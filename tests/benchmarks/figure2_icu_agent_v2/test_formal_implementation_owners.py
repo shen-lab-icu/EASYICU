@@ -17,6 +17,10 @@ from benchmarks.figure2_icu_agent_v2.easyicu_review_bundle_adapter import (
 from benchmarks.figure2_icu_agent_v2.formal_scheduler import (
     FormalScheduleError,
     build_core_schedule_dry_run,
+    build_qualification_schedule_dry_run,
+    claim_trajectory_lease,
+    consume_trajectory_lease,
+    validate_trajectory_lease,
 )
 from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import FormalEasyICURunner
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
@@ -24,6 +28,10 @@ from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     normalize_review_bundle,
 )
 from easyicu.research_agent.schema import PipelineResult
+from benchmarks.figure2_icu_agent_v2.multi_host_acceptance import (
+    MultiHostAcceptanceError,
+    validate_two_host_preflight,
+)
 
 
 def _native_pipeline_result(root: Path) -> PipelineResult:
@@ -115,21 +123,234 @@ def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
     ] == "result-1"
 
 
+def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
+    tmp_path: Path,
+) -> None:
+    class _Pipeline:
+        def run(self, **kwargs):
+            raise RuntimeError("private implementation detail")
+
+    class _HardStop:
+        def accounting_summary(self):
+            return {"provider_reported": {"n_calls": 1}}
+
+    runner = object.__new__(FormalEasyICURunner)
+    runner._pipeline = _Pipeline()
+    runner._provider_hard_stop = _HardStop()
+    output = tmp_path / "failed-review-bundle"
+
+    with pytest.raises(RuntimeError, match="private implementation detail"):
+        runner.run_and_write_review_bundle(
+            output_dir=output,
+            mandatory_artifacts=("main result",),
+            artifact_inventory={"main result": ()},
+        )
+
+    assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
+    normalized = normalize_review_bundle(output)
+    receipt = json.loads(normalized.files["07_run_receipt.json"])
+    assert receipt["terminal_status"] == "failed"
+    assert receipt["failure_category"] == "execution_failure"
+    assert b"private implementation detail" not in b"".join(
+        normalized.files.values()
+    )
+
+
 def test_core_scheduler_projects_78_unique_trajectories_without_writes(
     tmp_path: Path,
 ) -> None:
-    root = tmp_path / "formal-output"
-    dry_run = build_core_schedule_dry_run(root)
+    roots = {
+        "server": tmp_path / "server-output",
+        "laptop": tmp_path / "laptop-output",
+    }
+    dry_run = build_core_schedule_dry_run(roots)
 
-    assert dry_run.core_trajectory_count == 78
+    assert dry_run.scope == "core_wp2_wp3"
+    assert dry_run.trajectory_count == 78
     assert dry_run.provider_accessed is False
+    assert dry_run.site_pair_counts == {"server": 20, "laptop": 19}
     assert len({(row.task_id, row.arm) for row in dry_run.trajectories}) == 78
-    assert not root.exists()
+    assert not any(root.exists() for root in roots.values())
+    for index in range(0, 78, 2):
+        first, second = dry_run.trajectories[index : index + 2]
+        assert first.task_id == second.task_id
+        assert first.execution_site == second.execution_site
+        assert second.predecessor_output_dir == first.output_dir
 
     occupied = Path(dry_run.trajectories[0].output_dir)
     occupied.mkdir(parents=True)
     with pytest.raises(FormalScheduleError):
-        build_core_schedule_dry_run(root)
+        build_core_schedule_dry_run(roots)
+
+
+def test_qualification_scheduler_is_deterministic_balanced_and_pair_local(
+    tmp_path: Path,
+) -> None:
+    roots = {
+        "server": tmp_path / "server-qualification",
+        "laptop": tmp_path / "laptop-qualification",
+    }
+    task_ids = tuple(f"qualification_task_{index:02d}" for index in range(1, 13))
+
+    first = build_qualification_schedule_dry_run(task_ids, roots)
+    second = build_qualification_schedule_dry_run(tuple(reversed(task_ids)), roots)
+
+    assert first.scope == "qualification12"
+    assert first.trajectory_count == 24
+    assert first.site_pair_counts == {"server": 6, "laptop": 6}
+    assert first.site_assignment_sha256 == second.site_assignment_sha256
+    assert first.trajectories == second.trajectories
+    for site in roots:
+        first_arms = [
+            row.arm
+            for row in first.trajectories[::2]
+            if row.execution_site == site
+        ]
+        assert first_arms.count("easyicu_full") == 3
+        assert first_arms.count("generic_code_agent") == 3
+
+
+def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) -> None:
+    roots = {
+        "server": tmp_path / "server-output",
+        "laptop": tmp_path / "laptop-output",
+    }
+    dry_run = build_core_schedule_dry_run(roots)
+    first, second = dry_run.trajectories[:2]
+    lease_root = tmp_path / "server-leases"
+    lease_root.mkdir()
+
+    first_lease = claim_trajectory_lease(
+        first,
+        logical_site="server",
+        lease_root=lease_root,
+    )
+    assert first_lease.is_file()
+    validated = validate_trajectory_lease(
+        first_lease,
+        scope=first.scope,
+        task_id=first.task_id,
+        arm=first.arm,
+        execution_site=first.execution_site,
+    )
+    assert validated["output_dir"] == first.output_dir
+    started = consume_trajectory_lease(
+        first_lease,
+        scope=first.scope,
+        task_id=first.task_id,
+        arm=first.arm,
+        execution_site=first.execution_site,
+    )
+    assert started.is_file()
+    with pytest.raises(FileExistsError):
+        consume_trajectory_lease(
+            first_lease,
+            scope=first.scope,
+            task_id=first.task_id,
+            arm=first.arm,
+            execution_site=first.execution_site,
+        )
+    with pytest.raises(FormalScheduleError, match="execution_site mismatch"):
+        validate_trajectory_lease(
+            first_lease,
+            scope=first.scope,
+            task_id=first.task_id,
+            arm=first.arm,
+            execution_site="laptop",
+        )
+    with pytest.raises(FileExistsError):
+        claim_trajectory_lease(
+            first,
+            logical_site="server",
+            lease_root=lease_root,
+        )
+    with pytest.raises(FormalScheduleError, match="first arm"):
+        claim_trajectory_lease(
+            second,
+            logical_site="server",
+            lease_root=lease_root,
+        )
+    with pytest.raises(FormalScheduleError, match="another logical site"):
+        claim_trajectory_lease(
+            first,
+            logical_site="laptop",
+            lease_root=lease_root,
+        )
+
+    predecessor = Path(first.output_dir)
+    predecessor.mkdir(parents=True)
+    for name in CANONICAL_FILES:
+        payload = {"terminal_status": "completed"} if name == "07_run_receipt.json" else {}
+        (predecessor / name).write_text(json.dumps(payload), encoding="utf-8")
+    second_lease = claim_trajectory_lease(
+        second,
+        logical_site="server",
+        lease_root=lease_root,
+    )
+    assert second_lease.is_file()
+
+
+def _site_receipt(site: str) -> dict:
+    return {
+        "schema_version": "easyicu.figure2_site_preflight/1",
+        "logical_site": site,
+        "host_fingerprint_sha256": ("a" if site == "server" else "b") * 64,
+        "clock_offset_ms": 25,
+        "design_commit": "c" * 40,
+        "annotated_tag": "figure2-v2.1-test",
+        "container_image_digest": "sha256:" + "d" * 64,
+        "package_lock_sha256": "e" * 64,
+        "provider_route_sha256": "f" * 64,
+        "immutable_model_identifier": "shared-model-immutable-v1",
+        "sampling_policy_sha256": "1" * 64,
+        "runtime_budget_sha256": "2" * 64,
+        "network_policy_sha256": "3" * 64,
+        "input_manifest_set_sha256": "4" * 64,
+        "cpu_limit": 2,
+        "memory_limit_bytes": 8 * 1024**3,
+        "pids_limit": 256,
+        "clean_exact_head": True,
+        "container_limits_enforced": True,
+        "repository_access_denied": True,
+        "undeclared_network_denied": True,
+        "output_root_empty": True,
+        "clock_synchronized": True,
+        "provider_accessed": False,
+    }
+
+
+def test_two_host_preflight_requires_exact_runtime_parity() -> None:
+    receipts = [_site_receipt("server"), _site_receipt("laptop")]
+
+    result = validate_two_host_preflight(
+        receipts,
+        expected_design_commit="c" * 40,
+        expected_annotated_tag="figure2-v2.1-test",
+    )
+
+    assert result["status"] == "passed"
+    assert result["provider_accessed"] is False
+    assert result["logical_sites"] == ["server", "laptop"]
+
+
+def test_two_host_preflight_fails_on_resource_or_provider_drift() -> None:
+    resource_drift = [_site_receipt("server"), _site_receipt("laptop")]
+    resource_drift[1]["cpu_limit"] = 4
+    with pytest.raises(MultiHostAcceptanceError, match="cpu_limit"):
+        validate_two_host_preflight(
+            resource_drift,
+            expected_design_commit="c" * 40,
+            expected_annotated_tag="figure2-v2.1-test",
+        )
+
+    provider_access = [_site_receipt("server"), _site_receipt("laptop")]
+    provider_access[0]["provider_accessed"] = True
+    with pytest.raises(MultiHostAcceptanceError, match="provider_accessed"):
+        validate_two_host_preflight(
+            provider_access,
+            expected_design_commit="c" * 40,
+            expected_annotated_tag="figure2-v2.1-test",
+        )
 
 
 def _score(task_id: str, reviewer: str, bundle: str, success: bool) -> dict:

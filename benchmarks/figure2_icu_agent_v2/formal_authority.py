@@ -26,6 +26,7 @@ REPO_ROOT = PACKAGE_ROOT.parents[1]
 PROTOCOL_PATH = PACKAGE_ROOT / "experiment_protocol_v2_1.json"
 LAUNCH_CONTRACT_PATH = PACKAGE_ROOT / "formal_launch_contract_v1.json"
 PREREGISTRATION_PLAN_PATH = PACKAGE_ROOT / "preregistration_plan_v1.json"
+EXECUTION_CONTRACT_PATH = PACKAGE_ROOT / "execution_acceptance_contract_v1.json"
 REGISTERED_SOURCE_PATHS = {
     "validator_sha256": PACKAGE_ROOT / "design_v2_1.py",
     "validator_test_sha256": (
@@ -48,6 +49,7 @@ REGISTERED_SOURCE_PATHS = {
     ),
     "review_bundle_semantics_sha256": PACKAGE_ROOT / "review_bundle_semantics.py",
     "formal_scheduler_sha256": PACKAGE_ROOT / "formal_scheduler.py",
+    "multi_host_acceptance_sha256": PACKAGE_ROOT / "multi_host_acceptance.py",
     "blinded_evaluator_sha256": PACKAGE_ROOT / "blinded_evaluator.py",
     "formal_implementation_owner_test_sha256": (
         REPO_ROOT
@@ -240,6 +242,7 @@ def _validate_registration_details(
         "review_bundle_normalizer_sha256",
         "review_bundle_semantics_sha256",
         "formal_scheduler_sha256",
+        "multi_host_acceptance_sha256",
         "blinded_evaluator_sha256",
         "formal_implementation_owner_test_sha256",
     ):
@@ -315,7 +318,7 @@ def _validate_receipt_payload(
 
 def _normalize_coordinate(value: Any, *, field: str) -> dict[str, str]:
     coordinate = _require_mapping(value, field="authorized_call_coordinate")
-    required = {"scope", "task_id", "arm", "call_id"}
+    required = {"scope", "task_id", "arm", "execution_site", "call_id"}
     _require_exact_keys(
         coordinate, field=field, expected=required
     )
@@ -446,6 +449,10 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         _normalize_coordinate(item, field="authorized_call_coordinates[]")
         for item in coordinates
     ]
+    execution_contract = _load_json(EXECUTION_CONTRACT_PATH)
+    logical_sites = execution_contract.get("logical_sites")
+    if logical_sites != ["server", "laptop"]:
+        _fail("FORMAL_AUTHORITY_EXECUTION_SITE_CONTRACT_INVALID", repr(logical_sites))
     canonical_coordinates = [
         _canonical_json_bytes(item) for item in normalized_coordinates
     ]
@@ -458,6 +465,8 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
     for coordinate in normalized_coordinates:
         if coordinate["scope"] != scope:
             _fail("FORMAL_AUTHORITY_SCOPE_MISMATCH", repr(coordinate))
+        if coordinate["execution_site"] not in logical_sites:
+            _fail("FORMAL_AUTHORITY_EXECUTION_SITE_INVALID", repr(coordinate))
 
     expected_receipts = _expected_receipts(launch, scope)
     expected_receipt_ids = set(expected_receipts)

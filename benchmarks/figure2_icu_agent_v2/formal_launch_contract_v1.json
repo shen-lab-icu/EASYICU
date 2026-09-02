@@ -12,6 +12,7 @@
     "shared_review_semantics": "benchmarks/figure2_icu_agent_v2/review_bundle_semantics.py",
     "review_normalizer": "benchmarks/figure2_icu_agent_v2/review_bundle_normalizer.py",
     "formal_scheduler": "benchmarks/figure2_icu_agent_v2/formal_scheduler.py",
+    "multi_host_acceptance": "benchmarks/figure2_icu_agent_v2/multi_host_acceptance.py",
     "blinded_evaluator": "benchmarks/figure2_icu_agent_v2/blinded_evaluator.py"
   },
   "registration_receipt_ids": [
@@ -50,7 +51,9 @@
       "frozen EasyICU and generic-agent harnesses, prompts, tool contracts, normalizer, evaluator, model route, and numeric budgets",
       "Qualification12-A and two unopened access-controlled reserve-set digests with independent authorship and semantic nonoverlap receipts",
       "empty qualification output directory and scheduler dry-run with Provider access disabled",
-      "signed qualification12 atomic declaration naming the exact set and every call coordinate"
+      "two passing server/laptop site-preflight receipts and a passing two-host parity acceptance receipt",
+      "signed qualification12 task-pair site assignment with both arms colocated and sequential",
+      "signed qualification12 atomic declaration naming the exact set, execution site, and every call coordinate"
     ],
     "qualification": [
       "EasyICU Qualification12 pass receipt",
@@ -62,13 +65,15 @@
       "container image digest and package lock",
       "provider route and immutable model identifier",
       "matched token, time, cost, compute, sampling, and network budgets",
+      "server/laptop parity receipt binding identical runtime limits, release, model route, inputs, container, package lock, and network policy",
       "no arm-specific model-turn, provider-call, or tool-call cap; any emergency provider-invocation circuit breaker is numerically identical in both arms",
       "repository and undeclared-network denial probe; WP5 phase A permits only its separately declared literature-retrieval route"
     ],
     "batch": [
       "one signed atomic core batch declaration binding every core receipt and digest",
       "scheduler dry-run receipt with no Provider access",
-      "formal output directory confirmed empty"
+      "signed 39-pair site assignment with server=20 and laptop=19, both arms of every task pair on the same site",
+      "server and laptop formal output directories confirmed empty"
     ],
     "wp5_phase_a": [
       "all 78 WP2 and WP3 core runs have terminal immutable receipts",
@@ -92,7 +97,7 @@
     "wp5_phase_a": "Requires the frozen core release, all core terminal receipts, and every wp5_phase_a receipt. It permits bounded iterative Provider calls over the sealed direction, declared literature, nonpatient metadata, and neutral deterministic-feasibility receipts, but cannot access patient rows or patient-level outcome results.",
     "wp5_phase_b_showcase": "Requires the same frozen release plus every wp5_phase_b_showcase receipt. It authorizes only the locked flagship input and forbids postoutcome substitution, selective retry, or product repair."
   },
-  "authorization_rule": "A Provider call is authorized only within one explicitly requested scope when every receipt for that scope is present, valid, mutually consistent, bound to the same clean release and protocol digest, and the Ed25519-verified atomic declaration from the preregistered signer names that exact call coordinate.",
+  "authorization_rule": "A Provider call is authorized only within one explicitly requested scope when every receipt for that scope is present, valid, mutually consistent, bound to the same clean release and protocol digest, and the Ed25519-verified atomic declaration from the preregistered signer names that exact execution site and call coordinate.",
   "failure_rule": "Missing, stale, mismatched, unverifiable, or partially passing evidence returns a typed denial. No warning-only or partial-database launch exists.",
   "current_authority": {
     "formal_batch_authorized": false,

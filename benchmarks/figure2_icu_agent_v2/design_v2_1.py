@@ -37,6 +37,7 @@ IDEA_TO_EVIDENCE_PROTOCOL_PATH = PACKAGE_ROOT / "idea_to_evidence_protocol_v1.js
 IDEA_TO_EVIDENCE_RUBRIC_PATH = (
     PACKAGE_ROOT / "idea_to_evidence_evaluation_rubric_v1.json"
 )
+EXECUTION_ACCEPTANCE_PATH = PACKAGE_ROOT / "execution_acceptance_contract_v1.json"
 GENERIC_HARNESS_PATH = PACKAGE_ROOT / "generic_code_agent_harness.py"
 FORMAL_GENERIC_RUNNER_PATH = PACKAGE_ROOT / "formal_generic_runner.py"
 FORMAL_EASYICU_RUNNER_PATH = PACKAGE_ROOT / "formal_easyicu_runner.py"
@@ -45,6 +46,7 @@ FORMAL_PROVIDER_GATE_PATH = PACKAGE_ROOT / "formal_provider_gate.py"
 FORMAL_SCHEDULER_PATH = PACKAGE_ROOT / "formal_scheduler.py"
 EASYICU_REVIEW_ADAPTER_PATH = PACKAGE_ROOT / "easyicu_review_bundle_adapter.py"
 BLINDED_EVALUATOR_PATH = PACKAGE_ROOT / "blinded_evaluator.py"
+MULTI_HOST_ACCEPTANCE_PATH = PACKAGE_ROOT / "multi_host_acceptance.py"
 REVIEW_SEMANTICS_PATH = PACKAGE_ROOT / "review_bundle_semantics.py"
 
 
@@ -185,6 +187,7 @@ def _validate_assets(protocol: dict[str, Any]) -> None:
         "review_bundle_contract",
         "preregistration_plan",
         "formal_launch_contract",
+        "execution_acceptance_contract",
         "idea_to_evidence_protocol",
         "idea_to_evidence_evaluation_rubric",
     }
@@ -232,8 +235,109 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("HELDOUT_ORDER_DRIFT", repr(order))
     if arm_first != schedule["heldout27_arm_first"]:
         _fail("HELDOUT_ARM_BALANCE_DRIFT", repr(arm_first))
+    heldout_sites = schedule.get("heldout27_execution_site", {})
+    if set(heldout_sites) != set(order):
+        _fail("HELDOUT_EXECUTION_SITE_IDENTITY_INVALID", repr(heldout_sites))
+    heldout_site_counts = Counter(heldout_sites.values())
+    if heldout_site_counts != {"server": 14, "laptop": 13}:
+        _fail("HELDOUT_EXECUTION_SITE_BALANCE_INVALID", repr(heldout_site_counts))
+    tasks_by_id = {task["task_id"]: task for task in tasks}
+    expected_site_difficulty = {
+        "server": {"basic": 5, "intermediate": 5, "advanced": 4},
+        "laptop": {"basic": 4, "intermediate": 4, "advanced": 5},
+    }
+    expected_site_arm_first = {
+        "server": {"easyicu_full": 7, "generic_code_agent": 7},
+        "laptop": {"easyicu_full": 7, "generic_code_agent": 6},
+    }
+    expected_site_database = {
+        "server": {
+            "mimic": 2,
+            "eicu": 3,
+            "aumc": 3,
+            "hirid": 1,
+            "miiv": 3,
+            "sic": 2,
+        },
+        "laptop": {
+            "miiv": 2,
+            "sic": 2,
+            "mimic": 2,
+            "aumc": 2,
+            "eicu": 3,
+            "hirid": 2,
+        },
+    }
+    expected_site_analysis_family = {
+        "server": {
+            "descriptive": 3,
+            "association": 3,
+            "prediction": 2,
+            "time_to_event": 2,
+            "causal_emulation": 2,
+            "phenotyping": 2,
+        },
+        "laptop": {
+            "descriptive": 2,
+            "association": 3,
+            "prediction": 2,
+            "time_to_event": 2,
+            "causal_emulation": 2,
+            "phenotyping": 2,
+        },
+    }
+    for site in ("server", "laptop"):
+        site_tasks = [task_id for task_id in order if heldout_sites[task_id] == site]
+        difficulty_counts = dict(
+            Counter(tasks_by_id[task_id]["difficulty"] for task_id in site_tasks)
+        )
+        first_counts = dict(Counter(arm_first[task_id] for task_id in site_tasks))
+        database_counts = dict(
+            Counter(tasks_by_id[task_id]["database"] for task_id in site_tasks)
+        )
+        analysis_family_counts = dict(
+            Counter(tasks_by_id[task_id]["analysis_family"] for task_id in site_tasks)
+        )
+        if difficulty_counts != expected_site_difficulty[site]:
+            _fail("HELDOUT_SITE_DIFFICULTY_BALANCE_INVALID", repr(difficulty_counts))
+        if first_counts != expected_site_arm_first[site]:
+            _fail("HELDOUT_SITE_ARM_ORDER_BALANCE_INVALID", repr(first_counts))
+        if database_counts != expected_site_database[site]:
+            _fail("HELDOUT_SITE_DATABASE_BALANCE_INVALID", repr(database_counts))
+        if analysis_family_counts != expected_site_analysis_family[site]:
+            _fail(
+                "HELDOUT_SITE_ANALYSIS_FAMILY_BALANCE_INVALID",
+                repr(analysis_family_counts),
+            )
     if schedule.get("wp5_showcase_id") != "ite_showcase_01":
         _fail("WP5_SHOWCASE_IDENTITY_INVALID", repr(schedule.get("wp5_showcase_id")))
+    multi_host = protocol.get("multi_host_execution", {})
+    if multi_host.get("contract") != str(EXECUTION_ACCEPTANCE_PATH.relative_to(REPO_ROOT)):
+        _fail("MULTI_HOST_CONTRACT_PATH_INVALID", repr(multi_host))
+    if multi_host.get("logical_sites") != ["server", "laptop"]:
+        _fail("MULTI_HOST_SITE_IDENTITY_INVALID", repr(multi_host))
+    if not all(
+        term in multi_host.get("assignment_rule", "")
+        for term in ("server=20", "laptop=19", "Both arms", "sequentially")
+    ):
+        _fail("MULTI_HOST_PAIR_ASSIGNMENT_INVALID", repr(multi_host))
+
+    execution_acceptance = _load_json(EXECUTION_ACCEPTANCE_PATH)
+    if execution_acceptance.get("status") != "review_candidate_no_launch_authority":
+        _fail("EXECUTION_ACCEPTANCE_STATUS_INVALID", repr(execution_acceptance))
+    parallelization = execution_acceptance.get("parallelization", {})
+    if (
+        parallelization.get("unit") != "task_pair"
+        or parallelization.get("maximum_active_trajectories_per_site") != 1
+        or parallelization.get("maximum_active_trajectories_total") != 2
+    ):
+        _fail("MULTI_HOST_CONCURRENCY_INVALID", repr(parallelization))
+    if execution_acceptance.get("site_preflight_boolean_expectations", {}).get(
+        "provider_accessed"
+    ) is not False:
+        _fail("MULTI_HOST_PREFLIGHT_PROVIDER_BOUNDARY_INVALID", repr(execution_acceptance))
+    if "Scientific A/B outcomes are never" not in multi_host.get("go_no_go_rule", ""):
+        _fail("MULTI_HOST_OUTCOME_ADAPTATION_GUARD_MISSING", repr(multi_host))
 
     rubric = _load_json(RUBRIC_PATH)
     if rubric["primary_endpoint"]["name"] != "reportable_as_specified_without_postrun_repair":
@@ -264,6 +368,20 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     actual_dispositions = {task["expected_disposition"] for task in safety_tasks}
     if not actual_dispositions <= allowed_dispositions:
         _fail("SAFETY12_DISPOSITION_NOT_NEUTRAL", repr(actual_dispositions))
+    safety_sites = schedule.get("safety12_execution_site")
+    safety_first = schedule.get("safety12_arm_first")
+    if not isinstance(safety_sites, list) or len(safety_sites) != 12:
+        _fail("SAFETY12_EXECUTION_SITE_IDENTITY_INVALID", repr(safety_sites))
+    if Counter(safety_sites) != {"server": 6, "laptop": 6}:
+        _fail("SAFETY12_EXECUTION_SITE_BALANCE_INVALID", repr(safety_sites))
+    for site in ("server", "laptop"):
+        first_counts = Counter(
+            first
+            for first, assigned_site in zip(safety_first, safety_sites, strict=True)
+            if assigned_site == site
+        )
+        if first_counts != {"easyicu_full": 3, "generic_code_agent": 3}:
+            _fail("SAFETY12_SITE_ARM_ORDER_BALANCE_INVALID", repr(first_counts))
     rationale = _load_json(SAFETY_RATIONALE_PATH)
     if set(rationale["task_to_rationale"]) != {task["task_id"] for task in safety_tasks}:
         _fail("SAFETY12_EXTERNAL_RATIONALE_INCOMPLETE", "task mapping mismatch")
@@ -304,6 +422,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
             FORMAL_SCHEDULER_PATH,
             EASYICU_REVIEW_ADAPTER_PATH,
             BLINDED_EVALUATOR_PATH,
+            MULTI_HOST_ACCEPTANCE_PATH,
             REVIEW_SEMANTICS_PATH,
         )
     ):
@@ -621,6 +740,8 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     forbidden_markers = review_contract["normalization"]["forbidden_markers"]
     if not any("arm-diagnostic resource profiles" in marker for marker in forbidden_markers):
         _fail("BLINDING_RESOURCE_FINGERPRINT_GUARD_MISSING", repr(forbidden_markers))
+    if not any("execution-site labels" in marker for marker in forbidden_markers):
+        _fail("BLINDING_EXECUTION_SITE_GUARD_MISSING", repr(forbidden_markers))
     receipt_projection = review_contract["normalization"]["blinded_run_receipt_projection"]
     visible_fields = receipt_projection["reviewer_visible_fields"]
     if not any(
@@ -667,6 +788,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         "review_bundle_normalizer_sha256",
         "review_bundle_semantics_sha256",
         "formal_scheduler_sha256",
+        "multi_host_acceptance_sha256",
         "blinded_evaluator_sha256",
         "formal_implementation_owner_test_sha256",
         "design_commit",
@@ -714,6 +836,9 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
             (PACKAGE_ROOT / "review_bundle_normalizer.py").relative_to(REPO_ROOT)
         ),
         "formal_scheduler": str(FORMAL_SCHEDULER_PATH.relative_to(REPO_ROOT)),
+        "multi_host_acceptance": str(
+            MULTI_HOST_ACCEPTANCE_PATH.relative_to(REPO_ROOT)
+        ),
         "blinded_evaluator": str(BLINDED_EVALUATOR_PATH.relative_to(REPO_ROOT)),
     }
     if launch.get("implementation_owners") != expected_launch_owners:
@@ -771,6 +896,12 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("LAUNCH_WP5_EVALUATOR_INDEPENDENCE_MISSING", repr(wp5_phase_b_receipts))
     if "WP5 flagship showcase" not in protocol["formal_run_policy"]["first_provider_call_lock"]:
         _fail("WP5_RELEASE_LOCK_INCOMPLETE", protocol["formal_run_policy"]["first_provider_call_lock"])
+    site_sensitivity = sap["secondary_analyses"].get("execution_site_sensitivity", "")
+    if not all(
+        term in site_sensitivity
+        for term in ("Both arms", "colocated", "not an endpoint", "scores lock")
+    ):
+        _fail("MULTI_HOST_ANALYSIS_BOUNDARY_MISSING", site_sensitivity)
 
     return {
         "protocol_ref": protocol["protocol_ref"],

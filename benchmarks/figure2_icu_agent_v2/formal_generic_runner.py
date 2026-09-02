@@ -17,6 +17,7 @@ from .formal_provider_gate import (
     FormalCallCoordinate,
     complete_formal_provider_call,
 )
+from .formal_scheduler import consume_trajectory_lease
 from .generic_code_agent_harness import (
     DockerRunnerBackend,
     GenericCodeAgentHarness,
@@ -54,6 +55,7 @@ class FormalGenericModelGateway:
     receipts: Mapping[str, Any]
     scope: str
     task_id: str
+    execution_site: str
     max_tokens: int
     temperature: float
     provider_hard_stop: TaskProviderHardStop | None = None
@@ -66,6 +68,7 @@ class FormalGenericModelGateway:
             scope=self.scope,
             task_id=self.task_id,
             arm="generic_code_agent",
+            execution_site=self.execution_site,
             call_id=f"generic_{self._call_number:04d}",
         )
         try:
@@ -92,17 +95,27 @@ class FormalGenericCodeAgentRunner:
         receipts: Mapping[str, Any],
         scope: str,
         task_id: str,
+        execution_site: str,
+        trajectory_lease_path: Path,
         max_tokens: int,
         temperature: float,
         docker_runner: DockerRunner,
         provider_hard_stop: TaskProviderHardStop,
         resource_snapshot: Callable[[], Mapping[str, Any]],
     ) -> None:
+        consume_trajectory_lease(
+            trajectory_lease_path,
+            scope=scope,
+            task_id=task_id,
+            arm="generic_code_agent",
+            execution_site=execution_site,
+        )
         gateway = FormalGenericModelGateway(
             client=client,
             receipts=receipts,
             scope=scope,
             task_id=task_id,
+            execution_site=execution_site,
             max_tokens=max_tokens,
             temperature=temperature,
             provider_hard_stop=provider_hard_stop,

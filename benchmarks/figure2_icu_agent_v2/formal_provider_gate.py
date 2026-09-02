@@ -27,6 +27,7 @@ _FORMAL_SCOPES = frozenset(
     {"qualification12", "core_wp2_wp3", "wp5_phase_a", "wp5_phase_b_showcase"}
 )
 _FORMAL_ARMS = frozenset({"easyicu_full", "generic_code_agent"})
+_FORMAL_SITES = frozenset({"server", "laptop"})
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class FormalCallCoordinate:
     scope: str
     task_id: str
     arm: str
+    execution_site: str
     call_id: str
 
     def __post_init__(self) -> None:
@@ -41,6 +43,8 @@ class FormalCallCoordinate:
             raise ValueError(f"unsupported formal scope: {self.scope}")
         if self.arm not in _FORMAL_ARMS:
             raise ValueError(f"unsupported formal arm: {self.arm}")
+        if self.execution_site not in _FORMAL_SITES:
+            raise ValueError(f"unsupported execution site: {self.execution_site}")
         for field_name in ("task_id", "call_id"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():

@@ -22,12 +22,14 @@ from .formal_provider_gate import (
     FormalAuthorizedHardStopClient,
     FormalCallCoordinate,
 )
+from .formal_scheduler import consume_trajectory_lease
 
 
 class _FormalCallSequence:
-    def __init__(self, *, scope: str, task_id: str) -> None:
+    def __init__(self, *, scope: str, task_id: str, execution_site: str) -> None:
         self._scope = scope
         self._task_id = task_id
+        self._execution_site = execution_site
         self._number = 0
         self._lock = Lock()
 
@@ -39,6 +41,7 @@ class _FormalCallSequence:
             scope=self._scope,
             task_id=self._task_id,
             arm="easyicu_full",
+            execution_site=self._execution_site,
             call_id=f"easyicu_{number:04d}",
         )
 
@@ -55,6 +58,7 @@ class FormalEasyICUModelRouter:
         receipts: Mapping[str, Any],
         scope: str,
         task_id: str,
+        execution_site: str,
         provider_hard_stop: TaskProviderHardStop,
     ) -> None:
         if inner is None:
@@ -64,7 +68,11 @@ class FormalEasyICUModelRouter:
         self._inner = inner
         self._receipts = dict(receipts)
         self._hard_stop = provider_hard_stop
-        self._sequence = _FormalCallSequence(scope=scope, task_id=task_id)
+        self._sequence = _FormalCallSequence(
+            scope=scope,
+            task_id=task_id,
+            execution_site=execution_site,
+        )
         self._role_clients: dict[str, FormalAuthorizedHardStopClient] = {}
         self._iter_clients: list[FormalAuthorizedHardStopClient] | None = None
 
@@ -124,17 +132,27 @@ class FormalEasyICURunner:
         receipts: Mapping[str, Any],
         scope: str,
         task_id: str,
+        execution_site: str,
+        trajectory_lease_path: Path,
         provider_hard_stop: TaskProviderHardStop,
     ) -> None:
         if services.provider_hard_stop is not provider_hard_stop:
             raise ValueError(
                 "PipelineServices must carry the same formal provider hard stop"
             )
+        consume_trajectory_lease(
+            trajectory_lease_path,
+            scope=scope,
+            task_id=task_id,
+            arm="easyicu_full",
+            execution_site=execution_site,
+        )
         router = FormalEasyICUModelRouter(
             services.llm,
             receipts=receipts,
             scope=scope,
             task_id=task_id,
+            execution_site=execution_site,
             provider_hard_stop=provider_hard_stop,
         )
         formal_services = replace(
@@ -162,6 +180,40 @@ class FormalEasyICURunner:
             raise ValueError("formal Figure 2 runs cannot resume")
         return self._pipeline.run(**kwargs)
 
+    def _write_terminal_failure_bundle(
+        self,
+        *,
+        output_dir: Path,
+        mandatory_artifacts: tuple[str, ...],
+    ) -> None:
+        accounting = self._provider_hard_stop.accounting_summary()
+        failed = EasyICUReviewMaterial(
+            plan={"available": False, "failure_category": "execution_failure"},
+            cohort={"available": False, "failure_category": "execution_failure"},
+            results={"available": False, "failure_category": "execution_failure"},
+            diagnostics={
+                "available": False,
+                "failure_category": "execution_failure",
+            },
+            report=(
+                "The task ended with the neutral terminal category "
+                "`execution_failure`."
+            ),
+            headline_evidence=(),
+            artifact_inventory={label: [] for label in mandatory_artifacts},
+        )
+        write_easyicu_review_bundle(
+            failed,
+            output_dir=output_dir,
+            mandatory_artifacts=mandatory_artifacts,
+            resource_receipt={
+                "within_frozen_budget": False,
+                "provider_accounting": accounting,
+            },
+            terminal_status="failed",
+            failure_category="execution_failure",
+        )
+
     def run_and_write_review_bundle(
         self,
         *,
@@ -172,17 +224,24 @@ class FormalEasyICURunner:
     ) -> PipelineResult:
         """Run once and immediately project fixed native outputs for review."""
 
-        result = self.run(**run_kwargs)
-        if not isinstance(result, PipelineResult):
-            raise ValueError(
-                "formal review projection requires a terminal PipelineResult"
+        try:
+            result = self.run(**run_kwargs)
+            if not isinstance(result, PipelineResult):
+                raise ValueError(
+                    "formal review projection requires a terminal PipelineResult"
+                )
+            material = EasyICUReviewMaterial.from_pipeline_result(
+                result,
+                artifact_inventory=artifact_inventory,
             )
-        material = EasyICUReviewMaterial.from_pipeline_result(
-            result,
-            artifact_inventory=artifact_inventory,
-        )
-        self._provider_hard_stop.assert_active()
-        accounting = self._provider_hard_stop.accounting_summary()
+            self._provider_hard_stop.assert_active()
+            accounting = self._provider_hard_stop.accounting_summary()
+        except Exception:
+            self._write_terminal_failure_bundle(
+                output_dir=output_dir,
+                mandatory_artifacts=mandatory_artifacts,
+            )
+            raise
         write_easyicu_review_bundle(
             material,
             output_dir=output_dir,

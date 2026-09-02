@@ -32,6 +32,9 @@ The v2.1 candidate adds:
 - an external preregistration plan and a formal launch contract that defaults
   to denial, including a post-registration Qualification12-only authorization
   scope before any core or paper-facing run;
+- a two-host execution-acceptance contract for one server and one laptop: work
+  is split by complete task pair, both arms stay on the same host and run in
+  frozen order, and no more than one trajectory is active per host;
 - partially independent Heldout27 review: at least one scoring reviewer and
   every adjudicator are external to implementation and manuscript authorship,
   with conflicts and workload capacity sealed before qualification.
@@ -71,8 +74,14 @@ is projected into the shared seven-file contract only by
 `review_bundle_semantics.py`, and `review_bundle_normalizer.py` performs the
 arm-neutral reviewer projection without repairing scientific content.
 
-`formal_scheduler.py` reproduces all 78 core task-arm trajectories and rejects
-a nonempty output root without Provider access. `blinded_evaluator.py`
+`formal_scheduler.py` reproduces all 78 core task-arm trajectories, creates the
+post-unsealing Qualification12 assignment deterministically, rejects nonempty
+per-site output roots, and issues single-use site-bound leases without Provider
+access. A formal runner requires the matching lease before construction.
+`multi_host_acceptance.py` accepts exactly one server and one laptop preflight
+receipt only when the frozen release, model route, input set, budgets, container
+limits, and network policy match exactly; a warning, drift, Provider access, or
+missing field is a hard NO-GO. `blinded_evaluator.py`
 mechanically instantiates Heldout27 sheets from the frozen rubric and taskbank,
 then atomically locks two eligible reviewers' scores and arm guesses before
 unblinding. `formal_authority.py` verifies an Ed25519-signed atomic declaration,
@@ -83,8 +92,10 @@ Provider call because this review candidate intentionally has no registered
 signer key; offline test keys grant no qualification or formal-run authority.
 
 Before any formal call, follow `preregistration_plan_v1.json`, satisfy every
-receipt in `formal_launch_contract_v1.json`, and replace the internal review
-candidate with an externally timestamped immutable package.
+conjunctive gate in `execution_acceptance_contract_v1.json` and every receipt in
+`formal_launch_contract_v1.json`, and replace the internal review candidate
+with an externally timestamped immutable package. Scientific A/B outcomes may
+never decide whether to launch, continue, migrate, exclude, or rerun work.
 
 ## Historical v1 owner
 
