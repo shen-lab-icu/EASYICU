@@ -402,10 +402,14 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         for call in easyicu_runner_calls
         if isinstance(call.func, ast.Name)
     }
-    if "FormalAuthorizedHardStopClient" not in easyicu_runner_named_calls:
+    required_easyicu_runner_calls = {
+        "FormalAuthorizedHardStopClient",
+        "write_easyicu_review_bundle",
+    }
+    if not required_easyicu_runner_calls <= easyicu_runner_named_calls:
         _fail(
             "FORMAL_EASYICU_PROVIDER_GATE_MISSING",
-            repr(easyicu_runner_named_calls),
+            repr(sorted(required_easyicu_runner_calls - easyicu_runner_named_calls)),
         )
 
     gate_calls = calls_by_file[FORMAL_PROVIDER_GATE_PATH.name]

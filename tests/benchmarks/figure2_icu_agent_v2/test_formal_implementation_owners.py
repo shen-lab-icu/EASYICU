@@ -18,10 +18,40 @@ from benchmarks.figure2_icu_agent_v2.formal_scheduler import (
     FormalScheduleError,
     build_core_schedule_dry_run,
 )
+from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import FormalEasyICURunner
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     CANONICAL_FILES,
     normalize_review_bundle,
 )
+from easyicu.research_agent.schema import PipelineResult
+
+
+def _native_pipeline_result(root: Path) -> PipelineResult:
+    root.mkdir()
+    artifacts = {
+        "plan.json": {"population": "adult ICU"},
+        "research_context.json": {"cohort": {"n": 42}},
+        "manifest.json": {
+            "evidence": [{"evidence_id": "result-1", "sha256": "a" * 64}],
+            "findings": [],
+        },
+        "run_status.json": {"terminal": True, "gates_passed": True},
+    }
+    for name, value in artifacts.items():
+        (root / name).write_text(json.dumps(value), encoding="utf-8")
+    (root / "results_report.md").write_text("The estimate was 1.2.\n")
+    (root / "manuscript.md").write_text("Manuscript.\n")
+    return PipelineResult(
+        run_id="run-1",
+        workdir=str(root),
+        context_path=str(root / "research_context.json"),
+        plan_path=str(root / "plan.json"),
+        manifest_path=str(root / "manifest.json"),
+        report_path=str(root / "results_report.md"),
+        manuscript_path=str(root / "manuscript.md"),
+        evidence_count=1,
+        findings_count=0,
+    )
 def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -> None:
     material = EasyICUReviewMaterial(
         plan={"population": "adult ICU"},
@@ -44,6 +74,45 @@ def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -
     receipt = json.loads(normalized.files["07_run_receipt.json"])
     assert receipt["substantive_output_files"]["03_results.json"] is True
     assert "provider_tokens" not in receipt
+
+
+def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
+    tmp_path: Path,
+) -> None:
+    result = _native_pipeline_result(tmp_path / "native-run")
+
+    class _Pipeline:
+        def run(self, **kwargs):
+            assert kwargs == {"cohort": "sealed-input.parquet"}
+            return result
+
+    class _HardStop:
+        def assert_active(self):
+            return 12.0
+
+        def accounting_summary(self):
+            return {"provider_reported": {"n_calls": 3}}
+
+    runner = object.__new__(FormalEasyICURunner)
+    runner._pipeline = _Pipeline()
+    runner._provider_hard_stop = _HardStop()
+    output = tmp_path / "review-bundle"
+
+    returned = runner.run_and_write_review_bundle(
+        output_dir=output,
+        mandatory_artifacts=("main result",),
+        artifact_inventory={
+            "main result": ["03_results.json", "06_report.md"]
+        },
+        cohort="sealed-input.parquet",
+    )
+
+    assert returned is result
+    assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
+    normalized = normalize_review_bundle(output)
+    assert json.loads(normalized.files["03_results.json"])["evidence"][0][
+        "evidence_id"
+    ] == "result-1"
 
 
 def test_core_scheduler_projects_78_unique_trajectories_without_writes(
