@@ -19,7 +19,7 @@ from easyicu.webserver.study_scientific_configuration import (
     SetupFacts,
 )
 
-from . import cohort_eligibility, plan_decisions
+from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
     EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
     PLAN_RESUME_OFFER_GATE_REASONS,
@@ -169,6 +169,7 @@ def build_research_workflow_snapshot(
     active_job: Optional[Mapping[str, Any]],
     latest_run: Optional[Mapping[str, Any]],
     plan_review_authority: Optional[Mapping[str, Any]] = None,
+    continuing_review_choices: bool = False,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -442,8 +443,18 @@ def build_research_workflow_snapshot(
         and review_authority_available
         and plan_configuration_matches
     )
+    # Sibling choices may continue across host-receipted edits, but the
+    # superseded candidate still cannot be approved or executed.
+    choices_pending = bool(
+        continuing_review_choices
+        and plan_review_declared
+        and "plan_scientific_changes_required" in active_plan_review_codes
+        and "scientific_plan_review_policy_stale" not in active_plan_review_codes
+        and not analysis_running
+    )
     plan_execution_ready = bool(
         plan_review_pending
+        and not choices_pending
         and plan_approval_allowed(review_authority)
         and str(review_authority.get("budget_mode") or "full_reviewed")
         != "planner_canary"
@@ -458,7 +469,9 @@ def build_research_workflow_snapshot(
         else "plan_execution_upgrade_required"
     )
     plan_review_reason_code = (
-        live_plan_reason
+        "plan_scientific_changes_required"
+        if choices_pending
+        else live_plan_reason
         if plan_review_pending
         else "plan_configuration_superseded"
         if plan_review_declared
@@ -471,9 +484,9 @@ def build_research_workflow_snapshot(
     # A live, digest-matching review is an approval gate. A stale or
     # non-resumable plan remains historical evidence, but the next governed
     # action is a fresh planning run rather than approval or in-place editing.
-    plan_attention_required = bool(plan_review_pending)
+    plan_attention_required = bool(plan_review_pending or choices_pending)
     plan_regeneration_required = bool(
-        plan_review_declared and not plan_review_pending and not analysis_running
+        plan_review_declared and not plan_attention_required and not analysis_running
     )
     analysis_complete = bool(
         full_run
@@ -742,7 +755,7 @@ def build_research_workflow_snapshot(
     completed = sum(1 for row in required if row.status == "complete")
     if (
         eligibility_confirmation_required
-        and not plan_review_pending
+        and not plan_attention_required
         and not analysis_complete
         and not analysis_outputs_available
     ):
@@ -880,16 +893,23 @@ def build_project_workflow_projection(
         else None
     )
 
+    review = (
+        agent_runs.read_run_review(str(latest_run.get("project_dir") or ""))
+        if latest_run else {}
+    )
+
     snapshot = build_research_workflow_snapshot(
         study=study,
         active_export_present=registered_export_matches_study(study, registry),
         active_job=active_job,
         latest_run=latest_run,
         plan_review_authority=plan_review_authority,
+        continuing_review_choices=plan_review_progress.has_pending_choices(
+            study, latest_run or {}, review,
+        ),
     )
     latest_run_outcome: Mapping[str, Any] = {"present": False}
     if latest_run:
-        review = agent_runs.read_run_review(str(latest_run.get("project_dir") or ""))
         latest_run_outcome = project_run_outcome(review)
         snapshot = _enrich_plan_review(snapshot, study=study, review=review)
 
