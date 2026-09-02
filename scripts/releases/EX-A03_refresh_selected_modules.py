@@ -79,7 +79,7 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
         "sepsis3_sofa2",
     ),
 }
-SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v2"
+SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 
 
 class ModuleRefreshError(ValueError):
@@ -115,28 +115,14 @@ def _parse_data_path_overrides(values: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
-def _validate_databases(databases: Sequence[str]) -> tuple[str, ...]:
-    """Return a stable refresh subset; an empty selection keeps legacy all-six behaviour."""
-
-    selected = tuple(dict.fromkeys(str(database) for database in databases))
-    if not selected:
-        return DATABASES
-    unknown = set(selected) - set(DATABASES)
-    if unknown:
-        raise ModuleRefreshError(f"Unknown databases: {sorted(unknown)}")
-    return tuple(database for database in DATABASES if database in selected)
-
-
 def _resolve_data_paths(
-    source_manifest: Mapping[str, Any],
-    overrides: Mapping[str, str],
-    databases: Sequence[str] = DATABASES,
+    source_manifest: Mapping[str, Any], overrides: Mapping[str, str]
 ) -> dict[str, str]:
     recorded = source_manifest.get("data_paths")
     if not isinstance(recorded, dict):
         raise ModuleRefreshError("Source run manifest lacks data_paths")
     paths: dict[str, str] = {}
-    for database in databases:
+    for database in DATABASES:
         raw = overrides.get(database, recorded.get(database))
         if not isinstance(raw, str) or not raw:
             raise ModuleRefreshError(f"Missing recorded raw path for {database}")
@@ -415,7 +401,6 @@ def refresh_candidate(
     modules: Sequence[str],
     data_path_overrides: Mapping[str, str],
     batch_size: int | None,
-    databases: Sequence[str] = DATABASES,
     resume: bool = False,
     repair_finalized: bool = False,
 ) -> Path:
@@ -425,14 +410,9 @@ def refresh_candidate(
         raise ModuleRefreshError("Source and destination run roots must differ")
     requested_modules = _validate_modules(modules)
     selected_modules = _expand_module_dependency_closure(requested_modules)
-    selected_databases = _validate_databases(databases)
     publication_commit = REPUBLICATION._require_clean_checkout()
     source_run_manifest = REPUBLICATION._validate_source(source)
-    data_paths = _resolve_data_paths(
-        source_run_manifest,
-        data_path_overrides,
-        selected_databases,
-    )
+    data_paths = _resolve_data_paths(source_run_manifest, data_path_overrides)
     source_run_manifest_sha256 = REPUBLICATION._sha256_file(
         source / "run_manifest.json"
     )
@@ -498,7 +478,7 @@ def refresh_candidate(
 
     refreshed: dict[str, dict[str, Any]] = {}
     try:
-        for database in selected_databases:
+        for database in DATABASES:
             refreshed[database] = _refresh_one_database(
                 database=database,
                 data_path=data_paths[database],
@@ -512,12 +492,6 @@ def refresh_candidate(
         all_refreshed_modules = list(selected_modules)
         all_requested_modules = list(requested_modules)
         combined_runtime = refreshed
-        refreshed_modules_by_database = {
-            database: (
-                list(selected_modules) if database in selected_databases else []
-            )
-            for database in DATABASES
-        }
         repair_history: list[dict[str, Any]] = []
         if prior_provenance is not None:
             prior_refreshed = {
@@ -536,25 +510,7 @@ def refresh_candidate(
             )
             prior_runtime = prior_provenance.get("per_database_runtime") or {}
             combined_runtime = {}
-            previous_by_database = prior_provenance.get(
-                "refreshed_modules_by_database"
-            ) or {
-                database: prior_provenance.get("refreshed_modules", [])
-                for database in DATABASES
-            }
-            refreshed_modules_by_database = {
-                database: [
-                    module
-                    for module in MODULES
-                    if module in set(previous_by_database.get(database, []))
-                    or (
-                        database in selected_databases
-                        and module in selected_modules
-                    )
-                ]
-                for database in DATABASES
-            }
-            for database in selected_databases:
+            for database in DATABASES:
                 previous = copy.deepcopy(prior_runtime.get(database) or {})
                 current = refreshed[database]
                 previous_modules = dict(previous.get("modules") or {})
@@ -602,24 +558,17 @@ def refresh_candidate(
                 source_receipt=source_receipts[database],
                 publication_commit=publication_commit,
             )
-            if database in refreshed:
-                _rebind_manifest_metrics(manifest, refreshed[database]["modules"])
-            database_refreshed_modules = refreshed_modules_by_database[database]
+            _rebind_manifest_metrics(manifest, refreshed[database]["modules"])
             manifest["source_extraction_provenance"] = {
                 **(manifest.get("source_extraction_provenance") or {}),
-                "raw_database_reread": database in refreshed,
-                "refreshed_modules": list(database_refreshed_modules),
+                "raw_database_reread": True,
+                "refreshed_modules": list(all_refreshed_modules),
                 "reused_modules": [
-                    module
-                    for module in MODULES
-                    if module not in database_refreshed_modules
+                    module for module in MODULES if module not in all_refreshed_modules
                 ],
-                "module_refresh_runtime": combined_runtime.get(database),
+                "module_refresh_runtime": combined_runtime[database],
                 "transformation": (
                     "raw re-extraction of selected modules plus canonical native-v2 "
-                    "republication of the complete package"
-                    if database in refreshed
-                    else "byte reuse from the verified parent plus canonical native-v2 "
                     "republication of the complete package"
                 ),
             }
@@ -640,19 +589,14 @@ def refresh_candidate(
             "publication_easyicu_git_commit": publication_commit,
             "publication_easyicu_git_dirty": False,
             "refresher": str(Path(__file__).relative_to(REPOSITORY_ROOT)),
-            "refreshed_databases": list(selected_databases),
             "refreshed_modules": list(all_refreshed_modules),
-            "refreshed_modules_by_database": refreshed_modules_by_database,
             "requested_modules": list(all_requested_modules),
             "dependency_closure_applied": list(all_refreshed_modules),
             "raw_database_reread": True,
             "raw_data_paths": data_paths,
             "per_database_runtime": combined_runtime,
-            "reused_module_count_by_database": {
-                database: len(MODULES)
-                - len(refreshed_modules_by_database[database])
-                for database in DATABASES
-            },
+            "reused_module_count_per_database": len(MODULES)
+            - len(all_refreshed_modules),
             "seal_required_after_refresh": True,
         }
         if repair_history:
@@ -696,16 +640,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--database",
-        action="append",
-        default=[],
-        choices=DATABASES,
-        help=(
-            "Database to re-read; repeatable. When omitted, preserves the "
-            "legacy all-six refresh behaviour."
-        ),
-    )
-    parser.add_argument(
         "--module",
         action="append",
         default=[],
@@ -739,7 +673,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_run_root=args.source_run_root,
             output_root=args.output_root,
             modules=args.module,
-            databases=args.database,
             data_path_overrides=_parse_data_path_overrides(args.data_path),
             batch_size=args.batch_size,
             resume=args.resume,

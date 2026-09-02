@@ -5600,15 +5600,6 @@ class ConceptResolver:
                         print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
         elif align_to_admission:
             # Just alignment, no interval/aggregation
-            # True win_tbl concepts bypass the interval branch above, where
-            # the concat-level duration declaration is normally restored.
-            # Pandas time-column normalization may discard DataFrame.attrs;
-            # restore the already-validated unit before admission alignment
-            # so explicit ventilation intervals cannot become unitless.
-            if combined_dur_unit and "dur_var" in combined.columns:
-                from ..table.duration import set_dur_var_unit
-
-                set_dur_var_unit(combined, combined_dur_unit)
             combined = self._align_time_to_admission(
                 combined,
                 data_source,
