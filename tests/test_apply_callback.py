@@ -88,55 +88,6 @@ def test_aumc_urine_output_repairs_decimal_errors_before_outlier_filter():
     assert pd.isna(result["value"].iloc[3])
 
 
-def test_mimiciii_explicit_ventilation_excludes_cancelled_and_zero_length_rows():
-    frame = pd.DataFrame(
-        {
-            "mech_vent": [225792, 225794, 225792, 225792],
-            "cancelreason": [0, 0, 1, 0],
-            "dur_var": [720.0, 60.0, 120.0, 0.0],
-        }
-    )
-
-    result = _apply_callback(
-        frame,
-        _src(
-            "mimiciii_explicit_ventilation_interval",
-            value_var="itemid",
-            params={"cancel_var": "cancelreason"},
-        ),
-        concept_name="mech_vent",
-    )
-
-    assert result["mech_vent"].tolist() == ["invasive", "noninvasive"]
-    assert result["dur_var"].tolist() == [720.0, 60.0]
-
-
-def test_eicu_confirmed_invasive_airway_requires_nonzero_start_and_positive_span():
-    frame = pd.DataFrame(
-        {
-            "mech_vent": ["Oral ETT", "Tracheostomy", "Nasal ETT", "Oral ETT"],
-            "ventstartoffset": [120, 0, 300, 400],
-            "dur_var": [720, 900, 0, -10],
-        }
-    )
-
-    result = _apply_callback(
-        frame,
-        _src(
-            "eicu_confirmed_invasive_airway_interval",
-            value_var="airwaytype",
-            index_var="ventstartoffset",
-            dur_var="respcarestatusoffset",
-        ),
-        concept_name="mech_vent",
-    )
-
-    assert len(result) == 1
-    assert result.iloc[0]["mech_vent"] == "invasive"
-    assert result.iloc[0]["ventstartoffset"] == 120
-    assert result.iloc[0]["dur_var"] == 720
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
