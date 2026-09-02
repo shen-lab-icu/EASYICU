@@ -742,13 +742,16 @@ def build_research_workflow_snapshot(
     completed = sum(1 for row in required if row.status == "complete")
     if (
         eligibility_confirmation_required
+        and not plan_review_pending
         and not analysis_complete
         and not analysis_outputs_available
     ):
         # A StudyContext change invalidates its cohort receipt by design.  The
         # new population must be confirmed before a stale-plan regeneration
         # action can be offered; otherwise the visible button only submits a
-        # run that the launch owner must reject.
+        # run that the launch owner must reject. A live, digest-matching
+        # candidate is different: show its plan and evidence first and resolve
+        # its choices in that review, without granting execution authority.
         next_stage = next(row for row in required if row.id == "setup")
     elif (
         plan_attention_required
