@@ -12,6 +12,27 @@ from easyicu.webserver.pi_copilot.contracts import (
 from easyicu.webserver.routes import pi_copilot as route_module
 
 
+def test_literature_source_review_route_returns_bounded_typed_evidence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        route_module.idea_mining,
+        "review_literature_source",
+        lambda pmid: {
+            "ok": True,
+            "pmid": pmid,
+            "article_kind": "systematic_review",
+            "abstract_excerpt": "A bounded abstract.",
+            "full_text": {"status": "unavailable"},
+        },
+    )
+
+    response = TestClient(app).get("/api/copilot/pi/literature/sources/12345")
+
+    assert response.status_code == 200
+    assert response.json()["article_kind"] == "systematic_review"
+
+
 class FakeService:
     def runtime_status(self) -> dict:
         return {"ok": True, "runtime": {"status": "ready"}}
@@ -342,7 +363,9 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
     )
 
 
-def test_workspace_preview_surfaces_stale_checked_bytes_as_conflict(monkeypatch) -> None:
+def test_workspace_preview_surfaces_stale_checked_bytes_as_conflict(
+    monkeypatch,
+) -> None:
     class StalePreviewService(FakeService):
         def get_workspace_preview(self, **kwargs) -> dict:
             raise PiCopilotError(
@@ -427,7 +450,9 @@ def test_project_research_evidence_route_requires_id_and_digest(monkeypatch) -> 
     assert invalid.status_code in {404, 422}
 
 
-def test_project_data_package_prepare_route_returns_preview_resource(monkeypatch) -> None:
+def test_project_data_package_prepare_route_returns_preview_resource(
+    monkeypatch,
+) -> None:
     fake = FakeService()
     monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
     client = TestClient(app)
@@ -441,7 +466,9 @@ def test_project_data_package_prepare_route_returns_preview_resource(monkeypatch
     assert response.json()["resource"]["kind"] == "data_package_review"
 
 
-def test_project_data_workbench_prepare_route_returns_native_snapshot(monkeypatch) -> None:
+def test_project_data_workbench_prepare_route_returns_native_snapshot(
+    monkeypatch,
+) -> None:
     fake = FakeService()
     monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
     client = TestClient(app)
@@ -656,8 +683,7 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
     )
     assert regenerated.status_code == 200
     assert (
-        regenerated.json()["received"]["regeneration_intent"]
-        == "user_edited_message"
+        regenerated.json()["received"]["regeneration_intent"] == "user_edited_message"
     )
     assert (
         regenerated.json()["received"]["message_intent"]

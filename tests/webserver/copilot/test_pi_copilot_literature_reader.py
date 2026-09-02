@@ -98,6 +98,43 @@ def test_literature_source_preview_preserves_retrieval_fit_without_claiming_acce
     assert "系统参考资料" not in html
 
 
+def test_literature_source_preview_explains_article_type_and_full_text_boundary() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = _read("js/screens-guided-pi-literature.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'zh' }};
+      eval({_ESCAPE_OWNER!r});
+      eval({source!r});
+      console.log(window.EU_GUIDED_PI_LITERATURE.renderSource({{
+        title: 'Delayed awakening after sedation interruption',
+        url: 'https://pubmed.ncbi.nlm.nih.gov/12345/',
+        pmid: '12345',
+        retrieval_fit: 'adjacent_retrieval_fit',
+        article_kind: 'systematic_review',
+        publication_types: ['Systematic Review'],
+        abstract_excerpt: 'Delayed awakening has multiple competing explanations.',
+        source_review_status: 'reviewed',
+        full_text: {{status: 'reviewed', url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC12345/', evidence_spans: [
+          {{section: 'results', label: 'Results', excerpt: 'Recovery definitions varied across studies.'}}
+        ]}},
+      }}));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    html = completed.stdout
+    assert "系统综述 / Meta 分析" in html
+    assert "为什么收录这篇文献" in html
+    assert "它能支持什么" in html
+    assert "它不能支持什么" in html
+    assert "Delayed awakening has multiple competing explanations" in html
+    assert "正文补充" in html
+    assert "Recovery definitions varied across studies" in html
+    assert "不能完整回答当前 Idea" in html
+
+
 def test_replay_projection_keeps_bounded_literature_retrieval_fit() -> None:
     resource = projections._project_replay_resource(
         {
