@@ -112,7 +112,6 @@ def table_one_executor_code(
     )
     rendered = textwrap.dedent(
         f"""
-        import hashlib
         import json
         import os
         from pathlib import Path
@@ -120,6 +119,9 @@ def table_one_executor_code(
         import pandas as pd
         import pyarrow.parquet as pq
 
+        from easyicu.research_agent.execution.runners.typed_input_binding import (
+            load_step_cohort_frame,
+        )
         from easyicu.research_agent.methods.table_one import (
             build_grouped_table_one,
             table_one_spec_sha256,
@@ -134,85 +136,9 @@ def table_one_executor_code(
         out_dir = Path(os.environ["STEP_OUT_DIR"])
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        def sha256_file(path):
-            digest = hashlib.sha256()
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            return digest.hexdigest()
-
-        def load_typed_cohort(input_key):
-            run_dir = Path(os.environ["EASYICU_RUN_DIR"]).resolve()
-            manifest_path = Path(
-                os.environ["EASYICU_RESOLVED_INPUTS_JSON"]
-            ).resolve()
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            inputs = manifest.get("inputs")
-            if not isinstance(inputs, dict) or input_key not in inputs:
-                raise RuntimeError(
-                    "Missing exact typed cohort binding: %s" % input_key
-                )
-            binding = inputs[input_key]
-            relative_path = binding.get("relative_path")
-            expected_sha256 = binding.get("sha256")
-            contract = binding.get("product_contract")
-            if (
-                not isinstance(relative_path, str)
-                or not relative_path
-                or not isinstance(expected_sha256, str)
-                or len(expected_sha256) != 64
-                or not isinstance(contract, dict)
-            ):
-                raise RuntimeError("Typed cohort binding is incomplete")
-            cohort_path = (run_dir / relative_path).resolve()
-            try:
-                cohort_path.relative_to(run_dir)
-            except ValueError as exc:
-                raise RuntimeError(
-                    "Typed cohort binding escapes EASYICU_RUN_DIR"
-                ) from exc
-            if not cohort_path.is_file():
-                raise RuntimeError("Typed cohort binding does not name a file")
-            if sha256_file(cohort_path) != expected_sha256:
-                raise RuntimeError("Typed cohort digest verification failed")
-            columns = contract.get("columns")
-            row_count = contract.get("row_count")
-            if (
-                not isinstance(columns, list)
-                or not columns
-                or not all(isinstance(value, str) and value for value in columns)
-                or len(set(columns)) != len(columns)
-                or not isinstance(row_count, int)
-                or isinstance(row_count, bool)
-                or row_count < 0
-            ):
-                raise RuntimeError(
-                    "Typed cohort product_contract is incomplete"
-                )
-            suffix = cohort_path.suffix.lower()
-            if suffix in {{".parquet", ".pq"}}:
-                frame = pd.read_parquet(cohort_path)
-            elif suffix == ".csv":
-                frame = pd.read_csv(cohort_path)
-            elif suffix == ".tsv":
-                frame = pd.read_csv(cohort_path, sep="\\t")
-            else:
-                raise RuntimeError("Typed cohort table format is unsupported")
-            if list(frame.columns) != columns:
-                raise RuntimeError(
-                    "Typed cohort columns do not match product_contract"
-                )
-            if len(frame) != row_count:
-                raise RuntimeError(
-                    "Typed cohort row count does not match product_contract"
-                )
-            return frame, cohort_path
-
-        if typed_cohort_input is None:
-            cohort_path = Path(os.environ["COHORT_PARQUET"])
-            frame = pd.read_parquet(cohort_path)
-        else:
-            frame, cohort_path = load_typed_cohort(typed_cohort_input)
+        frame, cohort_path = load_step_cohort_frame(
+            typed_cohort_input=typed_cohort_input
+        )
 
         __EASYICU_STANDARD_PLAUSIBILITY_RECEIPT__
 
