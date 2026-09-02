@@ -23,8 +23,11 @@ This module is designed to fit the EasyICU traceability story:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -48,6 +51,49 @@ from .providers.mocks import MockLLMClient
 from .providers.factory import authorized_complete
 from .providers.protocol import LLMClient, LLMMessage
 from .schema import HypothesisBlueprint, ResearchContext, VariableRole
+
+logger = logging.getLogger(__name__)
+
+
+
+def _describe_transport_failure(exc: BaseException) -> str:
+    """Name what actually went wrong on a retrieval round trip.
+
+    Both clients degrade to an empty result list on purpose — a literature
+    lookup must never break an otherwise valid analysis. But "empty" then
+    covers four very different states: the network was unreachable, the key
+    was rejected, the source rate-limited us, or the query genuinely matched
+    nothing. Only the last is a statement about the literature; the other
+    three are statements about this run. Collapsing them is how a bundle
+    reports "we searched and found nothing" when nothing was ever searched.
+
+    The list return stays; this is the reason string that travels with it.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        status = int(getattr(exc, "code", 0) or 0)
+        if status == 429:
+            return f"rate limited by the source (HTTP {status})"
+        if status in (401, 403):
+            return f"credentials were rejected (HTTP {status})"
+        return f"the source returned HTTP {status}"
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, TimeoutError) or isinstance(exc.reason, socket.timeout):
+            return "the request timed out"
+        return f"the source was unreachable ({reason})"
+    if isinstance(exc, TimeoutError):
+        return "the request timed out"
+    return f"{type(exc).__name__}: {exc}"
+
+
+
+def _record_transport_failures(
+    sink: Dict[str, List[str]], source: str, client: Any
+) -> None:
+    """Copy a client's per-search transport failures into the provenance sink."""
+    failures = list(getattr(client, "transport_failures", None) or [])
+    if failures:
+        sink.setdefault(source, []).extend(failures)
 
 
 class CitationRecord(BaseModel):
@@ -111,6 +157,16 @@ class LiteratureSearchProvenance(BaseModel):
     sources_returning: List[str] = Field(
         default_factory=list,
         description="Sources that actually returned at least one record.",
+    )
+    sources_failing: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Why an enabled source produced no records: unreachable, rejected "
+            "credentials, rate limit, malformed response. Absence from "
+            "``sources_returning`` alone cannot distinguish those from a query "
+            "that genuinely matched nothing, and only the latter is a "
+            "statement about the literature."
+        ),
     )
     search_queries: Dict[str, List[str]] = Field(
         default_factory=dict,
@@ -655,6 +711,10 @@ class PubMedLiteratureClient:
         self.tool = tool
         self.timeout = float(timeout)
         self.base_url = base_url.rstrip("/")
+        # Reasons this client returned nothing, for the search that is running
+        # now. Read by LiteratureAgent so provenance can separate "the source
+        # returned nothing" from "the source never answered".
+        self.transport_failures: List[str] = []
 
     # ------------------------------------------------------------------
     # Internal HTTP
@@ -682,8 +742,22 @@ class PubMedLiteratureClient:
         try:
             with urllib.request.urlopen(url, timeout=self.timeout) as resp:
                 return resp.read()
-        except Exception:
+        except Exception as exc:
+            self.record_transport_failure(path, exc)
             return None
+
+    # ------------------------------------------------------------------
+    # Transport diagnostics
+    # ------------------------------------------------------------------
+
+    def record_transport_failure(self, path: str, exc: BaseException) -> None:
+        """Remember why a round trip produced no body, and say so in the log."""
+        reason = f"{path}: {_describe_transport_failure(exc)}"
+        self.transport_failures.append(reason)
+        logger.warning("PubMed retrieval degraded — %s", reason)
+
+    def reset_transport_failures(self) -> None:
+        self.transport_failures = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -2165,9 +2239,15 @@ class TavilyLiteratureClient:
         self.search_depth = search_depth
         self.include_domains = list(include_domains or [])
         self.exclude_domains = list(exclude_domains or [])
+        self.transport_failures: List[str] = []
 
     def search(self, query: str, *, max_results: int = 5) -> List[CitationRecord]:
-        if not query or not self.api_key:
+        if not query:
+            return []
+        if not self.api_key:
+            self.transport_failures.append(
+                "search: no Tavily API key is configured, so no search was issued"
+            )
             return []
         payload: Dict[str, Any] = {
             "query": query,
@@ -2215,8 +2295,18 @@ class TavilyLiteratureClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.read()
-        except Exception:
+        except Exception as exc:
+            self.record_transport_failure(path, exc)
             return None
+
+    def record_transport_failure(self, path: str, exc: BaseException) -> None:
+        """Remember why a round trip produced no body, and say so in the log."""
+        reason = f"{path}: {_describe_transport_failure(exc)}"
+        self.transport_failures.append(reason)
+        logger.warning("Tavily retrieval degraded — %s", reason)
+
+    def reset_transport_failures(self) -> None:
+        self.transport_failures = []
 
 
 def build_tavily_query_for_context(context: ResearchContext) -> str:
@@ -2363,6 +2453,7 @@ class LiteratureAgent:
         curated_seed_count = len(baseline)
         sources_enabled: List[str] = []
         sources_returning: List[str] = []
+        sources_failing: Dict[str, List[str]] = {}
         search_queries: Dict[str, List[str]] = {}
         record_queries: Dict[str, List[str]] = {}
         screening_decisions: List[LiteratureScreeningDecision] = []
@@ -2483,6 +2574,8 @@ class LiteratureAgent:
             live_bibliographic_retrieval_attempted = True
             sources_enabled.append("pubmed")
             client = self.pubmed_client or PubMedLiteratureClient()
+            if callable(getattr(client, "reset_transport_failures", None)):
+                client.reset_transport_failures()
             fallback_query = build_pubmed_protocol_query_for_context(context)
             try:
                 stratified_search = getattr(client, "search_context_strata", None)
@@ -2499,11 +2592,15 @@ class LiteratureAgent:
                     pubmed_record_queries = {
                         record.key: [fallback_query] for record in hits
                     }
-            except Exception:
+            except Exception as exc:
                 hits = []
                 pubmed_queries = build_pubmed_protocol_queries_for_context(context)
                 pubmed_record_queries = {}
+                sources_failing.setdefault("pubmed", []).append(
+                    f"search: {_describe_transport_failure(exc)}"
+                )
             search_queries["pubmed"] = pubmed_queries
+            _record_transport_failures(sources_failing, "pubmed", client)
             if hits:
                 sources_returning.append("pubmed")
             identified += len(hits)
@@ -2537,13 +2634,19 @@ class LiteratureAgent:
             live_bibliographic_retrieval_attempted = True
             sources_enabled.append("tavily")
             client = self.tavily_client or TavilyLiteratureClient()
+            if callable(getattr(client, "reset_transport_failures", None)):
+                client.reset_transport_failures()
             search_queries["tavily"] = [build_tavily_query_for_context(context)]
             try:
                 hits = client.search_for_context(
                     context, max_results=self.tavily_retmax
                 )
-            except Exception:
+            except Exception as exc:
                 hits = []
+                sources_failing.setdefault("tavily", []).append(
+                    f"search: {_describe_transport_failure(exc)}"
+                )
+            _record_transport_failures(sources_failing, "tavily", client)
             if hits:
                 sources_returning.append("tavily")
             identified += len(hits)
@@ -2640,6 +2743,11 @@ class LiteratureAgent:
             curated_seed_count=curated_seed_count,
             sources_enabled=sources_enabled,
             sources_returning=sources_returning,
+            sources_failing={
+                source: list(dict.fromkeys(reasons))
+                for source, reasons in sources_failing.items()
+                if reasons
+            },
             search_queries=search_queries,
             record_queries=record_queries,
             search_conducted=search_conducted,
@@ -2650,6 +2758,22 @@ class LiteratureAgent:
             ),
             note=(
                 (
+                    "Retrieval ran but "
+                    + "; ".join(
+                        f"{source} returned nothing because "
+                        + " and ".join(dict.fromkeys(reasons))
+                        for source, reasons in sorted(sources_failing.items())
+                        if reasons and source not in sources_returning
+                    )
+                    + ". PRISMA counts below therefore describe a degraded "
+                    "search, not the available literature."
+                )
+                if search_conducted
+                and any(
+                    reasons and source not in sources_returning
+                    for source, reasons in sources_failing.items()
+                )
+                else (
                     "Retrieval ran; PRISMA counts describe the records these "
                     "sources returned."
                 )
