@@ -10,10 +10,11 @@ strict evidence gate again.
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import List, Mapping, Optional, Sequence
 
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.structured_retry import call_llm_with_structured_retry
+from .writer_repair_decision import WriterRepairDecision
 
 
 def _first_json_object(text: str) -> Optional[str]:
@@ -55,7 +56,7 @@ def decide_writer_evidence_repairs(
     scientific_claims: Optional[Mapping[str, str]] = None,
     claim_required_sentences: Sequence[str] = (),
     language: str = "en",
-) -> List[Dict[str, object]]:
+) -> List[WriterRepairDecision]:
     """Return validated cite/drop/host-claim decisions for rejected prose."""
 
     sentences = [str(sentence).strip() for sentence in missing_sentences]
@@ -149,7 +150,7 @@ def decide_writer_evidence_repairs(
         ),
     ]
 
-    def _parse(raw: str) -> List[Dict[str, object]]:
+    def _parse(raw: str) -> List[WriterRepairDecision]:
         block = _first_json_object(raw)
         if block is None:
             raise ValueError("writer evidence repair returned no JSON object")
@@ -157,81 +158,49 @@ def decide_writer_evidence_repairs(
         raw_decisions = payload.get("decisions") if isinstance(payload, dict) else None
         if not isinstance(raw_decisions, list):
             raise ValueError("writer evidence repair requires a decisions list")
-        normalized: List[Dict[str, object]] = []
+        normalized: List[WriterRepairDecision] = []
         seen: set[int] = set()
         for item in raw_decisions:
             if not isinstance(item, dict):
                 raise ValueError("each writer evidence decision must be an object")
-            index = item.get("index")
-            if (
-                not isinstance(index, int)
-                or isinstance(index, bool)
-                or index < 0
-                or index >= len(sentences)
-                or index in seen
-            ):
+            # Shape — index, action, and which fields each action may carry —
+            # is the value type's invariant, checked in its constructor.
+            decision = WriterRepairDecision.from_mapping(item)
+            index = decision.index
+            if index >= len(sentences) or index in seen:
                 raise ValueError(
                     "writer evidence decision indexes must be unique and in range"
                 )
-            action = str(item.get("action") or "").strip().lower()
-            claim_ref = str(item.get("claim_ref") or "").strip()
-            raw_ids = item.get("evidence_ids", [])
-            if not isinstance(raw_ids, list):
-                raise ValueError("writer evidence_ids must be a list")
-            selected_ids = tuple(
-                dict.fromkeys(
-                    str(evidence_id).strip()
-                    for evidence_id in raw_ids
-                    if str(evidence_id).strip()
-                )
-            )
-            if any(evidence_id not in allowed_set for evidence_id in selected_ids):
+            # What remains is what only this call knows: which ids are
+            # registered for this run, and which sentences the host marked as
+            # requiring a scientific claim.
+            if any(
+                evidence_id not in allowed_set
+                for evidence_id in decision.evidence_ids
+            ):
                 raise ValueError(
                     "writer evidence repair selected an unregistered evidence id"
                 )
-            if action == "cite":
-                if sentences[index] in claim_required:
-                    raise ValueError(
-                        "scientific-claim sentences cannot borrow evidence citations"
-                    )
-                if not 1 <= len(selected_ids) <= 3:
-                    raise ValueError(
-                        "cite decisions require 1-3 registered evidence ids"
-                    )
-                if claim_ref:
-                    raise ValueError("cite decisions cannot select a claim_ref")
-            elif action == "claim":
+            if decision.action == "cite" and sentences[index] in claim_required:
+                raise ValueError(
+                    "scientific-claim sentences cannot borrow evidence citations"
+                )
+            if decision.action == "claim":
                 if sentences[index] not in claim_required:
                     raise ValueError(
                         "claim decisions are limited to scientific-claim sentences"
                     )
-                if selected_ids:
-                    raise ValueError("claim decisions cannot include evidence ids")
-                if claim_ref not in claim_text_by_ref:
+                if decision.claim_ref not in claim_text_by_ref:
                     raise ValueError(
                         "claim decisions require one registered host claim_ref"
                     )
-            elif action == "drop":
-                if selected_ids:
-                    raise ValueError("drop decisions cannot include evidence ids")
-                if claim_ref:
-                    raise ValueError("drop decisions cannot select a claim_ref")
-            else:
-                raise ValueError("writer evidence action must be cite, claim, or drop")
             seen.add(index)
-            decision: Dict[str, object] = {
-                "index": index,
-                "action": action,
-                "evidence_ids": list(selected_ids),
-            }
-            if action == "claim":
-                decision["claim_ref"] = claim_ref
             normalized.append(decision)
         if seen != set(range(len(sentences))):
             raise ValueError(
                 "writer evidence repair must decide every flagged sentence"
             )
-        return sorted(normalized, key=lambda item: int(item["index"]))
+        return sorted(normalized, key=lambda decision: decision.index)
 
     return call_llm_with_structured_retry(
         llm,
@@ -253,4 +222,4 @@ def decide_writer_evidence_repairs(
     )
 
 
-__all__ = ["decide_writer_evidence_repairs"]
+__all__ = ["WriterRepairDecision", "decide_writer_evidence_repairs"]
