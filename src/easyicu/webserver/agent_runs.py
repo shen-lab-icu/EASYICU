@@ -36,6 +36,13 @@ from easyicu.webserver.research_evidence_preview import (
 )
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver.run_record import (
+    RunDirectory,
+    RunRecord,
+    RunRecordReadError,
+    RunRecordReadResult,
+    read_error,
+)
 
 
 class AgentRunConfigError(ValueError):
@@ -142,13 +149,12 @@ def make_agent_run_runner(
     def runner(job: Any) -> Dict[str, Any]:
         started = time.time()
         run_id = f"run_{job.id}"
-        safe_study = _slug(study_id or "study")
         root = (
             Path(project_root).expanduser()
             if project_root
             else state_paths.projects_root()
         )
-        run_dir = root / safe_study / run_id
+        run_dir = RunDirectory.create(root, study_id, job.id).path
         run_dir.mkdir(parents=True, exist_ok=True)
         total_steps = 5 if resolved_run_type == "full" else 4
 
@@ -517,20 +523,29 @@ def make_agent_run_runner(
 project_artifact_governance = run_artifact_disclosure.project_artifact_governance
 
 
-def read_run_review(project_dir: str) -> Dict[str, Any]:
-    """Read the bounded artifact set for a local agent run review screen."""
-    run_dir = _resolve_run_dir(project_dir)
-    if run_dir is None:
-        return {"ok": False, "error": "project_dir_required"}
+def read_run_record(project_dir: str) -> RunRecordReadResult:
+    """Read one typed, bounded local run record."""
+    directory = RunDirectory.resolve(project_dir)
+    if directory is None:
+        return RunRecordReadError(ok=False, error="project_dir_required")
+    run_dir = directory.path
     if not run_dir.exists() or not run_dir.is_dir():
-        return {"ok": False, "error": "run_dir_not_found", "project_dir": str(run_dir)}
+        return RunRecordReadError(
+            ok=False,
+            error="run_dir_not_found",
+            directory=directory,
+        )
 
     loaded = _load_run_artifacts(run_dir)
     if not loaded.get("ok"):
-        return loaded
+        return read_error(loaded, directory)
     payloads = loaded["payloads"]
     if "quality_gate.json" not in payloads or "evidence_ledger.json" not in payloads:
-        return {"ok": False, "error": "not_agent_run_dir", "project_dir": str(run_dir)}
+        return RunRecordReadError(
+            ok=False,
+            error="not_agent_run_dir",
+            directory=directory,
+        )
 
     run_context = payloads.get("run_context.json") or {}
     ledger = payloads.get("evidence_ledger.json") or {}
@@ -545,26 +560,22 @@ def read_run_review(project_dir: str) -> Dict[str, Any]:
         signoff_stale=bool(signoff_integrity.get("signoff_stale")),
     )
 
-    return {
-        "ok": True,
-        "project_dir": str(run_dir),
-        "run_id": run_context.get("run_id") or ledger.get("run_id"),
-        "run_type": ledger.get("run_type") or "preflight",
-        "study_id": run_context.get("study_id"),
-        "scientific_configuration_sha256": run_context.get(
-            "scientific_configuration_sha256"
-        ),
-        "mode": run_context.get("mode"),
-        "engine": run_context.get("engine"),
-        "gate": gate,
-        "readiness": readiness,
-        "signed": bool(signoff),
-        "signoff_stale": bool(signoff_integrity.get("signoff_stale")),
-        "signoff_integrity": signoff_integrity,
-        "signoff": signoff,
-        "artifacts": artifacts,
-        "artifact_payloads": _public_review_payloads(payloads),
-    }
+    return RunRecord.build(
+        directory=directory,
+        run_context=run_context,
+        ledger=ledger,
+        gate_payload=gate,
+        readiness_payload=readiness,
+        signoff_payload=signoff,
+        signoff_integrity=signoff_integrity,
+        artifacts=artifacts,
+        artifact_payloads=_public_review_payloads(payloads),
+    )
+
+
+def read_run_review(project_dir: str) -> Dict[str, Any]:
+    """Compatibility JSON projection for HTTP and legacy UI consumers."""
+    return read_run_record(project_dir).to_dict()
 
 
 def create_human_signoff(
@@ -574,19 +585,18 @@ def create_human_signoff(
     note: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persist a local human signoff artifact without unlocking the draft."""
-    review = read_run_review(project_dir)
-    if not review.get("ok"):
-        return review
-    if review.get("signed"):
-        return review
+    record = read_run_record(project_dir)
+    if isinstance(record, RunRecordReadError):
+        return record.to_dict()
+    if record.signed:
+        return record.to_dict()
 
-    readiness = review.get("readiness") or {}
-    if not readiness.get("signable"):
+    if not record.readiness.signable:
         return {
             "ok": False,
             "error": "readiness_gate_not_signable",
-            "project_dir": review.get("project_dir"),
-            "readiness": readiness,
+            "project_dir": str(record.directory.path),
+            "readiness": record.readiness.to_dict(),
         }
 
     provided = {
@@ -603,11 +613,11 @@ def create_human_signoff(
 
     reviewer_text = re.sub(r"\s+", " ", str(reviewer or "local_reviewer")).strip()[:120]
     note_text = re.sub(r"\s+", " ", str(note or "")).strip()[:1000]
-    gate = review.get("gate") or {}
+    gate = record.gate
     signoff = {
-        "run_id": review.get("run_id"),
-        "run_type": review.get("run_type"),
-        "study_id": review.get("study_id"),
+        "run_id": record.run_id,
+        "run_type": record.run_type,
+        "study_id": record.study_id,
         "signed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "reviewer": reviewer_text or "local_reviewer",
         "status": "signed_analysis_only",
@@ -620,25 +630,25 @@ def create_human_signoff(
         "tokens": 0,
         "external_calls": 0,
         "gate_before_signoff": {
-            "status": gate.get("status"),
-            "reason": gate.get("reason"),
+            "status": gate.status,
+            "reason": gate.reason,
             "reportable": False,
             "draft_unlocked": False,
-            "checks": gate.get("checks", []),
+            "checks": [dict(check) for check in gate.checks],
         },
         "artifact_names": [
-            item.get("name")
-            for item in review.get("artifacts", [])
-            if item.get("name") != "human_signoff.json"
+            item.name
+            for item in record.artifacts
+            if item.name != "human_signoff.json"
         ],
         "signed_artifacts": [
             {
-                "name": item.get("name"),
-                "sha256": item.get("sha256"),
-                "bytes": item.get("bytes"),
+                "name": item.name,
+                "sha256": item.sha256,
+                "bytes": item.bytes,
             }
-            for item in review.get("artifacts", [])
-            if item.get("name") != "human_signoff.json"
+            for item in record.artifacts
+            if item.name != "human_signoff.json"
         ],
     }
     signoff["privacy_scan"] = run_artifact_disclosure.scan_artifact_payloads(
@@ -651,8 +661,8 @@ def create_human_signoff(
             "privacy_scan": signoff["privacy_scan"],
         }
 
-    _write_json(Path(str(review["project_dir"])) / "human_signoff.json", signoff)
-    return read_run_review(str(review["project_dir"]))
+    _write_json(record.directory.artifact("human_signoff.json"), signoff)
+    return read_run_record(str(record.directory.path)).to_dict()
 
 
 def list_run_history(
@@ -685,10 +695,10 @@ def list_run_history(
         for run_dir in study_dir.iterdir():
             if not run_dir.is_dir() or not run_dir.name.startswith("run_"):
                 continue
-            review = read_run_review(str(run_dir))
-            if not review.get("ok"):
+            record = read_run_record(str(run_dir))
+            if isinstance(record, RunRecordReadError):
                 continue
-            runs.append(_history_row(review, run_dir))
+            runs.append(_history_row(record, run_dir))
     runs.sort(key=lambda row: row.get("updated_at_epoch") or 0, reverse=True)
     limit = max(1, min(int(limit or 50), 200))
     return {
@@ -1250,10 +1260,8 @@ def _gate_reason(checks: List[Dict[str, Any]], hard_fail: bool, run_type: str) -
 
 
 def _resolve_run_dir(project_dir: str) -> Optional[Path]:
-    text = str(project_dir or "").strip()
-    if not text:
-        return None
-    return Path(text).expanduser().resolve()
+    directory = RunDirectory.resolve(project_dir)
+    return directory.path if directory is not None else None
 
 
 def _safe_artifact_path(
@@ -1419,11 +1427,11 @@ def _readiness_from_gate(
     }
 
 
-def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
-    readiness = review.get("readiness") or {}
-    gate = review.get("gate") or {}
-    artifacts = review.get("artifacts") or []
-    artifact_payloads = review.get("artifact_payloads") or {}
+def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
+    readiness = review.readiness
+    gate = review.gate
+    artifacts = review.artifacts
+    artifact_payloads = review.artifact_payloads
     source_manifest = artifact_payloads.get("source_run_manifest.json") or {}
     pending_reviews = source_manifest.get("pending_reviews") or []
     pending_reason_codes = sorted(
@@ -1433,25 +1441,23 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
             if isinstance(item, Mapping) and str(item.get("reason_code") or "").strip()
         }
     )
-    updated = max((run_dir / str(a.get("name"))).stat().st_mtime for a in artifacts)
+    updated = max((run_dir / artifact.name).stat().st_mtime for artifact in artifacts)
     gate_checks = {
         str(item.get("id") or "").strip(): bool(item.get("passed"))
-        for item in (gate.get("checks") or [])
+        for item in gate.checks
         if isinstance(item, Mapping) and str(item.get("id") or "").strip()
     }
     return {
-        "run_id": review.get("run_id") or run_dir.name,
-        "run_label": str(review.get("run_id") or run_dir.name).replace("_", " "),
-        "study_id": review.get("study_id"),
-        "scientific_configuration_sha256": review.get(
-            "scientific_configuration_sha256"
-        ),
-        "mode": review.get("mode"),
-        "engine": review.get("engine"),
-        "run_type": review.get("run_type"),
-        "project_dir": review.get("project_dir"),
-        "gate_status": gate.get("status"),
-        "gate_reason": gate.get("reason"),
+        "run_id": review.run_id or run_dir.name,
+        "run_label": str(review.run_id or run_dir.name).replace("_", " "),
+        "study_id": review.study_id,
+        "scientific_configuration_sha256": review.scientific_configuration_sha256,
+        "mode": review.mode,
+        "engine": review.engine,
+        "run_type": review.run_type,
+        "project_dir": str(review.directory.path),
+        "gate_status": gate.status,
+        "gate_reason": gate.reason,
         "gate_checks": gate_checks,
         "run_status": source_manifest.get("status"),
         "pending_review_reason_codes": pending_reason_codes,
@@ -1462,14 +1468,14 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "scientific_plan_review_score": source_manifest.get(
             "scientific_plan_review_score"
         ),
-        "readiness_status": readiness.get("status"),
-        "signed": bool(review.get("signed")),
-        "signoff_stale": bool(review.get("signoff_stale")),
-        "integrity_status": (review.get("signoff_integrity") or {}).get("status"),
+        "readiness_status": readiness.status,
+        "signed": review.signed,
+        "signoff_stale": review.signoff_stale,
+        "integrity_status": review.signoff_integrity.get("status"),
         "reportable": False,
         "draft_unlocked": False,
         "artifact_count": len(artifacts),
-        "artifact_names": [a.get("name") for a in artifacts],
+        "artifact_names": [artifact.name for artifact in artifacts],
         "updated_at_epoch": updated,
         "updated_at": datetime.fromtimestamp(updated, timezone.utc)
         .isoformat()

@@ -324,15 +324,14 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
     )
     monkeypatch.setattr(
         agent_runs,
-        "read_run_review",
-        lambda _project_dir: {
-            "ok": True,
-            "artifact_payloads": {
+        "read_run_record",
+        lambda _project_dir: SimpleNamespace(
+            artifact_payloads={
                 "scientific_plan_review.json": _nonapprovable_review_payload(
                     finding_code=finding_code
                 )
-            },
-        },
+            }
+        ),
     )
 
     contract = agent_pipeline_runs._compile_plan_revision_contract(

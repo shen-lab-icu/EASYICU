@@ -74,6 +74,7 @@ from easyicu.webserver.scientific_readiness_projection import (
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.run_record import RunDirectory, RunRecordReadError
 from easyicu.webserver.research_launch_resume import (
     _DevelopmentResumeAcquisition,
     _slug,
@@ -3301,13 +3302,11 @@ def _compile_plan_revision_contract(
             "plan_revision_source_configuration_superseded",
             "The scientific setup changed after the reviewed plan; its repair contract cannot be reused.",
         )
-    source_review = agent_runs.read_run_review(str(source_row.get("project_dir") or ""))
+    source_record = agent_runs.read_run_record(str(source_row.get("project_dir") or ""))
     review_payload = (
-        (source_review.get("artifact_payloads") or {}).get(
-            "scientific_plan_review.json"
-        )
-        if source_review.get("ok")
-        else None
+        None
+        if isinstance(source_record, RunRecordReadError)
+        else source_record.artifact_payloads.get("scientific_plan_review.json")
     )
     if not isinstance(review_payload, Mapping):
         raise ResearchPipelineRunError(
@@ -4083,7 +4082,7 @@ def make_research_pipeline_run_runner(
         wrapper_dir = (
             execution_resume_target.wrapper_dir
             if execution_resume_target is not None
-            else root / _slug(study.get("id")) / f"run_{job.id}"
+            else RunDirectory.create(root, study.get("id"), job.id).path
         )
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         bound_plan_revision_contract = ""
@@ -5138,7 +5137,7 @@ def refresh_literature_evidence_projection(wrapper_dir: Path) -> Dict[str, Any]:
             "research_pipeline_literature_run_id_missing",
             "The Web projection has no pipeline run id.",
         )
-    pipeline_run = (root / "pipeline" / run_id).resolve()
+    pipeline_run = RunDirectory(root).pipeline_run(run_id).resolve()
     try:
         pipeline_run.relative_to((root / "pipeline").resolve())
     except ValueError as exc:
