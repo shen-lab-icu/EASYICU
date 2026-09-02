@@ -8,7 +8,8 @@ import json
 import os
 from pathlib import Path
 import random
-from typing import Any, Mapping
+import re
+from typing import Any, Mapping, Sequence
 
 from .review_bundle_semantics import CANONICAL_FILES
 
@@ -18,6 +19,8 @@ EXECUTION_CONTRACT_PATH = Path(__file__).with_name(
     "execution_acceptance_contract_v1.json"
 )
 ARMS = ("easyicu_full", "generic_code_agent")
+FORMAL_PAIR_SCOPES = ("qualification12", "core_wp2_wp3")
+_TASK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 
 
 class FormalScheduleError(ValueError):
@@ -62,7 +65,18 @@ class FormalScheduleDryRun:
 
 
 def _load_protocol(path: Path) -> Mapping[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise FormalScheduleError(f"duplicate JSON key: {key}")
+            value[key] = item
+        return value
+
+    value = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicates,
+    )
     if not isinstance(value, dict):
         raise FormalScheduleError("protocol must be a JSON object")
     return value
@@ -72,6 +86,151 @@ def _ordered_arms(first: str) -> tuple[str, str]:
     if first not in ARMS:
         raise FormalScheduleError(f"unknown first arm: {first!r}")
     return first, next(arm for arm in ARMS if arm != first)
+
+
+def _site_assignment_sha256(assignment: Sequence[Mapping[str, Any]]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            list(assignment),
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def expected_site_assignment(
+    scope: str,
+    *,
+    task_ids: Sequence[str] = (),
+    protocol_path: Path = PROTOCOL_PATH,
+) -> tuple[dict[str, Any], ...]:
+    """Return the only registered task-to-site assignment for a pair scope."""
+
+    protocol = _load_protocol(protocol_path)
+    if scope == "core_wp2_wp3":
+        if task_ids:
+            raise FormalScheduleError("core assignment does not accept task IDs")
+        schedule = protocol["formal_schedule"]
+        order = [
+            *schedule["heldout27_execution_order"],
+            *schedule["safety12_execution_order"],
+        ]
+        sites = {
+            **schedule["heldout27_execution_site"],
+            **dict(
+                zip(
+                    schedule["safety12_execution_order"],
+                    schedule["safety12_execution_site"],
+                    strict=True,
+                )
+            ),
+        }
+    elif scope == "qualification12":
+        if (
+            len(task_ids) != 12
+            or len(set(task_ids)) != 12
+            or any(
+                not isinstance(task_id, str) or not _TASK_ID_RE.fullmatch(task_id)
+                for task_id in task_ids
+            )
+        ):
+            raise FormalScheduleError("Qualification12 requires 12 unique task IDs")
+        order = sorted(task_ids)
+        contract = _load_protocol(EXECUTION_CONTRACT_PATH)
+        random.Random(
+            contract["qualification12_assignment"]["randomization_seed"]
+        ).shuffle(order)
+        sites = {
+            task_id: "server" if pair_index % 2 == 1 else "laptop"
+            for pair_index, task_id in enumerate(order, start=1)
+        }
+    else:
+        raise FormalScheduleError(f"unsupported pair scope: {scope!r}")
+    return tuple(
+        {
+            "pair_sequence_number": pair_index,
+            "task_id": task_id,
+            "execution_site": sites[task_id],
+        }
+        for pair_index, task_id in enumerate(order, start=1)
+    )
+
+
+def expected_site_assignment_sha256(
+    scope: str,
+    *,
+    task_ids: Sequence[str] = (),
+    protocol_path: Path = PROTOCOL_PATH,
+) -> str:
+    return _site_assignment_sha256(
+        expected_site_assignment(
+            scope,
+            task_ids=task_ids,
+            protocol_path=protocol_path,
+        )
+    )
+
+
+def signed_site_assignment_sha256(receipts: Mapping[str, Any]) -> str:
+    """Read the assignment digest that the authority will verify before transport."""
+
+    declaration = receipts.get("atomic_declaration")
+    if not isinstance(declaration, Mapping):
+        raise FormalScheduleError("formal receipts lack an atomic declaration")
+    digest = declaration.get("site_assignment_sha256")
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise FormalScheduleError("signed site assignment digest is invalid")
+    return digest
+
+
+def validate_authorized_site_coordinates(
+    scope: str,
+    coordinates: Sequence[Mapping[str, str]],
+    *,
+    declared_site_assignment_sha256: str,
+    protocol_path: Path = PROTOCOL_PATH,
+) -> str:
+    """Bind signed call coordinates to the registered pair assignment."""
+
+    if scope not in FORMAL_PAIR_SCOPES:
+        return declared_site_assignment_sha256
+    task_ids = tuple(sorted({coordinate["task_id"] for coordinate in coordinates}))
+    assignment = expected_site_assignment(
+        scope,
+        task_ids=task_ids if scope == "qualification12" else (),
+        protocol_path=protocol_path,
+    )
+    expected_digest = _site_assignment_sha256(assignment)
+    if declared_site_assignment_sha256 != expected_digest:
+        raise FormalScheduleError("signed site assignment digest mismatch")
+    expected_by_task = {item["task_id"]: item for item in assignment}
+    arms_by_task: dict[str, set[str]] = {task_id: set() for task_id in expected_by_task}
+    for coordinate in coordinates:
+        task_id = coordinate["task_id"]
+        expected = expected_by_task.get(task_id)
+        if expected is None:
+            raise FormalScheduleError(f"task is absent from site assignment: {task_id}")
+        if coordinate["execution_site"] != expected["execution_site"]:
+            raise FormalScheduleError(f"task site assignment mismatch: {task_id}")
+        arm = coordinate["arm"]
+        if arm not in ARMS:
+            raise FormalScheduleError(f"unsupported arm in site assignment: {arm}")
+        arms_by_task[task_id].add(arm)
+    incomplete = sorted(
+        task_id for task_id, arms in arms_by_task.items() if arms != set(ARMS)
+    )
+    if incomplete:
+        raise FormalScheduleError(
+            "signed assignment must contain both arms for every task: "
+            + ", ".join(incomplete)
+        )
+    return expected_digest
 
 
 def _prepare_output_roots(output_roots: Mapping[str, Path]) -> dict[str, Path]:
@@ -117,28 +276,29 @@ def _finalize_dry_run(
             "formal trajectory output paths must not already exist: "
             + ", ".join(occupied[:3])
         )
-    site_assignment = [
+    site_assignment = tuple(
         {
             "pair_sequence_number": row.pair_sequence_number,
             "task_id": row.task_id,
             "execution_site": row.execution_site,
         }
         for row in rows[::2]
-    ]
+    )
+    task_ids = tuple(item["task_id"] for item in site_assignment)
+    expected_assignment = expected_site_assignment(
+        scope,
+        task_ids=task_ids if scope == "qualification12" else (),
+        protocol_path=protocol_path,
+    )
+    if site_assignment != expected_assignment:
+        raise FormalScheduleError("generated site assignment drifted")
     return FormalScheduleDryRun(
         protocol_sha256=hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
         scope=scope,
         trajectory_count=len(rows),
         provider_accessed=False,
         site_pair_counts=dict(site_pair_counts),
-        site_assignment_sha256=hashlib.sha256(
-            json.dumps(
-                site_assignment,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest(),
+        site_assignment_sha256=_site_assignment_sha256(site_assignment),
         trajectories=tuple(rows),
     )
 
@@ -229,17 +389,8 @@ def build_qualification_schedule_dry_run(
 ) -> FormalScheduleDryRun:
     """Project the post-unsealing Qualification12 schedule without Provider use."""
 
-    if (
-        len(task_ids) != 12
-        or len(set(task_ids)) != 12
-        or any(not isinstance(task_id, str) or not task_id.strip() for task_id in task_ids)
-    ):
-        raise FormalScheduleError("Qualification12 requires 12 unique task IDs")
     roots = _prepare_output_roots(output_roots)
-    contract = _load_protocol(EXECUTION_CONTRACT_PATH)
-    assignment = contract["qualification12_assignment"]
-    ordered_ids = sorted(task_ids)
-    random.Random(assignment["randomization_seed"]).shuffle(ordered_ids)
+    assignment = expected_site_assignment("qualification12", task_ids=task_ids)
     first_arm_pattern = (
         "easyicu_full",
         "easyicu_full",
@@ -248,8 +399,10 @@ def build_qualification_schedule_dry_run(
     )
     site_pair_counts = {site: 0 for site in roots}
     rows: list[FormalTrajectory] = []
-    for pair_index, task_id in enumerate(ordered_ids, start=1):
-        site = "server" if pair_index % 2 == 1 else "laptop"
+    for item in assignment:
+        pair_index = item["pair_sequence_number"]
+        task_id = item["task_id"]
+        site = item["execution_site"]
         first_arm = first_arm_pattern[(pair_index - 1) % len(first_arm_pattern)]
         site_pair_counts[site] += 1
         arms = _ordered_arms(first_arm)
@@ -294,11 +447,19 @@ def build_qualification_schedule_dry_run(
 def claim_trajectory_lease(
     trajectory: FormalTrajectory,
     *,
+    schedule: FormalScheduleDryRun,
     logical_site: str,
     lease_root: Path,
 ) -> Path:
     """Claim one statically assigned trajectory exactly once on its site."""
 
+    if (
+        trajectory not in schedule.trajectories
+        or schedule.scope != trajectory.scope
+        or schedule.protocol_sha256
+        != hashlib.sha256(PROTOCOL_PATH.read_bytes()).hexdigest()
+    ):
+        raise FormalScheduleError("trajectory is not in the registered dry run")
     if logical_site != trajectory.execution_site:
         raise FormalScheduleError("trajectory cannot move to another logical site")
     root = Path(lease_root)
@@ -326,10 +487,13 @@ def claim_trajectory_lease(
             "failed",
         }:
             raise FormalScheduleError("predecessor arm is not terminal")
-    lease_path = root / f"{trajectory.task_id}__{trajectory.arm}.lease.json"
+    lease_path = root / (
+        f"{trajectory.scope}__{trajectory.task_id}__{trajectory.arm}.lease.json"
+    )
     payload = {
         "schema_version": "easyicu.figure2_trajectory_lease/1",
         "protocol_sha256": hashlib.sha256(PROTOCOL_PATH.read_bytes()).hexdigest(),
+        "site_assignment_sha256": schedule.site_assignment_sha256,
         "scope": trajectory.scope,
         "sequence_number": trajectory.sequence_number,
         "pair_sequence_number": trajectory.pair_sequence_number,
@@ -360,6 +524,7 @@ def validate_trajectory_lease(
     task_id: str,
     arm: str,
     execution_site: str,
+    site_assignment_sha256: str,
 ) -> Mapping[str, Any]:
     """Validate the exact lease required by a formal runner constructor."""
 
@@ -373,6 +538,7 @@ def validate_trajectory_lease(
     required = {
         "schema_version",
         "protocol_sha256",
+        "site_assignment_sha256",
         "scope",
         "sequence_number",
         "pair_sequence_number",
@@ -386,6 +552,7 @@ def validate_trajectory_lease(
     expected = {
         "schema_version": "easyicu.figure2_trajectory_lease/1",
         "protocol_sha256": hashlib.sha256(PROTOCOL_PATH.read_bytes()).hexdigest(),
+        "site_assignment_sha256": site_assignment_sha256,
         "scope": scope,
         "task_id": task_id,
         "arm": arm,
@@ -394,6 +561,30 @@ def validate_trajectory_lease(
     for field, value in expected.items():
         if payload[field] != value:
             raise FormalScheduleError(f"trajectory lease {field} mismatch")
+    if scope not in FORMAL_PAIR_SCOPES:
+        raise FormalScheduleError(f"unsupported lease scope: {scope}")
+    if scope == "core_wp2_wp3":
+        assignment = expected_site_assignment(scope)
+        expected_assignment_sha256 = _site_assignment_sha256(assignment)
+        expected_by_task = {item["task_id"]: item for item in assignment}
+        item = expected_by_task.get(task_id)
+        if item is None:
+            raise FormalScheduleError(f"task is absent from core assignment: {task_id}")
+        if execution_site != item["execution_site"]:
+            raise FormalScheduleError("trajectory lease frozen site mismatch")
+        if payload["pair_sequence_number"] != item["pair_sequence_number"]:
+            raise FormalScheduleError("trajectory lease pair sequence mismatch")
+        if site_assignment_sha256 != expected_assignment_sha256:
+            raise FormalScheduleError("trajectory lease assignment digest mismatch")
+    output_dir = Path(payload["output_dir"])
+    if (
+        not output_dir.is_absolute()
+        or output_dir.name != arm
+        or output_dir.parent.name != task_id
+        or output_dir.is_symlink()
+        or output_dir.exists()
+    ):
+        raise FormalScheduleError("trajectory lease output directory mismatch")
     return payload
 
 
@@ -404,7 +595,8 @@ def consume_trajectory_lease(
     task_id: str,
     arm: str,
     execution_site: str,
-) -> Path:
+    site_assignment_sha256: str,
+) -> Mapping[str, Any]:
     """Atomically consume a lease so a formal trajectory cannot be restarted."""
 
     payload = validate_trajectory_lease(
@@ -413,6 +605,7 @@ def consume_trajectory_lease(
         task_id=task_id,
         arm=arm,
         execution_site=execution_site,
+        site_assignment_sha256=site_assignment_sha256,
     )
     path = Path(lease_path)
     started_path = path.with_name(f"{path.name}.started")
@@ -436,7 +629,7 @@ def consume_trajectory_lease(
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump(started_payload, handle, ensure_ascii=False, sort_keys=True)
         handle.write("\n")
-    return started_path
+    return payload
 
 
 __all__ = [
@@ -447,5 +640,9 @@ __all__ = [
     "build_qualification_schedule_dry_run",
     "claim_trajectory_lease",
     "consume_trajectory_lease",
+    "expected_site_assignment",
+    "expected_site_assignment_sha256",
+    "signed_site_assignment_sha256",
+    "validate_authorized_site_coordinates",
     "validate_trajectory_lease",
 ]

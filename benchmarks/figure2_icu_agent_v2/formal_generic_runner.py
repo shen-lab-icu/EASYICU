@@ -17,7 +17,10 @@ from .formal_provider_gate import (
     FormalCallCoordinate,
     complete_formal_provider_call,
 )
-from .formal_scheduler import consume_trajectory_lease
+from .formal_scheduler import (
+    consume_trajectory_lease,
+    signed_site_assignment_sha256,
+)
 from .generic_code_agent_harness import (
     DockerRunnerBackend,
     GenericCodeAgentHarness,
@@ -103,13 +106,15 @@ class FormalGenericCodeAgentRunner:
         provider_hard_stop: TaskProviderHardStop,
         resource_snapshot: Callable[[], Mapping[str, Any]],
     ) -> None:
-        consume_trajectory_lease(
+        lease = consume_trajectory_lease(
             trajectory_lease_path,
             scope=scope,
             task_id=task_id,
             arm="generic_code_agent",
             execution_site=execution_site,
+            site_assignment_sha256=signed_site_assignment_sha256(receipts),
         )
+        self._leased_output_dir = Path(lease["output_dir"]).resolve()
         gateway = FormalGenericModelGateway(
             client=client,
             receipts=receipts,
@@ -168,6 +173,9 @@ class FormalGenericCodeAgentRunner:
         output_dir: Path,
         review_plan: Callable[[Mapping[str, Any]], PlanReviewDecision],
     ) -> GenericHarnessResult:
+        if Path(output_dir).resolve() != self._leased_output_dir:
+            raise ValueError("formal output directory does not match the consumed lease")
+
         def review_without_charging_human_wait(
             plan: Mapping[str, Any],
         ) -> PlanReviewDecision:

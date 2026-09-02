@@ -434,9 +434,10 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
             if path.name != "formal_provider_gate.py"
         )
     ) + (FORMAL_PROVIDER_GATE_PATH,)
+    protected_paths = (*formal_paths, GENERIC_HARNESS_PATH, MULTI_HOST_ACCEPTANCE_PATH)
     protected_trees = {
         path.name: ast.parse(path.read_text(encoding="utf-8"))
-        for path in (*formal_paths, GENERIC_HARNESS_PATH)
+        for path in protected_paths
     }
     imports_by_file: dict[str, set[str]] = {}
     calls_by_file: dict[str, list[ast.Call]] = {}
@@ -462,8 +463,8 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         ):
             _fail("FORMAL_GENERIC_DYNAMIC_IMPORT_FORBIDDEN", name)
 
-    for name in tuple(path.name for path in formal_paths if path != FORMAL_PROVIDER_GATE_PATH) + (
-        GENERIC_HARNESS_PATH.name,
+    for name in tuple(
+        path.name for path in protected_paths if path != FORMAL_PROVIDER_GATE_PATH
     ):
         forbidden_provider_imports = {
             module
@@ -742,6 +743,15 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("BLINDING_RESOURCE_FINGERPRINT_GUARD_MISSING", repr(forbidden_markers))
     if not any("execution-site labels" in marker for marker in forbidden_markers):
         _fail("BLINDING_EXECUTION_SITE_GUARD_MISSING", repr(forbidden_markers))
+    blinding_context = review_contract["normalization"].get(
+        "required_runtime_blinding_context",
+        "",
+    )
+    if not all(
+        term in blinding_context
+        for term in ("two exact formal host markers", "two absolute", "/Volumes", "Windows")
+    ):
+        _fail("BLINDING_RUNTIME_CONTEXT_MISSING", blinding_context)
     receipt_projection = review_contract["normalization"]["blinded_run_receipt_projection"]
     visible_fields = receipt_projection["reviewer_visible_fields"]
     if not any(
@@ -819,6 +829,81 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("FORMAL_LAUNCH_FAIL_CLOSED_INVALID", repr(launch["current_authority"]))
     if launch.get("authority_owner") != str(FORMAL_AUTHORITY_PATH.relative_to(REPO_ROOT)):
         _fail("FORMAL_AUTHORITY_OWNER_INVALID", repr(launch.get("authority_owner")))
+    signed_payload_schema = launch.get("signature_verification", {}).get(
+        "signed_payload_schema", ""
+    )
+    if not all(
+        term in signed_payload_schema
+        for term in (
+            "easyicu.figure2_atomic_declaration/2",
+            "site_assignment_sha256",
+            "every qualification/core coordinate",
+        )
+    ):
+        _fail("FORMAL_AUTHORITY_SITE_ASSIGNMENT_BINDING_MISSING", signed_payload_schema)
+    site_receipt_transport = execution_acceptance.get("site_receipt_transport", {})
+    if not all(
+        term in " ".join(str(value) for value in site_receipt_transport.values())
+        for term in (
+            "unparsed UTF-8 JSON bytes",
+            "duplicate-key-rejecting",
+            "NaN",
+            "already-parsed mappings",
+        )
+    ):
+        _fail(
+            "MULTI_HOST_RAW_RECEIPT_TRANSPORT_MISSING",
+            repr(site_receipt_transport),
+        )
+    launch_receipt_ids = {
+        f"{group}:{index:02d}"
+        for group, descriptions in launch["required_receipts"].items()
+        for index, _description in enumerate(descriptions, start=1)
+    }
+    gate_specs = {
+        "prequalification_go_no_go": {
+            receipt_id
+            for receipt_id in launch_receipt_ids
+            if receipt_id.startswith("qualification_preconditions:")
+        },
+        "core_go_no_go": {
+            receipt_id
+            for receipt_id in launch_receipt_ids
+            if receipt_id.split(":", 1)[0]
+            in {"design", "data", "evaluation", "qualification", "runtime", "batch"}
+        },
+    }
+    for gate_name, expected_ids in gate_specs.items():
+        requirements = execution_acceptance.get(gate_name, {}).get("required")
+        if not isinstance(requirements, list) or not requirements:
+            _fail("EXECUTION_GATE_REQUIREMENTS_INVALID", gate_name)
+        gate_ids: list[str] = []
+        mapped_ids: set[str] = set()
+        for requirement in requirements:
+            if not isinstance(requirement, dict) or set(requirement) != {
+                "gate_id",
+                "requirement",
+                "launch_receipt_ids",
+            }:
+                _fail("EXECUTION_GATE_REQUIREMENT_SCHEMA_INVALID", repr(requirement))
+            gate_ids.append(requirement["gate_id"])
+            receipt_ids = requirement["launch_receipt_ids"]
+            if (
+                not isinstance(requirement["gate_id"], str)
+                or not requirement["gate_id"].strip()
+                or not isinstance(requirement["requirement"], str)
+                or not requirement["requirement"].strip()
+                or not isinstance(receipt_ids, list)
+                or not receipt_ids
+                or any(receipt_id not in expected_ids for receipt_id in receipt_ids)
+            ):
+                _fail("EXECUTION_GATE_RECEIPT_MAPPING_INVALID", repr(requirement))
+            mapped_ids.update(receipt_ids)
+        if len(gate_ids) != len(set(gate_ids)) or mapped_ids != expected_ids:
+            _fail(
+                "EXECUTION_GATE_RECEIPT_COVERAGE_INVALID",
+                f"{gate_name}: missing={sorted(expected_ids - mapped_ids)!r}",
+            )
     expected_launch_owners = {
         "provider_gate": str(FORMAL_PROVIDER_GATE_PATH.relative_to(REPO_ROOT)),
         "easyicu_formal_runner": str(

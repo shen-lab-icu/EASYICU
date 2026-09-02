@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
@@ -40,6 +41,38 @@ def _load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _load_site_receipt(raw: bytes) -> dict[str, Any]:
+    if not isinstance(raw, bytes):
+        raise MultiHostAcceptanceError(
+            "site receipts must be supplied as unparsed JSON bytes"
+        )
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise MultiHostAcceptanceError(
+                    f"duplicate site receipt JSON key: {key}"
+                )
+            value[key] = item
+        return value
+
+    def reject_constant(value: str) -> None:
+        raise MultiHostAcceptanceError(f"nonfinite site receipt value: {value}")
+
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MultiHostAcceptanceError("site receipt is invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise MultiHostAcceptanceError("site receipt must be a JSON object")
+    return value
+
+
 def _canonical_json(value: Mapping[str, Any]) -> bytes:
     try:
         return json.dumps(
@@ -60,7 +93,7 @@ def _require_sha256(value: Any, field: str) -> str:
 
 
 def validate_two_host_preflight(
-    receipts: Sequence[Mapping[str, Any]],
+    receipt_payloads: Sequence[bytes],
     *,
     expected_design_commit: str,
     expected_annotated_tag: str,
@@ -69,7 +102,7 @@ def validate_two_host_preflight(
 
     contract = _load_json(CONTRACT_PATH)
     logical_sites = tuple(contract["logical_sites"])
-    if logical_sites != ("server", "laptop") or len(receipts) != 2:
+    if logical_sites != ("server", "laptop") or len(receipt_payloads) != 2:
         raise MultiHostAcceptanceError("exactly server and laptop receipts are required")
     if not _COMMIT_RE.fullmatch(expected_design_commit):
         raise MultiHostAcceptanceError("expected design commit is invalid")
@@ -87,7 +120,8 @@ def validate_two_host_preflight(
         *boolean_expectations,
     }
     by_site: dict[str, Mapping[str, Any]] = {}
-    for receipt in receipts:
+    for raw_receipt in receipt_payloads:
+        receipt = _load_site_receipt(raw_receipt)
         if set(receipt) != required:
             raise MultiHostAcceptanceError(
                 "site receipt fields do not match the frozen schema"
@@ -103,9 +137,11 @@ def validate_two_host_preflight(
         if receipt["annotated_tag"] != expected_annotated_tag:
             raise MultiHostAcceptanceError(f"{site} annotated tag mismatch")
         clock_offset = receipt["clock_offset_ms"]
-        if type(clock_offset) not in {int, float} or abs(clock_offset) > contract[
-            "maximum_absolute_clock_offset_ms"
-        ]:
+        if (
+            type(clock_offset) not in {int, float}
+            or not math.isfinite(clock_offset)
+            or abs(clock_offset) > contract["maximum_absolute_clock_offset_ms"]
+        ):
             raise MultiHostAcceptanceError(f"{site} clock offset exceeds the limit")
         for field, expected in boolean_expectations.items():
             if receipt[field] is not expected:
@@ -128,7 +164,11 @@ def validate_two_host_preflight(
         ].strip():
             raise MultiHostAcceptanceError("immutable model identifier is invalid")
         for field in ("cpu_limit", "memory_limit_bytes", "pids_limit"):
-            if type(receipt[field]) not in {int, float} or receipt[field] <= 0:
+            if (
+                type(receipt[field]) not in {int, float}
+                or not math.isfinite(receipt[field])
+                or receipt[field] <= 0
+            ):
                 raise MultiHostAcceptanceError(f"{field} must be positive")
         by_site[site] = receipt
 

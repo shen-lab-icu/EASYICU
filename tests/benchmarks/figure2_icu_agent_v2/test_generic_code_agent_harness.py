@@ -20,8 +20,22 @@ from benchmarks.figure2_icu_agent_v2.generic_code_agent_harness import (
 )
 from benchmarks.figure2_icu_agent_v2.formal_provider_gate import FormalCallCoordinate
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
+    ReviewBlindingContext,
     normalize_review_bundle,
 )
+
+
+_BLINDING_CONTEXT = ReviewBlindingContext(
+    host_markers=("fig2-server-01", "fig2-laptop-01"),
+    output_roots=("/formal/server", "/formal/laptop"),
+)
+
+
+def _normalize(source_dir: Path):
+    return normalize_review_bundle(
+        source_dir,
+        blinding_context=_BLINDING_CONTEXT,
+    )
 from easyicu.research_agent.providers.protocol import LLMMessage
 from easyicu.research_agent.execution.runner import DockerRunner
 
@@ -148,7 +162,7 @@ def test_offline_generic_harness_executes_and_writes_complete_bundle(tmp_path: P
         "04_diagnostics.json": True,
         "06_report.md": True,
     }
-    normalized = normalize_review_bundle(result.output_dir)
+    normalized = _normalize(result.output_dir)
     assert tuple(normalized.files) == CANONICAL_FILES
 
 
@@ -204,7 +218,7 @@ def test_execution_timeout_is_terminal_without_model_retry(tmp_path: Path):
     assert receipt["agent_asserted_mandatory_artifact_presence"] == {
         label: False for label in MANDATORY_ARTIFACTS
     }
-    normalized = normalize_review_bundle(result.output_dir)
+    normalized = _normalize(result.output_dir)
     assert tuple(normalized.files) == CANONICAL_FILES
 
 

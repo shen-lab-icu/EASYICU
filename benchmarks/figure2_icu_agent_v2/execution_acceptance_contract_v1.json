@@ -60,30 +60,99 @@
     "clock_synchronized": true,
     "provider_accessed": false
   },
+  "site_receipt_transport": {
+    "input_type": "unparsed UTF-8 JSON bytes from each logical site",
+    "parser_rule": "The multi-host acceptance owner performs duplicate-key-rejecting JSON parsing and rejects NaN, Infinity, non-object roots, and already-parsed mappings before parity checks.",
+    "forbidden": "Callers may not parse, normalize, merge, or reconstruct a site receipt before acceptance validation."
+  },
   "prequalification_go_no_go": {
     "rule": "GO only when every item is passing; one missing, stale, mismatched, or warning-only item is NO-GO.",
     "required": [
-      "clean exact-head commit and annotated tag",
-      "independently timestamped registration and trusted signer key",
-      "two passing site-preflight receipts with exact matched-site-field parity",
-      "signed task-pair site assignment and zero-Provider scheduler dry run",
-      "identical sealed inputs, model route, budgets, container and network policy",
-      "empty per-site qualification output roots",
-      "duplicate-claim and occupied-output fail-closed probes",
-      "Qualification12-A and two unopened registered reserve sets"
+      {
+        "gate_id": "PREQ01_RELEASE_AND_REGISTRATION",
+        "requirement": "clean exact-head commit, annotated tag, independent timestamp, and trusted signer key",
+        "launch_receipt_ids": ["qualification_preconditions:01", "qualification_preconditions:02"]
+      },
+      {
+        "gate_id": "PREQ02_TWO_HOST_PARITY",
+        "requirement": "two passing site-preflight receipts with exact matched-site-field parity",
+        "launch_receipt_ids": ["qualification_preconditions:05"]
+      },
+      {
+        "gate_id": "PREQ03_SIGNED_ASSIGNMENT",
+        "requirement": "signed task-pair site assignment and zero-Provider scheduler dry run",
+        "launch_receipt_ids": ["qualification_preconditions:04", "qualification_preconditions:06", "qualification_preconditions:07"]
+      },
+      {
+        "gate_id": "PREQ04_MATCHED_RUNTIME",
+        "requirement": "identical sealed inputs, model route, budgets, container, and network policy",
+        "launch_receipt_ids": ["qualification_preconditions:02", "qualification_preconditions:03", "qualification_preconditions:05"]
+      },
+      {
+        "gate_id": "PREQ05_EMPTY_OUTPUT_ROOTS",
+        "requirement": "empty per-site qualification output roots",
+        "launch_receipt_ids": ["qualification_preconditions:04"]
+      },
+      {
+        "gate_id": "PREQ06_FAIL_CLOSED_PROBES",
+        "requirement": "duplicate-claim, consumed-lease, wrong-site, and occupied-output fail-closed probes",
+        "launch_receipt_ids": ["qualification_preconditions:08"]
+      },
+      {
+        "gate_id": "PREQ07_SEALED_QUALIFICATION_SETS",
+        "requirement": "Qualification12-A and two unopened registered reserve sets",
+        "launch_receipt_ids": ["qualification_preconditions:03"]
+      }
     ]
   },
   "core_go_no_go": {
     "rule": "GO only when every item is passing; core scientific outcomes are never used as a launch or continuation criterion.",
     "required": [
-      "EasyICU passes all twelve Qualification12 task contracts with zero critical unsafe authorization",
-      "generic arm produces twelve terminal normalized bundles and passes at least five of seven bound-result competence items",
-      "Dev9 and Qualification12 blinding pilots contain zero forbidden arm or site markers",
-      "unadjudicated binary reviewer Cohen kappa is at least 0.70",
-      "WP1 passes every required Heldout27 database-concept cell",
-      "reviewer eligibility, independence and capacity receipts pass",
-      "two-host runtime parity is rechecked against the registered receipts",
-      "per-site core output roots are empty and the signed atomic core declaration binds every site-tagged coordinate"
+      {
+        "gate_id": "CORE00_REGISTERED_RELEASE",
+        "requirement": "validated design, independent preregistration, and clean exact-head release receipts pass",
+        "launch_receipt_ids": ["design:01", "design:02", "design:03"]
+      },
+      {
+        "gate_id": "CORE01_EASYICU_QUALIFICATION",
+        "requirement": "EasyICU passes all twelve Qualification12 task contracts with zero critical unsafe authorization",
+        "launch_receipt_ids": ["qualification:01"]
+      },
+      {
+        "gate_id": "CORE02_GENERIC_QUALIFICATION",
+        "requirement": "generic arm produces twelve terminal normalized bundles and passes at least five of seven bound-result competence items",
+        "launch_receipt_ids": ["qualification:02"]
+      },
+      {
+        "gate_id": "CORE03_BLINDING",
+        "requirement": "review materials, Safety12 rationale, WP5 rubric, and Dev9/Qualification12 blinding pilots pass without forbidden arm or site markers",
+        "launch_receipt_ids": ["evaluation:01", "evaluation:02", "evaluation:03", "evaluation:04"]
+      },
+      {
+        "gate_id": "CORE04_REVIEWER_RELIABILITY",
+        "requirement": "unadjudicated binary reviewer Cohen kappa is at least 0.70",
+        "launch_receipt_ids": ["qualification:03"]
+      },
+      {
+        "gate_id": "CORE05_WP1",
+        "requirement": "WP1, native-v2 inputs, Safety12 fixtures, and partition-leakage controls all pass",
+        "launch_receipt_ids": ["data:01", "data:02", "data:03"]
+      },
+      {
+        "gate_id": "CORE06_REVIEWER_CAPACITY",
+        "requirement": "reviewer eligibility, independence, and capacity receipts pass",
+        "launch_receipt_ids": ["evaluation:05"]
+      },
+      {
+        "gate_id": "CORE07_TWO_HOST_RECHECK",
+        "requirement": "all seven runtime receipts pass, including repeated two-host parity, matched budgets, and isolation probes",
+        "launch_receipt_ids": ["runtime:01", "runtime:02", "runtime:03", "runtime:04", "runtime:05", "runtime:06", "runtime:07"]
+      },
+      {
+        "gate_id": "CORE08_ATOMIC_BATCH",
+        "requirement": "per-site core output roots are empty and the signed atomic core declaration binds every site-tagged coordinate and assignment digest",
+        "launch_receipt_ids": ["batch:01", "batch:02", "batch:03", "batch:04"]
+      }
     ]
   },
   "incident_policy": {

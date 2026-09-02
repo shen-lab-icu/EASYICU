@@ -57,6 +57,40 @@ def test_formal_provider_call_fails_closed() -> None:
     assert exc_info.value.reason_code == "FORMAL_AUTHORITY_SIGNER_NOT_REGISTERED"
 
 
+def test_execution_go_no_go_gates_cover_every_launch_receipt() -> None:
+    execution = _load_json("execution_acceptance_contract_v1.json")
+    launch = _load_json("formal_launch_contract_v1.json")
+    expected_groups = {
+        "prequalification_go_no_go": {"qualification_preconditions"},
+        "core_go_no_go": {
+            "design",
+            "data",
+            "evaluation",
+            "qualification",
+            "runtime",
+            "batch",
+        },
+    }
+
+    for gate_name, groups in expected_groups.items():
+        expected = {
+            f"{group}:{index:02d}"
+            for group in groups
+            for index, _description in enumerate(
+                launch["required_receipts"][group],
+                start=1,
+            )
+        }
+        requirements = execution[gate_name]["required"]
+        mapped = {
+            receipt_id
+            for requirement in requirements
+            for receipt_id in requirement["launch_receipt_ids"]
+        }
+        assert mapped == expected
+        assert len({item["gate_id"] for item in requirements}) == len(requirements)
+
+
 def test_formal_gate_static_contract_rejects_transport_before_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

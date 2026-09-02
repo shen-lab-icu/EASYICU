@@ -19,6 +19,10 @@ import re
 from typing import Any, Mapping, NoReturn
 
 from .design_errors import DesignContractError
+from .formal_scheduler import (
+    FormalScheduleError,
+    validate_authorized_site_coordinates,
+)
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -408,6 +412,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         "design_commit",
         "annotated_tag",
         "receipt_sha256",
+        "site_assignment_sha256",
         "authorized_call_coordinates",
     }
     _require_exact_keys(
@@ -415,7 +420,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         field="atomic_declaration",
         expected=declaration_fields,
     )
-    if declaration["schema_version"] != "easyicu.figure2_atomic_declaration/1":
+    if declaration["schema_version"] != "easyicu.figure2_atomic_declaration/2":
         _fail(
             "FORMAL_AUTHORITY_DECLARATION_SCHEMA_INVALID",
             repr(declaration["schema_version"]),
@@ -440,6 +445,9 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
     )
     annotated_tag = _require_nonempty_string(
         declaration["annotated_tag"], field="annotated_tag"
+    )
+    site_assignment_sha256 = _require_sha256(
+        declaration["site_assignment_sha256"], field="site_assignment_sha256"
     )
 
     coordinates = declaration["authorized_call_coordinates"]
@@ -467,6 +475,15 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
             _fail("FORMAL_AUTHORITY_SCOPE_MISMATCH", repr(coordinate))
         if coordinate["execution_site"] not in logical_sites:
             _fail("FORMAL_AUTHORITY_EXECUTION_SITE_INVALID", repr(coordinate))
+    try:
+        validate_authorized_site_coordinates(
+            scope,
+            normalized_coordinates,
+            declared_site_assignment_sha256=site_assignment_sha256,
+            protocol_path=PROTOCOL_PATH,
+        )
+    except FormalScheduleError as exc:
+        _fail("FORMAL_AUTHORITY_SITE_ASSIGNMENT_INVALID", str(exc))
 
     expected_receipts = _expected_receipts(launch, scope)
     expected_receipt_ids = set(expected_receipts)
@@ -490,6 +507,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         )
     expected_binding = {
         "protocol_sha256": protocol_sha256,
+        "site_assignment_sha256": site_assignment_sha256,
         "design_commit": design_commit,
         "annotated_tag": annotated_tag,
     }
@@ -522,6 +540,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         "scope": scope,
         "call_coordinate": dict(requested_coordinate),
         "protocol_sha256": protocol_sha256,
+        "site_assignment_sha256": site_assignment_sha256,
         "signer_id": signer_id,
         "receipt_count": len(expected_receipt_ids),
     }
