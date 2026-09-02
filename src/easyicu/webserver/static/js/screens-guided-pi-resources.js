@@ -119,6 +119,7 @@
       if (!grouped.primary.length && !hasLiterature && !hasDataWorkbench) return '';
       const zh = window.EU_LANG === 'zh';
       const list = resources => `<div class="gpi-resource-list">${resources.map(resource => button(resource)).join('')}</div>`;
+      const numberedLiteratureList = resources => `<ol class="gpi-resource-list gpi-literature-resource-list">${resources.map(resource => `<li>${button(resource)}</li>`).join('')}</ol>`;
       const sections = [];
       if (hasDataWorkbench) {
         sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(zh ? '审阅准备数据' : 'Review prepared data')}</span><div class="gpi-resource-list"><button class="gpi-resource-link" type="button" data-gpi-run-outcome-data>${esc(zh ? '打开数据可视化' : 'Open data visualization')}</button></div></div>`);
@@ -129,7 +130,7 @@
       }
       if (hasLiterature) {
         sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(zh ? '本题文献检索' : 'Topic literature search')}</span>${grouped.topicLiterature.length
-          ? list(grouped.topicLiterature)
+          ? numberedLiteratureList(grouped.topicLiterature)
           : `<p class="gpi-resource-empty">${esc(zh ? '本轮没有可展示的本题检索候选；这不代表没有相关文献。' : 'No topic-search candidates are available in this turn; this does not mean that no relevant literature exists.')}</p>`}</div>`);
       }
       if (grouped.methodLiterature.length) {
