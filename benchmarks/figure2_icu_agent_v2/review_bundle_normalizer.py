@@ -53,7 +53,8 @@ _RESOURCE_FINGERPRINTS = (
     re.compile(
         r"\b(?:model[ _-]?turns?|provider[ _-]?calls?|tool[ _-]?calls?|"
         r"provider[ _-]?tokens?|billed[ _-]?cost|per[ _-]?tool[ _-]?latency|"
-        r"stage[ _-]?shaped[ _-]?timing)\b",
+        r"stage[ _-]?shaped[ _-]?timing|execution[ _-]?site|logical[ _-]?site|"
+        r"host[ _-]?fingerprint|machine[ _-]?name)\b",
         re.IGNORECASE,
     ),
     re.compile(

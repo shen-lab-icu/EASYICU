@@ -187,13 +187,22 @@ def write_easyicu_review_bundle(
         raise EasyICUReviewBundleError("headline_evidence must be a sequence")
     if not all(isinstance(item, Mapping) for item in material.headline_evidence):
         raise EasyICUReviewBundleError("headline_evidence entries must be objects")
-    try:
-        inventory = normalize_artifact_inventory(
-            material.artifact_inventory,
-            mandatory_artifacts,
-        )
-    except ValueError as exc:
-        raise EasyICUReviewBundleError(str(exc)) from exc
+    if terminal_status == "failed":
+        if set(material.artifact_inventory) != set(mandatory_artifacts) or any(
+            references != [] for references in material.artifact_inventory.values()
+        ):
+            raise EasyICUReviewBundleError(
+                "failed bundle inventory must map every mandatory artifact to []"
+            )
+        inventory = {label: [] for label in mandatory_artifacts}
+    else:
+        try:
+            inventory = normalize_artifact_inventory(
+                material.artifact_inventory,
+                mandatory_artifacts,
+            )
+        except ValueError as exc:
+            raise EasyICUReviewBundleError(str(exc)) from exc
 
     payloads = {
         "01_plan.json": _canonical_json(material.plan),
@@ -221,20 +230,36 @@ def write_easyicu_review_bundle(
             resource_receipt.get("within_frozen_budget", False)
         ),
         "failure_category": failure_category,
-        "agent_asserted_mandatory_artifact_presence": asserted_artifact_presence(
-            inventory,
-            plan=material.plan,
-            cohort=material.cohort,
-            results=material.results,
-            diagnostics=material.diagnostics,
-            report=material.report,
+        "agent_asserted_mandatory_artifact_presence": (
+            {label: False for label in mandatory_artifacts}
+            if terminal_status == "failed"
+            else asserted_artifact_presence(
+                inventory,
+                plan=material.plan,
+                cohort=material.cohort,
+                results=material.results,
+                diagnostics=material.diagnostics,
+                report=material.report,
+            )
         ),
-        "substantive_output_files": substantive_file_flags(
-            plan=material.plan,
-            cohort=material.cohort,
-            results=material.results,
-            diagnostics=material.diagnostics,
-            report=material.report,
+        "substantive_output_files": (
+            {
+                name: False
+                for name in (
+                    "02_cohort.json",
+                    "03_results.json",
+                    "04_diagnostics.json",
+                    "06_report.md",
+                )
+            }
+            if terminal_status == "failed"
+            else substantive_file_flags(
+                plan=material.plan,
+                cohort=material.cohort,
+                results=material.results,
+                diagnostics=material.diagnostics,
+                report=material.report,
+            )
         ),
     }
     payloads["07_run_receipt.json"] = _canonical_json(receipt)

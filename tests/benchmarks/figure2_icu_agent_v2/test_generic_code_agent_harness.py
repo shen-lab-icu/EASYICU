@@ -360,6 +360,7 @@ def test_formal_gateway_denies_before_transport():
         receipts={},
         scope="qualification12",
         task_id="qualification12_a_01",
+        execution_site="server",
         max_tokens=100,
         temperature=0.0,
     )
@@ -408,6 +409,7 @@ def test_formal_coordinate_remains_generic_arm_owned():
         scope="core_wp2_wp3",
         task_id="icu27_t01",
         arm="generic_code_agent",
+        execution_site="server",
         call_id="generic_0001",
     )
     assert coordinate.arm == "generic_code_agent"

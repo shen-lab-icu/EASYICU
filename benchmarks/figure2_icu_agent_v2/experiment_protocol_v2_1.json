@@ -52,7 +52,7 @@
     {
       "role": "statistical_analysis_plan",
       "path": "benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v2.json",
-      "sha256": "dd89208ad0f5afb7b94ddc5f8237484315336c9cdf160dd8fc34630933b6d034"
+      "sha256": "a7523a26051345bead755dd8e6d22a42a870e7f14138d13eed7e2fe3f2044c1a"
     },
     {
       "role": "formal_safety12_taskbank",
@@ -82,17 +82,22 @@
     {
       "role": "review_bundle_contract",
       "path": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
-      "sha256": "886aaf90f78a7f5da213e3bdfe4967946e337043b146ee67f6fb3bf2fe6335d8"
+      "sha256": "2fd1db1eb12cc3528825c4a5a781519a791c1998397822d111f1ac58f85e6f74"
     },
     {
       "role": "preregistration_plan",
       "path": "benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json",
-      "sha256": "80dfee31728993ed78d7381a14e89b84002d18518110b93dda34381434fd30ac"
+      "sha256": "47de6b1214540d0b20e9ce017ff6b135bad520d4a98d6ed3423d88ab9afc6cb1"
     },
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "bf454a5233649c406a7209ae0dae4504519077bf6f9d8d8864d3b82c00dee2fe"
+      "sha256": "5f9803278ed2c2f72d1cf0bb71990426af98df6d589e7c7ea86f78f58c20c2fb"
+    },
+    {
+      "role": "execution_acceptance_contract",
+      "path": "benchmarks/figure2_icu_agent_v2/execution_acceptance_contract_v1.json",
+      "sha256": "1fbb9252c91c5498d9ff40e6e51ff72ee35d16361cbc18c5c6afb36ba0c35283"
     },
     {
       "role": "idea_to_evidence_protocol",
@@ -235,6 +240,19 @@
     "iteration_fairness": "No arm-specific model-turn, provider-call, or tool-call cap is permitted. Provider tokens, wall time, billed cost, and compute are the binding matched budgets. Any emergency provider-invocation circuit breaker must use the same numeric value, counting rule, and budget-exhaustion consequence in both arms and must be frozen before Qualification12.",
     "runtime_values_status": "must_be_filled_and_hashed_in_atomic_batch_declaration_before_first_provider_call"
   },
+  "multi_host_execution": {
+    "contract": "benchmarks/figure2_icu_agent_v2/execution_acceptance_contract_v1.json",
+    "logical_sites": [
+      "server",
+      "laptop"
+    ],
+    "parallel_unit": "task_pair",
+    "assignment_rule": "Use the frozen task_pair_site map, balanced across Heldout27 difficulty, analysis family, first-running arm, and proportional database coverage and across Formal Safety12 first-running arm, yielding server=20 and laptop=19. Both arms of each pair remain on that site and execute sequentially in frozen arm-first order; only different pairs may execute concurrently.",
+    "concurrency": "At most one active trajectory per site and two active trajectories total.",
+    "resource_rule": "Both sites must enforce identical registered container CPU, RAM, pids, package, model, sampling, token, wall-time, cost, network, and input limits. The server may add cross-pair parallel capacity but may not grant one arm greater per-run resources.",
+    "review_blinding": "Execution-site identity and host fingerprints remain hidden from scoring reviewers until scores lock, while retained in sealed runtime receipts for audit and descriptive sensitivity reporting.",
+    "go_no_go_rule": "Every prequalification and core requirement in the execution acceptance contract is conjunctive. Scientific A/B outcomes are never a launch, continuation, exclusion, or rerun criterion."
+  },
   "human_plan_review": {
     "opportunities_per_run": 1,
     "maximum_plan_revisions": 1,
@@ -251,9 +269,9 @@
   "authorization_sequence": [
     "complete the no-Provider design, harness, normalizer, validator, and evaluator implementation",
     "create a clean exact-head commit and tag and obtain the independent external registration receipt",
-    "use only the qualification12 scope to run Qualification12-A and the blinding pilot under frozen budgets; any qualification-relevant change to either arm or a shared qualification component consumes the opened set and requires the next unopened preregistered reserve set",
+    "pass the two-host prequalification GO/NO-GO gate, then use only the qualification12 scope to run Qualification12-A and the blinding pilot under frozen budgets and signed task-pair site assignment; any qualification-relevant change to either arm, either site's matched runtime, or a shared qualification component consumes the opened set and requires the next unopened preregistered reserve set",
     "run the deterministic WP1 six-database gate under the registered thresholds; this may proceed in parallel with qualification because it makes no Provider call",
-    "after qualification, WP1, reviewer reliability, input, runtime, and evaluator receipts pass, sign the core WP2/WP3 atomic batch declaration",
+    "after qualification, WP1, reviewer reliability, input, evaluator, and repeated two-host runtime parity receipts pass, sign the core WP2/WP3 atomic batch declaration",
     "run all 78 core trajectories to terminal immutable receipts",
     "run the iterative WP5 phase A and the locked flagship phase B only through their separately authorized scopes using the same immutable release"
   ],
@@ -318,6 +336,35 @@
       "icu27_t12": "easyicu_full",
       "icu27_t25": "easyicu_full"
     },
+    "heldout27_execution_site": {
+      "icu27_t09": "server",
+      "icu27_t14": "laptop",
+      "icu27_t27": "server",
+      "icu27_t04": "server",
+      "icu27_t13": "server",
+      "icu27_t26": "laptop",
+      "icu27_t02": "server",
+      "icu27_t11": "server",
+      "icu27_t19": "server",
+      "icu27_t03": "server",
+      "icu27_t15": "server",
+      "icu27_t17": "server",
+      "icu27_t06": "laptop",
+      "icu27_t10": "laptop",
+      "icu27_t18": "laptop",
+      "icu27_t05": "laptop",
+      "icu27_t20": "server",
+      "icu27_t22": "server",
+      "icu27_t07": "server",
+      "icu27_t24": "server",
+      "icu27_t21": "laptop",
+      "icu27_t01": "laptop",
+      "icu27_t16": "laptop",
+      "icu27_t23": "laptop",
+      "icu27_t08": "laptop",
+      "icu27_t12": "laptop",
+      "icu27_t25": "laptop"
+    },
     "safety12_execution_order": [
       "fs12_t01",
       "fs12_t02",
@@ -346,6 +393,20 @@
       "generic_code_agent",
       "easyicu_full"
     ],
+    "safety12_execution_site": [
+      "server",
+      "laptop",
+      "server",
+      "laptop",
+      "server",
+      "laptop",
+      "server",
+      "laptop",
+      "server",
+      "laptop",
+      "server",
+      "laptop"
+    ],
     "wp5_showcase_id": "ite_showcase_01",
     "wp5_sequence": "WP5 begins only after all 78 WP2 and WP3 core runs have terminal immutable receipts. One bounded phase-A human-Agent discovery process may iterate through literature, candidates, feedback, and deterministic feasibility before the final question, plan, and input are locked. Phase B then runs the locked flagship once if authorized; postoutcome substitution is forbidden."
   },
@@ -363,6 +424,7 @@
     "selective_arm_retry": false,
     "failures_remain_in_denominator": true,
     "external_pre_token_incident_policy": "Only a verified external incident before the first model token may void a run; the complete A/B pair must be repeated without inspecting scientific output.",
+    "multi_host_incident_policy": "After the first model token, a site failure permits no selective retry, migration, or resume; the trajectory reaches a terminal failure receipt and remains in the denominator. A systemic site failure stops new leases on both sites and requires an independently signed protocol decision without outcome-guided reassignment.",
     "first_provider_call_lock": "After the first core formal Provider call, code, prompts, taskbanks, rubrics, SAP, model, provider route, container, budgets, network policy, and review instructions remain immutable through all 78 core terminal receipts and, if WP5 remains declared under this release, through terminal disposition of the WP5 flagship showcase. Core inputs remain immutable through the core batch; only the prespecified append-only WP5 discovery records and locked phase-B artifacts may be added at the registered boundaries.",
     "wp5_derived_input_boundary": "The WP5 initial direction, iterative discovery contract, rubric, phase budgets, retrieval policy, reviewer roles, and final-lock rule are externally registered before phase A. Candidate versions and feasibility findings are appended during phase A; the final idea, approved plan, concept map, and phase-B input are locked and bound before patient-level outcome analysis. They may not change code, prompts, rubrics, or the registered discovery and lock rules."
   },
@@ -392,6 +454,7 @@
     "the generic harness passes the frozen Qualification12 completeness and minimum scientific-competence floor without task-specific tuning",
     "Qualification12-A plus two access-controlled independently authored reserve sets are externally registered before Qualification12-A is opened; any qualification-relevant change to either arm or a shared qualification component consumes the opened set and can use only the next unopened reserve set",
     "the arm-neutral normalizer and fixed review-bundle schema pass the Dev9 and Qualification12 blinding pilot with zero forbidden arm markers",
+    "server and laptop pass the registered two-host parity preflight; signed task-pair assignment keeps both arms colocated and sequential, permits at most one active trajectory per site, and exposes zero site markers to reviewers before score lock",
     "unadjudicated binary reviewer kappa is at least 0.70 on qualification material",
     "primary-reviewer independence eligibility, conflicts, available hours, session batching, breaks, replacement coverage, and adjudication capacity are sealed",
     "exact code commit, clean exact-head CI, container digest, provider route, immutable model identifier, budgets, network policy, and reviewer identities are sealed",

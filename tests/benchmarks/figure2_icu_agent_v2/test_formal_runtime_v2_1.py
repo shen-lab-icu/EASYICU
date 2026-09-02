@@ -134,6 +134,7 @@ def _signed_qualification_authority(
         "scope": "qualification12",
         "task_id": "qualification12_a_01",
         "arm": arm,
+        "execution_site": "server",
         "call_id": call_id,
     }
     binding = {
@@ -201,6 +202,7 @@ def test_formal_provider_gate_denies_before_transport() -> None:
         scope="qualification12",
         task_id="qualification12_a_01",
         arm="generic_code_agent",
+        execution_site="server",
         call_id="call_001",
     )
 
@@ -235,6 +237,14 @@ def test_formal_authority_accepts_only_exact_signed_coordinate(
             }
         )
     assert exc_info.value.reason_code == "FORMAL_AUTHORITY_COORDINATE_NOT_DECLARED"
+    with pytest.raises(DesignContractError) as site_exc_info:
+        formal_authority.authorize_formal_provider_call(
+            {
+                "receipts": envelope,
+                "call_coordinate": {**coordinate, "execution_site": "laptop"},
+            }
+        )
+    assert site_exc_info.value.reason_code == "FORMAL_AUTHORITY_COORDINATE_NOT_DECLARED"
 
 
 def test_signed_authority_and_budget_gate_reach_only_offline_mock(
@@ -303,6 +313,7 @@ def test_easyicu_router_authorizes_pipeline_role_before_offline_transport(
         receipts=envelope,
         scope=coordinate["scope"],
         task_id=coordinate["task_id"],
+        execution_site=coordinate["execution_site"],
         provider_hard_stop=task_budget,
     )
 
@@ -341,6 +352,7 @@ def test_easyicu_router_denies_before_transport_without_registered_signer(
         receipts={},
         scope="qualification12",
         task_id=task_id,
+        execution_site="server",
         provider_hard_stop=task_budget,
     )
 
@@ -410,6 +422,7 @@ def test_formal_provider_gate_preserves_production_transport_trust_check(
                 scope="core_wp2_wp3",
                 task_id="icu27_t01",
                 arm="easyicu_full",
+                execution_site="server",
                 call_id="call_001",
             ),
             provider_hard_stop=object(),  # type: ignore[arg-type]
@@ -437,6 +450,7 @@ def test_formal_provider_gate_requires_shared_budget_after_authorization(
                 scope="qualification12",
                 task_id="qualification12_a_01",
                 arm="generic_code_agent",
+                execution_site="server",
                 call_id="generic_0001",
             ),
         )
@@ -450,7 +464,16 @@ def test_formal_call_coordinate_rejects_unknown_scope_or_arm() -> None:
             scope="dev9",
             task_id="dev_01",
             arm="generic_code_agent",
+            execution_site="server",
             call_id="call_001",
+        )
+    with pytest.raises(ValueError, match="unsupported execution site"):
+        FormalCallCoordinate(
+            scope="qualification12",
+            task_id="qualification12_a_01",
+            arm="generic_code_agent",
+            call_id="call_001",
+            execution_site="desktop",
         )
 
 
@@ -484,6 +507,7 @@ def test_formal_provider_gate_uses_shared_durable_hard_stop(
         scope="qualification12",
         task_id="qualification12_a_01",
         arm="generic_code_agent",
+        execution_site="server",
         call_id="generic_0001",
     )
 
@@ -505,6 +529,7 @@ def test_formal_provider_gate_uses_shared_durable_hard_stop(
                 scope="qualification12",
                 task_id="qualification12_a_01",
                 arm="generic_code_agent",
+                execution_site="server",
                 call_id="generic_0002",
             ),
             provider_hard_stop=task_budget,
@@ -518,6 +543,7 @@ def test_formal_provider_gate_uses_shared_durable_hard_stop(
             scope="qualification12",
             task_id="qualification12_a_01",
             arm="other",
+            execution_site="server",
             call_id="call_001",
         )
 
@@ -602,6 +628,8 @@ def test_normalizer_redacts_container_and_repository_paths(tmp_path: Path) -> No
         "provider_calls=4",
         "provider tokens: 1200",
         "per-tool latency was retained",
+        "execution_site=server",
+        "host fingerprint was retained",
     ],
 )
 def test_normalizer_rejects_resource_fingerprints_outside_raw_receipt(

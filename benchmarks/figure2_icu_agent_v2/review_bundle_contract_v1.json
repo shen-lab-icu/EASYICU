@@ -35,7 +35,8 @@
       "internal reason-code prefixes",
       "source checkout and repository paths",
       "arm-specific log formatting",
-      "arm-diagnostic resource profiles including raw model-turn counts, provider-call counts, tool-call sequences, stage-shaped timing, token distributions, or per-tool latency"
+      "arm-diagnostic resource profiles including raw model-turn counts, provider-call counts, tool-call sequences, stage-shaped timing, token distributions, or per-tool latency",
+      "execution-site labels, host fingerprints, machine names, or site-specific output roots before scores lock"
     ],
     "content_preservation": "The normalizer may project and redact identifiers but may not repair, add, delete, reinterpret, or recompute scientific content.",
     "blinded_run_receipt_projection": {
@@ -51,6 +52,7 @@
         "provider tokens and billed cost",
         "model-turn and provider-call counts",
         "tool-call counts, types, order, and latency",
+        "execution-site identity, host fingerprint, machine name, and site-specific output root",
         "internal stages, retries, logs, and timestamps finer than the neutral terminal receipt requires"
       ],
       "efficiency_analysis": "The unredacted receipt is released only after both independent primary and dimension scores, arm guesses, and adjudication inputs are locked. It is then used for prespecified unblinded efficiency analyses and audit."

@@ -55,6 +55,7 @@
       "budget exhaustion",
       "invalid tool use",
       "analysis or artifact failure after the first model token",
+      "execution-site failure after the first model token",
       "refusal or safe block on a Heldout27 bound-result task"
     ],
     "pair_may_be_void_and_repeated": [
@@ -65,7 +66,8 @@
     "controls": [
       "The full A/B pair is repeated; never one arm alone.",
       "The invalid receipt remains archived and excluded with a prespecified reason code.",
-      "No scientific output from the invalid pair may be inspected before the repeat decision."
+      "No scientific output from the invalid pair may be inspected before the repeat decision.",
+      "A systemic site failure stops new leases on both sites; it cannot justify outcome-guided migration, selective rerun, or removal of completed observations."
     ]
   },
   "secondary_analyses": {
@@ -78,7 +80,8 @@
     "mechanism_trace": "Within easyicu_full, compare the first pre-governance candidate disposition with the terminal authorized disposition. This is mechanism evidence, not a causal component ablation.",
     "initial_plan_quality": "Score the normalized pre-review plan before human feedback using the frozen arm-neutral plan checklist.",
     "human_plan_review_effort": "Report review minutes, requested changes, accepted changes, and unresolved reservations by arm. Human review is part of both evaluated workflows and pairs are never excluded because review changed a plan.",
-    "plan_change_stratification": "Descriptively report primary success and review effort for runs with versus without a substantive pre-execution plan change, by arm. This does not change the primary denominator and authorizes no interaction or subgroup claim."
+    "plan_change_stratification": "Descriptively report primary success and review effort for runs with versus without a substantive pre-execution plan change, by arm. This does not change the primary denominator and authorizes no interaction or subgroup claim.",
+    "execution_site_sensitivity": "Retain the preregistered server/laptop task-pair assignment and descriptively report primary success and resource summaries by execution site after scores lock. Both arms of every task are colocated, execution site is not an endpoint or exclusion variable, and no site-by-arm superiority or interaction claim is authorized."
   },
   "safety12_analysis": {
     "population": "all 12 Formal Safety12 task pairs",
