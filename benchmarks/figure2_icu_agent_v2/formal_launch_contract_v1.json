@@ -3,6 +3,21 @@
   "status": "fail_closed_no_current_authority",
   "provider_call_default": "deny",
   "authority_owner": "benchmarks/figure2_icu_agent_v2/formal_authority.py",
+  "implementation_owners": {
+    "provider_gate": "benchmarks/figure2_icu_agent_v2/formal_provider_gate.py",
+    "easyicu_formal_runner": "benchmarks/figure2_icu_agent_v2/formal_easyicu_runner.py",
+    "generic_formal_runner": "benchmarks/figure2_icu_agent_v2/formal_generic_runner.py",
+    "generic_harness": "benchmarks/figure2_icu_agent_v2/generic_code_agent_harness.py",
+    "easyicu_review_adapter": "benchmarks/figure2_icu_agent_v2/easyicu_review_bundle_adapter.py",
+    "shared_review_semantics": "benchmarks/figure2_icu_agent_v2/review_bundle_semantics.py",
+    "review_normalizer": "benchmarks/figure2_icu_agent_v2/review_bundle_normalizer.py",
+    "formal_scheduler": "benchmarks/figure2_icu_agent_v2/formal_scheduler.py",
+    "blinded_evaluator": "benchmarks/figure2_icu_agent_v2/blinded_evaluator.py"
+  },
+  "registration_receipt_ids": [
+    "qualification_preconditions:01",
+    "design:02"
+  ],
   "signature_verification": {
     "algorithm": "Ed25519",
     "trusted_signer_id": null,

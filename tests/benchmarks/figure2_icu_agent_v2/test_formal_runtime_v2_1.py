@@ -16,6 +16,9 @@ from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
     FormalProviderBudgetMissingError,
     complete_formal_provider_call,
 )
+from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import (
+    FormalEasyICUModelRouter,
+)
 from easyicu.research_agent.authority.provider_hard_stop import (
     ProviderHardStopExceeded,
     ProviderHardStopLedger,
@@ -72,7 +75,15 @@ def _write_bundle(root: Path) -> None:
             "terminal_status": "completed",
             "within_frozen_budget": True,
             "failure_category": None,
-            "mandatory_artifact_presence": {"01_plan.json": True},
+            "agent_asserted_mandatory_artifact_presence": {
+                "01_plan.json": True
+            },
+            "substantive_output_files": {
+                "02_cohort.json": True,
+                "03_results.json": True,
+                "04_diagnostics.json": True,
+                "06_report.md": True,
+            },
             "provider_tokens": 1234,
             "model_turns": 3,
             "tool_call_sequence": ["python"],
@@ -97,7 +108,11 @@ def _canonical_json(value: object) -> bytes:
 
 
 def _signed_qualification_authority(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    arm: str = "generic_code_agent",
+    call_id: str = "generic_0001",
 ) -> tuple[dict[str, object], dict[str, str]]:
     launch = json.loads(formal_authority.LAUNCH_CONTRACT_PATH.read_text())
     private_key = Ed25519PrivateKey.generate()
@@ -118,8 +133,8 @@ def _signed_qualification_authority(
     coordinate = {
         "scope": "qualification12",
         "task_id": "qualification12_a_01",
-        "arm": "generic_code_agent",
-        "call_id": "generic_0001",
+        "arm": arm,
+        "call_id": call_id,
     }
     binding = {
         "protocol_sha256": hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
@@ -148,10 +163,10 @@ def _signed_qualification_authority(
         "embargo_or_public_status": "embargoed",
         "package_sha256": "1" * 64,
         "protocol_sha256": binding["protocol_sha256"],
-        "validator_sha256": "2" * 64,
-        "validator_test_sha256": "3" * 64,
-        "formal_authority_sha256": "4" * 64,
-        "formal_authority_test_sha256": "5" * 64,
+        **{
+            field: hashlib.sha256(path.read_bytes()).hexdigest()
+            for field, path in formal_authority.REGISTERED_SOURCE_PATHS.items()
+        },
         "design_commit": binding["design_commit"],
         "annotated_tag": binding["annotated_tag"],
         "registrant_identity": "test-registrant",
@@ -255,6 +270,87 @@ def test_signed_authority_and_budget_gate_reach_only_offline_mock(
 
     assert response == "authorized offline response"
     assert len(client.calls) == 1
+
+
+def test_easyicu_router_authorizes_pipeline_role_before_offline_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envelope, coordinate = _signed_qualification_authority(
+        tmp_path,
+        monkeypatch,
+        arm="easyicu_full",
+        call_id="easyicu_0001",
+    )
+    limits = ProviderHardStopLimits(
+        max_provider_attempts_per_run=1,
+        max_provider_attempts_per_batch=1,
+        max_total_tokens_per_run=200_000,
+        max_total_tokens_per_batch=200_000,
+        max_estimated_cost_usd_per_batch=1.0,
+        max_wall_clock_seconds_per_task=60.0,
+        input_cost_usd_per_million_tokens=0.1,
+        output_cost_usd_per_million_tokens=0.1,
+    )
+    task_budget = ProviderHardStopLedger(
+        path=tmp_path / "easyicu-hard-stop.json",
+        task_ids=(coordinate["task_id"],),
+        limits=limits,
+        batch_id="offline-easyicu-test",
+    ).start_task(coordinate["task_id"])
+    client = ScriptedMockLLMClient(["authorized EasyICU offline response"])
+    router = FormalEasyICUModelRouter(
+        client,
+        receipts=envelope,
+        scope=coordinate["scope"],
+        task_id=coordinate["task_id"],
+        provider_hard_stop=task_budget,
+    )
+
+    response = router.for_role("planner").complete(
+        [LLMMessage(role="user", content="offline only")],
+        max_tokens=16,
+    )
+
+    assert response == "authorized EasyICU offline response"
+    assert len(client.calls) == 1
+
+
+def test_easyicu_router_denies_before_transport_without_registered_signer(
+    tmp_path: Path,
+) -> None:
+    task_id = "qualification12_a_01"
+    limits = ProviderHardStopLimits(
+        max_provider_attempts_per_run=1,
+        max_provider_attempts_per_batch=1,
+        max_total_tokens_per_run=200_000,
+        max_total_tokens_per_batch=200_000,
+        max_estimated_cost_usd_per_batch=1.0,
+        max_wall_clock_seconds_per_task=60.0,
+        input_cost_usd_per_million_tokens=0.1,
+        output_cost_usd_per_million_tokens=0.1,
+    )
+    task_budget = ProviderHardStopLedger(
+        path=tmp_path / "denied-easyicu-hard-stop.json",
+        task_ids=(task_id,),
+        limits=limits,
+        batch_id="denied-easyicu-test",
+    ).start_task(task_id)
+    client = _TransportSpy()
+    router = FormalEasyICUModelRouter(
+        client,
+        receipts={},
+        scope="qualification12",
+        task_id=task_id,
+        provider_hard_stop=task_budget,
+    )
+
+    with pytest.raises(DesignContractError) as exc_info:
+        router.for_role("planner").complete(
+            [LLMMessage(role="user", content="do not send")]
+        )
+
+    assert exc_info.value.reason_code == "FORMAL_AUTHORITY_SIGNER_NOT_REGISTERED"
+    assert client.called is False
 
 
 def test_formal_authority_rejects_tampered_receipt(
@@ -442,7 +538,8 @@ def test_normalizer_preserves_science_and_hides_arm_resource_fingerprints(
         "terminal_status",
         "within_frozen_budget",
         "failure_category",
-        "mandatory_artifact_presence",
+        "agent_asserted_mandatory_artifact_presence",
+        "substantive_output_files",
     }
     assert "provider_tokens" not in normalized_receipt
     assert "EasyICU" not in result.files["06_report.md"].decode("utf-8")
@@ -624,7 +721,9 @@ def test_normalizer_rejects_nonboolean_artifact_presence(tmp_path: Path) -> None
     _write_bundle(tmp_path)
     receipt_path = tmp_path / "07_run_receipt.json"
     receipt = json.loads(receipt_path.read_text())
-    receipt["mandatory_artifact_presence"] = {"result table": "yes"}
+    receipt["agent_asserted_mandatory_artifact_presence"] = {
+        "result table": "yes"
+    }
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:

@@ -39,8 +39,13 @@ IDEA_TO_EVIDENCE_RUBRIC_PATH = (
 )
 GENERIC_HARNESS_PATH = PACKAGE_ROOT / "generic_code_agent_harness.py"
 FORMAL_GENERIC_RUNNER_PATH = PACKAGE_ROOT / "formal_generic_runner.py"
+FORMAL_EASYICU_RUNNER_PATH = PACKAGE_ROOT / "formal_easyicu_runner.py"
 FORMAL_AUTHORITY_PATH = PACKAGE_ROOT / "formal_authority.py"
 FORMAL_PROVIDER_GATE_PATH = PACKAGE_ROOT / "formal_provider_gate.py"
+FORMAL_SCHEDULER_PATH = PACKAGE_ROOT / "formal_scheduler.py"
+EASYICU_REVIEW_ADAPTER_PATH = PACKAGE_ROOT / "easyicu_review_bundle_adapter.py"
+BLINDED_EVALUATOR_PATH = PACKAGE_ROOT / "blinded_evaluator.py"
+REVIEW_SEMANTICS_PATH = PACKAGE_ROOT / "review_bundle_semantics.py"
 
 
 def _fail(reason_code: str, detail: str) -> NoReturn:
@@ -245,7 +250,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     if not all(
         term in manifest_warning
         for term in (
-            "Harness-computed file digests prove only",
+            "Harness-computed file digests and substantive-output-file flags",
             "unverified assertions",
             "HG04 and HG06",
         )
@@ -294,18 +299,25 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         for path in (
             GENERIC_HARNESS_PATH,
             FORMAL_GENERIC_RUNNER_PATH,
+            FORMAL_EASYICU_RUNNER_PATH,
             FORMAL_AUTHORITY_PATH,
+            FORMAL_SCHEDULER_PATH,
+            EASYICU_REVIEW_ADAPTER_PATH,
+            BLINDED_EVALUATOR_PATH,
+            REVIEW_SEMANTICS_PATH,
         )
     ):
         _fail("GENERIC_HARNESS_IMPLEMENTATION_MISSING", repr(implementation))
+    formal_paths = tuple(
+        sorted(
+            path
+            for path in PACKAGE_ROOT.glob("formal_*.py")
+            if path.name != "formal_provider_gate.py"
+        )
+    ) + (FORMAL_PROVIDER_GATE_PATH,)
     protected_trees = {
         path.name: ast.parse(path.read_text(encoding="utf-8"))
-        for path in (
-            FORMAL_GENERIC_RUNNER_PATH,
-            GENERIC_HARNESS_PATH,
-            FORMAL_PROVIDER_GATE_PATH,
-            FORMAL_AUTHORITY_PATH,
-        )
+        for path in (*formal_paths, GENERIC_HARNESS_PATH)
     }
     imports_by_file: dict[str, set[str]] = {}
     calls_by_file: dict[str, list[ast.Call]] = {}
@@ -331,10 +343,8 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         ):
             _fail("FORMAL_GENERIC_DYNAMIC_IMPORT_FORBIDDEN", name)
 
-    for name in (
-        FORMAL_GENERIC_RUNNER_PATH.name,
+    for name in tuple(path.name for path in formal_paths if path != FORMAL_PROVIDER_GATE_PATH) + (
         GENERIC_HARNESS_PATH.name,
-        FORMAL_AUTHORITY_PATH.name,
     ):
         forbidden_provider_imports = {
             module
@@ -352,6 +362,27 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
             for call in calls_by_file[name]
         ):
             _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", name)
+        if any(
+            isinstance(call.func, ast.Name)
+            and call.func.id == "getattr"
+            and len(call.args) >= 2
+            and isinstance(call.args[1], ast.Constant)
+            and call.args[1].value
+            in {
+                "authorized_complete",
+                "complete",
+                "complete_with_usage",
+                "complete_with_images",
+            }
+            for call in calls_by_file[name]
+        ):
+            _fail("FORMAL_PROVIDER_DYNAMIC_ATTRIBUTE_BYPASS", name)
+        if any(
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "__getattribute__"
+            for call in calls_by_file[name]
+        ):
+            _fail("FORMAL_PROVIDER_DYNAMIC_ATTRIBUTE_BYPASS", name)
 
     formal_runner_calls = calls_by_file[FORMAL_GENERIC_RUNNER_PATH.name]
     runner_named_calls = {
@@ -364,6 +395,18 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", "direct .complete call")
     if "complete_formal_provider_call" not in runner_named_calls:
         _fail("FORMAL_GENERIC_PROVIDER_GATE_MISSING", repr(runner_named_calls))
+
+    easyicu_runner_calls = calls_by_file[FORMAL_EASYICU_RUNNER_PATH.name]
+    easyicu_runner_named_calls = {
+        call.func.id
+        for call in easyicu_runner_calls
+        if isinstance(call.func, ast.Name)
+    }
+    if "FormalAuthorizedHardStopClient" not in easyicu_runner_named_calls:
+        _fail(
+            "FORMAL_EASYICU_PROVIDER_GATE_MISSING",
+            repr(easyicu_runner_named_calls),
+        )
 
     gate_calls = calls_by_file[FORMAL_PROVIDER_GATE_PATH.name]
     gate_named_calls = {
@@ -555,6 +598,19 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         "review_candidate_normalizer_implemented_no_formal_authority"
     ):
         _fail("BLINDING_NORMALIZER_STATUS_INVALID", review_contract["status"])
+    expected_review_owners = {
+        "easyicu_producer": str(EASYICU_REVIEW_ADAPTER_PATH.relative_to(REPO_ROOT)),
+        "generic_producer": str(GENERIC_HARNESS_PATH.relative_to(REPO_ROOT)),
+        "shared_structural_semantics": str(REVIEW_SEMANTICS_PATH.relative_to(REPO_ROOT)),
+        "arm_neutral_normalizer": str(
+            (PACKAGE_ROOT / "review_bundle_normalizer.py").relative_to(REPO_ROOT)
+        ),
+    }
+    if review_contract.get("implementation_owners") != expected_review_owners:
+        _fail(
+            "REVIEW_BUNDLE_IMPLEMENTATION_OWNER_DRIFT",
+            repr(review_contract.get("implementation_owners")),
+        )
     preservation = review_contract["normalization"]["content_preservation"]
     if "may not repair, add, delete, reinterpret, or recompute" not in preservation:
         _fail("BLINDING_NORMALIZER_CONTENT_MUTATION", preservation)
@@ -568,6 +624,13 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         for field in visible_fields
     ):
         _fail("BLINDING_FAILURE_CATEGORY_SHAPE_AMBIGUOUS", repr(visible_fields))
+    if not any(
+        "explicitly labeled as assertions" in field for field in visible_fields
+    ) or not any(
+        "harness-computed substantive-output-file flags" in field
+        for field in visible_fields
+    ):
+        _fail("BLINDING_ARTIFACT_ASSERTION_BOUNDARY_MISSING", repr(visible_fields))
     if "model-turn and provider-call counts" not in receipt_projection["reviewer_hidden_until_scores_lock"]:
         _fail("BLINDING_RAW_RESOURCE_PROJECTION_INVALID", repr(receipt_projection))
 
@@ -592,6 +655,16 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         "validator_test_sha256",
         "formal_authority_sha256",
         "formal_authority_test_sha256",
+        "formal_provider_gate_sha256",
+        "formal_easyicu_runner_sha256",
+        "formal_generic_runner_sha256",
+        "generic_harness_sha256",
+        "easyicu_review_adapter_sha256",
+        "review_bundle_normalizer_sha256",
+        "review_bundle_semantics_sha256",
+        "formal_scheduler_sha256",
+        "blinded_evaluator_sha256",
+        "formal_implementation_owner_test_sha256",
         "design_commit",
         "annotated_tag",
         "trusted_authority_signer_identity",
@@ -620,6 +693,38 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("FORMAL_LAUNCH_FAIL_CLOSED_INVALID", repr(launch["current_authority"]))
     if launch.get("authority_owner") != str(FORMAL_AUTHORITY_PATH.relative_to(REPO_ROOT)):
         _fail("FORMAL_AUTHORITY_OWNER_INVALID", repr(launch.get("authority_owner")))
+    expected_launch_owners = {
+        "provider_gate": str(FORMAL_PROVIDER_GATE_PATH.relative_to(REPO_ROOT)),
+        "easyicu_formal_runner": str(
+            FORMAL_EASYICU_RUNNER_PATH.relative_to(REPO_ROOT)
+        ),
+        "generic_formal_runner": str(
+            FORMAL_GENERIC_RUNNER_PATH.relative_to(REPO_ROOT)
+        ),
+        "generic_harness": str(GENERIC_HARNESS_PATH.relative_to(REPO_ROOT)),
+        "easyicu_review_adapter": str(
+            EASYICU_REVIEW_ADAPTER_PATH.relative_to(REPO_ROOT)
+        ),
+        "shared_review_semantics": str(REVIEW_SEMANTICS_PATH.relative_to(REPO_ROOT)),
+        "review_normalizer": str(
+            (PACKAGE_ROOT / "review_bundle_normalizer.py").relative_to(REPO_ROOT)
+        ),
+        "formal_scheduler": str(FORMAL_SCHEDULER_PATH.relative_to(REPO_ROOT)),
+        "blinded_evaluator": str(BLINDED_EVALUATOR_PATH.relative_to(REPO_ROOT)),
+    }
+    if launch.get("implementation_owners") != expected_launch_owners:
+        _fail(
+            "FORMAL_IMPLEMENTATION_OWNER_DRIFT",
+            repr(launch.get("implementation_owners")),
+        )
+    if set(launch.get("registration_receipt_ids", ())) != {
+        "qualification_preconditions:01",
+        "design:02",
+    }:
+        _fail(
+            "FORMAL_AUTHORITY_REGISTRATION_RECEIPT_IDS_INVALID",
+            repr(launch.get("registration_receipt_ids")),
+        )
     signature_verification = launch.get("signature_verification", {})
     if signature_verification.get("algorithm") != "Ed25519":
         _fail("FORMAL_AUTHORITY_ALGORITHM_INVALID", repr(signature_verification))

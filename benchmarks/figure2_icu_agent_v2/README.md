@@ -53,9 +53,7 @@ Run the no-Provider design check with:
 
 ```bash
 python -m pytest \
-  tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py \
-  tests/benchmarks/figure2_icu_agent_v2/test_formal_runtime_v2_1.py \
-  tests/benchmarks/figure2_icu_agent_v2/test_generic_code_agent_harness.py -q
+  tests/benchmarks/figure2_icu_agent_v2 -q
 ```
 
 `design_v2_1.validate_review_candidate_bundle()` validates asset digests,
@@ -65,13 +63,24 @@ and fail-closed launch status. It cannot call a model or authorize a run.
 
 `generic_code_agent_harness.py` implements the frozen generic baseline loop
 and adapts the existing isolated DockerRunner to Python and in-container shell.
-`formal_generic_runner.py` is its only Provider-backed formal entry point and
-routes every model turn through `formal_provider_gate.py`. The current launch
-contract still denies every Provider call. `formal_authority.py` is the
-executable authority owner: it verifies an Ed25519-signed atomic declaration
-against the preregistered public key and binds every required receipt plus the
-exact call coordinate. This review candidate intentionally has no registered
-key; offline test keys do not grant qualification or formal-run authority.
+`formal_generic_runner.py` and `formal_easyicu_runner.py` are the two formal
+arm entry points; both route every model turn through
+`formal_provider_gate.py` and the same durable budget ledger. The EasyICU arm
+is projected into the shared seven-file contract only by
+`easyicu_review_bundle_adapter.py`; both producers use
+`review_bundle_semantics.py`, and `review_bundle_normalizer.py` performs the
+arm-neutral reviewer projection without repairing scientific content.
+
+`formal_scheduler.py` reproduces all 78 core task-arm trajectories and rejects
+a nonempty output root without Provider access. `blinded_evaluator.py`
+mechanically instantiates Heldout27 sheets from the frozen rubric and taskbank,
+then atomically locks two eligible reviewers' scores and arm guesses before
+unblinding. `formal_authority.py` verifies an Ed25519-signed atomic declaration,
+the exact call coordinate, and the registered SHA-256 of every critical runner,
+gate, producer, normalizer, scheduler, evaluator, and test owner before a
+transport can be reached. The current launch contract still denies every
+Provider call because this review candidate intentionally has no registered
+signer key; offline test keys grant no qualification or formal-run authority.
 
 Before any formal call, follow `preregistration_plan_v1.json`, satisfy every
 receipt in `formal_launch_contract_v1.json`, and replace the internal review

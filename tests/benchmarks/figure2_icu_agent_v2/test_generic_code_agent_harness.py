@@ -137,10 +137,16 @@ def test_offline_generic_harness_executes_and_writes_complete_bundle(tmp_path: P
     assert manifest["agent_asserted_headline_evidence"] == [
         {"claim": "risk difference", "artifact": "03_results.json"}
     ]
-    assert receipt["mandatory_artifact_presence"] == {
+    assert receipt["agent_asserted_mandatory_artifact_presence"] == {
         "cohort flow": True,
         "result table": True,
         "core diagnostic": True,
+    }
+    assert receipt["substantive_output_files"] == {
+        "02_cohort.json": True,
+        "03_results.json": True,
+        "04_diagnostics.json": True,
+        "06_report.md": True,
     }
     normalized = normalize_review_bundle(result.output_dir)
     assert tuple(normalized.files) == CANONICAL_FILES
@@ -195,7 +201,7 @@ def test_execution_timeout_is_terminal_without_model_retry(tmp_path: Path):
     )
     receipt = json.loads((result.output_dir / "07_run_receipt.json").read_text())
     assert receipt["failure_category"] == "execution_timeout"
-    assert receipt["mandatory_artifact_presence"] == {
+    assert receipt["agent_asserted_mandatory_artifact_presence"] == {
         label: False for label in MANDATORY_ARTIFACTS
     }
     normalized = normalize_review_bundle(result.output_dir)
@@ -261,7 +267,12 @@ def test_shared_budget_exhaustion_produces_terminal_bundle(tmp_path: Path):
     assert result.failure_category == "budget_exhausted"
     receipt = json.loads((result.output_dir / "07_run_receipt.json").read_text())
     assert receipt["within_frozen_budget"] is False
-    assert all(not value for value in receipt["mandatory_artifact_presence"].values())
+    assert all(
+        not value
+        for value in receipt[
+            "agent_asserted_mandatory_artifact_presence"
+        ].values()
+    )
 
 
 def test_empty_referenced_result_is_reported_absent(tmp_path: Path):
@@ -282,7 +293,10 @@ def test_empty_referenced_result_is_reported_absent(tmp_path: Path):
 
     receipt = json.loads((result.output_dir / "07_run_receipt.json").read_text())
     assert result.terminal_status == "completed"
-    assert receipt["mandatory_artifact_presence"]["result table"] is False
+    assert receipt["agent_asserted_mandatory_artifact_presence"][
+        "result table"
+    ] is False
+    assert receipt["substantive_output_files"]["03_results.json"] is False
 
 
 class _RunnerResult:

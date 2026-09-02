@@ -24,17 +24,15 @@ from easyicu.research_agent.authority.provider_hard_stop import (
 )
 from easyicu.research_agent.providers.protocol import LLMMessage
 
+from .review_bundle_semantics import (
+    CANONICAL_FILES,
+    asserted_artifact_presence,
+    normalize_artifact_inventory,
+    substantive_file_flags,
+)
+
 
 SPEC_PATH = Path(__file__).with_name("generic_code_agent_spec_v1.json")
-CANONICAL_FILES = (
-    "01_plan.json",
-    "02_cohort.json",
-    "03_results.json",
-    "04_diagnostics.json",
-    "05_evidence_manifest.json",
-    "06_report.md",
-    "07_run_receipt.json",
-)
 PLAN_FIELDS = (
     "population",
     "eligibility",
@@ -50,7 +48,6 @@ PLAN_FIELDS = (
 )
 LIST_PLAN_FIELDS = frozenset({"diagnostics", "artifacts", "limitations"})
 ALLOWED_LANGUAGES = frozenset({"python", "shell"})
-ARTIFACT_REFERENCE_FILES = frozenset(CANONICAL_FILES[:4] + ("06_report.md",))
 
 
 class GenericHarnessError(RuntimeError):
@@ -681,23 +678,16 @@ class GenericCodeAgentHarness:
                 "GENERIC_FINAL_BUNDLE_INVALID",
                 "artifact_inventory must map every frozen mandatory artifact",
             )
-        normalized_inventory: dict[str, list[str]] = {}
-        for label in mandatory_artifacts:
-            references = inventory[label]
-            if (
-                not isinstance(references, list)
-                or not references
-                or not all(
-                    isinstance(reference, str)
-                    and reference in ARTIFACT_REFERENCE_FILES
-                    for reference in references
-                )
-            ):
-                raise GenericHarnessError(
-                    "GENERIC_FINAL_BUNDLE_INVALID",
-                    f"artifact_inventory has invalid references for {label!r}",
-                )
-            normalized_inventory[label] = list(dict.fromkeys(references))
+        try:
+            normalized_inventory = normalize_artifact_inventory(
+                inventory,
+                mandatory_artifacts,
+            )
+        except ValueError as exc:
+            raise GenericHarnessError(
+                "GENERIC_FINAL_BUNDLE_INVALID",
+                str(exc),
+            ) from exc
 
         payloads = {
             "01_plan.json": _canonical_json_bytes(plan),
@@ -719,23 +709,30 @@ class GenericCodeAgentHarness:
         for name in CANONICAL_FILES[:6]:
             _write_new_file(destination, name, payloads[name])
 
-        substantive = {
-            "01_plan.json": bool(plan),
-            "02_cohort.json": bool(action["cohort"]),
-            "03_results.json": bool(action["results"]),
-            "04_diagnostics.json": bool(action["diagnostics"]),
-            "06_report.md": bool(action["report"].strip()),
-        }
-        artifact_presence = {
-            label: all(substantive[reference] for reference in references)
-            for label, references in normalized_inventory.items()
-        }
+        agent_asserted_artifact_presence = asserted_artifact_presence(
+            normalized_inventory,
+            plan=plan,
+            cohort=action["cohort"],
+            results=action["results"],
+            diagnostics=action["diagnostics"],
+            report=action["report"],
+        )
+        substantive_output_files = substantive_file_flags(
+            plan=plan,
+            cohort=action["cohort"],
+            results=action["results"],
+            diagnostics=action["diagnostics"],
+            report=action["report"],
+        )
         receipt = {
             **snapshot,
             "terminal_status": "completed",
             "within_frozen_budget": bool(snapshot.pop("within_frozen_budget", False)),
             "failure_category": None,
-            "mandatory_artifact_presence": artifact_presence,
+            "agent_asserted_mandatory_artifact_presence": (
+                agent_asserted_artifact_presence
+            ),
+            "substantive_output_files": substantive_output_files,
             "model_turns": model_turns,
             "tool_calls": tool_calls,
             "wall_seconds": round(max(0.0, time.monotonic() - started), 6),
@@ -796,8 +793,17 @@ class GenericCodeAgentHarness:
             "terminal_status": "failed",
             "within_frozen_budget": bool(snapshot.pop("within_frozen_budget", False)),
             "failure_category": category,
-            "mandatory_artifact_presence": {
+            "agent_asserted_mandatory_artifact_presence": {
                 label: False for label in mandatory_artifacts
+            },
+            "substantive_output_files": {
+                name: False
+                for name in (
+                    "02_cohort.json",
+                    "03_results.json",
+                    "04_diagnostics.json",
+                    "06_report.md",
+                )
             },
             "model_turns": model_turns,
             "tool_calls": tool_calls,
