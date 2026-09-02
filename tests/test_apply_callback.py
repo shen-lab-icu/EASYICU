@@ -88,6 +88,81 @@ def test_aumc_urine_output_repairs_decimal_errors_before_outlier_filter():
     assert pd.isna(result["value"].iloc[3])
 
 
+def test_mimiciii_explicit_ventilation_excludes_cancelled_and_zero_length_rows():
+    frame = pd.DataFrame(
+        {
+            "mech_vent": [225792, 225794, 225792, 225792],
+            "cancelreason": [0, 0, 1, 0],
+            "dur_var": [720.0, 60.0, 120.0, 0.0],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "mimiciii_explicit_ventilation_interval",
+            value_var="itemid",
+            params={"cancel_var": "cancelreason"},
+        ),
+        concept_name="mech_vent",
+    )
+
+    assert result["mech_vent"].tolist() == ["invasive", "noninvasive"]
+    assert result["dur_var"].tolist() == [720.0, 60.0]
+
+
+def test_eicu_confirmed_invasive_airway_left_censors_pre_icu_start_and_keeps_zero():
+    class DataSource:
+        def load_table(self, table_name, columns=None, verbose=False):
+            assert table_name == "patient"
+            assert columns == ["patientunitstayid", "unitdischargeoffset"]
+            del verbose
+            return pd.DataFrame(
+                {
+                    "patientunitstayid": [1, 2, 3, 4, 5],
+                    "unitdischargeoffset": [2000, 600, 60, 2000, 2000],
+                }
+            )
+
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [1, 2, 3, 4, 5, 2],
+            "mech_vent": [
+                "Oral ETT",
+                "Tracheostomy",
+                "Nasal ETT",
+                "Oral ETT",
+                "Oral ETT",
+                "Tracheostomy",
+            ],
+            "ventstartoffset": [120, 0, -60, 300, 400, 0],
+            "dur_var": [720, 900, 180, 0, -10, 1200],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "eicu_confirmed_invasive_airway_interval",
+            value_var="airwaytype",
+            index_var="ventstartoffset",
+            dur_var="respcarestatusoffset",
+        ),
+        concept_name="mech_vent",
+        data_source=DataSource(),
+    )
+
+    assert len(result) == 3
+    by_stay = result.set_index("patientunitstayid")
+    assert set(by_stay["mech_vent"]) == {"invasive"}
+    assert by_stay.loc[1, "ventstartoffset"] == 120
+    assert by_stay.loc[1, "dur_var"] == 720
+    assert by_stay.loc[2, "ventstartoffset"] == 0
+    assert by_stay.loc[2, "dur_var"] == 600
+    assert by_stay.loc[3, "ventstartoffset"] == 0
+    assert by_stay.loc[3, "dur_var"] == 60
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

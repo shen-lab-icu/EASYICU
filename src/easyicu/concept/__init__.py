@@ -5600,6 +5600,14 @@ class ConceptResolver:
                         print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
         elif align_to_admission:
             # Just alignment, no interval/aggregation
+            # True win_tbl concepts bypass the interval branch above, where
+            # the concat-level duration declaration is normally restored.
+            # Restore that declaration before admission alignment so the
+            # duration cannot be mistaken for an already-hour-valued number.
+            if combined_dur_unit and "dur_var" in combined.columns:
+                from ..table.duration import set_dur_var_unit
+
+                set_dur_var_unit(combined, combined_dur_unit)
             combined = self._align_time_to_admission(
                 combined,
                 data_source,
@@ -8885,6 +8893,7 @@ class ConceptResolver:
         # row during the outer merge.  The table metadata is the authoritative
         # time binding and must travel with the frame until names are aligned.
         declared_time_columns: Dict[str, str] = {}
+        declared_duration_columns: Dict[str, str] = {}
         for name, table in tables.items():
             if isinstance(table, ICUTable):
                 df = table.data
@@ -8908,6 +8917,9 @@ class ConceptResolver:
                 declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
                 if declared_index and declared_index in df.columns:
                     declared_time_columns[name] = declared_index
+                declared_duration = getattr(table, 'dur_var', None)
+                if declared_duration and declared_duration in df.columns:
+                    declared_duration_columns[name] = declared_duration
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
                     value_candidates = ['value', 'valuenum']
@@ -8986,6 +8998,27 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
+            # WinTbl metadata is authoritative: its dur_var is an elapsed
+            # duration, while source frames may still carry an auxiliary
+            # absolute end timestamp.  The generic compatibility expander
+            # otherwise prefers that absolute timestamp and can manufacture
+            # years of hourly rows.  Canonicalise the declared duration and
+            # remove only the redundant end columns for this WinTbl.
+            declared_duration = declared_duration_columns.get(name)
+            if declared_duration and declared_duration in df.columns:
+                if declared_duration != "duration":
+                    df = df.drop(columns=["duration"], errors="ignore").rename(
+                        columns={declared_duration: "duration"}
+                    )
+                redundant_end_columns = [
+                    column
+                    for column in ("endtime", "stop")
+                    if column in df.columns
+                    and column != declared_time_columns.get(name)
+                ]
+                if redundant_end_columns:
+                    df = df.drop(columns=redundant_end_columns)
+                concept_data[name] = df
             # The table's declared index is authoritative.  Multi-source
             # concepts can retain an auxiliary column whose name happens to
             # equal the time key selected from an earlier concept.  For
