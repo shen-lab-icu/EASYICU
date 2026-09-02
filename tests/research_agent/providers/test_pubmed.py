@@ -544,6 +544,61 @@ def test_prepare_preplan_literature_reuses_resume_authority_exactly(ra, tmp_path
     ) == seed
 
 
+def test_prepare_preplan_literature_reuses_registered_resume_evidence(
+    ra, tmp_path, monkeypatch
+):
+    schema = ra.schema
+    from easyicu.research_agent.literature import LiteratureBundle
+    from easyicu.research_agent.planning import preplan_literature as owner
+
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+    approved = LiteratureBundle(
+        research_question=context.research_question,
+        citations=[],
+        prisma={
+            "identified": 8,
+            "duplicates_removed": 0,
+            "screened": 8,
+            "eligible": 3,
+            "included": 3,
+        },
+    )
+    approved_path = tmp_path / "approved-literature.json"
+    approved_path.write_text(approved.model_dump_json(indent=2), encoding="utf-8")
+    evidence = _RecordingEvidence()
+    evidence.records["preplan_literature_bundle"] = {"relative_path": "ignored"}
+    monkeypatch.setattr(
+        owner,
+        "verified_run_evidence_path",
+        lambda run_dir, record: approved_path,
+    )
+
+    observed = owner.prepare_preplan_literature(
+        context=context,
+        run_dir=tmp_path,
+        evidence=evidence,
+        enable_pubmed=False,
+        pubmed_email=None,
+        pubmed_api_key=None,
+        enable_tavily=False,
+        tavily_api_key=None,
+        tavily_retmax=5,
+        tavily_include_domains=(),
+        reuse_registered_exact=True,
+    )
+
+    assert observed == approved
+    assert LiteratureBundle.model_validate_json(
+        (tmp_path / "preplan_literature_bundle.json").read_text(encoding="utf-8")
+    ) == approved
+
+
 # ---------------------------------------------------------------------------
 # esummary parser
 # ---------------------------------------------------------------------------

@@ -999,6 +999,7 @@ def _run_preplan_literature_and_hypothesis(
                 reuse_bound_seed_exact=(
                     self._development_resume_reuse_bound_literature
                 ),
+                reuse_registered_exact=resume_state is not None,
             )
             if self._config.require_literature_design_authority:
                 _literature_design.validate_preplan_literature_design_authority(
