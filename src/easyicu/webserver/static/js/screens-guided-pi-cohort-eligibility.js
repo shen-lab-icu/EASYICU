@@ -162,5 +162,5 @@
     return { render, actionFromEvent, repeatedStayDecisionHtml };
   }
 
-  window.EU_GUIDED_PI_COHORT_ELIGIBILITY = { create };
+  window.EasyICU.guidedPi.declare('cohortEligibility', { create });
 })();

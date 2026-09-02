@@ -106,5 +106,5 @@
     };
   }
 
-  window.EU_GUIDED_PI_RESULT_SUMMARY = Object.freeze({ summarize });
+  window.EasyICU.guidedPi.declare('resultSummary', { summarize });
 })();

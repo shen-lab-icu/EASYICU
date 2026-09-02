@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -15,6 +16,9 @@ STATIC = (
     Path(__file__).resolve().parents[3] / "src" / "easyicu" / "webserver" / "static"
 )
 NODE_APP = STATIC.parent / "pi_copilot" / "node_app"
+NODE_MODULE_HARNESS = Path(__file__).resolve().parents[2] / "js" / (
+    "guided_pi_module_harness.cjs"
+)
 
 
 def _read(relative: str) -> str:
@@ -34,6 +38,13 @@ def test_node_prompt_obeys_owner_order_before_internal_resolution() -> None:
 _ESCAPE_OWNER = _read("js/html-escape.js")
 
 
+@pytest.fixture(autouse=True)
+def _load_guided_pi_module_harness(monkeypatch: pytest.MonkeyPatch) -> None:
+    existing = os.environ.get("NODE_OPTIONS", "").strip()
+    preload = f"--require={NODE_MODULE_HARNESS}"
+    monkeypatch.setenv("NODE_OPTIONS", f"{preload} {existing}".strip())
+
+
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260902-type-scale2" in index
@@ -45,6 +56,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
+    assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20260828-literature-search1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260901-idea-value2" in index
     assert "js/screens-guided-pi-next-actions.js?v=20260901-entry-routing1" in index
@@ -92,6 +104,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
     )
+    assert index.index("js/screens-guided-pi-modules.js") < index.index(
+        "js/screens-guided-pi-literature.js"
+    )
     assert index.index("js/screens-guided-pi-markdown.js") < index.index(
         "js/screens-guided-pi-next-actions.js"
     )
@@ -135,6 +150,29 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi.js"
     )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
+
+
+def test_guided_pi_module_contract_rejects_ambiguous_or_missing_owners() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    completed = subprocess.run(
+        [
+            node,
+            str(STATIC.parents[3] / "tests" / "js" / "guided_pi_modules.test.js"),
+            str(STATIC / "js" / "screens-guided-pi-modules.js"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(completed.stdout) == {"ok": True, "fail_closed_cases": 5}
+
+    guided_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((STATIC / "js").glob("screens-guided-pi*.js"))
+    )
+    assert re.search(r"window\.EU_GUIDED_PI(?:_|\b)", guided_sources) is None
 
 
 def test_guided_pi_project_switch_clears_project_scoped_extraction_receipts() -> None:
@@ -269,7 +307,7 @@ def test_formal_plan_buttons_append_one_concise_governed_action() -> None:
     )[0]
     assert "api.submitAgentRunReview" in approval
     assert "host.sendText(" not in approval
-    assert "window.EU_GUIDED_PI_PLAN_ACTIONS.create({" in shell
+    assert "MODULES.require('planActions').create({" in shell
     assert "async function submitCurrentPlanReview" not in shell
     assert "row.hostActionCode !== 'generate_plan'" in shell
     assert "String(row && row.hostActionCode || '') === 'generate_plan'" in resources
@@ -773,7 +811,7 @@ def test_guided_header_and_progress_keep_secondary_controls_available() -> None:
     events = _read("js/screens-guided-pi-events.js")
     aside_owner = _read("js/screens-guided-pi-aside.js")
 
-    assert "window.EU_GUIDED_PI_HEADER = { render };" in header
+    assert "guidedPi.declare('header', { render });" in header
     assert "gpi-head-new" in header and "data-gpi-new" in header
     assert '<button class="gpi-model-binding"' in header
     assert "变更将在新会话中生效" in header
@@ -959,7 +997,7 @@ def test_local_source_picker_activates_the_sessions_bound_study_context() -> Non
         "await store.activate(contextId)"
     )
     assert authorization.index("await store.activate(contextId)") < authorization.index(
-        "window.EU_GUIDED_PI_PREVIEW.open"
+        "guidedPi.optional('preview')"
     )
     assert "emptyResearchHtml" in owner
     assert "需要读取或分析数据时" in starters
@@ -1061,7 +1099,7 @@ def test_new_conversation_binds_only_a_source_before_model_guided_setup() -> Non
     assert "export_format" not in source_persist
     assert "confirmDataSourceBinding" in shell
     assert "action: 'confirm_selected_source'" in data_binding_owner
-    assert "EU_GUIDED_PI_PREVIEW.close()" in shell
+    assert "MODULES.optional('preview')" in shell
     assert "easyicu:guided-projects-refresh" in data_binding_owner
     assert "easyicu:guided-projects-refresh" in guided
     assert "loadGuidedDrafts(true)" in guided
@@ -1163,7 +1201,7 @@ def test_conversational_data_workbench_assets_are_route_owned() -> None:
     assert index.index("js/screens-guided-pi-resources.js") < index.index(
         "js/screens-guided-pi.js"
     )
-    assert "window.EU_GUIDED_PI_DATA_PREVIEW" in preview
+    assert "guidedPi.declare('dataPreview'" in preview
     assert "window.EU_VIZ_EMBEDDED_WORKBENCH" in _read("js/screens-viz-embedded.js")
     assert "data_workbench_snapshot" in resources
     assert ".gpi-viz-embed" in css
@@ -1379,7 +1417,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'id="gdPiShell"' in guided
     assert 'id="gdLegacyShell"' in guided
     assert "piOwner.mount" in guided
-    assert "window.EU_GUIDED_PI = {" in pi_owner
+    assert "guidedPi.declare('shell', {" in pi_owner
     for public_method in (
         "mount",
         "unmount",
@@ -1442,7 +1480,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "loadPiCopilotSessions(100, expectedProjectId)" in pi_owner
     assert "easyicu_pi_copilot_session:' + encodeURIComponent(projectId())" in pi_owner
     assert "project_dir" not in pi_owner
-    assert "window.EU_GUIDED_PI.bindProject" in guided
+    assert "guidedPi.optional('shell')" in guided
     assert "if (usePiSession) return bindProjectToPi(result, row);" in guided
     assert "restoreGuidedProjectThread(result, row, kind);" in guided
     assert (
@@ -1461,7 +1499,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "guidedProjectRenderer('renderShellRail')" in guided
     assert "data-gpi-provider-form" in provider_owner
     assert '<form class="gpi-provider-section"' not in pi_owner
-    assert "window.EU_GUIDED_PI_PROVIDER" in provider_owner
+    assert "guidedPi.declare('provider'" in provider_owner
     assert "CLIProxyAPI / Local proxy" in provider_owner
     assert "gpt-5.6-luna" in provider_owner
     assert "gpt5.6 luna" not in provider_owner
@@ -1495,7 +1533,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "RESOURCE_OWNER.fromButton(resource)" in events_owner
     assert "RESOURCE_OWNER.fromButton(resource)" not in pi_owner
     assert 'data-gpi-mode-switch="workspace"' in header_owner
-    assert "const HEADER = window.EU_GUIDED_PI_HEADER;" in pi_owner
+    assert "const HEADER = MODULES.require('header');" in pi_owner
     assert "agentMode: 'research'" in pi_owner
     assert "pendingAuthorityRebind" in pi_owner
     assert "event.host_rebind_after_turn === true" in pi_owner
@@ -2245,7 +2283,7 @@ process.stdout.write(JSON.stringify({
     shell = _read("js/screens-guided-pi.js")
     owner = _read("js/screens-guided-pi-confirmation.js")
     # The shell keeps the mount and the send; the owner keeps the catalogue.
-    assert "window.EU_GUIDED_PI_CONFIRMATION.create({" in shell
+    assert "MODULES.require('confirmation').create({" in shell
     assert "function workflowConfirmation()" not in shell
     assert "function workflowConfirmation()" in owner
     assert "请基于已确认的研究问题和 EasyICU 数据库能力目录" not in owner
@@ -2485,9 +2523,11 @@ def test_child_job_terminal_event_archives_and_refreshes_without_reload() -> Non
     if not node:
         pytest.skip("Node.js is unavailable")
     owner_path = STATIC / "js" / "screens-guided-pi-childjob.js"
+    replay_path = STATIC / "js" / "screens-guided-pi-replay.js"
     script = r"""
 global.window = {};
 require(process.argv[1]);
+require(process.argv[2]);
 const messages = [];
 const calls = [];
 let childJobId = 'job-1';
@@ -2522,7 +2562,7 @@ setTimeout(() => process.stdout.write(JSON.stringify({
 })), 20);
 """
     result = subprocess.run(
-        [node, "-e", script, str(owner_path)],
+        [node, "-e", script, str(replay_path), str(owner_path)],
         check=False,
         capture_output=True,
         text=True,
@@ -4568,7 +4608,7 @@ def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
     workbench = _read("js/screens-guided-pi-workbench-preview.js")
     css = _read("css/guided-pi-workbench-preview.css")
     assert 'data-gpi-preview-mode="workbench"' in preview
-    assert "window.EU_GUIDED_PI_WORKBENCH_PREVIEW" in workbench
+    assert "guidedPi.declare('workbenchPreview'" in workbench
     assert "data-gpi-wb-query" in workbench
     assert "data-gpi-wb-status" in workbench
     assert "typed proposal" in workbench
@@ -4653,7 +4693,7 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "94,458 / 94,458" in demo
     assert "0 / 9,466" in demo
     assert "primaryDocument" in demo
-    assert "window.EU_GUIDED_PI_PREVIEW.open(primary" in pi_owner
+    assert "preview.open(primary" in pi_owner
     assert "Reviewer workflow" in pi_owner
     assert "gpi-demo-reviewer" not in pi_owner
     assert "reviewer_dossier_complete" in aside_owner
@@ -4854,7 +4894,7 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
     preview = _read("js/screens-guided-pi-preview.js")
     assert "demo.renderArtifact" not in preview
     assert "renderer.artifactStructuredView(state.resource.artifact" in preview
-    assert "EU_GUIDED_PI_LITERATURE" in preview
+    assert "guidedPi.require('literature')" in preview
     assert "Bounded reviewer projection · Standard Web renderer" in preview
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
@@ -4965,6 +5005,7 @@ def test_evidence_preview_renderer_escapes_code_json_and_table_content() -> None
             str(
                 STATIC.parents[3] / "tests" / "js" / "evidence_preview_security.test.js"
             ),
+            str(STATIC / "js" / "screens-guided-pi-modules.js"),
             str(STATIC / "js" / "screens-guided-pi-evidence-preview.js"),
         ],
         check=True,
@@ -4986,7 +5027,7 @@ def test_technical_report_has_a_dedicated_safe_preview_owner() -> None:
     assert "data-gpi-evidence-open" in report
     assert "data-gpi-report-artifact" in report
     assert "research_report" in preview
-    assert "EU_GUIDED_PI_TECHNICAL_REPORT" in preview
+    assert "guidedPi.require('technicalReport')" in preview
     assert "research_report" in resources
     assert "View technical analysis report" in run_outcome
     assert "Preview technical analysis report" in confirmation
@@ -5002,6 +5043,7 @@ def test_technical_report_has_a_dedicated_safe_preview_owner() -> None:
         [
             node,
             str(STATIC.parents[3] / "tests" / "js" / "technical_report_security.test.js"),
+            str(STATIC / "js" / "screens-guided-pi-modules.js"),
             str(STATIC / "js" / "screens-guided-pi-technical-report.js"),
         ],
         check=True,
@@ -5022,7 +5064,7 @@ def test_e2_full_and_article_reports_have_dedicated_safe_owners() -> None:
     assert "easyicu.web-full-analysis-report/1" in analysis
     assert "Result interpretation" in analysis
     assert "data-gpi-evidence-open" in analysis
-    assert "EU_GUIDED_PI_ARTICLE_REPORT" in article
+    assert "guidedPi.declare('articleReport'" in article
     assert "full_analysis_report.json" in preview
     assert "article_report.json" in preview
     assert "Preview complete analysis report" in confirmation
@@ -5041,6 +5083,7 @@ def test_e2_full_and_article_reports_have_dedicated_safe_owners() -> None:
         [
             node,
             str(STATIC.parents[3] / "tests" / "js" / "e2_reports_security.test.js"),
+            str(STATIC / "js" / "screens-guided-pi-modules.js"),
             str(STATIC / "js" / "screens-guided-pi-analysis-report.js"),
             str(STATIC / "js" / "screens-guided-pi-article-report.js"),
         ],
@@ -5578,7 +5621,7 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
     data_binding_owner = _read("js/screens-guided-pi-data-binding.js")
     css = _read("css/guided-pi.css")
 
-    assert "window.EU_GUIDED_PI_NEXT_ACTIONS" in owner
+    assert "MODULES.require('nextActions')" in owner
     assert "row.complete !== false" in owner
     assert "row === latestAssistant && !interactionLocked && !stale" in owner
     assert "sendText(message, governedNextChoiceGrants(nextChoice, message))" in events
@@ -5626,7 +5669,7 @@ def test_successful_local_source_action_opens_native_workspace_immediately() -> 
 
     assert "event.code || '') === 'easyicu_local_source_workspace_ready'" in owner
     assert "resource && resource.kind === 'native_workspace'" in owner
-    assert "window.EU_GUIDED_PI_PREVIEW.open(localWorkspace, projectId())" in owner
+    assert "preview.open(localWorkspace, projectId())" in owner
     assert "nextChoice.dataset.gpiNextLocalDatabase" in events
     assert "authorizeDataSource('begin_local_selection', { database: localDatabase })" in events
 
@@ -5828,7 +5871,7 @@ def test_copilot_message_actions_are_host_wired_without_history_rewrite() -> Non
     events = _read("js/screens-guided-pi-events.js")
     css = _read("css/guided-pi.css")
 
-    assert "window.EU_GUIDED_PI_MESSAGE_ACTIONS.create" in owner
+    assert "MODULES.require('messageActions').create" in owner
     assert "state.editingMessageId === row.id" in owner
     assert "MESSAGE_ACTIONS.handleClick(event)" in events
     assert "MESSAGE_ACTIONS.handleSubmit(event)" in events
@@ -6155,7 +6198,7 @@ def test_literature_preview_receives_current_workflow_status_from_guided_owner()
     confirmation = _read("js/screens-guided-pi-confirmation.js")
 
     assert "function previewWorkflowContext()" in guided
-    assert "EU_GUIDED_PI_PREVIEW.setWorkflowContext(previewWorkflowContext())" in guided
+    assert "preview.setWorkflowContext(previewWorkflowContext())" in guided
     assert "const descriptor = RESOURCE_OWNER.fromButton(resource)" in events
     assert "descriptor, projectId(), previewWorkflowContext()" in events
     assert "state.workflow.active_job = (payload && payload.active_job) || { present: false }" in guided
@@ -6211,7 +6254,7 @@ def test_guided_analysis_reports_fallback_to_registered_result_tables() -> None:
     technical = _read("js/screens-guided-pi-technical-report.js")
     index = _read("index.html")
 
-    assert "EU_GUIDED_PI_RESULT_SUMMARY" in summary
+    assert "guidedPi.declare('resultSummary'" in summary
     assert "overall_outcome.risk_pct" in summary
     assert "all_requested_inputs" not in summary
     assert "complete.*(case|model)" in summary
@@ -6596,6 +6639,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
     if node is None:
         pytest.skip("Node is not installed")
     source = _read("js/screens-guided-pi-preview.js")
+    resources = _read("js/screens-guided-pi-resources.js")
     digest = "c" * 64
     script = f"""
       const calls = [];
@@ -6610,6 +6654,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
       }};
       global.document = {{ getElementById() {{ return null; }} }};
       eval({_ESCAPE_OWNER!r});
+      eval({resources!r});
       eval({source!r});
       const host = {{
         hidden: false,

@@ -29,8 +29,9 @@
       if (resource.kind === 'idea_plan') {
         return window.EU_LANG === 'zh' ? 'Idea Mining 方案预览' : 'Idea Mining plan preview';
       }
-      if (resource.kind === 'demo_artifact' && window.EU_GUIDED_PI_DEMO && typeof window.EU_GUIDED_PI_DEMO.artifactLabel === 'function') {
-        return window.EU_GUIDED_PI_DEMO.artifactLabel(resource.artifact || resource.label || '');
+      const demo = window.EasyICU.guidedPi.optional('demo');
+      if (resource.kind === 'demo_artifact' && demo && typeof demo.artifactLabel === 'function') {
+        return demo.artifactLabel(resource.artifact || resource.label || '');
       }
       if (resource.kind === 'research_artifact' && window.AGENT_RENDER && typeof window.AGENT_RENDER.artifactTitle === 'function') {
         return window.AGENT_RENDER.artifactTitle(resource.artifact || resource.label || '');
@@ -181,5 +182,5 @@
     return { name, key, label, button, forMessage, groupForMessage, renderForMessage, fromButton };
   }
 
-  window.EU_GUIDED_PI_RESOURCES = { create };
+  window.EasyICU.guidedPi.declare('resources', { create });
 })();

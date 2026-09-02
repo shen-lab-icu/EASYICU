@@ -89,7 +89,7 @@
     }
   }
 
-  window.EU_GUIDED_PI_PROJECT = Object.freeze({
+  window.EasyICU.guidedPi.declare('project', {
     prepare, requestedProjectId, requestedSessionId, syncLocation,
   });
 })();

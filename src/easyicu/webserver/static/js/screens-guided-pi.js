@@ -3,12 +3,13 @@
    remain in their existing EasyICU owners. */
 (function () {
   'use strict';
+  const MODULES = window.EasyICU.guidedPi;
   const { esc } = window.EU_HTML;
-  const DATA_CONSENT = window.EU_GUIDED_PI_DATA_CONSENT;
-  const STARTERS = window.EU_GUIDED_PI_STARTERS;
-  const IDEA_SOURCE = window.EU_GUIDED_PI_IDEA_SOURCE;
-  const HEADER = window.EU_GUIDED_PI_HEADER;
-  const REGENERATION = window.EU_GUIDED_PI_REGENERATION;
+  const DATA_CONSENT = MODULES.require('dataConsent');
+  const STARTERS = MODULES.require('starters');
+  const IDEA_SOURCE = MODULES.require('ideaSource');
+  const HEADER = MODULES.require('header');
+  const REGENERATION = MODULES.require('regeneration');
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
@@ -51,7 +52,7 @@
       .replace(/\beasyicu\.webserver\.pi_copilot(?:\.[a-z0-9_.]+)?\b/gi, 'EasyICU Copilot');
   }
   function assistantTextHtml(value) {
-    const renderer = window.EU_GUIDED_PI_MARKDOWN;
+    const renderer = MODULES.require('markdown');
     return renderer && typeof renderer.render === 'function'
       ? renderer.render(value)
       : esc(value).replace(/\n/g, '<br>');
@@ -229,12 +230,12 @@
   function iconHtml(name, size) {
     return typeof window.icon === 'function' ? window.icon(name, size || 16, 1.55) : '';
   }
-  const RESOURCE_OWNER = window.EU_GUIDED_PI_RESOURCES.create({ esc });
+  const RESOURCE_OWNER = MODULES.require('resources').create({ esc });
   const resourceName = RESOURCE_OWNER.name;
   const resourceKey = RESOURCE_OWNER.key;
   const resourceLabel = RESOURCE_OWNER.label;
   const resourceButton = RESOURCE_OWNER.button;
-  const PROVIDER_CONTROL = window.EU_GUIDED_PI_PROVIDER_CONTROL.create({
+  const PROVIDER_CONTROL = MODULES.require('providerControl').create({
     state, api, tr, render, runtimeReady, shellReady,
     connectionConfigured, connectionReady, errorText,
   });
@@ -243,19 +244,19 @@
     startCodexLogin, openAuthorizationPopup, cancelCodexLogin, logoutCodex,
     configureProvider, finishProviderSetup,
   } = PROVIDER_CONTROL;
-  const RUN_OUTCOME = window.EU_GUIDED_PI_RUN_OUTCOME.create({
+  const RUN_OUTCOME = MODULES.require('runOutcome').create({
     tr, esc, iconHtml, resourceButton, api, projectId,
     canPreview: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
-    preview: () => window.EU_GUIDED_PI_PREVIEW,
+    preview: () => MODULES.optional('preview'),
     workflowContext: previewWorkflowContext,
     errorText,
     recordHostAction,
     onError: value => { state.error = value; render(); },
   });
-  const ACTIVITY = window.EU_GUIDED_PI_ACTIVITY.create({
+  const ACTIVITY = MODULES.require('activity').create({
     tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
   });
-  const CONFIRMATION = window.EU_GUIDED_PI_CONFIRMATION.create({
+  const CONFIRMATION = MODULES.require('confirmation').create({
     tr, esc, iconHtml, resourceButton, sessionIsStale,
     workflow: () => state.workflow,
     session: () => state.session,
@@ -265,7 +266,7 @@
   const workflowConfirmation = CONFIRMATION.workflowConfirmation;
   const workflowConfirmationHtml = CONFIRMATION.workflowConfirmationHtml;
   const localizedAuthorizationQuestion = CONFIRMATION.localizedAuthorizationQuestion;
-  const COHORT_ELIGIBILITY = window.EU_GUIDED_PI_COHORT_ELIGIBILITY.create({
+  const COHORT_ELIGIBILITY = MODULES.require('cohortEligibility').create({
     tr, esc,
     session: () => state.session,
     workflow: () => state.workflow,
@@ -273,13 +274,13 @@
     sessionIsStale,
   });
   const { timeMs } = ACTIVITY;
-  const TRANSCRIPT = window.EU_GUIDED_PI_TRANSCRIPT.create({
+  const TRANSCRIPT = MODULES.require('transcript').create({
     tr, activity: ACTIVITY, upsertActivityStep, timeMs, resourceKey, modelErrorText,
     activityHasCompletedAction,
     workflowActionCode: () => String((state.workflow && state.workflow.next_action_code) || ''),
   });
   const transcriptMessages = TRANSCRIPT.transcriptMessages;
-  const CHILDJOB = window.EU_GUIDED_PI_CHILDJOB.create({
+  const CHILDJOB = MODULES.require('childJob').create({
     tr, activity: ACTIVITY, upsertActivityStep, api,
     render: () => render(),
     loadWorkflow: (...args) => loadWorkflow(...args),
@@ -300,7 +301,7 @@
     childSource: () => state.childSource,
     setChildSource: value => { state.childSource = value; },
   });
-  const ASIDE = window.EU_GUIDED_PI_ASIDE.create({
+  const ASIDE = MODULES.require('aside').create({
     tr, esc, iconHtml,
     projectId: () => projectId(),
     displayProjectTitle: (...args) => displayProjectTitle(...args),
@@ -310,7 +311,7 @@
     workflow: () => state.workflow,
   });
   const syncProjectWorkflowAside = ASIDE.syncProjectWorkflowAside;
-  const DATA_BINDING = window.EU_GUIDED_PI_DATA_BINDING.create({
+  const DATA_BINDING = MODULES.require('dataBinding').create({
     api,
     render: () => render(),
     projectId: () => projectId(),
@@ -335,10 +336,10 @@
   const handleChildJobEvent = CHILDJOB.handleChildJobEvent;
   const watchChildJob = CHILDJOB.watchChildJob;
   const hydrateProjectedJob = CHILDJOB.hydrateProjectedJob;
-  const PLAN_ACTIONS = window.EU_GUIDED_PI_PLAN_ACTIONS.create({
+  const PLAN_ACTIONS = MODULES.require('planActions').create({
     tr, errorText, regeneration: REGENERATION,
-    nextActions: window.EU_GUIDED_PI_NEXT_ACTIONS,
-    replay: window.EU_GUIDED_PI_REPLAY,
+    nextActions: MODULES.require('nextActions'),
+    replay: MODULES.require('replay'),
     session: () => state.session,
     workflow: () => state.workflow,
     busy: () => state.busy || Boolean(state.childJobId),
@@ -362,7 +363,7 @@
   const retryFailedExecution = PLAN_ACTIONS.retryFailedExecution;
   const startCurrentFormalPlanGeneration = PLAN_ACTIONS.startFormalPlanGeneration;
   const governedNextChoiceGrants = PLAN_ACTIONS.governedNextChoiceGrants;
-  const MESSAGE_ACTIONS = window.EU_GUIDED_PI_MESSAGE_ACTIONS.create({
+  const MESSAGE_ACTIONS = MODULES.require('messageActions').create({
     tr, iconHtml,
     rows: () => state.messages.concat(state.workflowReceipts),
     canEdit: () => !state.busy && !state.childJobId && !sessionIsStale(),
@@ -373,7 +374,7 @@
     resubmitHostGenerated: PLAN_ACTIONS.resubmitHostGenerated,
     host: () => state.host,
   });
-  const EVENTS = window.EU_GUIDED_PI_EVENTS.create({
+  const EVENTS = MODULES.require('events').create({
     state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
     DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
     openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
@@ -464,7 +465,7 @@
     const runtimeMissing = window.EU_PI_BLOCKERS
       ? window.EU_PI_BLOCKERS.describe(blockers, runtime)
       : [];
-    const owner = window.EU_GUIDED_PI_PROVIDER;
+    const owner = MODULES.require('provider');
     if (!owner || typeof owner.renderSetup !== 'function') return '';
     return owner.renderSetup({
       state, runtime, config, blockers, runtimeMissing, tr, esc, option,
@@ -475,7 +476,7 @@
   }
 
   function providerBindingSummary() {
-    const owner = window.EU_GUIDED_PI_PROVIDER;
+    const owner = MODULES.require('provider');
     return owner && typeof owner.renderBindingSummary === 'function'
       ? owner.renderBindingSummary({ state, tr, esc, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(), connectionReady: connectionReady() })
       : '';
@@ -582,7 +583,7 @@
       ? DATA_CONSENT.renderPast(state.session, { tr, esc, icon: iconHtml })
       : '';
     const publicRow = row.role === 'assistant' ? { ...row, text: publicAssistantText(row.text) } : row;
-    const nextOwner = window.EU_GUIDED_PI_NEXT_ACTIONS;
+    const nextOwner = MODULES.require('nextActions');
     // Project every assistant turn, not only the newest one. Projecting only
     // the latest left older turns rendering their own "### 下一步" block as raw
     // markdown -- four bullet lists that read as offers but could not be
@@ -756,7 +757,7 @@
   }
 
   function demoPanel() {
-    const demo = window.EU_GUIDED_PI_DEMO;
+    const demo = MODULES.optional('demo');
     if (!demo || typeof demo.messages !== 'function') {
       return `<div class="gpi-activate"><h2>${tr('Demo unavailable', '演示暂不可用')}</h2><button class="btn" type="button" data-gpi-demo-exit>${tr('Back', '返回')}</button></div>`;
     }
@@ -776,22 +777,24 @@
   }
 
   function openDemo() {
-    const demo = window.EU_GUIDED_PI_DEMO;
+    const demo = MODULES.optional('demo');
     if (!demo || typeof demo.messages !== 'function') return;
-    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) window.EU_GUIDED_PI_PREVIEW.close();
+    const preview = MODULES.optional('preview');
+    if (preview && preview.close) preview.close();
     state.demoMode = true;
     state.demoScrollTopPending = true;
     state.error = '';
     setShell('pi');
     const primary = typeof demo.primaryDocument === 'function' ? demo.primaryDocument() : null;
-    if (primary && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
-      window.EU_GUIDED_PI_PREVIEW.open(primary, projectId());
+    if (primary && preview && preview.open) {
+      preview.open(primary, projectId());
     }
   }
   function closeDemo() {
     state.demoMode = false;
     state.demoScrollTopPending = false;
-    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) window.EU_GUIDED_PI_PREVIEW.close();
+    const preview = MODULES.optional('preview');
+    if (preview && preview.close) preview.close();
     render();
   }
 
@@ -818,8 +821,9 @@
       : (state.demoMode ? demoPanel() : (state.projectIssue === 'pi_project_study_context_missing'
         ? activatePanel()
         : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel())))));
-    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.setWorkflowContext) {
-      window.EU_GUIDED_PI_PREVIEW.setWorkflowContext(previewWorkflowContext());
+    const preview = MODULES.optional('preview');
+    if (preview && preview.setWorkflowContext) {
+      preview.setWorkflowContext(previewWorkflowContext());
     }
     syncProjectWorkflowAside();
     requestAnimationFrame(() => {
@@ -911,8 +915,9 @@
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
       state.projectInitialization = null;
       rememberSession(state.session.session_id);
-      if (window.EU_GUIDED_PI_PROJECT && window.EU_GUIDED_PI_PROJECT.syncLocation) {
-        window.EU_GUIDED_PI_PROJECT.syncLocation(expectedProjectId, state.session.session_id);
+      const projectOwner = MODULES.require('project');
+      if (projectOwner && projectOwner.syncLocation) {
+        projectOwner.syncLocation(expectedProjectId, state.session.session_id);
       }
       state.sessions = [state.session].concat(state.sessions.filter(row => row.session_id !== state.session.session_id));
     } catch (error) { state.error = errorText(error); }
@@ -942,7 +947,7 @@
         render();
         return;
       }
-      const replayOwner = window.EU_GUIDED_PI_REPLAY;
+      const replayOwner = MODULES.require('replay');
       state.session = replayOwner && typeof replayOwner.hydrate === 'function'
         ? await replayOwner.hydrate(api(), payload.session, expectedProjectId)
         : payload.session;
@@ -959,8 +964,9 @@
       reconcileSettledSession();
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
       rememberSession(sessionId); setShell('pi');
-      if (window.EU_GUIDED_PI_PROJECT && window.EU_GUIDED_PI_PROJECT.syncLocation) {
-        window.EU_GUIDED_PI_PROJECT.syncLocation(expectedProjectId, sessionId);
+      const projectOwner = MODULES.require('project');
+      if (projectOwner && projectOwner.syncLocation) {
+        projectOwner.syncLocation(expectedProjectId, sessionId);
       }
       if (refreshWorkflow !== false) await loadWorkflow();
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
@@ -1029,10 +1035,11 @@
     closeChildSource();
     state.error = '';
     state.pendingAuthorityRebind = false;
-    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
-      window.EU_GUIDED_PI_PREVIEW.close();
+    const preview = MODULES.optional('preview');
+    if (preview && preview.close) {
+      preview.close();
     }
-    const replayOwner = window.EU_GUIDED_PI_REPLAY;
+    const replayOwner = MODULES.require('replay');
     let existingSessionId = replayOwner && typeof replayOwner.preferredSessionId === 'function'
       ? replayOwner.preferredSessionId(state.sessions, '', next, uiLanguage())
       : String(state.sessions.find(row => (row.agent_mode || 'research') === next && sessionMatchesUiLanguage(row))?.session_id || '');
@@ -1115,8 +1122,9 @@
       const localWorkspace = !event.is_error && String(event.code || '') === 'easyicu_local_source_workspace_ready'
         ? toolResources.find(resource => resource && resource.kind === 'native_workspace')
         : null;
-      if (localWorkspace && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
-        window.EU_GUIDED_PI_PREVIEW.open(localWorkspace, projectId());
+      const preview = MODULES.optional('preview');
+      if (localWorkspace && preview && preview.open) {
+        preview.open(localWorkspace, projectId());
       }
       if (event.host_rebind_after_turn === true || ['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
         state.pendingAuthorityRebind = true;
@@ -1156,7 +1164,7 @@
     if (!state.session || !projectId()) return;
     try {
       const payload = await api().loadPiCopilotSession(state.session.session_id, projectId());
-      const replayOwner = window.EU_GUIDED_PI_REPLAY;
+      const replayOwner = MODULES.require('replay');
       state.session = !preserveTimeline && replayOwner && typeof replayOwner.hydrate === 'function'
         ? await replayOwner.hydrate(api(), payload.session, projectId())
         : payload.session;
@@ -1203,7 +1211,7 @@
     const listed = await api().loadPiCopilotSessions(100, expectedProjectId);
     if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
     state.sessions = (listed && listed.sessions) || [];
-    const projectOwner = window.EU_GUIDED_PI_PROJECT;
+    const projectOwner = MODULES.require('project');
     const requested = projectOwner && typeof projectOwner.requestedSessionId === 'function'
       ? projectOwner.requestedSessionId(expectedProjectId)
       : '';
@@ -1211,7 +1219,7 @@
       ? state.sessions.find(row => row.session_id === requested && sessionMatchesUiLanguage(row))
       : null;
     const remembered = rememberedSession();
-    const replayOwner = window.EU_GUIDED_PI_REPLAY;
+    const replayOwner = MODULES.require('replay');
     const preferred = requestedRow
       ? requested
       : (replayOwner && typeof replayOwner.preferredSessionId === 'function'
@@ -1236,8 +1244,9 @@
     state.error = '';
     state.busy = false;
     state.jobId = '';
-    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
-      window.EU_GUIDED_PI_PREVIEW.close();
+    const preview = MODULES.optional('preview');
+    if (preview && preview.close) {
+      preview.close();
     }
     state.projectLoading = Boolean(expectedProjectId && connectionReady());
     render();
@@ -1311,7 +1320,7 @@
     if (state.projectPreparePromise && state.projectPrepareId === expectedProjectId) {
       return state.projectPreparePromise;
     }
-    const pending = window.EU_GUIDED_PI_PROJECT.prepare({
+    const pending = MODULES.require('project').prepare({
       state, api, projectId, connectionReady, loadWorkflow,
       loadProjectSessions, render,
     });
@@ -1342,11 +1351,12 @@
     state.demoMode = false;
     state.demoScrollTopPending = false;
     state.project = next;
-    if (window.EU_GUIDED_PI_PROJECT && window.EU_GUIDED_PI_PROJECT.syncLocation) {
-      const requestedSession = next && window.EU_GUIDED_PI_PROJECT.requestedSessionId
-        ? window.EU_GUIDED_PI_PROJECT.requestedSessionId(next.id)
+    const projectOwner = MODULES.require('project');
+    if (projectOwner && projectOwner.syncLocation) {
+      const requestedSession = next && projectOwner.requestedSessionId
+        ? projectOwner.requestedSessionId(next.id)
         : '';
-      window.EU_GUIDED_PI_PROJECT.syncLocation(next && next.id, requestedSession);
+      projectOwner.syncLocation(next && next.id, requestedSession);
     }
     state.session = null;
     state.sessions = [];
@@ -1372,8 +1382,9 @@
     state.projectLoading = !!next;
     state.agentMode = 'research';
     state.pendingAuthorityRebind = false;
-    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.clearProject) {
-      window.EU_GUIDED_PI_PREVIEW.clearProject();
+    const preview = MODULES.optional('preview');
+    if (preview && preview.clearProject) {
+      preview.clearProject();
     }
     render();
     if (next) {
@@ -1574,7 +1585,8 @@
   }
   async function previewApprovedPlanDataPackage(button) {
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
-    if (!api().preparePiCopilotDataPackageReview || !window.EU_GUIDED_PI_PREVIEW || !window.EU_GUIDED_PI_PREVIEW.open) {
+    const preview = MODULES.optional('preview');
+    if (!api().preparePiCopilotDataPackageReview || !preview || !preview.open) {
       state.error = tr('The data preview is temporarily unavailable. Refresh this project and try again.', '数据预览暂时不可用，请刷新当前项目后重试。');
       render();
       return;
@@ -1589,7 +1601,7 @@
       const resource = payload && payload.resource;
       if (!resource) throw new Error(tr('EasyICU did not return a data preview.', 'EasyICU 未返回可预览的数据包。'));
       resource.label = tr('Pre-analysis data readiness', '分析前数据准备检查');
-      window.EU_GUIDED_PI_PREVIEW.open(resource, projectId(), previewWorkflowContext());
+      preview.open(resource, projectId(), previewWorkflowContext());
       state.error = '';
     } catch (error) {
       state.error = errorText(error);
@@ -1736,7 +1748,7 @@
     stopCodexPoll(); closeSource(); closeChildSource(); if (IDEA_SOURCE) IDEA_SOURCE.reset(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
   window.addEventListener('easyicu:languagechange', handleLanguageChange);
-  window.EU_GUIDED_PI = {
+  window.EasyICU.guidedPi.declare('shell', {
     mount,
     unmount,
     setShell,
@@ -1746,5 +1758,5 @@
     notifyExtractionHandoff,
     confirmDataSourceBinding,
     setProjectDiscoveryLoading,
-  };
+  });
 })();

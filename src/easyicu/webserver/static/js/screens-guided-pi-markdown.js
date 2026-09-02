@@ -42,7 +42,7 @@
   }
 
   function safeUrl(value) {
-    const literature = window.EU_GUIDED_PI_LITERATURE;
+    const literature = window.EasyICU.guidedPi.optional('literature');
     if (literature && typeof literature.safeUrl === 'function') {
       return literature.safeUrl(value);
     }
@@ -161,5 +161,5 @@
     return out.join('');
   }
 
-  window.EU_GUIDED_PI_MARKDOWN = { render, safeUrl };
+  window.EasyICU.guidedPi.declare('markdown', { render, safeUrl });
 })();

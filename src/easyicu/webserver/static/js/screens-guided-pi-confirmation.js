@@ -702,5 +702,5 @@
     };
   }
 
-  window.EU_GUIDED_PI_CONFIRMATION = { create };
+  window.EasyICU.guidedPi.declare('confirmation', { create });
 })();

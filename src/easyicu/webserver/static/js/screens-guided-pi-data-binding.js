@@ -48,8 +48,9 @@
             await store.activate(contextId);
           }
         }
-        if (payload.resource && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
-          window.EU_GUIDED_PI_PREVIEW.open(payload.resource, projectId());
+        const preview = window.EasyICU.guidedPi.optional('preview');
+        if (payload.resource && preview && preview.open) {
+          preview.open(payload.resource, projectId());
         }
         render();
       } catch (error) {
@@ -122,10 +123,11 @@
       host.setSession(payload.session || host.session());
       rememberSession(host.session().session_id);
       document.dispatchEvent(new CustomEvent('easyicu:guided-projects-refresh'));
-      if (payload.resource && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
-        window.EU_GUIDED_PI_PREVIEW.open(payload.resource, projectId());
-      } else if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
-        window.EU_GUIDED_PI_PREVIEW.close();
+      const preview = window.EasyICU.guidedPi.optional('preview');
+      if (payload.resource && preview && preview.open) {
+        preview.open(payload.resource, projectId());
+      } else if (preview && preview.close) {
+        preview.close();
       }
       await loadWorkflow();
       render();
@@ -141,5 +143,5 @@
     return { authorizeDataSource, notifyExtractionHandoff, confirmDataSourceBinding };
   }
 
-  window.EU_GUIDED_PI_DATA_BINDING = { create };
+  window.EasyICU.guidedPi.declare('dataBinding', { create });
 })();

@@ -135,5 +135,5 @@
     return Object.freeze({ render, openData });
   }
 
-  window.EU_GUIDED_PI_RUN_OUTCOME = { create };
+  window.EasyICU.guidedPi.declare('runOutcome', { create });
 })();

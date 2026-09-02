@@ -4,8 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const analysisSource = fs.readFileSync(process.argv[2], 'utf8');
-const articleSource = fs.readFileSync(process.argv[3], 'utf8');
+const modulesSource = fs.readFileSync(process.argv[2], 'utf8');
+const analysisSource = fs.readFileSync(process.argv[3], 'utf8');
+const articleSource = fs.readFileSync(process.argv[4], 'utf8');
 const escape = value => String(value == null ? '' : value)
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -19,6 +20,7 @@ const context = {
   },
 };
 vm.createContext(context);
+vm.runInContext(modulesSource, context);
 vm.runInContext(analysisSource, context);
 vm.runInContext(articleSource, context);
 
@@ -31,7 +33,7 @@ const claim = (id, field, value, displayValue) => ({
     kind: 'statistic', description: '<img src=x onerror=bad()>',
   },
 });
-const html = context.window.EU_GUIDED_PI_ANALYSIS_REPORT.render({
+const html = context.window.EasyICU.guidedPi.require('analysisReport').render({
   run_context: { question: '<svg onload=bad()> E2?' },
   manuscript_provenance: { claims: [
     claim('a', 'cohort.n_stays', 94458, '94,458'),
@@ -54,7 +56,7 @@ assert.ok(html.includes('&lt;img src=x onerror=bad()&gt;'));
 assert.ok(!html.includes('<svg onload=bad()>'));
 assert.ok(!html.includes('<img src=x onerror=bad()>'));
 
-const mismatchedHtml = context.window.EU_GUIDED_PI_ANALYSIS_REPORT.render({
+const mismatchedHtml = context.window.EasyICU.guidedPi.require('analysisReport').render({
   run_context: { question: 'Mismatch probe' },
   manuscript_provenance: { claims: [
     claim('m', 'primary_or', 2.0, '2.0'),
@@ -65,7 +67,7 @@ const mismatchedHtml = context.window.EU_GUIDED_PI_ANALYSIS_REPORT.render({
 });
 assert.ok(!mismatchedHtml.includes('OR 2.0 (95% CI 0.8–1.2)'));
 
-const unrelatedHtml = context.window.EU_GUIDED_PI_ANALYSIS_REPORT.render({
+const unrelatedHtml = context.window.EasyICU.guidedPi.require('analysisReport').render({
   run_context: { question: 'Does vasopressor exposure predict acute kidney injury?' },
   manuscript_provenance: { claims: [] },
   figure_gallery: {},
@@ -79,7 +81,7 @@ for (const caseSpecificText of [
   assert.ok(!unrelatedHtml.includes(caseSpecificText), caseSpecificText);
 }
 
-const articleHtml = context.window.EU_GUIDED_PI_ARTICLE_REPORT.render({
+const articleHtml = context.window.EasyICU.guidedPi.require('articleReport').render({
   marker: '<script>bad()</script>', figure_gallery: { presentation_variant: true },
 });
 assert.ok(articleHtml.includes('&lt;script&gt;bad()&lt;/script&gt;'));

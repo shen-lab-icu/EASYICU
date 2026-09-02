@@ -32,5 +32,5 @@
     return Object.fromEntries(loaded);
   }
 
-  window.EU_GUIDED_PI_REPORT_ARTIFACTS = Object.freeze({ load });
+  window.EasyICU.guidedPi.declare('reportArtifacts', { load });
 })();

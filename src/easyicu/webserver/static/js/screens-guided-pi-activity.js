@@ -489,5 +489,5 @@
     return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
-  window.EU_GUIDED_PI_ACTIVITY = Object.freeze({ create });
+  window.EasyICU.guidedPi.declare('activity', { create });
 })();

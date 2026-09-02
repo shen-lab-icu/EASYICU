@@ -45,10 +45,12 @@ def test_repeated_stay_review_uses_typed_plan_decision_not_chat_text() -> None:
         return
     cohort_owner = STATIC / "js" / "screens-guided-pi-cohort-eligibility.js"
     confirmation_owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
+    modules_owner = STATIC / "js" / "screens-guided-pi-modules.js"
     script = r"""
 global.window = { EU_LANG: 'zh' };
 require(process.argv[1]);
 require(process.argv[2]);
+require(process.argv[3]);
 const options = [
   { id: 'first_admission_only', expected_revision: 29,
     primary_cohort_contract_sha256: 'first-scope', selection_event_id: 'first-event' },
@@ -61,11 +63,11 @@ const session = { cohort_eligibility_selection: {
     minimum_age_years: 0, minimum_icu_duration_hours: 0,
   }}, options,
 }};
-const cohort = window.EU_GUIDED_PI_COHORT_ELIGIBILITY.create({
+const cohort = window.EasyICU.guidedPi.require('cohortEligibility').create({
   tr: (en, zh) => zh || en, esc: value => String(value),
   session: () => session, busy: () => false, sessionIsStale: () => false,
 });
-const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({
+const confirmation = window.EasyICU.guidedPi.require('confirmation').create({
   tr: (en, zh) => zh || en, esc: value => String(value), iconHtml: () => '',
   resourceButton: () => '', sessionIsStale: () => false, busy: () => false,
   session: () => ({ binding: { run_id: 'run-1' } }),
@@ -90,6 +92,7 @@ process.stdout.write(JSON.stringify({
             node,
             "-e",
             script,
+            str(modules_owner.resolve()),
             str(cohort_owner.resolve()),
             str(confirmation_owner.resolve()),
         ],

@@ -387,7 +387,7 @@
         }
       });
       closeHistoryActivity(lastTimestamp);
-      const replayOwner = window.EU_GUIDED_PI_REPLAY;
+      const replayOwner = window.EasyICU.guidedPi.require('replay');
       const lifecycleTurns = replayOwner && typeof replayOwner.lifecycleTurns === 'function'
         ? replayOwner.lifecycleTurns(session) : [];
       const replayTurns = lifecycleTurns.filter(turn => turn && turn.kind !== 'host_action');
@@ -565,5 +565,7 @@
     return { transcriptMessages, latestTurnCompletedIdeaExploration };
   }
 
-  window.EU_GUIDED_PI_TRANSCRIPT = { create, latestTurnCompletedIdeaExploration };
+  window.EasyICU.guidedPi.declare('transcript', {
+    create, latestTurnCompletedIdeaExploration,
+  });
 })();

@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const ownerPath = process.argv[2];
+const modulesPath = process.argv[2];
+const ownerPath = process.argv[3];
 assert.ok(ownerPath, 'screens-extraction-embedded.js path is required');
 
 let html = '';
@@ -34,6 +35,7 @@ global.icon = () => '';
 global.t = en => en;
 global.escHtml = value => String(value == null ? '' : value);
 global.window = {
+  EU_HTML: { esc: value => String(value == null ? '' : value) },
   EU_EXTRACTION_NATIVE_OWNER: {
     render: () => '<section></section>',
     bind: () => {},
@@ -53,11 +55,12 @@ global.window = {
       };
     },
   },
-  EU_GUIDED_PI: {
+};
+vm.runInThisContext(fs.readFileSync(modulesPath, 'utf8'), { filename: modulesPath });
+window.EasyICU.guidedPi.declare('shell', {
     rebind: async () => { rebindCalls += 1; },
     notifyExtractionHandoff: receipt => { receivedReceipt = receipt; },
-  },
-};
+});
 
 vm.runInThisContext(fs.readFileSync(ownerPath, 'utf8'), { filename: ownerPath });
 

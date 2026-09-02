@@ -1629,7 +1629,7 @@
     ));
   }
   function notifyCopilotOfExtraction(receipt) {
-    const copilot = window.EU_GUIDED_PI;
+    const copilot = window.EasyICU.guidedPi.optional('shell');
     const rebound = copilot && typeof copilot.rebind === 'function' ? copilot.rebind() : null;
     return Promise.resolve(rebound).then(() => {
       if (copilot && typeof copilot.notifyExtractionHandoff === 'function') {

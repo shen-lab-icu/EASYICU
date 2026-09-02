@@ -964,7 +964,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     provider_control_js = _static_js("screens-guided-pi-provider-control.js")
     index_html = _static_html("index.html")
 
-    assert "window.EU_GUIDED_PI_PROVIDER =" in provider_js
+    assert "guidedPi.declare('provider'" in provider_js
     assert "ChatGPT / Codex account" in provider_js
     assert "DeepSeek API" in provider_js
     assert "OpenRouter API" in provider_js
