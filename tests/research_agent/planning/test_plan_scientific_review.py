@@ -1973,6 +1973,39 @@ def test_signed_landmark_runtime_group_input_closes_repeated_stay_design() -> No
     assert repeated_unit_design_closed(context, plan) is True
 
 
+def test_signed_landmark_without_runtime_group_is_not_closed_by_table_one() -> None:
+    context = _context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[
+            _traditional_table_one_step(),
+            AnalysisStep(
+                step_id="signed_landmark_primary",
+                planned_analysis_role="primary",
+                intent="Run the signed landmark model.",
+                inputs=["dataset:analysis_cohort", "exposure", "death"],
+                expected_outputs=["table:landmark_rcs_curve"],
+                method="signed_landmark_restricted_cubic_spline",
+                scientific_capability="association_landmark_spline_v1",
+                icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+            ),
+        ],
+    )
+
+    assert repeated_unit_design_closed(context, plan) is False
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" in {
+        finding.code for finding in review.findings
+    }
+
+
 def test_one_step_cannot_close_models_while_leaving_marginal_cis_unclosed() -> None:
     context = _context().model_copy(
         update={
