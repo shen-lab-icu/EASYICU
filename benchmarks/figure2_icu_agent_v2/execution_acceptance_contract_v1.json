@@ -80,7 +80,7 @@
       },
       {
         "gate_id": "PREQ03_SIGNED_ASSIGNMENT",
-        "requirement": "signed task-pair site assignment and zero-Provider scheduler dry run",
+        "requirement": "signed task-pair site assignment, exact output roots by site, and zero-Provider scheduler dry run",
         "launch_receipt_ids": ["qualification_preconditions:04", "qualification_preconditions:06", "qualification_preconditions:07"]
       },
       {
@@ -150,7 +150,7 @@
       },
       {
         "gate_id": "CORE08_ATOMIC_BATCH",
-        "requirement": "per-site core output roots are empty and the signed atomic core declaration binds every site-tagged coordinate and assignment digest",
+        "requirement": "per-site core output roots are empty and the signed atomic core declaration binds every site-tagged coordinate, assignment digest, and exact output root by site",
         "launch_receipt_ids": ["batch:01", "batch:02", "batch:03", "batch:04"]
       }
     ]

@@ -265,6 +265,7 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
         "laptop": tmp_path / "laptop-output",
     }
     dry_run = build_core_schedule_dry_run(roots)
+    assignment = expected_site_assignment("core_wp2_wp3")
     first, second = dry_run.trajectories[:2]
     lease_root = tmp_path / "server-leases"
     lease_root.mkdir()
@@ -282,7 +283,8 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
         task_id=first.task_id,
         arm=first.arm,
         execution_site=first.execution_site,
-        site_assignment_sha256=dry_run.site_assignment_sha256,
+        site_assignment=assignment,
+        expected_output_root=str(roots[first.execution_site].resolve()),
     )
     assert validated["output_dir"] == first.output_dir
     consumed = consume_trajectory_lease(
@@ -291,7 +293,8 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
         task_id=first.task_id,
         arm=first.arm,
         execution_site=first.execution_site,
-        site_assignment_sha256=dry_run.site_assignment_sha256,
+        site_assignment=assignment,
+        expected_output_root=str(roots[first.execution_site].resolve()),
     )
     assert consumed["output_dir"] == first.output_dir
     assert Path(f"{first_lease}.started").is_file()
@@ -302,7 +305,8 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
             task_id=first.task_id,
             arm=first.arm,
             execution_site=first.execution_site,
-            site_assignment_sha256=dry_run.site_assignment_sha256,
+            site_assignment=assignment,
+            expected_output_root=str(roots[first.execution_site].resolve()),
         )
     with pytest.raises(FormalScheduleError, match="execution_site mismatch"):
         validate_trajectory_lease(
@@ -311,7 +315,8 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
             task_id=first.task_id,
             arm=first.arm,
             execution_site="laptop",
-            site_assignment_sha256=dry_run.site_assignment_sha256,
+            site_assignment=assignment,
+            expected_output_root=str(roots["laptop"].resolve()),
         )
     with pytest.raises(FileExistsError):
         claim_trajectory_lease(
@@ -355,6 +360,7 @@ def test_manual_lease_cannot_override_frozen_core_assignment(tmp_path: Path) -> 
         "laptop": tmp_path / "laptop-output",
     }
     dry_run = build_core_schedule_dry_run(roots)
+    assignment = expected_site_assignment("core_wp2_wp3")
     trajectory = dry_run.trajectories[0]
     lease_root = tmp_path / "leases"
     lease_root.mkdir()
@@ -376,7 +382,8 @@ def test_manual_lease_cannot_override_frozen_core_assignment(tmp_path: Path) -> 
             task_id=trajectory.task_id,
             arm=trajectory.arm,
             execution_site="laptop",
-            site_assignment_sha256=dry_run.site_assignment_sha256,
+            site_assignment=assignment,
+            expected_output_root=str(roots["laptop"].resolve()),
         )
 
     payload["task_id"] = "not_a_registered_core_task"
@@ -390,7 +397,77 @@ def test_manual_lease_cannot_override_frozen_core_assignment(tmp_path: Path) -> 
             task_id="not_a_registered_core_task",
             arm=trajectory.arm,
             execution_site="laptop",
-            site_assignment_sha256=dry_run.site_assignment_sha256,
+            site_assignment=assignment,
+            expected_output_root=str(roots["laptop"].resolve()),
+        )
+
+    payload = json.loads(legitimate.read_text(encoding="utf-8"))
+    payload["sequence_number"] = 9999
+    forged_sequence = lease_root / "forged-sequence.lease.json"
+    forged_sequence.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(FormalScheduleError, match="sequence number mismatch"):
+        validate_trajectory_lease(
+            forged_sequence,
+            scope=trajectory.scope,
+            task_id=trajectory.task_id,
+            arm=trajectory.arm,
+            execution_site=trajectory.execution_site,
+            site_assignment=assignment,
+            expected_output_root=str(roots[trajectory.execution_site].resolve()),
+        )
+
+    payload = json.loads(legitimate.read_text(encoding="utf-8"))
+    payload["output_dir"] = str(
+        tmp_path / "rogue" / trajectory.task_id / trajectory.arm
+    )
+    forged_output = lease_root / "forged-output.lease.json"
+    forged_output.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(FormalScheduleError, match="output directory mismatch"):
+        validate_trajectory_lease(
+            forged_output,
+            scope=trajectory.scope,
+            task_id=trajectory.task_id,
+            arm=trajectory.arm,
+            execution_site=trajectory.execution_site,
+            site_assignment=assignment,
+            expected_output_root=str(roots[trajectory.execution_site].resolve()),
+        )
+
+
+def test_manual_qualification_lease_cannot_override_registered_assignment(
+    tmp_path: Path,
+) -> None:
+    roots = {
+        "server": tmp_path / "server-qualification",
+        "laptop": tmp_path / "laptop-qualification",
+    }
+    task_ids = tuple(f"qualification_task_{index:02d}" for index in range(1, 13))
+    dry_run = build_qualification_schedule_dry_run(task_ids, roots)
+    assignment = expected_site_assignment("qualification12", task_ids=task_ids)
+    trajectory = dry_run.trajectories[0]
+    lease_root = tmp_path / "qualification-leases"
+    lease_root.mkdir()
+    legitimate = claim_trajectory_lease(
+        trajectory,
+        schedule=dry_run,
+        logical_site=trajectory.execution_site,
+        lease_root=lease_root,
+    )
+    payload = json.loads(legitimate.read_text(encoding="utf-8"))
+    wrong_site = "laptop" if trajectory.execution_site == "server" else "server"
+    payload["execution_site"] = wrong_site
+    forged = lease_root / "forged-qualification-site.lease.json"
+    forged.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(FormalScheduleError, match="frozen site mismatch"):
+        validate_trajectory_lease(
+            forged,
+            scope=trajectory.scope,
+            task_id=trajectory.task_id,
+            arm=trajectory.arm,
+            execution_site=wrong_site,
+            site_assignment=assignment,
+            expected_output_root=str(roots[wrong_site].resolve()),
         )
 
 

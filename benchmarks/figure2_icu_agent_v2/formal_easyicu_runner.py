@@ -24,7 +24,8 @@ from .formal_provider_gate import (
 )
 from .formal_scheduler import (
     consume_trajectory_lease,
-    signed_site_assignment_sha256,
+    signed_output_root,
+    signed_site_assignment,
 )
 
 
@@ -149,7 +150,11 @@ class FormalEasyICURunner:
             task_id=task_id,
             arm="easyicu_full",
             execution_site=execution_site,
-            site_assignment_sha256=signed_site_assignment_sha256(receipts),
+            site_assignment=signed_site_assignment(receipts, scope=scope),
+            expected_output_root=signed_output_root(
+                receipts,
+                execution_site=execution_site,
+            ),
         )
         self._leased_output_dir = Path(lease["output_dir"]).resolve()
         router = FormalEasyICUModelRouter(

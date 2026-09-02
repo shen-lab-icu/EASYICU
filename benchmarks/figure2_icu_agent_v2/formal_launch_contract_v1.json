@@ -24,7 +24,7 @@
     "trusted_signer_id": null,
     "trusted_public_key_base64": null,
     "registration_rule": "The signer identity and public key must be fixed in the independently timestamped preregistration package before any formal Provider call. A test key, agent-generated key, mutable environment variable, or key supplied inside a run receipt is not trusted authority.",
-    "signed_payload_schema": "easyicu.figure2_atomic_declaration/2; site_assignment_sha256 is mandatory and every qualification/core coordinate must match that registered assignment",
+    "signed_payload_schema": "easyicu.figure2_atomic_declaration/3; site_assignment_sha256 and the exact output_root_by_site mapping are mandatory, and every qualification/core coordinate and trajectory lease must match that registered assignment and site output root",
     "receipt_payload_schema": "easyicu.figure2_launch_receipt/1; every required receipt must have status=passed, a release binding, evidence digest, issuer, and UTC issue time; the external registration receipt must additionally satisfy every preregistration required_receipt_field and bind the same signer key",
     "canonicalization": "UTF-8 JSON with sorted keys, no insignificant whitespace, ensure_ascii=false, and NaN forbidden"
   },
@@ -53,7 +53,7 @@
       "empty qualification output directory and scheduler dry-run with Provider access disabled",
       "two passing server/laptop site-preflight receipts and a passing two-host parity acceptance receipt",
       "signed qualification12 task-pair site assignment with both arms colocated and sequential",
-      "signed qualification12 atomic declaration naming the exact set, execution site, assignment digest, and every call coordinate",
+      "signed qualification12 atomic declaration naming the exact set, execution site, assignment digest, exact output root by site, and every call coordinate",
       "passing duplicate-claim, consumed-lease, wrong-site, and occupied-output fail-closed probe receipt"
     ],
     "qualification": [
@@ -71,7 +71,7 @@
       "repository and undeclared-network denial probe; WP5 phase A permits only its separately declared literature-retrieval route"
     ],
     "batch": [
-      "one signed atomic core batch declaration binding every core receipt and digest",
+      "one signed atomic core batch declaration binding every core receipt, digest, and exact output root by site",
       "scheduler dry-run receipt with no Provider access",
       "signed 39-pair site assignment with server=20 and laptop=19, both arms of every task pair on the same site",
       "server and laptop formal output directories confirmed empty"
@@ -98,7 +98,7 @@
     "wp5_phase_a": "Requires the frozen core release, all core terminal receipts, and every wp5_phase_a receipt. It permits bounded iterative Provider calls over the sealed direction, declared literature, nonpatient metadata, and neutral deterministic-feasibility receipts, but cannot access patient rows or patient-level outcome results.",
     "wp5_phase_b_showcase": "Requires the same frozen release plus every wp5_phase_b_showcase receipt. It authorizes only the locked flagship input and forbids postoutcome substitution, selective retry, or product repair."
   },
-  "authorization_rule": "A Provider call is authorized only within one explicitly requested scope when every receipt for that scope is present, valid, mutually consistent, bound to the same clean release, protocol digest, and site-assignment digest, and the Ed25519-verified atomic declaration from the preregistered signer names that exact task, arm, execution site, and call coordinate. Qualification and core declarations must include both arms of every assigned task.",
+  "authorization_rule": "A Provider call is authorized only within one explicitly requested scope when every receipt for that scope is present, valid, mutually consistent, bound to the same clean release, protocol digest, and site-assignment digest, and the Ed25519-verified atomic declaration from the preregistered signer names that exact task, arm, execution site, call coordinate, and output root by site. Qualification and core declarations must include both arms of every assigned task, and each trajectory lease must match the registered task, site, pair, sequence, and exact site output root.",
   "failure_rule": "Missing, stale, mismatched, unverifiable, or partially passing evidence returns a typed denial. No warning-only or partial-database launch exists.",
   "current_authority": {
     "formal_batch_authorized": false,

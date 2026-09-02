@@ -749,7 +749,13 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     )
     if not all(
         term in blinding_context
-        for term in ("two exact formal host markers", "two absolute", "/Volumes", "Windows")
+        for term in (
+            "two exact formal host markers",
+            "two absolute",
+            "/Volumes",
+            "Windows",
+            "/kg/day",
+        )
     ):
         _fail("BLINDING_RUNTIME_CONTEXT_MISSING", blinding_context)
     receipt_projection = review_contract["normalization"]["blinded_run_receipt_projection"]
@@ -835,8 +841,9 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     if not all(
         term in signed_payload_schema
         for term in (
-            "easyicu.figure2_atomic_declaration/2",
+            "easyicu.figure2_atomic_declaration/3",
             "site_assignment_sha256",
+            "output_root_by_site",
             "every qualification/core coordinate",
         )
     ):

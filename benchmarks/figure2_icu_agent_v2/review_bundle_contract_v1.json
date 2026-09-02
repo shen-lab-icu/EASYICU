@@ -26,7 +26,7 @@
     "fixed_file_names": true,
     "fixed_missing_value_representation": true,
     "fixed_timestamp_precision": true,
-    "required_runtime_blinding_context": "Every normalizer call must receive the two exact formal host markers and two absolute site-specific output roots. Omitting this context is invalid; registered values, logical site labels, generic POSIX paths including /Volumes, and Windows absolute paths must be rejected or fully redacted before reviewer material is emitted.",
+    "required_runtime_blinding_context": "Every normalizer call must receive the two exact formal host markers and two absolute site-specific output roots. Omitting this context is invalid; registered values, singular or plural logical site labels, registered output roots, known runtime-root POSIX paths including /Volumes, and Windows absolute paths must be rejected or fully redacted before reviewer material is emitted without treating clinical slash units such as /kg/day as paths.",
     "free_text_redaction": "Remove system self-identification and arm-specific boilerplate without changing scientific content, numeric values, limitations, or disposition.",
     "forbidden_markers": [
       "EasyICU product or package name",

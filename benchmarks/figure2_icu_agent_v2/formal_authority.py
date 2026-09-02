@@ -22,6 +22,7 @@ from .design_errors import DesignContractError
 from .formal_scheduler import (
     FormalScheduleError,
     validate_authorized_site_coordinates,
+    validate_output_root_by_site,
 )
 
 
@@ -413,6 +414,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         "annotated_tag",
         "receipt_sha256",
         "site_assignment_sha256",
+        "output_root_by_site",
         "authorized_call_coordinates",
     }
     _require_exact_keys(
@@ -420,7 +422,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         field="atomic_declaration",
         expected=declaration_fields,
     )
-    if declaration["schema_version"] != "easyicu.figure2_atomic_declaration/2":
+    if declaration["schema_version"] != "easyicu.figure2_atomic_declaration/3":
         _fail(
             "FORMAL_AUTHORITY_DECLARATION_SCHEMA_INVALID",
             repr(declaration["schema_version"]),
@@ -449,6 +451,12 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
     site_assignment_sha256 = _require_sha256(
         declaration["site_assignment_sha256"], field="site_assignment_sha256"
     )
+    try:
+        output_root_by_site = validate_output_root_by_site(
+            declaration["output_root_by_site"]
+        )
+    except FormalScheduleError as exc:
+        _fail("FORMAL_AUTHORITY_OUTPUT_ROOT_INVALID", str(exc))
 
     coordinates = declaration["authorized_call_coordinates"]
     if not isinstance(coordinates, list) or not coordinates:
@@ -541,6 +549,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         "call_coordinate": dict(requested_coordinate),
         "protocol_sha256": protocol_sha256,
         "site_assignment_sha256": site_assignment_sha256,
+        "output_root": output_root_by_site[requested_coordinate["execution_site"]],
         "signer_id": signer_id,
         "receipt_count": len(expected_receipt_ids),
     }

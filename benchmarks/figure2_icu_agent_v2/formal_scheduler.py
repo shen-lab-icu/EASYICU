@@ -173,12 +173,17 @@ def expected_site_assignment_sha256(
     )
 
 
-def signed_site_assignment_sha256(receipts: Mapping[str, Any]) -> str:
-    """Read the assignment digest that the authority will verify before transport."""
-
+def _signed_declaration(receipts: Mapping[str, Any]) -> Mapping[str, Any]:
     declaration = receipts.get("atomic_declaration")
     if not isinstance(declaration, Mapping):
         raise FormalScheduleError("formal receipts lack an atomic declaration")
+    return declaration
+
+
+def signed_site_assignment_sha256(receipts: Mapping[str, Any]) -> str:
+    """Read the assignment digest that the authority will verify before transport."""
+
+    declaration = _signed_declaration(receipts)
     digest = declaration.get("site_assignment_sha256")
     if (
         not isinstance(digest, str)
@@ -187,6 +192,88 @@ def signed_site_assignment_sha256(receipts: Mapping[str, Any]) -> str:
     ):
         raise FormalScheduleError("signed site assignment digest is invalid")
     return digest
+
+
+def signed_site_assignment(
+    receipts: Mapping[str, Any],
+    *,
+    scope: str,
+    protocol_path: Path = PROTOCOL_PATH,
+) -> tuple[dict[str, Any], ...]:
+    """Rebuild and verify the registered pair assignment from the signed declaration."""
+
+    declaration = _signed_declaration(receipts)
+    if declaration.get("scope") != scope:
+        raise FormalScheduleError("signed declaration scope mismatch")
+    coordinates = declaration.get("authorized_call_coordinates")
+    if not isinstance(coordinates, list) or not all(
+        isinstance(coordinate, Mapping) for coordinate in coordinates
+    ):
+        raise FormalScheduleError("signed declaration coordinates are invalid")
+    try:
+        normalized = [
+            {
+                "scope": coordinate["scope"],
+                "task_id": coordinate["task_id"],
+                "arm": coordinate["arm"],
+                "execution_site": coordinate["execution_site"],
+                "call_id": coordinate["call_id"],
+            }
+            for coordinate in coordinates
+        ]
+    except KeyError as exc:
+        raise FormalScheduleError("signed declaration coordinate is incomplete") from exc
+    if any(
+        not isinstance(value, str) or not value
+        for coordinate in normalized
+        for value in coordinate.values()
+    ):
+        raise FormalScheduleError("signed declaration coordinate is invalid")
+    digest = signed_site_assignment_sha256(receipts)
+    validate_authorized_site_coordinates(
+        scope,
+        normalized,
+        declared_site_assignment_sha256=digest,
+        protocol_path=protocol_path,
+    )
+    task_ids = tuple(sorted({coordinate["task_id"] for coordinate in normalized}))
+    return expected_site_assignment(
+        scope,
+        task_ids=task_ids if scope == "qualification12" else (),
+        protocol_path=protocol_path,
+    )
+
+
+def validate_output_root_by_site(value: Any) -> dict[str, str]:
+    """Validate the exact two output roots carried by a signed declaration."""
+
+    if not isinstance(value, Mapping) or set(value) != {"server", "laptop"}:
+        raise FormalScheduleError("signed output roots must map server and laptop")
+    roots: dict[str, str] = {}
+    for site in ("server", "laptop"):
+        raw = value[site]
+        if not isinstance(raw, str) or not raw.strip() or raw != raw.strip():
+            raise FormalScheduleError(f"signed {site} output root is invalid")
+        path = Path(raw)
+        if (
+            not path.is_absolute()
+            or str(path) != raw
+            or ".." in path.parts
+            or len(path.parts) < 3
+        ):
+            raise FormalScheduleError(f"signed {site} output root must be canonical")
+        roots[site] = raw
+    if roots["server"].casefold() == roots["laptop"].casefold():
+        raise FormalScheduleError("signed output roots must be distinct")
+    return roots
+
+
+def signed_output_root(receipts: Mapping[str, Any], *, execution_site: str) -> str:
+    declaration = _signed_declaration(receipts)
+    roots = validate_output_root_by_site(declaration.get("output_root_by_site"))
+    if execution_site not in roots:
+        raise FormalScheduleError(f"unsupported execution site: {execution_site}")
+    return roots[execution_site]
 
 
 def validate_authorized_site_coordinates(
@@ -524,7 +611,8 @@ def validate_trajectory_lease(
     task_id: str,
     arm: str,
     execution_site: str,
-    site_assignment_sha256: str,
+    site_assignment: Sequence[Mapping[str, Any]],
+    expected_output_root: str,
 ) -> Mapping[str, Any]:
     """Validate the exact lease required by a formal runner constructor."""
 
@@ -549,6 +637,21 @@ def validate_trajectory_lease(
     }
     if not isinstance(payload, dict) or set(payload) != required:
         raise FormalScheduleError("trajectory lease fields do not match the schema")
+    if scope not in FORMAL_PAIR_SCOPES:
+        raise FormalScheduleError(f"unsupported lease scope: {scope}")
+    if arm not in ARMS:
+        raise FormalScheduleError(f"unsupported lease arm: {arm}")
+    canonical_assignment = tuple(dict(item) for item in site_assignment)
+    assignment_task_ids = tuple(
+        item.get("task_id") for item in canonical_assignment
+    )
+    expected_assignment = expected_site_assignment(
+        scope,
+        task_ids=assignment_task_ids if scope == "qualification12" else (),
+    )
+    if canonical_assignment != expected_assignment:
+        raise FormalScheduleError("trajectory lease site assignment mismatch")
+    site_assignment_sha256 = _site_assignment_sha256(canonical_assignment)
     expected = {
         "schema_version": "easyicu.figure2_trajectory_lease/1",
         "protocol_sha256": hashlib.sha256(PROTOCOL_PATH.read_bytes()).hexdigest(),
@@ -561,26 +664,63 @@ def validate_trajectory_lease(
     for field, value in expected.items():
         if payload[field] != value:
             raise FormalScheduleError(f"trajectory lease {field} mismatch")
-    if scope not in FORMAL_PAIR_SCOPES:
-        raise FormalScheduleError(f"unsupported lease scope: {scope}")
+    if any(
+        type(payload[field]) is not int or payload[field] <= 0
+        for field in ("sequence_number", "pair_sequence_number")
+    ):
+        raise FormalScheduleError("trajectory lease sequence fields are invalid")
+    expected_by_task = {item["task_id"]: item for item in expected_assignment}
+    item = expected_by_task.get(task_id)
+    if item is None:
+        assignment_name = "core" if scope == "core_wp2_wp3" else "Qualification12"
+        raise FormalScheduleError(
+            f"task is absent from {assignment_name} assignment: {task_id}"
+        )
+    if execution_site != item["execution_site"]:
+        raise FormalScheduleError("trajectory lease frozen site mismatch")
+    if payload["pair_sequence_number"] != item["pair_sequence_number"]:
+        raise FormalScheduleError("trajectory lease pair sequence mismatch")
     if scope == "core_wp2_wp3":
-        assignment = expected_site_assignment(scope)
-        expected_assignment_sha256 = _site_assignment_sha256(assignment)
-        expected_by_task = {item["task_id"]: item for item in assignment}
-        item = expected_by_task.get(task_id)
-        if item is None:
-            raise FormalScheduleError(f"task is absent from core assignment: {task_id}")
-        if execution_site != item["execution_site"]:
-            raise FormalScheduleError("trajectory lease frozen site mismatch")
-        if payload["pair_sequence_number"] != item["pair_sequence_number"]:
-            raise FormalScheduleError("trajectory lease pair sequence mismatch")
-        if site_assignment_sha256 != expected_assignment_sha256:
-            raise FormalScheduleError("trajectory lease assignment digest mismatch")
-    output_dir = Path(payload["output_dir"])
+        protocol_schedule = _load_protocol(PROTOCOL_PATH)["formal_schedule"]
+        first_arm_by_task = {
+            **protocol_schedule["heldout27_arm_first"],
+            **dict(
+                zip(
+                    protocol_schedule["safety12_execution_order"],
+                    protocol_schedule["safety12_arm_first"],
+                    strict=True,
+                )
+            ),
+        }
+        first_arm = first_arm_by_task[task_id]
+    else:
+        first_arm_pattern = (
+            "easyicu_full",
+            "easyicu_full",
+            "generic_code_agent",
+            "generic_code_agent",
+        )
+        first_arm = first_arm_pattern[(item["pair_sequence_number"] - 1) % 4]
+    expected_sequence_number = 2 * item["pair_sequence_number"] - (
+        1 if arm == first_arm else 0
+    )
+    if payload["sequence_number"] != expected_sequence_number:
+        raise FormalScheduleError("trajectory lease sequence number mismatch")
+    output_root = Path(expected_output_root)
     if (
-        not output_dir.is_absolute()
-        or output_dir.name != arm
-        or output_dir.parent.name != task_id
+        not output_root.is_absolute()
+        or str(output_root) != expected_output_root
+        or ".." in output_root.parts
+        or len(output_root.parts) < 3
+        or output_root.is_symlink()
+    ):
+        raise FormalScheduleError("expected formal output root is invalid")
+    if not isinstance(payload["output_dir"], str):
+        raise FormalScheduleError("trajectory lease output directory is invalid")
+    output_dir = Path(payload["output_dir"])
+    expected_output_dir = output_root / task_id / arm
+    if (
+        output_dir != expected_output_dir
         or output_dir.is_symlink()
         or output_dir.exists()
     ):
@@ -595,7 +735,8 @@ def consume_trajectory_lease(
     task_id: str,
     arm: str,
     execution_site: str,
-    site_assignment_sha256: str,
+    site_assignment: Sequence[Mapping[str, Any]],
+    expected_output_root: str,
 ) -> Mapping[str, Any]:
     """Atomically consume a lease so a formal trajectory cannot be restarted."""
 
@@ -605,7 +746,8 @@ def consume_trajectory_lease(
         task_id=task_id,
         arm=arm,
         execution_site=execution_site,
-        site_assignment_sha256=site_assignment_sha256,
+        site_assignment=site_assignment,
+        expected_output_root=expected_output_root,
     )
     path = Path(lease_path)
     started_path = path.with_name(f"{path.name}.started")
@@ -642,7 +784,10 @@ __all__ = [
     "consume_trajectory_lease",
     "expected_site_assignment",
     "expected_site_assignment_sha256",
+    "signed_output_root",
+    "signed_site_assignment",
     "signed_site_assignment_sha256",
     "validate_authorized_site_coordinates",
+    "validate_output_root_by_site",
     "validate_trajectory_lease",
 ]

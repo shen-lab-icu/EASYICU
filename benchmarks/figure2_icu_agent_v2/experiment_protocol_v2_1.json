@@ -82,7 +82,7 @@
     {
       "role": "review_bundle_contract",
       "path": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
-      "sha256": "68ecc7fc83032a77f858ca5fa60f6cdd426edb2a5cc90fb30eebdd4bcc4d84fd"
+      "sha256": "22b0a13bf3c192f384686b41f2506596e2520a9d6e18b30efbd4c54765ddb4a8"
     },
     {
       "role": "preregistration_plan",
@@ -92,12 +92,12 @@
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "418d9310a53cfce022c62bcfdcde1d7a81e6aa99eabdb69b481981b6e14accfc"
+      "sha256": "495c6b18f189cb6ea6341635d38e9378004356460dacdb91baf4b8c8f8600428"
     },
     {
       "role": "execution_acceptance_contract",
       "path": "benchmarks/figure2_icu_agent_v2/execution_acceptance_contract_v1.json",
-      "sha256": "c17ca8d739b9b4009e8834af57bf7842d9c7bc0ff72682c60f700c027f99c8c7"
+      "sha256": "e24ff4014c938826715c2841c38151e2c343472553d96d93f70c574427912e0e"
     },
     {
       "role": "idea_to_evidence_protocol",
@@ -249,7 +249,7 @@
     "parallel_unit": "task_pair",
     "assignment_rule": "Use the frozen task_pair_site map, balanced across Heldout27 difficulty, analysis family, first-running arm, and proportional database coverage and across Formal Safety12 first-running arm, yielding server=20 and laptop=19. Both arms of each pair remain on that site and execute sequentially in frozen arm-first order; only different pairs may execute concurrently.",
     "concurrency": "At most one active trajectory per site and two active trajectories total.",
-    "resource_rule": "Both sites must enforce identical registered container CPU, RAM, pids, package, model, sampling, token, wall-time, cost, network, and input limits. The server may add cross-pair parallel capacity but may not grant one arm greater per-run resources.",
+    "resource_rule": "Both sites must enforce identical registered container CPU, RAM, pids, package, model, sampling, token, wall-time, cost, network, and input limits. The signed atomic declaration must name the exact output root for each site, and every trajectory lease must remain beneath that root. The server may add cross-pair parallel capacity but may not grant one arm greater per-run resources.",
     "review_blinding": "Execution-site identity and host fingerprints remain hidden from scoring reviewers until scores lock, while retained in sealed runtime receipts for audit and descriptive sensitivity reporting.",
     "go_no_go_rule": "Every prequalification and core requirement in the execution acceptance contract is conjunctive. Scientific A/B outcomes are never a launch, continuation, exclusion, or rerun criterion."
   },
@@ -269,7 +269,7 @@
   "authorization_sequence": [
     "complete the no-Provider design, harness, normalizer, validator, and evaluator implementation",
     "create a clean exact-head commit and tag and obtain the independent external registration receipt",
-    "pass the two-host prequalification GO/NO-GO gate, then use only the qualification12 scope to run Qualification12-A and the blinding pilot under frozen budgets and signed task-pair site assignment; any qualification-relevant change to either arm, either site's matched runtime, or a shared qualification component consumes the opened set and requires the next unopened preregistered reserve set",
+    "pass the two-host prequalification GO/NO-GO gate, then use only the qualification12 scope to run Qualification12-A and the blinding pilot under frozen budgets, signed task-pair site assignment, and signed exact output roots by site; any qualification-relevant change to either arm, either site's matched runtime, or a shared qualification component consumes the opened set and requires the next unopened preregistered reserve set",
     "run the deterministic WP1 six-database gate under the registered thresholds; this may proceed in parallel with qualification because it makes no Provider call",
     "after qualification, WP1, reviewer reliability, input, evaluator, and repeated two-host runtime parity receipts pass, sign the core WP2/WP3 atomic batch declaration",
     "run all 78 core trajectories to terminal immutable receipts",
