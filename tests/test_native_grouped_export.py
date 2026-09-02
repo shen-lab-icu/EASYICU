@@ -1092,6 +1092,77 @@ def test_longitudinal_conflicting_strings_fail_closed() -> None:
         )
 
 
+def test_sofa2_cns_positive_score_resolves_ascertainment_receipt_conflict() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    precise = "sofa2_cns_delirium_tx_ascertainment"
+    alias = "sofa2_cns_ascertainment"
+    concepts = ["sofa2_cns", precise, alias]
+    source = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            "sofa2_cns": [3.0, 0.0],
+            "sofa2_cns_observed": [True, False],
+            "sofa2_cns_available": [True, False],
+            precise: ["not_score_relevant", "proxy_only"],
+            f"{precise}_observed": [True, True],
+            f"{precise}_available": [True, True],
+            alias: ["not_score_relevant", "proxy_only"],
+            f"{alias}_observed": [True, True],
+            f"{alias}_available": [True, True],
+        }
+    )
+    canonical = api._canonicalise_native_export_frame(
+        source,
+        module="sofa2_score",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+
+    consolidated, audit = api._consolidate_native_export_row_grain(
+        canonical,
+        module="sofa2_score",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+
+    assert consolidated["sofa2_cns"].tolist() == [3.0]
+    assert consolidated[precise].tolist() == ["not_score_relevant"]
+    assert consolidated[alias].tolist() == ["not_score_relevant"]
+    assert "owner_available_median_cns_positive" in audit["aggregation_policy"][
+        "sofa2_cns_ascertainment"
+    ]
+
+
+def test_sofa2_cns_nonpositive_receipt_conflict_still_fails_closed() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    receipt = "sofa2_cns_delirium_tx_ascertainment"
+    concepts = ["sofa2_cns", receipt]
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [0.0, 0.0],
+                "sofa2_cns": [0.0, 0.0],
+                "sofa2_cns_available": [True, False],
+                receipt: ["complete", "proxy_only"],
+                f"{receipt}_available": [True, True],
+            }
+        ),
+        module="sofa2_score",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+
+    with pytest.raises(ValueError, match=f"conflicting string concept '{receipt}'"):
+        api._consolidate_native_export_row_grain(
+            canonical,
+            module="sofa2_score",
+            requested_concepts=concepts,
+            dictionary=dictionary,
+        )
+
+
 def test_native_bounds_survive_sofa2_overlay_redefinition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1463,3 +1534,55 @@ def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
     assert not (tmp_path / ".neurological.native-v2.tmp.parquet").exists()
     assert not (tmp_path / ".neurological.native-v2.duckdb.tmp.parquet").exists()
     assert not (tmp_path / ".neurological.native-v2.arrow.tmp.parquet").exists()
+
+
+def test_large_sofa2_cns_positive_score_resolves_receipts_with_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    precise = "sofa2_cns_delirium_tx_ascertainment"
+    alias = "sofa2_cns_ascertainment"
+    concepts = ["sofa2_cns", precise, alias]
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sofa2_score": concepts})
+    monkeypatch.setattr(api, "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS", 1)
+    monkeypatch.setattr(
+        api, "_NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET", 1
+    )
+    path = tmp_path / "sofa2_score.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            "sofa2_cns": [3.0, 0.0],
+            "sofa2_cns_observed": [True, False],
+            "sofa2_cns_available": [True, False],
+            precise: ["not_score_relevant", "proxy_only"],
+            f"{precise}_observed": [True, True],
+            f"{precise}_available": [True, True],
+            alias: ["not_score_relevant", "proxy_only"],
+            f"{alias}_observed": [True, True],
+            f"{alias}_available": [True, True],
+        }
+    ).to_parquet(path, index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    exported = pd.read_parquet(path)
+    assert exported["sofa2_cns"].tolist() == [3.0]
+    assert exported[precise].tolist() == ["not_score_relevant"]
+    assert exported[alias].tolist() == ["not_score_relevant"]
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["row_grain_audit"]
+    assert audit["publication_backend"] == (
+        "duckdb_bounded_spillable_row_grain_consolidation"
+    )
+    assert audit["string_conflict_audit_partitions"] == 2
+    assert "owner_available_median_cns_positive" in audit["aggregation_policy"][
+        "sofa2_cns_ascertainment"
+    ]
