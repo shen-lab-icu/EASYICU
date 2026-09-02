@@ -8,6 +8,8 @@ representation of the same ideas with validation via :mod:`pydantic`.
 
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional
 
@@ -609,6 +611,8 @@ def import_config(input_file: Path,
     return config
 
 # ============================================================================
+
+logger = logging.getLogger(__name__)
 # Configuration validation and migration
 # ============================================================================
 
@@ -636,7 +640,7 @@ def validate_config(config: Optional[Dict[str, Any]] = None) -> bool:
     if 'data_dir' in config and config['data_dir']:
         data_dir = Path(config['data_dir'])
         if not data_dir.exists():
-            print(f"Warning: data_dir does not exist: {data_dir}")
+            logger.warning(f"data_dir does not exist: {data_dir}")
             valid = False
     
     # Check cache_dir exists if specified
@@ -646,13 +650,13 @@ def validate_config(config: Optional[Dict[str, Any]] = None) -> bool:
             try:
                 cache_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                print(f"Warning: Cannot create cache_dir: {cache_dir}: {e}")
+                logger.warning(f"Cannot create cache_dir: {cache_dir}: {e}")
                 valid = False
     
     # Check numeric values are valid
     if 'max_workers' in config:
         if not isinstance(config['max_workers'], int) or config['max_workers'] < 1:
-            print(f"Warning: max_workers must be a positive integer: {config['max_workers']}")
+            logger.warning(f"max_workers must be a positive integer: {config['max_workers']}")
             valid = False
     
     return valid

@@ -7,6 +7,8 @@ entry points.
 
 from __future__ import annotations
 
+import logging
+
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -44,6 +46,8 @@ def _get_all_patient_ids(
 
 
 # ============================================================================
+
+logger = logging.getLogger(__name__)
 # 全库提取 API — 按模块子进程隔离与实测内存自适应
 # ============================================================================
 
@@ -4917,9 +4921,9 @@ def extract_database(
             f"   RSS: {rss:.0f}MB" + (f"  |  输出: {output_dir}" if output_dir else "")
         )
         if all_errors:
-            print(f"   ⚠️ {len(all_errors)} 错误: {all_errors[:5]}")
+            logger.warning(f"{len(all_errors)} 错误: {all_errors[:5]}")
         if all_warnings:
-            print(f"   ⚠️ {len(all_warnings)} 警告: {all_warnings[:5]}")
+            logger.warning(f"{len(all_warnings)} 警告: {all_warnings[:5]}")
         print(f"{'=' * 60}")
 
     return result
