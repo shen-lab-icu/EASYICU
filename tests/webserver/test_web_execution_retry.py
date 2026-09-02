@@ -70,6 +70,7 @@ def test_completed_approved_run_can_retry_post_execution_validation(
         lambda *_args, **_kwargs: SimpleNamespace(
             state="completed",
             approved_decisions=[{"decision": "approved"}],
+            pipeline_config_sha256="b" * 64,
         ),
     )
 
@@ -81,6 +82,7 @@ def test_completed_approved_run_can_retry_post_execution_validation(
 
     assert target.wrapper_dir == wrapper.resolve()
     assert target.pipeline_run_id == "run-analysis"
+    assert target.pipeline_config_sha256 == "b" * 64
 
 
 @pytest.mark.parametrize(
@@ -145,6 +147,7 @@ def test_completed_execution_can_retry_each_downstream_report_gate(
         lambda *_args, **_kwargs: SimpleNamespace(
             state="completed",
             approved_decisions=[{"decision": "approved"}],
+            pipeline_config_sha256="b" * 64,
         ),
     )
 
@@ -156,6 +159,7 @@ def test_completed_execution_can_retry_each_downstream_report_gate(
 
     assert target.wrapper_dir == wrapper.resolve()
     assert target.pipeline_run_id == "run-analysis"
+    assert target.pipeline_config_sha256 == "b" * 64
 
 
 def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
@@ -177,6 +181,7 @@ def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
         agent_pipeline_runs._ExecutionResumeTarget(
             wrapper_dir=wrapper.resolve(),
             pipeline_run_id="run-analysis",
+            pipeline_config_sha256="b" * 64,
         )
     )
 
@@ -186,3 +191,102 @@ def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
         run_dir / capsule.materialized_cohort_authority_ref["file"]
     )
     assert inputs.trajectory_path is None
+
+
+def test_execution_retry_accepts_missing_seed_only_for_exact_checkpoint_digest(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    wrapper = tmp_path / "projects" / "study" / "run-wrapper"
+    config = PipelineConfig(workdir=wrapper / "pipeline")
+    target = agent_pipeline_runs._ExecutionResumeTarget(
+        wrapper_dir=wrapper.resolve(),
+        pipeline_run_id="run-analysis",
+        pipeline_config_sha256=config.canonical_digest(),
+    )
+
+    restored = agent_pipeline_runs._validated_execution_retry_config(
+        current_config=config,
+        target=target,
+        recovery_seed=None,
+        current_scientific_digest="a" * 64,
+        prepared_package_binding=None,
+    )
+
+    assert restored is config
+
+
+def test_execution_retry_rejects_missing_seed_when_checkpoint_digest_drifted(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    wrapper = tmp_path / "projects" / "study" / "run-wrapper"
+    config = PipelineConfig(workdir=wrapper / "pipeline")
+    target = agent_pipeline_runs._ExecutionResumeTarget(
+        wrapper_dir=wrapper.resolve(),
+        pipeline_run_id="run-analysis",
+        pipeline_config_sha256="b" * 64,
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+        agent_pipeline_runs._validated_execution_retry_config(
+            current_config=config,
+            target=target,
+            recovery_seed=None,
+            current_scientific_digest="a" * 64,
+            prepared_package_binding=None,
+        )
+
+    assert raised.value.code == (
+        "research_pipeline_execution_retry_recovery_seed_missing"
+    )
+
+
+def test_failed_projection_keeps_retry_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    removed: list[Path] = []
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_remove_local_recovery",
+        lambda wrapper: removed.append(wrapper),
+    )
+
+    agent_pipeline_runs._cleanup_recovery_after_projection(
+        wrapper_dir=tmp_path,
+        projection={
+            "gate": {
+                "reason": "research_agent_pipeline_failed_closed",
+            }
+        },
+    )
+
+    assert removed == []
+
+
+def test_completed_projection_prunes_retry_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    removed: list[Path] = []
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_remove_local_recovery",
+        lambda wrapper: removed.append(wrapper),
+    )
+
+    agent_pipeline_runs._cleanup_recovery_after_projection(
+        wrapper_dir=tmp_path,
+        projection={
+            "gate": {
+                "reason": (
+                    "research_agent_pipeline_complete_human_interpretation_required"
+                ),
+            }
+        },
+    )
+
+    assert removed == [tmp_path]
