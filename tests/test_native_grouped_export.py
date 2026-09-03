@@ -1092,7 +1092,7 @@ def test_longitudinal_conflicting_strings_fail_closed() -> None:
         )
 
 
-def test_sofa2_cns_positive_score_resolves_ascertainment_receipt_conflict() -> None:
+def test_sofa2_cns_positive_score_does_not_override_receipt_conflict() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     precise = "sofa2_cns_delirium_tx_ascertainment"
     alias = "sofa2_cns_ascertainment"
@@ -1119,19 +1119,13 @@ def test_sofa2_cns_positive_score_resolves_ascertainment_receipt_conflict() -> N
         dictionary=dictionary,
     )
 
-    consolidated, audit = api._consolidate_native_export_row_grain(
-        canonical,
-        module="sofa2_score",
-        requested_concepts=concepts,
-        dictionary=dictionary,
-    )
-
-    assert consolidated["sofa2_cns"].tolist() == [3.0]
-    assert consolidated[precise].tolist() == ["not_score_relevant"]
-    assert consolidated[alias].tolist() == ["not_score_relevant"]
-    assert "owner_available_median_cns_positive" in audit["aggregation_policy"][
-        "sofa2_cns_ascertainment"
-    ]
+    with pytest.raises(ValueError, match=f"conflicting string concept '{precise}'"):
+        api._consolidate_native_export_row_grain(
+            canonical,
+            module="sofa2_score",
+            requested_concepts=concepts,
+            dictionary=dictionary,
+        )
 
 
 def test_sofa2_cns_nonpositive_receipt_conflict_still_fails_closed() -> None:
@@ -1536,7 +1530,7 @@ def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
     assert not (tmp_path / ".neurological.native-v2.arrow.tmp.parquet").exists()
 
 
-def test_large_sofa2_cns_positive_score_resolves_receipts_with_duckdb(
+def test_large_sofa2_cns_positive_score_conflict_fails_closed_with_duckdb(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     precise = "sofa2_cns_delirium_tx_ascertainment"
@@ -1564,25 +1558,22 @@ def test_large_sofa2_cns_positive_score_resolves_receipts_with_duckdb(
         }
     ).to_parquet(path, index=False)
 
-    api._publish_native_export_v2(
-        database="miiv",
-        data_path="/raw/source-must-not-be-read",
-        output_dir=str(tmp_path),
-        modules=["sofa2_score"],
-        max_patients=None,
-        result=_completed_result("sofa2_score"),
-    )
+    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(
+        ValueError,
+        match=f"conflicting string concept '{precise}'",
+    ):
+        api._publish_native_export_v2(
+            database="miiv",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["sofa2_score"],
+            max_patients=None,
+            result=_completed_result("sofa2_score"),
+        )
 
-    exported = pd.read_parquet(path)
-    assert exported["sofa2_cns"].tolist() == [3.0]
-    assert exported[precise].tolist() == ["not_score_relevant"]
-    assert exported[alias].tolist() == ["not_score_relevant"]
-    manifest = json.loads((tmp_path / "_manifest.json").read_text())
-    audit = manifest["files"][0]["row_grain_audit"]
-    assert audit["publication_backend"] == (
-        "duckdb_bounded_spillable_row_grain_consolidation"
-    )
-    assert audit["string_conflict_audit_partitions"] == 2
-    assert "owner_available_median_cns_positive" in audit["aggregation_policy"][
-        "sofa2_cns_ascertainment"
-    ]
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == original_digest
+    assert not (tmp_path / "_manifest.json").exists()
+    assert not (tmp_path / ".sofa2_score.native-v2.tmp.parquet").exists()
+    assert not (tmp_path / ".sofa2_score.native-v2.duckdb.tmp.parquet").exists()
+    assert not (tmp_path / ".sofa2_score.native-v2.arrow.tmp.parquet").exists()

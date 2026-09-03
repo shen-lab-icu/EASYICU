@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 
@@ -198,3 +199,24 @@ def test_resume_reuses_only_complete_files_detached_from_source(
     )
 
     assert result["recovery_mode"].startswith("explicit_resume")
+
+
+def test_score_content_gate_rejects_all_null_sofa_totals(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0.0, 1.0], "sofa2": [None, None]}
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    with pytest.raises(refresher.ModuleRefreshError, match="0 non-null"):
+        refresher._validate_refreshed_score_content(
+            tmp_path, ("sofa2_score",)
+        )
+
+
+def test_score_content_gate_streams_non_null_sofa_totals(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0.0, 1.0], "sofa": [None, 4.0]}
+    ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
+
+    refresher._validate_refreshed_score_content(tmp_path, ("sofa1_score",))

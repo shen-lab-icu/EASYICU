@@ -731,31 +731,40 @@ def test_mimic_legacy_vital_channels_keep_semantic_boundaries() -> None:
         assert {226860, 226861, 226862, 226863, 226865}.isdisjoint(o2sat_ids)
 
 
-def test_mech_vent_has_explicit_mimiciii_and_conservative_eicu_intervals() -> None:
+def test_mech_vent_has_reference_mimiciii_intervals_and_eicu_point_evidence() -> None:
     concept = _load_json("concept-dict.json")
     sources = concept["mech_vent"]["sources"]
 
     for dataset in ("mimic", "mimic_demo"):
-        source = sources[dataset][0]
-        assert source["table"] == "procedureevents_mv"
-        assert set(source["ids"]) == {225792, 225794}
-        assert source["dur_var"] == "endtime"
-        assert source["cancel_var"] == "cancelreason"
-        assert source["callback"] == "mimiciii_explicit_ventilation_interval"
+        chart, procedure = sources[dataset]
+        assert chart["table"] == "chartevents"
+        assert chart["index_var"] == "charttime"
+        assert {60, 467, 640, 720, 223848, 223849, 226732}.issubset(
+            set(chart["ids"])
+        )
+        assert chart["callback"] == "mimiciii_chart_ventilation_intervals"
+        assert procedure["table"] == "procedureevents_mv"
+        assert set(procedure["ids"]) == {225792, 225794}
+        assert procedure["dur_var"] == "endtime"
+        assert procedure["cancel_var"] == "cancelreason"
+        assert procedure["status_var"] == "statusdescription"
+        assert procedure["callback"] == "mimiciii_explicit_ventilation_interval"
 
-    eicu = sources["eicu"][0]
-    assert eicu["table"] == "respiratorycare"
-    assert eicu["index_var"] == "ventstartoffset"
-    assert eicu["dur_var"] == "respcarestatusoffset"
-    assert eicu["dur_is_end"] is True
-    assert set(eicu["ids"]) == {
+    airway, device, treatment = sources["eicu"]
+    assert airway["table"] == "respiratorycare"
+    assert airway["index_var"] == "ventstartoffset"
+    assert "dur_var" not in airway
+    assert set(airway["ids"]) == {
         "Oral ETT",
         "Nasal ETT",
-        "Tracheostomy",
         "Double-Lumen Tube",
         "Cricothyrotomy",
     }
-    assert eicu["callback"] == "eicu_confirmed_invasive_airway_interval"
+    assert airway["callback"] == "eicu_invasive_airway_evidence"
+    assert device["table"] == "respiratorycharting"
+    assert device["callback"] == "eicu_respiratory_device_ventilation_evidence"
+    assert treatment["table"] == "treatment"
+    assert treatment["callback"] == "eicu_treatment_ventilation_evidence"
 
 
 def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
