@@ -139,6 +139,7 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "pi_copilot/node_app/THIRD_PARTY_NOTICES.md",
         "pi_copilot/node_app/src/main.mjs",
         "pi_copilot/node_app/src/event-projection.mjs",
+        "pi_copilot/node_app/src/post-tool-finalization.mjs",
         "pi_copilot/node_app/src/shell-budget.mjs",
         "pi_copilot/node_app/src/session-lifecycle.mjs",
         "pi_copilot/node_app/src/skills/web-prototype/SKILL.md",

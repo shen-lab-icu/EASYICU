@@ -21,9 +21,11 @@ RUNTIME_FILES = (
     "README.md",
     "THIRD_PARTY_NOTICES.md",
 )
+RUNTIME_EXTERNAL_FILES = ("tool_catalog.json",)
 RUNTIME_SOURCE_FILES = (
     "src/main.mjs",
     "src/event-projection.mjs",
+    "src/post-tool-finalization.mjs",
     "src/shell-budget.mjs",
     "src/session-lifecycle.mjs",
     "src/skills/web-prototype/SKILL.md",
@@ -45,13 +47,28 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _packaged_source_file(root: Path, relative: str) -> Path:
+    """Resolve one runtime file without duplicating its package owner."""
+
+    direct = root / relative
+    if direct.is_file():
+        return direct
+    if relative in RUNTIME_EXTERNAL_FILES:
+        return root.parent / relative
+    return direct
+
+
 def runtime_manifest(source: Optional[Path] = None) -> dict[str, object]:
     """Compile the content identity expected for one executable runtime."""
 
     root = Path(source or packaged_app_dir()).resolve()
     files = {}
-    for relative in (*RUNTIME_FILES, *RUNTIME_SOURCE_FILES):
-        candidate = root / relative
+    for relative in (
+        *RUNTIME_FILES,
+        *RUNTIME_EXTERNAL_FILES,
+        *RUNTIME_SOURCE_FILES,
+    ):
+        candidate = _packaged_source_file(root, relative)
         if not candidate.is_file():
             raise RuntimeError(f"Packaged Pi runtime file is missing: {relative}")
         files[relative] = _sha256(candidate)
@@ -253,6 +270,8 @@ def install_runtime(
     try:
         for name in RUNTIME_FILES:
             shutil.copy2(source_dir / name, staging / name)
+        for name in RUNTIME_EXTERNAL_FILES:
+            shutil.copy2(_packaged_source_file(source_dir, name), staging / name)
         shutil.copytree(source_dir / "src", staging / "src")
         subprocess.run(
             [npm, "ci", "--ignore-scripts", "--omit=dev"],

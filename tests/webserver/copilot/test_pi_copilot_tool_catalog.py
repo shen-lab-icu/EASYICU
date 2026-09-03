@@ -29,6 +29,16 @@ def test_catalog_is_the_ordered_policy_authority_for_python_dispatch() -> None:
     )
 
 
+def test_node_runtime_validates_the_current_catalog_schema_and_arguments() -> None:
+    source = (
+        Path(tools.__file__).with_name("node_app") / "src" / "main.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert 'payload?.schema_version !== "easyicu.pi-tool-catalog/2"' in source
+    assert '"host_mutating", "data_source_required", "arguments"' in source
+    assert 'const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"])' in source
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
