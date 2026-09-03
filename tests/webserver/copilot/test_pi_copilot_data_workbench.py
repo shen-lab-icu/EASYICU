@@ -236,7 +236,7 @@ def test_completed_analysis_prepares_native_feature_workbench_from_plan(
     assert snapshot["payload"]["summary"]["cohort_size"] == 120
 
 
-def test_completed_analysis_review_uses_immutable_run_cohort_when_source_is_offline(
+def test_completed_analysis_review_prefers_immutable_run_cohort_when_source_is_online(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pd = pytest.importorskip("pandas")
@@ -298,7 +298,18 @@ def test_completed_analysis_review_uses_immutable_run_cohort_when_source_is_offl
     )
     monkeypatch.setattr(
         "easyicu.webserver.dataio.describe_export_source",
-        lambda _path: {"error": "not_a_directory", "files": []},
+        lambda _path: {
+            "files": [
+                {"module": "blood_gas", "columns": ["stay_id", "lact"]},
+                {"module": "outcome", "columns": ["stay_id", "death"]},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "easyicu.webserver.cohort_review.cohort_review_summary",
+        lambda _body: pytest.fail(
+            "a completed run must not be projected from the broader source export"
+        ),
     )
 
     prepared = service.prepare_data_workbench_snapshot(project_id="project-a")
@@ -357,6 +368,36 @@ def test_selected_feature_distributions_are_bounded_stay_level_aggregates() -> N
         {"label": "Unknown", "count": 2},
     ]
     assert all("mapping" not in row for row in distributions)
+
+
+def test_run_scoped_group_profile_omits_unavailable_legacy_core_metrics() -> None:
+    selected_exposure = {
+        "id": "analysis:sep3_sofa1_max",
+        "module": "analysis",
+        "column": "sep3_sofa1_max",
+        "label": "Sep3 Sofa1 Max",
+        "kind": "binary",
+        "aggregation": "max",
+        "mapping": {"stay-a": False, "stay-b": True},
+    }
+
+    profile = cohort_review._group_profile(
+        "survival",
+        entity_ids=["stay-a", "stay-b"],
+        age_by_entity={},
+        sex_by_entity={},
+        death_by_entity={"stay-a": False, "stay-b": True},
+        los_by_entity={},
+        sofa_by_entity={},
+        sepsis_by_entity={},
+        selected_features=[selected_exposure],
+    )
+
+    metrics = {row["metric"]: row for row in profile["rows"]}
+    assert "Sepsis-3 %" not in metrics
+    assert "Median SOFA-2" not in metrics
+    assert "Median ICU LOS" not in metrics
+    assert metrics["Sep3 Sofa1 Max %"]["values"] == [0.0, 100.0, None]
 
 
 def test_selected_hospital_death_distribution_matches_cohort_owner_semantics() -> None:

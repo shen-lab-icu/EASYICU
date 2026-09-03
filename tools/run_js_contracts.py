@@ -47,6 +47,8 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_gate_state.test.js": ["screens-guided-contracts.js"],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
+    # Loads the plan-confirmation owner itself; takes no arguments.
+    "guided_plan_resource_authority.test.js": [],
     "viz_embedded_workbench.test.js": [],
     "guided_idea_flow.test.js": ["screens-guided-idea.js"],
     "guided_project_handoff.test.js": [

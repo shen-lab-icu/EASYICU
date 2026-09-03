@@ -1021,8 +1021,7 @@
     const steps = Array.isArray(p.steps) ? p.steps : [];
     const robustness = Array.isArray(p.robustness_specs) ? p.robustness_specs : [];
     const selectedAnalysisType = String(selected.analysis_type || p.analysis_type || '').toLowerCase();
-    const descriptiveCountsOnly = ['descriptive', 'descriptive_epidemiology'].includes(selectedAnalysisType)
-      && String(designSelection.claim_ceiling || '') === 'analysis_only';
+    const analysisOnlyPlan = String(designSelection.claim_ceiling || '') === 'analysis_only';
     const endpoint = p.endpoint && typeof p.endpoint === 'object' ? p.endpoint : null;
     const required = Array.isArray(selected.required_variables) ? selected.required_variables : [];
     const visibleVariables = required.filter(value => !/(?:^|_)id$/i.test(String(value || ''))).slice(0, 10);
@@ -1032,8 +1031,12 @@
     ].filter(Boolean)));
     const gaps = [];
     if (!recommendation) gaps.push(t('The Planner has not yet produced a complete reviewable recommendation.', 'Planner 尚未给出完整、可审阅的推荐方案。'));
-    if (!endpoint) gaps.push(t('The primary outcome still lacks an executable definition and observation horizon.', '主要结局尚缺可执行定义和观察时间范围。'));
-    if (!robustness.length && !descriptiveCountsOnly) gaps.push(t('The sensitivity-analysis proposal has not yet been formed.', '敏感性分析方案尚未形成。'));
+    // AnalysisPlan.endpoint is an optional projection; the sealed
+    // ResearchContext and scientific review own endpoint authority.  An
+    // analysis-only plan may therefore omit the duplicate projection without
+    // the artifact reader contradicting the approval gate beside it.
+    if (!endpoint && !analysisOnlyPlan) gaps.push(t('The primary outcome still lacks an executable definition and observation horizon.', '主要结局尚缺可执行定义和观察时间范围。'));
+    if (!robustness.length && !analysisOnlyPlan) gaps.push(t('The sensitivity-analysis proposal has not yet been formed.', '敏感性分析方案尚未形成。'));
     if (String(p.analysis_type || '') === 'data_quality_audit') gaps.push(t('This version answers data readiness only; it does not yet answer the stated association question.', '这一版只能回答数据是否可用，还不能回答原研究问题中的关联。'));
     const planReady = gaps.length === 0;
     const flowStages = agentPlanFlowStages(steps);
@@ -1085,8 +1088,10 @@
     const rawToken = resultTableToken(table, index);
     const token = rawToken.toLowerCase();
     const labels = [
+      [/exposure_outcome_distribution/, t('Exposure prevalence and observed outcome', '暴露比例与观察结局')],
       [/population_flow|cohort_flow/, t('Population flow and denominators', '研究人群流程与分母')],
       [/adjusted_absolute_risk/, t('Adjusted absolute risk', '校正后绝对风险')],
+      [/time_varying_cox_estimates/, t('Time-updated Cox estimates', '时变 Cox 主要估计')],
       [/rcs_contrasts/, t('Primary spline contrasts', '主要样条对比')],
       [/rcs_curve/, t('Primary association curve values', '主要关联曲线数据')],
       [/linear_sensitivity/, t('Functional-form sensitivity', '函数形式敏感性分析')],
@@ -1101,8 +1106,10 @@
   function resultTableRank(table, index) {
     const token = resultTableToken(table, index).toLowerCase();
     const patterns = [
+      /exposure_outcome_distribution/,
       /population_flow|cohort_flow/,
       /adjusted_absolute_risk/,
+      /time_varying_cox_estimates/,
       /rcs_contrasts/,
       /linear_sensitivity/,
       /variable_opportunity/,

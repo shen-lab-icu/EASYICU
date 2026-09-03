@@ -141,9 +141,73 @@ def test_opening_update_preserves_question_without_silently_confirming_design(mo
     assert result["code"] == "study_context_updated"
     assert "ask the user to select each one explicitly" not in result["summary"]
     assert writes[0]["question"] == question
-    for slot in ("outcome", "primary_exposure", "analysis_goal"):
-        assert not writes[0].get(slot)
-        assert slot in result["details"]["omitted_unconfirmed_fields"]
+    # Exact reader-facing labels stated by the researcher may reach the
+    # candidate setup; they do not bind executable concept ids or approve a
+    # design. The generic relationship goal remains unresolved for Planner.
+    assert writes[0]["outcome"] == "院内死亡"
+    assert writes[0]["primary_exposure"] == "乳酸"
+    assert not writes[0].get("analysis_goal")
+    assert not writes[0].get("analysis_design")
+    assert result["details"]["omitted_unconfirmed_fields"] == ["analysis_goal"]
     workflow = result["details"]["workflow"]
     assert workflow["next_action_code"] == "provider_ready_to_generate_plan"
     assert _finalize(workflow, args) is not None
+
+
+def test_explicit_descriptive_question_becomes_one_reviewable_candidate_setup(
+    monkeypatch,
+):
+    question = (
+        "在 MIMIC-IV ICU 患者中估计 Sepsis-3 的患病率，"
+        "并描述 Sepsis-3 状态与院内死亡的关系。"
+    )
+    current = {
+        "id": "entry-descriptive-owner-test", "revision": 1, "question": "",
+        "data_source": {"database": "miiv", "path": "/test/miiv"},
+        "analysis_design": {}, "confirmations": {"extraction_completed": True},
+    }
+    writes = []
+    monkeypatch.setattr(study_tools, "_bound_context", lambda _binding: dict(current))
+    monkeypatch.setattr(
+        study_tools.study_contexts, "upsert_context",
+        lambda row, **_kw: writes.append(dict(row)) or {**current, **row, "revision": 2},
+    )
+    monkeypatch.setattr(
+        study_tools, "_workflow_snapshot",
+        lambda _ctx, *, study_override=None: build_research_workflow_snapshot(
+            study=study_override, active_export_present=False,
+            active_job=None, latest_run=None,
+        ).model_dump(mode="json"),
+    )
+    result = study_tools.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "question": question,
+            "purpose": "描述 Sepsis-3 患病率及不同状态下的院内死亡情况。",
+            "cohort": {"label": "MIMIC-IV ICU 患者"},
+            "outcome": "院内死亡",
+            "primary_exposure": "Sepsis-3 状态",
+            "analysis_goal": "估计 Sepsis-3 患病率，并描述其与院内死亡的关系。",
+        },
+        ToolExecutionContext(
+            session=PiSessionRecord(
+                session_id="pi-entry-descriptive-owner-test",
+                binding=AuthorityBinding(
+                    study_context_id=current["id"], study_revision=1,
+                ),
+            ),
+            user_message=question,
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert result["details"]["omitted_unconfirmed_fields"] == []
+    assert writes[0]["outcome"] == "院内死亡"
+    assert writes[0]["primary_exposure"] == "Sepsis-3 状态"
+    assert writes[0]["analysis_design"] == {
+        "analysis_family": "descriptive_epidemiology",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "none_counts_only",
+    }
+    assert writes[0]["confirmations"]["plan_timing_descriptive_only"] is True

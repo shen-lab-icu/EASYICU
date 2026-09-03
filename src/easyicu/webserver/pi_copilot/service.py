@@ -55,6 +55,7 @@ from .contracts import (
 )
 from .codex_gateway import CodexPiGatewayPool
 from .gateway import PiGatewayClient
+from .message_input import prepare_user_message
 from .project_authority import (
     ProjectAuthorityStore,
     ProjectStudyContextMigrationReceipt,
@@ -64,7 +65,6 @@ from .projections import (
     project_job,
     project_pi_replay_event,
     project_transcript,
-    reject_sensitive_message,
 )
 from .user_visible_text import sanitize_user_visible_text
 from .replay_store import PiConversationReplayStore
@@ -103,6 +103,7 @@ ALLOWED_TURN_ACTIONS = frozenset(
 )
 HOST_ACTION_JOB_KINDS = {
     "generate_plan": frozenset({"agent-run"}),
+    "auto_revise_plan": frozenset({"agent-run"}),
     "prepare_analysis_data": frozenset({"agent-run"}),
     "execute_plan": frozenset({"agent-run"}),
     "retry_analysis": frozenset({"agent-run"}),
@@ -1756,6 +1757,97 @@ class PiCopilotService:
             confirmed_at=utc_now(),
         )
 
+    def _bind_registered_source_from_message(
+        self,
+        record: PiSessionRecord,
+        *,
+        source: Mapping[str, Any],
+    ) -> PiSessionRecord:
+        """Bind an exact registry path supplied by the user, before provider use."""
+
+        context_id = str(record.binding.study_context_id or "").strip()
+        if not context_id:
+            raise PiCopilotError(
+                "pi_message_study_context_required",
+                "Create a research project before selecting its local data source.",
+                status_code=409,
+            )
+        try:
+            current = study_contexts.get_context(context_id)
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(exc.detail.get("error") or "study_context_invalid"),
+                "The bound StudyContext could not be loaded.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        if not current:
+            raise PiCopilotError(
+                "study_context_not_found",
+                "The bound StudyContext no longer exists.",
+                status_code=409,
+            )
+        if current.get("active_job_id"):
+            raise PiCopilotError(
+                "study_context_active_job_conflict",
+                "The local data source cannot change while its EasyICU job is active.",
+                status_code=409,
+            )
+        source_path = str(source.get("path") or "").strip()
+        database = str(source.get("database") or "").strip()
+        if not source_path or not database or not bool(source.get("ok")):
+            raise PiCopilotError(
+                "pi_message_local_source_invalid",
+                "The selected registry row is not a validated EasyICU data source.",
+                status_code=409,
+            )
+        confirmations = dict(current.get("confirmations") or {})
+        confirmations["extraction_completed"] = True
+        try:
+            updated = study_contexts.upsert_context(
+                {
+                    "id": context_id,
+                    "data_source": {
+                        "path": source_path,
+                        "label": str(source.get("label") or "local EasyICU data")[:160],
+                        "database": database,
+                    },
+                    "confirmations": confirmations,
+                },
+                active=True,
+                expected_revision=int(current.get("revision") or 0),
+                require_revision=True,
+                lifecycle_write=False,
+            )
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(exc.detail.get("error") or "study_context_update_blocked"),
+                "The StudyContext owner rejected the local data-source binding.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        record.binding = self._binding_for_context(
+            updated,
+            run_id=self._latest_run_id(context_id, project_id=record.project_id),
+        )
+        source_reference = self._session_source_reference(updated)
+        if source_reference is None:
+            raise PiCopilotError(
+                "pi_message_local_source_reference_unavailable",
+                "The selected data source could not be projected into session authority.",
+                status_code=409,
+            )
+        record.data_source_authorization = PiSessionDataSourceAuthorization(
+            status="confirmed",
+            reason=None,
+            confirmation_mode="select_local_source",
+            extraction_scope="reuse_prepared_full",
+            source=source_reference,
+            confirmed_at=utc_now(),
+        )
+        self._save_record(record)
+        return record
+
     def send_message(
         self,
         session_id: str,
@@ -1785,7 +1877,11 @@ class PiCopilotService:
                 "The EasyICU Copilot message exceeds its bounded contract.",
                 details={"max_chars": MAX_MESSAGE_CHARS},
             )
-        reject_sensitive_message(text)
+        prepared_input = prepare_user_message(
+            text,
+            registered_sources=sources.load_registry().get("sources") or [],
+        )
+        provider_text = prepared_input.provider_message
         stale = self._stale_details(record)
         if stale.get("stale"):
             raise PiCopilotError(
@@ -1797,6 +1893,11 @@ class PiCopilotService:
                 status_code=409,
                 details=stale,
             )
+        if prepared_input.registered_source is not None:
+            record = self._bind_registered_source_from_message(
+                record,
+                source=prepared_input.registered_source,
+            )
         # A prepared source that is already bound to this project can be
         # confirmed before the provider turn.  This lets one explicit user
         # choice both unlock the data gate and advance to the requested data
@@ -1805,7 +1906,7 @@ class PiCopilotService:
         prior_authorization = record.data_source_authorization.model_dump(mode="json")
         self._confirm_registered_source_selected_in_turn(
             record,
-            user_message=text,
+            user_message=provider_text,
         )
         if (
             record.data_source_authorization.model_dump(mode="json")
@@ -1814,7 +1915,7 @@ class PiCopilotService:
             self._save_record(record)
         requested_actions = frozenset(
             str(item).strip() for item in allowed_actions if str(item).strip()
-        ) | infer_explicit_turn_actions(text)
+        ) | infer_explicit_turn_actions(provider_text)
         unknown_actions = sorted(requested_actions - ALLOWED_TURN_ACTIONS)
         if unknown_actions:
             raise PiCopilotError(
@@ -1828,7 +1929,7 @@ class PiCopilotService:
                 study_context_id=record.binding.study_context_id,
             )
             if workflow.workflow.current_stage == "idea":
-                message_intent = infer_idea_mining_followup_intent(text)
+                message_intent = infer_idea_mining_followup_intent(provider_text)
         if (
             not regenerate_user_entry_id
             and not message_intent
@@ -1838,13 +1939,13 @@ class PiCopilotService:
                 study_context_id=record.binding.study_context_id,
             )
             if workflow.workflow.current_stage == "idea":
-                message_intent = infer_research_entry_intent(text)
+                message_intent = infer_research_entry_intent(provider_text)
         if (
             not regenerate_user_entry_id
             and int(opened_state.get("message_count") or 0) == 0
             and _session_title_is_automatic(record.title)
         ):
-            record.title = _first_message_session_title(text)
+            record.title = _first_message_session_title(provider_text)
             self._save_record(record)
         regenerate_target: Optional[Dict[str, Any]] = None
         if regenerate_user_entry_id:
@@ -1869,7 +1970,8 @@ class PiCopilotService:
             }
             if (
                 regeneration_intent not in edited_regeneration_intents
-                and str(regenerate_target.get("message") or "").strip() != text
+                and str(regenerate_target.get("message") or "").strip()
+                != provider_text
             ):
                 raise PiCopilotError(
                     "pi_regenerate_message_mismatch",
@@ -1983,7 +2085,7 @@ class PiCopilotService:
                     }
                 )
                 method = "session.regenerate" if regenerate_target is not None else "session.prompt"
-                params = {"session_id": record.session_id, "message": text}
+                params = {"session_id": record.session_id, "message": provider_text}
                 if idea_source:
                     params["idea_source"] = dict(idea_source)
                 if message_intent:
@@ -2010,7 +2112,7 @@ class PiCopilotService:
                 )
                 self._confirm_registered_source_selected_in_turn(
                     refreshed,
-                    user_message=text,
+                    user_message=provider_text,
                 )
                 refreshed.last_message_job_id = job.id
                 refreshed.active_message_job_id = job.id
@@ -3117,16 +3219,23 @@ class PiCopilotService:
                 break
 
         try:
-            if files:
-                body: Dict[str, Any] = {"source_path": source_path}
-                if feature_ids:
-                    body["selected_features"] = feature_ids
-                owner_payload = cohort_review.cohort_review_summary(body)
-            elif materialized_analysis_path is not None:
+            # A completed or reviewable run owns the exact cohort that its
+            # plan and results consumed.  Prefer that immutable input even
+            # while the broader export remains online; resolving plan tokens
+            # back to similarly named source columns can visualize a different
+            # feature (for example raw sepsis3_sofa1 instead of the analysed
+            # sep3_sofa1_max).  The registered export is only the fallback
+            # before a run-scoped cohort exists.
+            if materialized_analysis_path is not None:
                 owner_payload = cohort_review.materialized_analysis_review(
                     materialized_analysis_path,
                     requested_variables,
                 )
+            elif files:
+                body: Dict[str, Any] = {"source_path": source_path}
+                if feature_ids:
+                    body["selected_features"] = feature_ids
+                owner_payload = cohort_review.cohort_review_summary(body)
             else:
                 reason = str(description.get("error") or "source_not_available")
                 raise cohort_review.CohortReviewError({"error": reason})

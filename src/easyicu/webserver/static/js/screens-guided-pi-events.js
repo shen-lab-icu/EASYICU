@@ -47,6 +47,19 @@
       return '';
     }
 
+    function prepareEntryCompose(action) {
+      state.draft = action.text;
+      state.pendingEntryIntent = action.intent;
+      render();
+      window.requestAnimationFrame(() => {
+        const input = state.host && state.host.querySelector('[data-gpi-input]');
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        input.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
     function wire() {
       if (!state.host) return;
       state.host.addEventListener('click', event => {
@@ -149,16 +162,7 @@
           return;
         }
         if (starterAction && starterAction.kind === 'compose') {
-          state.draft = starterAction.text;
-          state.pendingEntryIntent = starterAction.intent;
-          render();
-          window.requestAnimationFrame(() => {
-            const input = state.host && state.host.querySelector('[data-gpi-input]');
-            if (!input) return;
-            input.focus();
-            input.setSelectionRange(input.value.length, input.value.length);
-            input.scrollIntoView({ block: 'nearest' });
-          });
+          prepareEntryCompose(starterAction);
           return;
         }
         if (event.target.closest('[data-gpi-data-source-continue]')) {
@@ -173,6 +177,16 @@
             return;
           }
           const message = nextChoice.dataset.gpiNextChoice;
+          const discoveryAction = STARTERS && STARTERS.actionFromDiscoveryChoice
+            ? STARTERS.actionFromDiscoveryChoice(message, tr) : null;
+          if (discoveryAction && discoveryAction.kind === 'compose') {
+            prepareEntryCompose(discoveryAction);
+            return;
+          }
+          if (discoveryAction && discoveryAction.kind === 'send') {
+            sendText(discoveryAction.text, [], discoveryAction.intent);
+            return;
+          }
           sendText(message, governedNextChoiceGrants(nextChoice, message));
           return;
         }

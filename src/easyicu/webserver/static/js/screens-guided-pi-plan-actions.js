@@ -31,6 +31,7 @@
     const nextActions = host.nextActions;
     const replay = host.replay;
     let automaticScientificRevisionStarted = false;
+    let automaticExecutionUpgradeStarted = false;
 
     function unavailable() {
       return !host.session() || host.busy() || host.sessionIsStale();
@@ -52,7 +53,8 @@
       const resumeCheckpoint = reasonCode === 'planner_checkpoint_resume_available';
       const fresh = reasonCode !== 'provider_ready_to_generate_plan'
         && !resumeCheckpoint
-        && !retryExecution;
+        && !retryExecution
+        && !executionUpgrade;
       return {
         text: retryExecution
           ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
@@ -81,9 +83,21 @@
       const provider = session.research_provider || {};
       const studyContextId = String(binding.study_context_id || '').trim();
       const revisingScientificPlan = reasonCode === 'plan_scientific_changes_required';
-      const revisionSourceRunId = revisingScientificPlan
+      const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
+      // Both a plan-owned revision and a candidate-to-package upgrade must be
+      // bound to the exact reviewed run.  The server distinguishes the two by
+      // the digest-verified scientific review: non-approvable reviews produce
+      // a bounded repair contract, while approvable metadata-only plans grant
+      // only their exact materialization roster.
+      const revisionSourceRunId = revisingScientificPlan || executionUpgrade
         ? String(binding.run_id || '').trim()
         : '';
+      // A user- or agent-initiated continuation already consumes the matching
+      // automatic progression for this page lifetime. Without these guards,
+      // the terminal callback can see the same workflow snapshot and launch
+      // an identical second run.
+      if (revisingScientificPlan) automaticScientificRevisionStarted = true;
+      if (executionUpgrade) automaticExecutionUpgradeStarted = true;
       const api = host.api();
       if (
         !studyContextId
@@ -129,15 +143,15 @@
           // own findings instead of rediscovering them on every user click.
           planner_start_mode: reasonCode === 'planner_checkpoint_resume_available'
             ? 'resume_checkpoint'
-            : revisingScientificPlan
+            : revisingScientificPlan || executionUpgrade
               ? 'auto'
               : 'fresh',
           plan_revision_source_run_id: revisionSourceRunId,
         });
         await host.recordHostAction(
-          automatic
+          automatic && !executionUpgrade
             ? 'auto_revise_plan'
-            : reasonCode === 'plan_execution_upgrade_required'
+            : executionUpgrade
             ? 'prepare_analysis_data'
             : 'generate_plan',
           String(payload.job_id || ''),
@@ -152,15 +166,37 @@
       }
     }
 
-    async function continueSystemOwnedPlanRevision() {
+    async function continueSystemOwnedPlanProgression() {
       const workflow = host.workflow() || {};
+      const actionCode = String(workflow.next_action_code || '');
+      if (unavailable()) return false;
+      if (actionCode === 'plan_execution_upgrade_required') {
+        const session = host.session() || {};
+        const binding = session.binding || {};
+        const reviewedRunId = String(binding.run_id || '').trim();
+        const studyContextId = String(binding.study_context_id || '').trim();
+        if (
+          automaticExecutionUpgradeStarted
+          || !reviewedRunId
+          || !studyContextId
+        ) return false;
+        automaticExecutionUpgradeStarted = true;
+        await startFormalPlanGeneration(actionCode, {automatic: true});
+        return true;
+      }
       const questions = workflow.plan_review_summary
         && Array.isArray(workflow.plan_review_summary.authorization_questions)
         ? workflow.plan_review_summary.authorization_questions
         : [];
+      const plannerOwnedFindings = workflow.plan_review_summary
+        && workflow.plan_review_summary.remediation_buckets
+        && Array.isArray(workflow.plan_review_summary.remediation_buckets.agent_plan_revision)
+        ? workflow.plan_review_summary.remediation_buckets.agent_plan_revision
+        : [];
       if (
-        String(workflow.next_action_code || '') !== 'plan_scientific_changes_required'
+        actionCode !== 'plan_scientific_changes_required'
         || questions.length
+        || !plannerOwnedFindings.length
         || automaticScientificRevisionStarted
       ) return false;
       automaticScientificRevisionStarted = true;
@@ -347,6 +383,11 @@
           expected_revision: expectedRevision,
           run_id: runId,
         });
+        // An edited fallback question may still be present in the composer
+        // when the researcher answers through the structured decision card.
+        // The card response is already the authoritative answer, so retaining
+        // that draft suggests the same decision still needs to be sent.
+        if (typeof host.setDraft === 'function') host.setDraft('');
         await host.refreshSession(true);
         await host.loadWorkflow();
         host.setBusy(false);
@@ -383,7 +424,7 @@
     return Object.freeze({
       confirmDecision,
       confirmWorkflow,
-      continueSystemOwnedPlanRevision,
+      continueSystemOwnedPlanProgression,
       governedNextChoiceGrants,
       regenerationAuthority,
       rejectWorkflow,

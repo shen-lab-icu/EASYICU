@@ -188,6 +188,7 @@ class PiMessageRequest(BaseModel):
             "confirm_fresh_plan_generation",
             "confirm_planner_checkpoint_resume",
             "advance_after_data_source_confirmation",
+            "idea_discovery_entry",
             "idea_mining_entry",
             "idea_mining_candidate_selection",
             "implement_scientific_question",
@@ -242,6 +243,7 @@ class PiHostActionRequest(BaseModel):
     project_id: ShortText
     action_code: Literal[
         "generate_plan",
+        "auto_revise_plan",
         "prepare_analysis_data",
         "execute_plan",
         "retry_analysis",

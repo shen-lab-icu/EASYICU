@@ -105,6 +105,32 @@ def test_failed_preparation_keeps_unchanged_candidate_plan_authoritative() -> No
     )
 
 
+def test_cancelled_duplicate_does_not_hide_scientific_revision_candidate() -> None:
+    digest = "a" * 64
+    candidate = {
+        "run_id": "run_scientific-candidate",
+        "run_type": "full",
+        "run_status": "human_review_pending",
+        "gate_reason": "human_plan_review_required",
+        "scientific_configuration_sha256": digest,
+        "pending_review_reason_codes": ["plan_scientific_changes_required"],
+        "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+    }
+    cancelled_duplicate = {
+        "run_id": "run_cancelled-duplicate",
+        "run_type": "full",
+        "run_status": "failed",
+        "gate_reason": "research_pipeline_cancelled",
+        "scientific_configuration_sha256": digest,
+        "artifact_names": ["source_run_manifest.json", "evidence_ledger.json"],
+    }
+
+    assert (
+        run_authority.workflow_authoritative_run([cancelled_duplicate, candidate])
+        is candidate
+    )
+
+
 def test_failed_preparation_does_not_restore_stale_candidate_plan() -> None:
     failed_preparation = {
         "run_id": "run_failed-preparation",
