@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -51,16 +52,29 @@ const SESSION_DIR = resolve(
 const CWD = resolve(process.env.EASYICU_PI_CWD || process.cwd());
 const TOOL_CATALOG_FIELDS = new Set([
   "name", "surface", "policy_group", "execution_mode",
-  "host_mutating", "data_source_required",
+  "host_mutating", "data_source_required", "arguments",
 ]);
+const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"]);
 const TOOL_CATALOG = (() => {
   let payload;
   try {
-    payload = JSON.parse(readFileSync(new URL("../../tool_catalog.json", import.meta.url), "utf8"));
+    const catalogUrl = [
+      // Installed private runtime: <revision>/src/main.mjs.
+      new URL("../tool_catalog.json", import.meta.url),
+      // Packaged development tree: pi_copilot/node_app/src/main.mjs.
+      new URL("../../tool_catalog.json", import.meta.url),
+    ].find((candidate) => existsSync(candidate));
+    if (!catalogUrl) throw new Error("tool_catalog.json is missing");
+    payload = JSON.parse(readFileSync(catalogUrl, "utf8"));
   } catch (error) {
     throw Object.assign(new Error("Pi tool catalog is unreadable"), { code: "pi_tool_catalog_unreadable", cause: error });
   }
-  if (payload?.schema_version !== "easyicu.pi-tool-catalog/1" || !Array.isArray(payload?.tools)) {
+  const rootFields = Object.keys(payload || {});
+  if (payload?.schema_version !== "easyicu.pi-tool-catalog/2"
+    || rootFields.length !== 3
+    || !rootFields.every((field) => ["schema_version", "_arguments", "tools"].includes(field))
+    || !Array.isArray(payload?._arguments)
+    || !Array.isArray(payload?.tools)) {
     throw Object.assign(new Error("Pi tool catalog schema is invalid"), { code: "pi_tool_catalog_schema_invalid" });
   }
   const names = new Set();
@@ -80,12 +94,37 @@ const TOOL_CATALOG = (() => {
       || typeof entry.data_source_required !== 'boolean') {
       throw Object.assign(new Error("Pi tool catalog policy is invalid"), { code: "pi_tool_catalog_policy_invalid" });
     }
+    const argumentFields = Object.keys(entry.arguments || {});
+    const argumentsValid = argumentFields.length === TOOL_ARGUMENT_FIELDS.size
+      && argumentFields.every((field) => TOOL_ARGUMENT_FIELDS.has(field))
+      && ["model", "host", "required"].every((field) => {
+        const values = entry.arguments[field];
+        return Array.isArray(values)
+          && values.every((value) => typeof value === "string" && value.trim())
+          && new Set(values).size === values.length;
+      });
+    if (!argumentsValid) {
+      throw Object.assign(new Error("Pi tool catalog arguments are invalid"), { code: "pi_tool_catalog_arguments_invalid" });
+    }
+    const modelArguments = new Set(entry.arguments.model);
+    const hostArguments = new Set(entry.arguments.host);
+    if ([...modelArguments].some((name) => hostArguments.has(name))
+      || entry.arguments.required.some((name) => !modelArguments.has(name) && !hostArguments.has(name))) {
+      throw Object.assign(new Error("Pi tool catalog arguments are inconsistent"), { code: "pi_tool_catalog_arguments_invalid" });
+    }
     names.add(entry.name);
   }
   if (!payload.tools.length) {
     throw Object.assign(new Error("Pi tool catalog is empty"), { code: "pi_tool_catalog_empty" });
   }
-  return Object.freeze(payload.tools.map((entry) => Object.freeze({ ...entry })));
+  return Object.freeze(payload.tools.map((entry) => Object.freeze({
+    ...entry,
+    arguments: Object.freeze({
+      model: Object.freeze([...entry.arguments.model]),
+      host: Object.freeze([...entry.arguments.host]),
+      required: Object.freeze([...entry.arguments.required]),
+    }),
+  })));
 })();
 const TOOL_CATALOG_BY_NAME = new Map(TOOL_CATALOG.map((entry) => [entry.name, entry]));
 const RESEARCH_TOOL_NAMES = Object.freeze(
