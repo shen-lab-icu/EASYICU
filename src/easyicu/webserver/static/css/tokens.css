@@ -4,6 +4,12 @@
   --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-cn: 'IBM Plex Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --type-caption: 12.5px;        /* provenance, timestamps, secondary metadata */
+  --type-meta: 13px;             /* compact status and control support copy */
+  --type-label: 14px;            /* ordinary labels, links, and secondary prose */
+  --type-reading: 16px;          /* long-form evidence and research prose */
+  --type-section: 18px;          /* local section titles */
+  --leading-reading: 1.6;
 
   /* —— Neutral palette (warm-cool off-white base) —— */
   --bg: #FAFAF7;                  /* canvas */

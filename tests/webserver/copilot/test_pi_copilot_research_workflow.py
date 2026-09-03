@@ -348,6 +348,139 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
         assert contract == ""
 
 
+def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = _complete_study()
+    study.update(
+        {
+            "question": "Is lact associated with death?",
+            "covariates": ["age"],
+            "covariate_selection": "exact",
+            "execution_concepts": {"covariates": ["age"]},
+        }
+    )
+    source_run_id = "run-candidate"
+    project_dir = tmp_path / "candidate-wrapper"
+    inner_run = project_dir / "pipeline" / source_run_id
+    inner_run.mkdir(parents=True)
+    capsule = {
+        "scientific_identity": {
+            "question": study["question"],
+            "database": "miiv",
+            "primary_exposure": "lact",
+            "target_outcome": "death",
+            "user_preferences": {"covariates": ["age"]},
+        }
+    }
+    capsule_raw = json.dumps(capsule).encode()
+    (inner_run / "run_input_capsule.json").write_bytes(capsule_raw)
+    (inner_run / "human_review_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "state": "pending",
+                "run_input_capsule_sha256": hashlib.sha256(
+                    capsule_raw
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    pipeline_input = project_dir / "pipeline_input"
+    pipeline_input.mkdir()
+    pd.DataFrame(columns=["lact", "death", "age"]).to_parquet(
+        pipeline_input / "planner_catalog.parquet",
+        index=False,
+    )
+    (pipeline_input / "planner_catalog_receipt.json").write_text(
+        json.dumps({"selected_concepts": ["lact", "death", "age"]}),
+        encoding="utf-8",
+    )
+    review = PlanScientificReview(
+        status="analysis_only",
+        approval_allowed=True,
+        top_journal_candidate=False,
+        score=85,
+        dimension_scores={"study_design": 85},
+        findings=[],
+        context_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        literature_sha256="c" * 64,
+        figure_strategy_sha256="d" * 64,
+        generated_at="2026-09-03T00:00:00Z",
+    ).model_dump(mode="json")
+    monkeypatch.setattr(
+        agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {
+            "runs": [
+                {
+                    "run_id": source_run_id,
+                    "project_dir": str(project_dir),
+                    "scientific_configuration_sha256": (
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        agent_runs,
+        "read_run_review",
+        lambda _project_dir: {
+            "ok": True,
+            "artifact_payloads": {
+                "scientific_plan_review.json": review,
+                "agent_plan.json": {
+                    "analysis_type": "association_study",
+                    "cohort": {"selection_mode": "all_input_rows"},
+                    "steps": [
+                        {
+                            "step_id": "primary_model",
+                            "method": "association",
+                            "planned_analysis_role": "primary",
+                            "inputs": ["lact", "death", "age"],
+                            "expected_outputs": ["table:estimate"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_metadata_only_planning_coordinates",
+        lambda **_kwargs: {
+            "primary_exposure": "lact",
+            "target_outcome": "death",
+        },
+    )
+
+    authority = agent_pipeline_runs._load_candidate_plan_materialization_authority(
+        study=study,
+        project_root=str(tmp_path),
+        source_run_id=source_run_id,
+        database="miiv",
+        covariates=("age",),
+    )
+
+    assert authority is not None
+    assert authority.primary_exposure == "lact"
+    assert authority.target_outcome == "death"
+    assert "source_plan_sha256: " + "b" * 64 in authority.contract
+    assert "primary_model" in authority.contract
+
+
+def test_public_composite_concept_resolves_to_one_materialization_source() -> None:
+    by_id = {"sep3_sofa1": object()}
+
+    assert research_launch_scientific._source_concept_for_operational_column(
+        "sep3",
+        by_id=by_id,
+    ) == "sep3_sofa1"
+
+
 def test_identified_local_database_can_generate_a_candidate_plan() -> None:
     """Eligibility is proposed in the candidate plan, not asked beforehand."""
 
@@ -1700,6 +1833,33 @@ def test_landmark_sensitivity_keeps_trajectory_for_counts_only_design() -> None:
     ) is True
 
 
+def test_time_varying_sensitivity_keeps_trajectory_for_counts_only_design() -> None:
+    study = {
+        **_complete_study(),
+        "analysis_design": {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+        "sensitivity_specs": [
+            {
+                "spec_id": "time_varying_exposure",
+                "axis": "timing",
+                "strategy": "time_varying",
+                "execution_variables": ["lact"],
+            }
+        ],
+    }
+
+    assert agent_pipeline_runs._analysis_requires_longitudinal_trajectory(
+        study,
+        validated_design={
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+    ) is True
+
+
 def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
     study = _complete_study()
     snapshot = build_research_workflow_snapshot(
@@ -1837,6 +1997,7 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
                         "study_authority_change": [
                             "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
                         ],
+                        "runtime_capability": [],
                         "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
                         "independent_review": [],
                     }
@@ -1847,6 +2008,7 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
 
     assert snapshot.next_action_code == "plan_scientific_changes_required"
     assert snapshot.plan_review_summary == {
+        "run_id": "run-science-review",
         "status": "changes_required",
         "score": 58,
         "top_journal_candidate": False,
@@ -1877,6 +2039,7 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
             "study_authority_change": [
                 "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
             ],
+            "runtime_capability": [],
             "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
             "independent_review": [],
         },
@@ -1912,6 +2075,7 @@ def test_plan_review_separates_system_proposals_from_user_authorization() -> Non
                     "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
                     "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
                 ],
+                "runtime_capability": [],
                 "external_evidence": [],
                 "independent_review": [],
             }
@@ -1955,6 +2119,7 @@ def test_plan_review_separates_system_proposals_from_user_authorization() -> Non
             "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
         ],
         "study_authority_change": ["ADJUSTMENT_SET_NOT_USER_CONFIRMED"],
+        "runtime_capability": [],
         "external_evidence": [],
         "independent_review": [],
     }
@@ -7019,7 +7184,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             None,
             "easyicu-research-agent:1.0.0",
             "npj_dm_e1_demo_dev",
-            "20260819",
+            "20260903",
         ),
         (
             "full_reviewed",
@@ -7027,7 +7192,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             "easyicu-research-agent:isolated-exact-head",
             "easyicu-research-agent:isolated-exact-head",
             "npj_dm_e1_demo_dev",
-            "20260819",
+            "20260903",
         ),
         (
             "full_reviewed",
@@ -7035,7 +7200,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             " \n",
             "easyicu-research-agent:e1-demo-local",
             "npj_dm_e1_demo_dev",
-            "20260819",
+            "20260903",
         ),
     ],
 )

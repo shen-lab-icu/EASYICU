@@ -633,6 +633,20 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
         == "confirm_fresh_plan_generation"
     )
 
+    discovery_entry = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "我目前还没有具体研究方向",
+            "turn_intent": "idea_discovery_entry",
+        },
+    )
+    assert discovery_entry.status_code == 200
+    assert (
+        discovery_entry.json()["received"]["message_intent"]
+        == "idea_discovery_entry"
+    )
+
     idea_entry = client.post(
         "/api/copilot/pi/sessions/pi-test/message",
         json={
@@ -820,6 +834,22 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
         "action_code": "generate_plan",
         "action_key": "job-child-1",
         "child_job_id": "job-child-1",
+    }
+    automatic_revision = client.post(
+        action_path,
+        json={
+            "project_id": "guided-project-2",
+            "action_code": "auto_revise_plan",
+            "action_key": "job-child-2",
+            "child_job_id": "job-child-2",
+        },
+    )
+    assert automatic_revision.status_code == 200
+    assert automatic_revision.json()["received"] == {
+        "project_id": "guided-project-2",
+        "action_code": "auto_revise_plan",
+        "action_key": "job-child-2",
+        "child_job_id": "job-child-2",
     }
     for action_code in (
         "review_result_tables",

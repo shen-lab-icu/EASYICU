@@ -152,8 +152,17 @@ def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
     outcome_materialized = str(requirement.get("outcome") or "").strip()
     exposure = _source_concept(exposure_materialized, field="primary exposure")
     outcome = _source_concept(outcome_materialized, field="outcome")
-    event_time = f"{outcome}_time"
-    observation_duration = "los_icu"
+    event_time = "death_time_hours" if outcome == "death" else f"{outcome}_time"
+    # ``los_icu`` ends at ICU discharge.  It cannot stand in for the hospital
+    # follow-up axis of an in-hospital mortality analysis: a stay may leave the
+    # ICU alive and still die before hospital discharge.  Issue the required
+    # owner coordinate here; data readiness will fail closed until a source-bound
+    # follow-up contract materializes it.
+    observation_duration = (
+        "hospital_followup_time_hours"
+        if outcome == "death"
+        else f"{outcome}_followup_time_hours"
+    )
     return {
         "exposure": exposure,
         "outcome": outcome,
@@ -161,6 +170,7 @@ def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
         "outcome_materialized": outcome_materialized,
         "event_time": event_time,
         "observation_duration": observation_duration,
+        "observation_duration_unit": "hours",
     }
 
 
@@ -214,26 +224,57 @@ def compile_plan_decision(
                 "The selected option is not available for this scientific review decision.",
                 details={"decision_code": code, "option_id": option},
             )
-        coordinates = _timing_coordinates(agent_plan)
-        landmark = {
-            "spec_id": "landmark_24h",
-            "axis": "timing",
-            "strategy": "landmark",
-            "execution_variables": [
-                coordinates["event_time"],
-                coordinates["observation_duration"],
-            ],
-            "landmark_hours": 24,
-            "require_alive_at_landmark": True,
-            "exclude_negative_event_times": True,
-            "event_time_variable": coordinates["event_time"],
-            "observation_duration_variable": coordinates["observation_duration"],
-            "observation_duration_unit": "days",
-        }
+        # “Keep and execute” authorizes execution of an already confirmed
+        # specification.  It must never reinterpret a protocol-only plan and
+        # replace (for example) a time-varying design with a landmark design.
+        # A missing timing specification is therefore an authority error, not
+        # permission to synthesize a convenient fallback from the agent plan.
+        raw_specs = study.get("sensitivity_specs")
+        timing_rows = (
+            [
+                dict(spec)
+                for spec in raw_specs
+                if isinstance(spec, Mapping)
+                and str(spec.get("axis") or "") == "timing"
+            ]
+            if isinstance(raw_specs, Sequence) and not isinstance(raw_specs, (str, bytes))
+            else []
+        )
+        if len(timing_rows) != 1:
+            raise PlanDecisionError(
+                "plan_decision_confirmed_timing_missing",
+                "Keeping a required sensitivity requires exactly one existing typed timing specification.",
+                details={"timing_spec_count": len(timing_rows)},
+            )
+        from easyicu.research_agent.planning.sensitivity_authority import (
+            EXECUTABLE_METHODS_BY_STRATEGY,
+            PrespecifiedSensitivitySpec,
+        )
+
+        try:
+            timing = PrespecifiedSensitivitySpec.model_validate(
+                timing_rows[0]
+            ).model_dump(mode="json")
+        except ValueError as exc:
+            raise PlanDecisionError(
+                "plan_decision_confirmed_timing_invalid",
+                "The existing timing specification is not a valid executable sensitivity contract.",
+                details={"reason": str(exc)[:500]},
+            ) from exc
+        if (not EXECUTABLE_METHODS_BY_STRATEGY[timing["strategy"]]
+            or (timing["strategy"] == "time_varying" and timing.get("time_varying_execution") is None)):
+            raise PlanDecisionError(
+                "plan_decision_confirmed_timing_runtime_unavailable",
+                "The saved timing strategy has no registered deterministic runtime.",
+                details={
+                    "spec_id": timing["spec_id"],
+                    "strategy": timing["strategy"],
+                },
+            )
         return CompiledPlanDecision(
             patch={
                 "sensitivity_specs": configuration.replace_sensitivity(
-                    axis="timing", replacement=landmark
+                    axis="timing", replacement=timing
                 ),
                 "confirmations": configuration.merge_confirmations(
                     plan_required_sensitivities_executable=True,
@@ -395,7 +436,7 @@ def compile_plan_decision(
             "exclude_negative_event_times": True,
             "event_time_variable": coordinates["event_time"],
             "observation_duration_variable": coordinates["observation_duration"],
-            "observation_duration_unit": "days",
+            "observation_duration_unit": coordinates["observation_duration_unit"],
         }
         current_design = study.get("analysis_design")
         current_design = (
@@ -450,6 +491,8 @@ def compile_plan_decision(
                     extraction_completed=True,
                     export_format=True,
                     plan_timing_landmark_24h=True,
+                    plan_timing_descriptive_only=False,
+                    plan_timing_time_varying=False,
                 ),
             },
             display_label_en="Use the recommended 24-hour landmark",
@@ -463,11 +506,13 @@ def compile_plan_decision(
             if fixed_24h_lactate
             else exposure_zh
         )
+        descriptive_execution = dict(execution)
+        descriptive_execution["covariates"] = []
         return CompiledPlanDecision(
             patch={
                 "outcome": outcome_zh,
                 "primary_exposure": exposure_display,
-                "execution_concepts": execution,
+                "execution_concepts": descriptive_execution,
                 "analysis_goal": "描述暴露与结局分布，不估计时间对齐后的关联",
                 # This click changes the scientific family, so it must also
                 # close the typed launch contract.  Leaving only prose in
@@ -481,6 +526,11 @@ def compile_plan_decision(
                     "analysis_unit": "icu_stay",
                     "variance_estimator": "none_counts_only",
                 },
+                "covariates": [],
+                "covariate_selection": "exact",
+                "covariate_rationales": {},
+                "covariate_temporal_roles": {},
+                "covariate_operationalizations": {},
                 "export_format": "parquet",
                 "sensitivity_specs": configuration.replace_sensitivity(
                     axis="timing", replacement=None
@@ -489,7 +539,11 @@ def compile_plan_decision(
                     feature_time_window=True,
                     extraction_completed=True,
                     export_format=True,
+                    plan_timing_landmark_24h=False,
                     plan_timing_descriptive_only=True,
+                    plan_timing_time_varying=False,
+                    plan_repeated_stays_clustered=False,
+                    plan_adjustment_set_confirmed=False,
                 ),
             },
             display_label_en=f"Keep {exposure_en} and {outcome_en} descriptive",
@@ -517,6 +571,8 @@ def compile_plan_decision(
                     axis="timing", replacement=sensitivity
                 ),
                 "confirmations": configuration.merge_confirmations(
+                    plan_timing_landmark_24h=False,
+                    plan_timing_descriptive_only=False,
                     plan_timing_time_varying=True,
                     extraction_completed=False,
                 ),

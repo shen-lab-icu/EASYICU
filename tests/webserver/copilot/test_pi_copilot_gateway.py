@@ -282,6 +282,42 @@ def test_initial_question_update_uses_host_finalization_without_second_provider_
     assert "尚未开始数据提取或分析" in payload["result"]["content"][0]["text"]
 
 
+def test_zero_direction_entry_uses_deterministic_host_routing_reply() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    module = APP_DIR / "src" / "post-tool-finalization.mjs"
+    script = f"""
+      import {{ hostPostToolFinalization }} from {json.dumps(module.as_uri())};
+      const model = {{ api: 'openai-completions', provider: 'test', id: 'test' }};
+      const user = {{
+        role: 'user',
+        content: '我还没有方向\\n\\n[EASYICU_ZERO_DIRECTION_ENTRY_V1]\\nroute only',
+      }};
+      const stream = hostPostToolFinalization(model, {{ messages: [user] }}, 'zh');
+      if (!stream) throw new Error('expected deterministic routing finalization');
+      const events = [];
+      for await (const event of stream) events.push(event);
+      const result = await stream.result();
+      console.log(JSON.stringify({{ types: events.map(event => event.type), result }}));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    payload = json.loads(completed.stdout)
+    assert payload["result"]["usage"]["totalTokens"] == 0
+    text = payload["result"]["content"][0]["text"]
+    assert "不必先写出完整研究问题。" in text
+    assert "EasyICU 仍会先确认数据源；" in text
+    assert text.endswith("- 从现有 ICU 数据开始")
+
+
 def test_idea_selection_forces_exact_literature_search_after_mining() -> None:
     node = shutil.which("node")
     if not node or not (APP_DIR / "node_modules").is_dir():
@@ -1614,6 +1650,21 @@ def test_data_source_transition_appends_a_hidden_mechanically_read_only_host_tur
     )[0]
     assert "sendCustomMessage" in prompt_session
     assert "navigateTree" not in prompt_session
+
+
+def test_zero_direction_entry_is_a_tool_free_routing_turn() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    prompt_session = entrypoint.split("async function promptSession", 1)[1].split(
+        "function regenerateTarget", 1
+    )[0]
+
+    assert 'intent === "clarify_research_entry" || intent === "idea_discovery_entry"' in prompt_session
+    assert "record.session.setActiveToolsByName([])" in prompt_session
+    assert "do not invent candidate ideas" in entrypoint
+    regenerate_session = entrypoint.split("async function regenerateSession", 1)[1].split(
+        "async function handleRequest", 1
+    )[0]
+    assert 'turnIntent === "clarify_research_entry" || turnIntent === "idea_discovery_entry"' in regenerate_session
 
 
 def test_data_source_transition_cannot_move_a_failed_plan_back_to_data_preparation() -> None:

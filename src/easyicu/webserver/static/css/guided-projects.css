@@ -82,7 +82,7 @@
 .gd-project-heading-actions{display:inline-flex;align-items:center;gap:3px}
 .gd-manage-mini{
   min-width:42px;height:26px;padding:0 7px;border:1px solid transparent;border-radius:7px;
-  background:transparent;color:var(--ink-3);font:inherit;font-size:13px;font-weight:650;cursor:pointer
+  background:transparent;color:var(--ink-3);font:inherit;font-size:var(--type-label);font-weight:650;cursor:pointer
 }
 .gd-manage-mini:hover,.gd-manage-mini:focus-visible,.gd-manage-mini.active{
   border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-ink);outline:0
@@ -100,7 +100,7 @@
 }
 .gd-project-summary>svg{margin-top:1px;color:var(--ink-4)}
 .gd-project-summary strong{display:block;color:var(--ink-2);font-size:14px;font-weight:650}
-.gd-project-summary span{display:block;margin-top:3px;color:var(--ink-4);font-size:13px;line-height:1.45}
+.gd-project-summary span{display:block;margin-top:3px;color:var(--ink-4);font-size:var(--type-label);line-height:1.45}
 .gd-empty-local{
   margin:0 2px 4px;padding:11px;border:1px dashed var(--hair-2);border-radius:9px;
   background:color-mix(in srgb,var(--surface) 72%,transparent)
@@ -148,9 +148,9 @@
 }
 .gd-sess .ss-m{
   min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--ink-4);font-size:13.5px;line-height:1.35
+  color:var(--ink-4);font-size:var(--type-label);line-height:1.4
 }
-.gd-sess .ss-time{align-self:start;padding-top:1px;color:var(--ink-4);font:500 12.5px/1.35 var(--font-mono);white-space:nowrap;opacity:.78}
+.gd-sess .ss-time{align-self:start;padding-top:1px;color:var(--ink-4);font:500 var(--type-meta)/1.4 var(--font-mono);white-space:nowrap;opacity:.8}
 .gd-sessline:hover .ss-time,.gd-sessline:focus-within .ss-time{opacity:0}
 .gd-sess-action{
   position:absolute;right:7px;top:50%;z-index:1;transform:translateY(-50%) scale(.92);
@@ -204,6 +204,7 @@
 .gd-utilbtn:focus-visible{outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent)}
 .gd-utilbtn.lang span{font-family:var(--font-mono);font-size:13px}
 .gd-data-workspace{justify-content:center}
+.gd-rail-foot .btn.gd-data-workspace{font-size:13.5px}
 
 @media (max-width:1180px){
   .gd-main.threecol{grid-template-columns:292px minmax(0,1fr)}

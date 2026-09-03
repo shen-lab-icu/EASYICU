@@ -169,8 +169,11 @@ def workflow_authoritative_run(
             str(candidate.get("run_status") or "") == "human_review_pending"
             and str(candidate.get("gate_reason") or "")
             == "human_plan_review_required"
-            and "operator_plan_approval_required"
-            in {
+            and {
+                "operator_plan_approval_required",
+                "plan_scientific_changes_required",
+            }
+            & {
                 str(code or "").strip()
                 for code in candidate.get("pending_review_reason_codes") or []
             }

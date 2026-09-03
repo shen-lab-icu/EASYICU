@@ -546,7 +546,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     redesign_css = _static_css("redesign.css")
 
     assert "css/guided.css?v=20260829-readability2" in index_html
-    assert "css/guided-projects.css?v=20260829-horizontal-arrows1" in index_html
+    assert "css/guided-projects.css?v=20260902-type-scale2" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20260830-viz-final1" in index_html
     assert (
@@ -2764,7 +2764,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     )
     assert "screens-guided.js?v=20260901-session-deeplink1" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
-    assert "guided-projects.css?v=20260829-horizontal-arrows1" in index_html
+    assert "guided-projects.css?v=20260902-type-scale2" in index_html
     assert "gd-rail-heading" in projects_js
     assert "gd-name\">${t('EasyICU ICU Research Assistant', 'EasyICU 重症科研助手')}</span>" in projects_js
     assert "${t('New / open research project', '新建 / 打开研究项目')}" in projects_js

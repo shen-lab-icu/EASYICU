@@ -118,6 +118,13 @@ function latestUserPrompt(context) {
   return "";
 }
 
+function zeroDirectionEntryText(context, language) {
+  if (!latestUserPrompt(context).includes("[EASYICU_ZERO_DIRECTION_ENTRY_V1]")) return "";
+  return language === "zh"
+    ? "你现在只需要选择一个最容易开始的入口，不必先写出完整研究问题。\n\n选择现有 ICU 数据时，EasyICU 仍会先确认数据源；本轮不会读取数据或生成研究方案。\n\n**下一步：**\n- 从临床困惑开始\n- 从已有文章或 PDF 开始\n- 从现有 ICU 数据开始"
+    : "Choose the easiest available starting point; you do not need a complete research question yet.\n\nIf you start from existing ICU data, EasyICU will still confirm the source first; this turn will not read data or create a study plan.\n\n**Next step:**\n- Start from a clinical uncertainty\n- Start from an article or PDF\n- Start from existing ICU data";
+}
+
 function mandatoryIdeaLiteratureSearch(context) {
   const messages = Array.isArray(context?.messages) ? context.messages : [];
   const result = messages.at(-1);
@@ -220,6 +227,10 @@ function dataSourceSelectionText(language, catalog) {
  * already owns source selection and the candidate-plan confirmation.
  */
 export function hostPostToolFinalization(model, context, language) {
+  const zeroDirection = zeroDirectionEntryText(context, language);
+  if (zeroDirection) {
+    return completedStream(finalizedMessage(model, zeroDirection));
+  }
   const literatureSearch = mandatoryIdeaLiteratureSearch(context);
   if (literatureSearch) {
     return toolCallStream(model, "easyicu_search_literature", literatureSearch);

@@ -105,7 +105,13 @@ def test_database_mention_or_local_choice_does_not_confirm_prepared_source(
         ("请帮我评估并比较这个已有想法", "idea_mining_entry"),
         ("这是我已经明确的研究问题，请进入研究方案", "implement_scientific_question"),
         ("不要进行 Idea Mining，直接进入数据准备", "implement_scientific_question"),
+        (
+            "数据目录已给出，请完成配置并生成一份完整候选计划供审阅",
+            "implement_scientific_question",
+        ),
         ("我想从现有 ICU 数据开始", "data_first_entry"),
+        ("我目前还没有具体研究方向", "idea_discovery_entry"),
+        ("我不知道做什么研究", "idea_discovery_entry"),
         ("液体平衡会不会影响撤机？", "clarify_research_entry"),
         (
             "研究成人 ICU 早期液体平衡与拔管失败的关系",

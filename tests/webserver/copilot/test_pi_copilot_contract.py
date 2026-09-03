@@ -51,6 +51,7 @@ from easyicu.webserver.pi_copilot.projections import (
 )
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 from easyicu.webserver.pi_copilot.gateway import PiGatewayClient
+from easyicu.webserver.pi_copilot.message_input import prepare_user_message
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot import tools as tool_module
@@ -792,6 +793,57 @@ def test_new_research_session_allows_planning_but_blocks_data_tools_until_confir
     )
 
 
+def test_exact_registered_path_in_message_binds_source_before_provider(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        "id": "src-message-path",
+        "path": "/private/export",
+        "label": "MIMIC-IV research export",
+        "database": "mimiciv",
+        "ok": True,
+    }
+    monkeypatch.setattr(
+        service_module.sources,
+        "load_registry",
+        lambda: {"active_path": source["path"], "sources": [source]},
+    )
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-path-in-message",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-path-in-message",
+        message=(
+            "研究 Sepsis-3 患病率，数据目录是 /private/export。"
+            "请完成配置并生成候选计划。"
+        ),
+        allowed_actions={"configure"},
+    )
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    prompt_call = next(call for call in gateway.calls if call[0] == "session.prompt")
+    assert "/private/export" not in prompt_call[1]["message"]
+    assert "EasyICU host-verified local data source" in prompt_call[1]["message"]
+    assert gateway.tool_contexts[-1].session.data_source_authorization.status == "confirmed"
+    assert (
+        gateway.tool_contexts[-1]
+        .session.data_source_authorization.confirmation_mode
+        == "select_local_source"
+    )
+
+
 def test_blank_project_first_turn_gets_typed_entry_clarification(
     tmp_path: Path,
     study_state: dict[str, Any],
@@ -825,6 +877,41 @@ def test_blank_project_first_turn_gets_typed_entry_clarification(
 
     prompt_call = next(call for call in gateway.calls if call[0] == "session.prompt")
     assert prompt_call[1]["intent"] == "clarify_research_entry"
+
+
+def test_blank_project_without_a_direction_gets_typed_discovery_entry(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        service_module,
+        "build_project_workflow_projection",
+        lambda **kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(current_stage="idea")
+        ),
+    )
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-zero-direction",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-zero-direction",
+        message="我目前还没有具体研究方向",
+    )
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    prompt_call = next(call for call in gateway.calls if call[0] == "session.prompt")
+    assert prompt_call[1]["intent"] == "idea_discovery_entry"
 
 
 def test_copilot_message_passes_bounded_idea_source_to_gateway_and_tool_context(
@@ -3990,7 +4077,7 @@ def test_conversational_setup_does_not_bundle_all_stays_with_clustering(
     assert writes == []
 
 
-def test_sibling_candidate_slots_never_confirm_each_other(
+def test_exact_question_label_does_not_confirm_sibling_candidate_slots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One question proposing outcome + exposure + goal must still block.
@@ -4042,9 +4129,14 @@ def test_sibling_candidate_slots_never_confirm_each_other(
         ),
     )
 
-    assert blocked["status"] == "blocked"
-    assert blocked["code"] == "study_primary_outcome_confirmation_required"
-    assert writes == []
+    assert blocked["status"] == "ok"
+    assert blocked["code"] == "study_context_updated"
+    assert writes[0]["primary_exposure"] == "Sepsis-3"
+    assert not writes[0].get("outcome")
+    assert not writes[0].get("analysis_goal")
+    assert blocked["details"]["omitted_unconfirmed_fields"] == [
+        "outcome", "analysis_goal"
+    ]
 
 
 def test_dropped_scientific_slots_are_named_in_the_receipt(
@@ -4102,18 +4194,14 @@ def test_dropped_scientific_slots_are_named_in_the_receipt(
     # The explicitly written question is a real confirmed change and lands.
     assert result["code"] == "study_context_updated"
     assert writes[0]["question"].startswith("Estimate Sepsis-3 prevalence")
-    # The two candidate slots do not.
+    # The exact exposure label does; the translated outcome label does not.
     assert writes[0].get("outcome", "") == ""
-    assert writes[0].get("primary_exposure", "") == ""
+    assert writes[0]["primary_exposure"] == "Sepsis-3"
     # And the receipt says so, with a typed reason code per dropped slot.
     details = result["details"]
-    assert details["omitted_unconfirmed_fields"] == ["outcome", "primary_exposure"]
+    assert details["omitted_unconfirmed_fields"] == ["outcome"]
     assert details["unconfirmed_omissions"] == [
         {"field": "outcome", "code": "study_primary_outcome_confirmation_required"},
-        {
-            "field": "primary_exposure",
-            "code": "study_primary_exposure_confirmation_required",
-        },
     ]
     assert "NOT saved this turn" in result["summary"]
     assert "outcome" in result["summary"]
@@ -5941,6 +6029,35 @@ def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> No
         with pytest.raises(PiCopilotError) as unsafe_string:
             ensure_safe_projection({"reason": unsafe_value})
         assert unsafe_string.value.code == "pi_projection_blocked"
+
+
+def test_registered_local_data_path_is_kept_host_side() -> None:
+    source = {
+        "id": "src-mimic",
+        "path": "/Volumes/research/easyicu/miiv",
+        "label": "MIMIC-IV",
+        "database": "miiv",
+        "ok": True,
+    }
+
+    prepared = prepare_user_message(
+        "研究 Sepsis-3，数据目录是 /Volumes/research/easyicu/miiv。请生成计划。",
+        registered_sources=[source],
+    )
+
+    assert prepared.registered_source == source
+    assert "/Volumes/" not in prepared.provider_message
+    assert "EasyICU host-verified local data source: MIMIC-IV" in prepared.provider_message
+
+
+def test_unregistered_local_path_is_not_forwarded_to_provider() -> None:
+    with pytest.raises(PiCopilotError) as exc_info:
+        prepare_user_message(
+            "数据目录是 /Volumes/research/unregistered/raw。",
+            registered_sources=[],
+        )
+
+    assert exc_info.value.code == "pi_message_local_path_unregistered"
 
     projected = project_study_context(
         {

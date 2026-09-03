@@ -523,6 +523,8 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "", idea
     ? (sourcePreparationAlreadyPassed
       ? `\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has confirmed the study's data source outside the model transcript, and the authoritative workflow has already advanced to ${transitionWorkflowCode}. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. Acknowledge the current plan-stage readiness in at most two short sentences and stop so the host can show the workflow-owned action. Do not ask a setup question, do not start a sequential questionnaire, and do not propose cohort, exposure, outcome, window, module or export values yourself. Do not call a tool during this transition.`
       : "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has confirmed the study data source. Follow the authoritative workflow receipt, including any blocker. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. A raw identified database supports metadata-only candidate planning: extraction is not a prerequisite for generating a candidate plan. Acknowledge the saved source briefly and stop for the host-owned next action. Do not invent data-preparation inputs, ask exposure/outcome/goal confirmations, or authorize extraction. If the question is missing, ask only for the research question. Do not call a tool during this transition.")
+    : turnIntent === "idea_discovery_entry"
+    ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\n[EASYICU_ZERO_DIRECTION_ENTRY_V1]\nThe researcher explicitly says they do not yet have a research direction. Do not call any tool, do not invent candidate ideas, and do not start a study-design questionnaire. The host owns the exact localized routing reply for this marker."
     : turnIntent === "idea_mining_entry"
     ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\nThe researcher explicitly chose Idea Mining. Do not ask whether they instead want implementation and do not start a design questionnaire. Inspect the workflow, call easyicu_mine_ideas, then call easyicu_search_literature once with the exact returned run_id and idea_id before answering. If the literature gate blocks, continue with an honest source-grounded candidate map and name the missing search. Present candidate innovation directions and evidence boundaries in the ordinary conversation; do not construct or persist a scientific question in this turn."
     : turnIntent === "idea_mining_candidate_selection"
@@ -1210,7 +1212,7 @@ async function promptSession(requestId, params) {
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
-  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
+  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== "idea_discovery_entry" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
     throw Object.assign(new Error("unsupported message intent"), { code: "pi_message_intent_invalid" });
   }
   const record = sessions.get(sessionId);
@@ -1231,7 +1233,7 @@ async function promptSession(requestId, params) {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);
     } else if (intent === "advance_after_data_source_confirmation") {
       record.session.setActiveToolsByName([]);
-    } else if (intent === "clarify_research_entry") {
+    } else if (intent === "clarify_research_entry" || intent === "idea_discovery_entry") {
       record.session.setActiveToolsByName([]);
     }
     const ownerContext = await currentTurnOwnerContext(sessionId);
@@ -1301,7 +1303,7 @@ async function regenerateSession(requestId, params) {
   ) {
     throw Object.assign(new Error("unsupported regenerate intent"), { code: "pi_regenerate_intent_invalid" });
   }
-  if (turnIntent && turnIntent !== "confirm_formal_plan_generation" && turnIntent !== "confirm_fresh_plan_generation" && turnIntent !== "confirm_planner_checkpoint_resume" && turnIntent !== "idea_mining_entry" && turnIntent !== "idea_mining_candidate_selection" && turnIntent !== "implement_scientific_question" && turnIntent !== "data_first_entry" && turnIntent !== "clarify_research_entry") {
+  if (turnIntent && turnIntent !== "confirm_formal_plan_generation" && turnIntent !== "confirm_fresh_plan_generation" && turnIntent !== "confirm_planner_checkpoint_resume" && turnIntent !== "idea_discovery_entry" && turnIntent !== "idea_mining_entry" && turnIntent !== "idea_mining_candidate_selection" && turnIntent !== "implement_scientific_question" && turnIntent !== "data_first_entry" && turnIntent !== "clarify_research_entry") {
     throw Object.assign(new Error("unsupported regenerate turn intent"), { code: "pi_message_intent_invalid" });
   }
   if (
@@ -1328,6 +1330,8 @@ async function regenerateSession(requestId, params) {
       record.session.setActiveToolsByName(["easyicu_run"]);
     } else if (turnIntent === "confirm_fresh_plan_generation" || turnIntent === "confirm_planner_checkpoint_resume") {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);
+    } else if (turnIntent === "clarify_research_entry" || turnIntent === "idea_discovery_entry") {
+      record.session.setActiveToolsByName([]);
     }
     const navigation = await record.session.navigateTree(target.entryId, { summarize: false });
     if (navigation.cancelled) {

@@ -93,15 +93,16 @@ def test_landmark_choice_compiles_one_complete_typed_update() -> None:
         "spec_id": "landmark_24h",
         "axis": "timing",
         "strategy": "landmark",
-        "execution_variables": ["death_time", "los_icu"],
+        "execution_variables": ["death_time_hours", "hospital_followup_time_hours"],
         "landmark_hours": 24,
         "require_alive_at_landmark": True,
         "exclude_negative_event_times": True,
-        "event_time_variable": "death_time",
-        "observation_duration_variable": "los_icu",
-        "observation_duration_unit": "days",
+        "event_time_variable": "death_time_hours",
+        "observation_duration_variable": "hospital_followup_time_hours",
+        "observation_duration_unit": "hours",
     }
     assert compiled.patch["confirmations"]["plan_timing_landmark_24h"] is True
+    assert compiled.patch["confirmations"]["plan_timing_time_varying"] is False
 
 
 def test_landmark_choice_preserves_confirmed_patient_cluster_design() -> None:
@@ -160,6 +161,19 @@ def test_non_lactate_plan_cannot_receive_lactate_24h_landmark() -> None:
 
 def test_non_lactate_timing_context_and_descriptive_patch_are_plan_bound() -> None:
     plan = _sepsis_plan()
+    study = _study()
+    study.update({
+        "covariates": ["age", "sex"],
+        "covariate_selection": "exact",
+        "covariate_rationales": {"age": "baseline", "sex": "baseline"},
+        "covariate_temporal_roles": {"age": "baseline_static", "sex": "baseline_static"},
+        "covariate_operationalizations": {"age": "age", "sex": "sex"},
+        "execution_concepts": {"covariates": ["age", "sex"]},
+    })
+    study["confirmations"].update({
+        "plan_repeated_stays_clustered": True,
+        "plan_adjustment_set_confirmed": True,
+    })
     context = plan_decision_context(
         plan, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
     )
@@ -171,7 +185,7 @@ def test_non_lactate_timing_context_and_descriptive_patch_are_plan_bound() -> No
     compiled = compile_plan_decision(
         decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         option_id="descriptive_only",
-        study=_study(),
+        study=study,
         agent_plan=plan,
     )
 
@@ -182,6 +196,15 @@ def test_non_lactate_timing_context_and_descriptive_patch_are_plan_bound() -> No
         "analysis_unit": "icu_stay",
         "variance_estimator": "none_counts_only",
     }
+    assert compiled.patch["confirmations"]["plan_timing_descriptive_only"] is True
+    assert compiled.patch["confirmations"]["plan_timing_time_varying"] is False
+    assert compiled.patch["confirmations"]["plan_repeated_stays_clustered"] is False
+    assert compiled.patch["confirmations"]["plan_adjustment_set_confirmed"] is False
+    assert compiled.patch["covariates"] == []
+    assert compiled.patch["covariate_rationales"] == {}
+    assert compiled.patch["covariate_temporal_roles"] == {}
+    assert compiled.patch["covariate_operationalizations"] == {}
+    assert compiled.patch["execution_concepts"]["covariates"] == []
 
 
 def test_unknown_plan_choice_never_falls_back_to_free_text() -> None:
@@ -289,7 +312,7 @@ def test_repeated_stay_choice_removes_legacy_duplicate_sensitivity() -> None:
     }
 
 
-def test_keep_sensitivities_repairs_landmark_execution_coordinates() -> None:
+def test_keep_sensitivities_rejects_unregistered_timing_runtime() -> None:
     study = _study()
     study["sensitivity_specs"].append(
         {
@@ -298,19 +321,37 @@ def test_keep_sensitivities_repairs_landmark_execution_coordinates() -> None:
             "strategy": "cluster_robust",
         }
     )
-
-    compiled = compile_plan_decision(
-        decision_code="REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY",
-        option_id="keep_executable_sensitivities",
-        study=study,
-        agent_plan=_plan(),
+    study["sensitivity_specs"].append(
+        {
+            "spec_id": "time_varying_exposure",
+            "axis": "timing",
+            "strategy": "time_varying",
+            "execution_variables": ["lact"],
+        }
     )
 
-    specs = {item["axis"]: item for item in compiled.patch["sensitivity_specs"]}
-    assert specs["timing"]["event_time_variable"] == "death_time"
-    assert specs["timing"]["observation_duration_variable"] == "los_icu"
-    assert specs["timing"]["observation_duration_unit"] == "days"
-    assert specs["repeated_stays"]["strategy"] == "cluster_robust"
-    assert compiled.patch["confirmations"][
-        "plan_required_sensitivities_executable"
-    ] is True
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_plan_decision(
+            decision_code="REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY",
+            option_id="keep_executable_sensitivities",
+            study=study,
+            agent_plan=_plan(),
+        )
+
+    assert raised.value.code == "plan_decision_confirmed_timing_runtime_unavailable"
+    assert raised.value.details == {
+        "spec_id": "time_varying_exposure",
+        "strategy": "time_varying",
+    }
+
+
+def test_keep_sensitivities_without_a_confirmed_timing_spec_fails_closed() -> None:
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_plan_decision(
+            decision_code="REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY",
+            option_id="keep_executable_sensitivities",
+            study=_study(),
+            agent_plan=_plan(),
+        )
+
+    assert raised.value.code == "plan_decision_confirmed_timing_missing"

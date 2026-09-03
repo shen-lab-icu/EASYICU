@@ -104,12 +104,10 @@
         ...(childJobId ? { child_job_id: String(childJobId) } : {}),
       });
     } catch (error) {
-      // The child task may already be running. Keep monitoring it, but surface
-      // that this click could not be restored as part of the conversation.
-      state.error = tr(
-        'The task started, but its conversation receipt could not be saved. Refresh after it finishes.',
-        '任务已经启动，但本次对话回执未能保存；请在任务完成后刷新检查。',
-      );
+      // A child task is already durable before this optional replay receipt is
+      // written. Its watcher reconciles the terminal session state, so never
+      // make the user refresh or decide how to recover a telemetry failure.
+      console.warn('EasyICU could not persist the host-action receipt.', error);
       return null;
     }
   }
@@ -290,10 +288,10 @@
     refreshSession: (...args) => refreshSession(...args),
     archiveChildJob: (...args) => archiveChildJob(...args),
     // The callback is evaluated only after PLAN_ACTIONS is initialized.  A
-    // completed plan with system-owned findings may therefore continue once
-    // without inventing a user chat turn or requiring another click.
-    continueSystemOwnedPlanRevision: (...args) => (
-      PLAN_ACTIONS && PLAN_ACTIONS.continueSystemOwnedPlanRevision(...args)
+    // completed candidate or a plan with system-owned findings may therefore
+    // continue once without inventing a user chat turn or another review gate.
+    continueSystemOwnedPlanProgression: (...args) => (
+      PLAN_ACTIONS && PLAN_ACTIONS.continueSystemOwnedPlanProgression(...args)
     ),
     messages: () => state.messages,
     session: () => state.session,
@@ -351,6 +349,7 @@
     loadWorkflow: (...args) => loadWorkflow(...args),
     setBusy: value => { state.busy = Boolean(value); },
     setError: value => { state.error = String(value || ''); },
+    setDraft: value => { state.draft = String(value || ''); },
     appendMessage: value => { state.messages.push(value); },
     truncateMessagesAt: id => {
       const at = state.messages.findIndex(item => String((item && item.id) || '') === id);

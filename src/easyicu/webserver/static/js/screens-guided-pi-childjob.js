@@ -149,10 +149,10 @@
           .then(async () => {
             if (host.session() && sessionIsStale()) await rebind();
             await loadWorkflow();
-            render();
-            if (typeof host.continueSystemOwnedPlanRevision === 'function') {
-              await host.continueSystemOwnedPlanRevision();
-            }
+            const continued = typeof host.continueSystemOwnedPlanProgression === 'function'
+              ? await host.continueSystemOwnedPlanProgression()
+              : false;
+            if (!continued) render();
           })
           .catch(() => render());
         return;

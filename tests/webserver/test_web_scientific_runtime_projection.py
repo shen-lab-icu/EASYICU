@@ -24,7 +24,7 @@ from easyicu.webserver.scientific_runtime_projection import (
 )
 
 
-def _specs(*, closed_landmark: bool = True):
+def _specs(*, closed_landmark: bool = True, duration_unit: str = "days"):
     landmark = {
         "spec_id": "landmark_24h_primary",
         "axis": "timing",
@@ -38,7 +38,7 @@ def _specs(*, closed_landmark: bool = True):
             {
                 "event_time_variable": "death_time",
                 "observation_duration_variable": "los_icu",
-                "observation_duration_unit": "days",
+                "observation_duration_unit": duration_unit,
             }
         )
     return (
@@ -70,10 +70,11 @@ def _universe(tmp_path):
     return path
 
 
-def test_closed_web_landmark_spline_compiles_signed_runtime(tmp_path) -> None:
+@pytest.mark.parametrize("duration_unit", ["days", "hours"])
+def test_closed_web_landmark_spline_compiles_signed_runtime(tmp_path, duration_unit) -> None:
     projection = compile_landmark_spline_runtime_projection(
         study={"covariate_selection": "exact"},
-        sensitivity_specs=_specs(),
+        sensitivity_specs=_specs(duration_unit=duration_unit),
         primary_exposure="lact_max",
         primary_exposure_source="lact",
         target_outcome="death",
@@ -88,6 +89,7 @@ def test_closed_web_landmark_spline_compiles_signed_runtime(tmp_path) -> None:
     authority = projection.authority
     assert authority["plan_method"] == "signed_landmark_restricted_cubic_spline"
     assert authority["observation_duration_column"] == "los_icu"
+    assert authority["observation_duration_unit"] == duration_unit
     assert authority["categorical_adjustment_columns"] == ["sex"]
     assert authority["required_adjustment_columns"] == [
         "age",
@@ -126,6 +128,41 @@ def test_landmark_observation_duration_is_a_source_materialization_variable() ->
     landmark = _specs()[0]
 
     assert landmark.source_materialization_variables == ("los_icu",)
+
+
+def test_new_plan_timing_coordinates_compile_in_the_real_runtime(tmp_path) -> None:
+    from easyicu.webserver.pi_copilot.plan_decisions import compile_plan_decision
+
+    decision = compile_plan_decision(
+        decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        option_id="landmark_24h",
+        study={},
+        agent_plan={
+            "design_selection": {"candidates": [{"disposition": "selected"}]},
+            "steps": [{"model_requirements": [{
+                "analysis_role": "primary", "exposure_source": "lact_max",
+                "outcome": "death_max", "covariates": ["age", "sex"],
+            }]}],
+        },
+    )
+    timing = PrespecifiedSensitivitySpec.model_validate(
+        next(row for row in decision.patch["sensitivity_specs"] if row["axis"] == "timing")
+    )
+    universe = _universe(tmp_path)
+    frame = pd.read_parquet(universe).rename(columns={"death_time": "death_time_hours"})
+    frame["hospital_followup_time_hours"] = frame.pop("los_icu") * 24
+    frame.to_parquet(universe, index=False)
+    projection = compile_landmark_spline_runtime_projection(
+        study={"covariate_selection": "exact"},
+        sensitivity_specs=(timing, _specs()[1]),
+        primary_exposure="lact_max", primary_exposure_source="lact",
+        target_outcome="death", declared_covariates=("age", "sex"),
+        covariate_operationalizations={}, target_is_event_status=True,
+        universe_path=universe, scientific_configuration_sha256="e" * 64,
+    )
+    assert projection is not None
+    assert projection.authority["observation_duration_column"] == "hospital_followup_time_hours"
+    assert projection.authority["observation_duration_unit"] == "hours"
 
 
 def test_landmark_event_time_is_never_requested_from_source_modules() -> None:
@@ -168,8 +205,9 @@ def test_web_projection_requires_explicit_repeated_covariate_operationalization(
     assert caught.value.details["missing_operationalizations"] == ["charlson"]
 
 
+@pytest.mark.parametrize("duration_unit", ["days", "hours"])
 def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
-    tmp_path,
+    tmp_path, duration_unit,
 ) -> None:
     rng = np.random.default_rng(20260831)
     patient_count = 90
@@ -191,7 +229,7 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
             "death_time": np.where(
                 death == 1, rng.uniform(30.0, 180.0, size=n), np.nan
             ),
-            "los_icu": rng.uniform(1.2, 8.0, size=n),
+            "los_icu": rng.uniform(1.2, 8.0, size=n) * (24 if duration_unit == "hours" else 1),
             "age": age,
             "sex": rng.choice(["F", "M"], size=n),
             "charlson_first": rng.poisson(3.0, size=n).astype(float),
@@ -204,7 +242,7 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
     )
     projection = compile_landmark_spline_runtime_projection(
         study={"covariate_selection": "exact"},
-        sensitivity_specs=_specs(),
+        sensitivity_specs=_specs(duration_unit=duration_unit),
         primary_exposure="lact_max",
         primary_exposure_source="lact",
         target_outcome="death",
