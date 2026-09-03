@@ -88,7 +88,7 @@
     ['Lab — Hematology', '实验室-血液学', 25, false, false],
     ['Vasopressors', '血管活性药物', 17, false, false],
     ['Other medications', '其他药物', 49, false, false],
-    ['Renal & urine output', '肾脏与尿量', 40, false, false],
+    ['Renal & urine output', '肾脏与尿量', 56, false, false],
     ['Neurological', '神经系统', 14, false, false],
     ['Circulatory', '循环系统', 10, false, false],
     ['Other scores', '其他评分', 9, false, false],
