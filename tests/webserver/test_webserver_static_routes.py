@@ -371,7 +371,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260901-session-deeplink1" in index_html
+    assert "js/screens-guided.js?v=20260903-session-deeplink2" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -656,7 +656,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260901-session-deeplink1" in index_html
+    assert "js/screens-guided.js?v=20260903-session-deeplink2" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -2765,7 +2765,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260901-session-deeplink1" in index_html
+    assert "screens-guided.js?v=20260903-session-deeplink2" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
     assert "guided-projects.css?v=20260902-type-scale2" in index_html
     assert "gd-rail-heading" in projects_js
