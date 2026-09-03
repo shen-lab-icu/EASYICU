@@ -1,0 +1,61 @@
+"""Boundary checks for the extracted deterministic-repair helper module."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+
+def test_code_repair_helpers_entrypoints_are_importable() -> None:
+    from easyicu.research_agent.repairs.helpers import (
+        _extract_required_cols_list,
+        _family_allows_binary_model_repair,
+    )
+
+    # Behavioral canary: pure helpers keep their exact semantics after the move.
+    assert _family_allows_binary_model_repair(None) is True
+    assert _family_allows_binary_model_repair("association_study") is True
+    assert _family_allows_binary_model_repair("not_a_family") is False
+    assert _extract_required_cols_list('required_cols = ["a", "b"]') == ["a", "b"]
+    assert _extract_required_cols_list("no list here") == []
+
+
+def test_code_repair_reexports_helpers_by_identity() -> None:
+    """The split must be behavior-preserving: code_repair keeps exposing the
+    same objects so existing internal references (and pipeline imports) resolve
+    unchanged."""
+    from easyicu.research_agent.repairs import helpers as code_repair_helpers
+    from easyicu.research_agent.repairs import source as code_repair
+
+    for name in (
+        "_patch_primary_predictor_into_design_matrix",
+        "_strip_columns_from_list_literals",
+        "_extract_missing_index_columns",
+        "_patch_json_dump_numpy_key_sanitizer",
+        "_BINARY_MODEL_REPAIR_FAMILIES",
+        "_KEYERROR_NOT_IN_INDEX_RE",
+    ):
+        assert getattr(code_repair, name) is getattr(code_repair_helpers, name)
+
+
+def test_code_repair_helpers_is_a_leaf_module() -> None:
+    """The helper module must not import its parent repair implementation."""
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "src"
+        / "easyicu"
+        / "research_agent"
+        / "repairs"
+        / "helpers.py"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    assert not any(
+        isinstance(node, ast.ImportFrom)
+        and node.module
+        in {
+            "source",
+            "code_repair",
+            "easyicu.research_agent.repairs.source",
+        }
+        for node in tree.body
+    )

@@ -946,7 +946,7 @@
     const steps = Array.isArray(plan.analysis_plan) ? plan.analysis_plan.length : 0;
     const studyId = projectSeed && projectSeed.study_id ? projectSeed.study_id : '';
     const projectDir = projectSeed && projectSeed.project_dir ? projectSeed.project_dir : '';
-    const question = (projectSeed && (projectSeed.question || projectSeed.title)) || plan.research_question || (handoff && handoff.candidate_topic) || t('Idea-derived study', '由 idea 生成的研究');
+    const question = (projectSeed && (projectSeed.question || projectSeed.title)) || plan.research_question || (handoff && handoff.candidate_topic) || t('Research idea', '研究想法');
     const ready = !!projectSeed;
     const title = ready ? t('Project seed ready', '项目种子已就绪') : t('Handoff frozen', '交接已冻结');
     const body = ready
@@ -1193,7 +1193,7 @@
         ${ideaListContext(rows)}
         <div class="ag-studies">
           ${rows.length ? rows.map((r, i) => `
-            <button class="studycard ${String(r.id) === String(activeId) ? 'on' : ''}" data-idea-record="${esc(r.runId || r.id)}" data-idea-record-key="${esc(r.id)}" ${loadingRun === (r.runId || r.id) ? 'aria-disabled="true"' : ''}>
+            <button class="studycard ${String(r.id) === String(activeId) ? 'on' : ''}" data-idea-record="${esc(r.runId || r.id)}" data-idea-record-key="${esc(r.id)}" title="${esc(r.title)}" ${loadingRun === (r.runId || r.id) ? 'aria-disabled="true"' : ''}>
               <div class="sc-top">
                 <span class="sc-dot ${dotCls[r.status] || 'idle'}"></span>
                 <span class="sc-name">${esc(r.title)}</span>

@@ -599,6 +599,11 @@ _ZH_COUNTED_PATTERN = (
 _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"  # avoid mid-identifier digits
     r"(?P<value>"
+    r"(?:"  # --- Unicode scientific notation: 1 × 10⁻⁵² ---
+    r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)\s*[×x]\s*"
+    r"10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+"
+    r")"
+    r"|"
     r"(?:"  # --- general numeric form ---
     r"[-+]?"
     r"(?:"
@@ -906,6 +911,154 @@ def _walk_numeric_leaves(obj: Any, prefix: str = "") -> List[Tuple[str, str, flo
             literal, canonical = coerced
             out.append((prefix or "<root>", literal, canonical))
     return out
+
+
+def _walk_numeric_leaves_with_effect_scale(
+    obj: Any,
+    prefix: str = "",
+    inherited_effect_scale: Any = None,
+) -> List[Tuple[str, str, float, Any]]:
+    """Walk numeric leaves while carrying a row-local effect-measure label.
+
+    An effect scale is scoped to the mapping that declares it.  It may flow
+    through a list of homogeneous rows, but it does not flow through an
+    arbitrary nested mapping: nested result blocks can contain a different
+    estimand and must declare or expose their own scale.  A row that contains
+    an explicit ratio field (for example ``hazard_ratio`` beside ``ci_low``)
+    exposes enough local identity for its generic interval fields.
+    """
+
+    out: List[Tuple[str, str, float, Any]] = []
+    local_effect_scale = inherited_effect_scale
+    if isinstance(obj, dict):
+        declared_here = None
+        for key in ("effect_scale", "effect_measure"):
+            candidate = obj.get(key)
+            if candidate not in (None, ""):
+                declared_here = candidate
+                break
+        if declared_here is None:
+            sibling_scales = [
+                scale
+                for field, scale in (
+                    ("odds_ratio", "odds_ratio"),
+                    ("hazard_ratio", "hazard_ratio"),
+                    ("risk_ratio", "risk_ratio"),
+                    ("relative_risk", "risk_ratio"),
+                )
+                if obj.get(field) not in (None, "")
+            ]
+            if len(set(sibling_scales)) == 1:
+                declared_here = sibling_scales[0]
+        if declared_here is not None:
+            local_effect_scale = declared_here
+        for key, value in obj.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            # Mapping boundaries are estimand boundaries.  Lists retain the
+            # current scale because they commonly encode homogeneous rows or
+            # a two-element interval owned by this mapping.
+            child_effect_scale = (
+                None if isinstance(value, dict) else local_effect_scale
+            )
+            out.extend(
+                _walk_numeric_leaves_with_effect_scale(
+                    value,
+                    child,
+                    child_effect_scale,
+                )
+            )
+    elif isinstance(obj, (list, tuple)):
+        for index, value in enumerate(obj):
+            child = f"{prefix}[{index}]"
+            out.extend(
+                _walk_numeric_leaves_with_effect_scale(
+                    value,
+                    child,
+                    local_effect_scale,
+                )
+            )
+    else:
+        coerced = _coerce_numeric_literal(obj)
+        if coerced is not None:
+            literal, canonical = coerced
+            out.append(
+                (prefix or "<root>", literal, canonical, local_effect_scale)
+            )
+    return out
+
+
+_HEADLINE_NUMERIC_ROOT_PRIORITY: Tuple[str, ...] = (
+    "primary_estimate",
+    "adjusted_effect",
+    "primary_effect",
+    "primary_or",
+    "primary_hr",
+    "primary_ci_low",
+    "primary_ci_high",
+    "primary_estimate_interval",
+    "primary_or_ci",
+    "primary_hr_ci",
+    "primary_effect_ci",
+    "estimate",
+    "ci_low",
+    "ci_high",
+    "p_value",
+    "sample_size",
+    "n_total",
+    "n_events",
+    "complete_case_n",
+)
+
+_HEADLINE_NUMERIC_LEAF_PRIORITY: Tuple[str, ...] = (
+    "auroc",
+    "auc",
+    "brier_score",
+    "average_precision",
+    "calibration_intercept",
+    "calibration_slope",
+    "auroc_ci_low",
+    "auroc_ci_high",
+    "auc_ci_low",
+    "auc_ci_high",
+    "event_rate",
+    "evaluation_n",
+    "event_n",
+)
+
+
+def _prioritize_headline_numeric_leaves(
+    leaves: Sequence[Tuple[str, str, float, Any]],
+) -> List[Tuple[str, str, float, Any]]:
+    """Put manuscript-facing summary numerics ahead of nested diagnostics.
+
+    The per-step registry cap is a safety boundary, not a scientific priority
+    rule.  Large nested model diagnostics can otherwise consume the cap before
+    top-level effect, interval, and cohort-size fields are reached.  Preserve
+    original traversal order within every priority class and for all remaining
+    leaves so producer ordering remains deterministic.
+    """
+
+    root_priority = {
+        root: index for index, root in enumerate(_HEADLINE_NUMERIC_ROOT_PRIORITY)
+    }
+    leaf_priority = {
+        leaf: index for index, leaf in enumerate(_HEADLINE_NUMERIC_LEAF_PRIORITY)
+    }
+
+    def _sort_key(
+        indexed_leaf: Tuple[int, Tuple[str, str, float, Any]],
+    ) -> Tuple[int, int, int]:
+        original_index, leaf = indexed_leaf
+        path = leaf[0]
+        root = path.split(".", 1)[0].split("[", 1)[0]
+        terminal = path.rsplit(".", 1)[-1].split("[", 1)[0]
+        if root in root_priority:
+            return 0, root_priority[root], original_index
+        if terminal in leaf_priority:
+            return 1, leaf_priority[terminal], original_index
+        return 2, 0, original_index
+
+    return [leaf for _, leaf in sorted(enumerate(leaves), key=_sort_key)]
 
 
 def sha256_of_file(path: Path, chunk: int = 1024 * 1024) -> str:
@@ -2339,12 +2492,11 @@ class EvidenceStore:
         ``max_leaves`` caps the number of claims registered per call to
         prevent a single step that dumps a full interaction matrix into
         ``step_summary`` from drowning the registry. When the cap is
-        exceeded the **first** ``max_leaves`` leaves (typically the most
-        salient summary-level fields like ``primary_or``) are kept and
-        the remainder is silently skipped; a single info-level marker
-        claim records that truncation happened. ``None`` (the default
-        when called directly) disables the cap. Pipelines pass the
-        ``PipelineConfig.max_numeric_claims_per_step`` value.
+        exceeded, headline top-level effect, interval, and cohort-size fields
+        are registered first; remaining leaves retain producer traversal order.
+        A single info-level marker claim records that truncation happened.
+        ``None`` (the default when called directly) disables the cap. Pipelines
+        pass the ``PipelineConfig.max_numeric_claims_per_step`` value.
         """
         # Qualitative scientific authority is validated before any numeric
         # mutation.  The phase-level success transaction then publishes both
@@ -2365,20 +2517,24 @@ class EvidenceStore:
                 summary=summary,
                 drafts=scientific_claim_drafts,
             )
-        leaves = _walk_numeric_leaves(summary)
         declared_effect_scale = (
             summary.get("effect_scale") if isinstance(summary, Mapping) else None
+        )
+        leaves = _walk_numeric_leaves_with_effect_scale(
+            summary,
+            inherited_effect_scale=declared_effect_scale,
         )
         truncated = False
         if max_leaves is not None and max_leaves > 0 and len(leaves) > max_leaves:
             truncated_count = len(leaves) - max_leaves
+            leaves = _prioritize_headline_numeric_leaves(leaves)
             leaves = leaves[:max_leaves]
             truncated = True
         else:
             truncated_count = 0
         registered: List[NumericClaim] = []
         with self._lock:
-            for path, literal, canonical in leaves:
+            for path, literal, canonical, local_effect_scale in leaves:
                 registered.append(
                     self._upsert_numeric_claim_in_memory(
                         value=literal,
@@ -2387,7 +2543,7 @@ class EvidenceStore:
                         step_id=step_id,
                         source_field=path,
                         tolerance=tolerance,
-                        effect_scale=declared_effect_scale,
+                        effect_scale=local_effect_scale,
                     )
                 )
             if truncated:
@@ -2791,7 +2947,7 @@ class EvidenceStore:
                 if abs(candidate) > 1e-9:
                     rel = abs(candidate - canonical) / abs(candidate)
                 else:
-                    rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+                    rel = float("inf")
                 abs_window = max(
                     display_abs_tol, window * max(abs(candidate), abs(canonical))
                 )
@@ -2960,6 +3116,20 @@ class EvidenceStore:
             record.evidence_id: record
             for record in self.current_verified_records(per_step_records)
         }
+        current_identity_scales: Dict[Tuple[str, str, str], Any] = {}
+        for raw in per_step_records:
+            step_id = str(raw.get("step_id") or "").strip()
+            evidence_id = str(raw.get("step_summary_evidence_id") or "").strip()
+            summary = raw.get("step_summary")
+            if not step_id or not evidence_id or not isinstance(summary, Mapping):
+                continue
+            for path, _literal, _canonical, effect_scale in (
+                _walk_numeric_leaves_with_effect_scale(
+                    summary,
+                    inherited_effect_scale=summary.get("effect_scale"),
+                )
+            ):
+                current_identity_scales[(step_id, evidence_id, path)] = effect_scale
         active_ids_by_step = active_step_evidence_ids_by_step(per_step_records)
         run_level_contracts = {
             "research_context": ("log", "pipeline"),
@@ -2977,6 +3147,18 @@ class EvidenceStore:
                     record_step == claim_step
                     and claim.evidence_id in active_ids_by_step.get(record_step, set())
                 ):
+                    identity_key = (
+                        claim_step,
+                        claim.evidence_id,
+                        claim.source_field,
+                    )
+                    if identity_key in current_identity_scales:
+                        payload = claim.to_dict()
+                        payload.pop("effect_scale", None)
+                        current_scale = current_identity_scales[identity_key]
+                        if current_scale not in (None, ""):
+                            payload["effect_scale"] = current_scale
+                        claim = NumericClaim.from_dict(payload)
                     authoritative.append(claim)
                 continue
 
@@ -3001,9 +3183,16 @@ class EvidenceStore:
 
     def enforce_evidence_bound_scaffold(self, scaffold: str) -> tuple[str, List[str]]:
         """Apply the manuscript claim policy and enforce this store's mode."""
+        verified_ids = {record.evidence_id for record in self.verified_records()}
+
+        def resolve_evidence(ref: str) -> bool:
+            record = self.get(ref)
+            return record is not None and record.evidence_id in verified_ids
+
         result = filter_evidence_bound_scaffold(
             scaffold,
             resolve_claim=self._scientific_claim_by_ref,
+            resolve_evidence=resolve_evidence,
         )
         if result.filtered_sentences and (
             self.enforcement_mode is EvidenceEnforcementMode.STRICT
@@ -3193,6 +3382,18 @@ def _target_basename_stem(target: Path, evidence_id: str) -> str:
     return Path(name.split("__", 1)[-1]).stem
 
 
+def evidence_artifact_basename_stem(target: Path, evidence_id: str) -> str:
+    """Read the original artefact stem out of a registered evidence filename.
+
+    The ``<evidence_id>__<filename>`` layout is owned here, including the
+    doubled-underscore case an id ending in ``_`` produces.  Consumers that need
+    to group a logical artefact across its exports must use this reader instead
+    of splitting the filename themselves.
+    """
+
+    return _target_basename_stem(target, evidence_id)
+
+
 def _id_prefix(kind: str, stem: str) -> str:
     safe = "".join(c for c in stem if c.isalnum() or c in "_-").strip("_")[:32]
     return f"{kind}_{safe}" if safe else kind
@@ -3209,6 +3410,7 @@ def _binding_caveat(record: EvidenceRecord, *, verbose: bool = False) -> str:
 
 __all__ = [
     "EvidenceStore",
+    "evidence_artifact_basename_stem",
     "registered_source_fingerprints_match",
     "EvidenceAuthorityIntegrityError",
     "EvidenceEnforcementMode",

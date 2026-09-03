@@ -46,11 +46,13 @@ from ..schema import (
     TableOneSpec,
     TableOneVariableSpec,
 )
+from ..research_context.typed import declared_domain_for_variable
 from .analysis_types import (
     canonical_analysis_family,
     get_analysis_type,
     validate_host_authorized_analysis_family,
 )
+from .adjustment_authority import AdjustmentSetAuthority
 from .cohort_contract import (
     CohortDefinition,
     CohortSchemaError,
@@ -83,6 +85,7 @@ from .scientific_action_catalog import (
     validate_plan_scientific_action_selections,
 )
 from .scientific_review import post_baseline_exposure
+from .sensitivity_authority import FUNCTIONAL_FORM_EXECUTABLE_METHODS
 
 
 _OWNER = "easyicu.planning.progressive_compiler_v1"
@@ -105,6 +108,7 @@ _MODULE_OUTPUT_ROLES: Mapping[str, frozenset[str]] = {
     "adjusted_association": frozenset(
         {"adjusted_association_estimates", "adjusted_association_model"}
     ),
+    "absolute_risk_context": frozenset({"absolute_risk_context"}),
     "robustness_replay": frozenset(
         {
             "robustness_matrix",
@@ -127,14 +131,24 @@ _METHOD_BY_MODULE: Mapping[str, str] = {
     "exposure_outcome_distribution": "descriptive",
     "measurement_audit": "missing_data",
     "adjusted_association": "adjusted_association_models",
+    "absolute_risk_context": "absolute_risk_context",
     "robustness_replay": "robustness_sensitivity",
     "visualization": "visualization",
-    "report": "feasibility_protocol",
+    "report": "scientific_reporting",
 }
+
+
+def progressive_output_roles_for_module(module_id: str) -> tuple[str, ...]:
+    """Return the compiler-owned semantic output-role vocabulary for a module."""
+
+    return tuple(sorted(_MODULE_OUTPUT_ROLES.get(str(module_id or ""), ())))
+
+
 _COHORT_FRAME_ONLY_MODULES = frozenset(
     {
         "cohort_definition",
         "table_one",
+        "absolute_risk_context",
         "exposure_outcome_distribution",
         "measurement_audit",
         "adjusted_association",
@@ -171,6 +185,98 @@ def _fail(
 
 def _variable_index(context: ResearchContext) -> dict[str, Any]:
     return {variable.name: variable for variable in context.variables}
+
+
+def _binary_level_index(value: Any) -> int | None:
+    token = str("" if value is None else value).strip().casefold()
+    if token in {"0", "0.0", "false", "no", "n", "absent", "negative"}:
+        return 0
+    if token in {"1", "1.0", "true", "yes", "y", "present", "positive"}:
+        return 1
+    return None
+
+
+def required_binary_display_label_scopes(
+    context: ResearchContext,
+    steps: Sequence[Any],
+) -> tuple[str, ...]:
+    """Return primary binary figure scopes that need Planner-owned labels.
+
+    An outline does not yet contain executable ``primary_exposure`` fields, so
+    the host may use only the context-declared primary exposure when that exact
+    variable is present in a distribution step. A compiled skeleton supplies
+    the field directly. In both cases the observed domain must be a closed
+    binary encoding understood by the figure layer; the host never invents
+    scientific labels.
+    """
+
+    variables = _variable_index(context)
+    required: list[str] = []
+    for step in steps:
+        if getattr(step, "module_id", None) != "exposure_outcome_distribution":
+            continue
+        scope = str(getattr(step, "primary_exposure", None) or "").strip()
+        if not scope:
+            candidate = str(context.primary_exposure or "").strip()
+            variable_names = tuple(getattr(step, "variable_names", ()) or ())
+            if candidate and candidate in variable_names:
+                scope = candidate
+        descriptor = variables.get(scope)
+        domain = descriptor.observed_domain if descriptor is not None else None
+        if not scope or not isinstance(domain, Mapping) or not domain.get("is_binary"):
+            continue
+        levels = observed_levels_for(name=scope, variables=variables)
+        if {_binary_level_index(level) for level in levels} != {0, 1}:
+            continue
+        if scope not in required:
+            required.append(scope)
+    return tuple(required)
+
+
+def required_reader_display_label_keys(
+    context: ResearchContext,
+    design_selection: Any,
+) -> tuple[str, ...]:
+    """Return exact plan variables that need Planner-owned reader labels.
+
+    The Web plan review renders the selected design's ``required_variables``.
+    Those identifiers are executable coordinates, not presentation copy, so
+    the Planner must bind their reader-facing names in the same sealed
+    foundation instead of leaving the UI to guess scientific semantics.
+    """
+
+    selected = getattr(design_selection, "selected", None)
+    if selected is None:
+        return ()
+    id_columns = set(context.cohort.id_columns)
+    variable_roles = {
+        variable.name: str(getattr(variable.role, "value", variable.role) or "")
+        .strip()
+        .casefold()
+        for variable in context.variables
+    }
+    return tuple(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in getattr(selected, "required_variables", ()) or ()
+            if str(value or "").strip()
+            and str(value or "").strip() not in id_columns
+            and variable_roles.get(str(value or "").strip()) != "id"
+        )
+    )
+
+
+def _is_mechanical_identifier_label(key: str, value: str) -> bool:
+    """Reject underscore replacement masquerading as reader-facing copy."""
+
+    if not any(character in key for character in "_-0123456789"):
+        return False
+    normalized_key = " ".join(key.casefold().split())
+    humanized_key = " ".join(
+        key.casefold().replace("_", " ").replace("-", " ").split()
+    )
+    normalized_value = " ".join(value.casefold().split())
+    return normalized_value in {normalized_key, humanized_key}
 
 
 def progressive_cohort_concept_ids(
@@ -276,10 +382,59 @@ def validate_progressive_foundation(
     *,
     context: ResearchContext,
     analysis_type: str,
+    require_robustness_intent: bool = False,
+    robustness_replay_required: bool = False,
+    required_binary_display_label_scopes: Sequence[str] = (),
+    required_reader_display_label_keys: Sequence[str] = (),
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
     _validate_progressive_cohort_intent(foundation.cohort, context=context)
+    labels = {
+        str(item.key or "").strip(): " ".join(str(item.value or "").split())
+        for item in foundation.display_labels
+    }
+    for raw_key in dict.fromkeys(required_reader_display_label_keys):
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        value = labels.get(key, "")
+        if not value or _is_mechanical_identifier_label(key, value):
+            raise _fail(
+                "progressive_required_reader_display_labels_missing",
+                "the selected design requires a Planner-authored reader label "
+                f"for {key!r}; copy the exact variable key and derive a concise "
+                "clinical label only from sealed concept metadata",
+                path="display_labels",
+                detail={"required_key": key},
+            )
+    for raw_scope in dict.fromkeys(required_binary_display_label_scopes):
+        scope = str(raw_scope or "").strip()
+        if not scope:
+            continue
+        reference = labels.get(f"{scope}=0", "")
+        comparison = labels.get(f"{scope}=1", "")
+        if (
+            not reference
+            or not comparison
+            or reference.casefold() == comparison.casefold()
+        ):
+            raise _fail(
+                "progressive_required_binary_display_labels_missing",
+                "a primary binary figure requires distinct Planner-authored "
+                f"reader labels for {scope!r}; declare exactly {scope}=0 and "
+                f"{scope}=1 from the sealed concept metadata",
+                path="display_labels",
+                detail={"required_scope": scope},
+            )
+    if robustness_replay_required and not foundation.robustness_intents:
+        raise _fail(
+            "progressive_foundation_robustness_intent_missing",
+            "the validated outline declares a robustness_replay step, but the "
+            "foundation supplies no replayable robustness intent; add at least "
+            "one prespecified host-replayable intent or remove the outline step",
+            path="robustness_intents",
+        )
     if (
         str(analysis_type or "").strip().casefold() == "descriptive_epidemiology"
         and foundation.robustness_intents
@@ -289,6 +444,14 @@ def validate_progressive_foundation(
             "descriptive_epidemiology has no fitted primary effect or interval; "
             "use typed measurement and denominator audits instead of "
             "effect-style robustness intents",
+            path="robustness_intents",
+        )
+    if require_robustness_intent and not foundation.robustness_intents:
+        raise _fail(
+            "progressive_required_robustness_intent_missing",
+            "the binding article contract requires at least one executable "
+            "robustness specification; progressive v1 must declare an explicit "
+            "complete-case missing-data intent in the plan foundation",
             path="robustness_intents",
         )
     variables = {item.name: item for item in context.variables}
@@ -308,8 +471,7 @@ def validate_progressive_foundation(
             if (
                 (descriptor := variables.get(name)) is not None
                 and descriptor.observation_semantics is not None
-                and descriptor.observation_semantics.kind
-                == "conditional_event_time"
+                and descriptor.observation_semantics.kind == "conditional_event_time"
             )
         ]
         if conditional_event_times:
@@ -318,10 +480,7 @@ def validate_progressive_foundation(
                 "complete-case membership cannot require conditional event-time "
                 "columns whose event-absent rows are typed as not applicable: "
                 + ", ".join(conditional_event_times),
-                path=(
-                    f"robustness_intents.{intent.spec_id}."
-                    "complete_case_variables"
-                ),
+                path=(f"robustness_intents.{intent.spec_id}.complete_case_variables"),
             )
 
 
@@ -389,7 +548,37 @@ def _compile_robustness_intents(
     return compiled
 
 
+def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
+    """Recognise the one provisional baseline shape promised to the Planner.
+
+    When metadata-only planning has no closed grouping domain, the outline
+    contract permits one auxiliary custom step to own baseline context until
+    post-extraction re-planning.  Product identity, role, and module shape are
+    the authority for that closed exception; ``custom_method`` is descriptive
+    model prose and must not become a hidden allowlist.  Project the historical
+    ``artifact:baseline_context`` spelling onto the registered cohort-summary
+    table instead of sending synonymous method labels back to the model.
+    """
+
+    return (
+        step.module_id == "custom_analysis"
+        and step.planned_analysis_role == "auxiliary"
+        and step.scientific_action_id is None
+        and step.custom_method is not None
+        and len(step.outputs) == 1
+        and step.outputs[0].semantic_role == "custom"
+        and step.outputs[0].product_id
+        in {
+            "artifact:baseline_context",
+            "artifact:baseline_context_summary",
+            "table:cohort_summary",
+        }
+    )
+
+
 def _canonical_outputs(step: ProgressiveSkeletonStep) -> list[tuple[str, str]]:
+    if _is_ungrouped_baseline_summary(step):
+        return [("table:cohort_summary", "custom")]
     standard = list(PROGRESSIVE_HOST_COMPILED_OUTPUTS.get(step.module_id, ()))
     declared = [(item.product_id, item.semantic_role) for item in step.outputs]
     by_product: dict[str, str] = {}
@@ -482,11 +671,7 @@ def _compile_ordered_stratified_contract(
         observed_levels_for(name=binary_outcome, variables=dict(variables))
     )
     event_index = int(parent.event_level_index)
-    if (
-        len(levels) < 3
-        or binary_levels != [0, 1]
-        or event_index != 1
-    ):
+    if len(levels) < 3 or binary_levels != [0, 1] or event_index != 1:
         raise _fail(
             "progressive_ordered_trend_domain_unsupported",
             "the v1 deterministic owner requires >=3 ordered exposure levels "
@@ -608,6 +793,8 @@ def _validate_scientific_action_runtime_contract(
             path="product_inputs",
             detail={"non_dependency_producers": non_dependencies},
         )
+
+
 def _compile_binary_association_sensitivity_capability(
     *,
     skeleton: ProgressivePlanSkeleton,
@@ -623,9 +810,7 @@ def _compile_binary_association_sensitivity_capability(
         if semantic_role == "scientific_sensitivity"
     ]
     parsed_output = (
-        typed_product(scientific_outputs[0])
-        if len(scientific_outputs) == 1
-        else None
+        typed_product(scientific_outputs[0]) if len(scientific_outputs) == 1 else None
     )
     if not scientific_outputs:
         return None
@@ -644,6 +829,19 @@ def _compile_binary_association_sensitivity_capability(
             step=step,
             step_index=step_index,
             path="outputs",
+        )
+    if (
+        "functional_form" in str(step.step_id or "").casefold()
+        and str(step.custom_method or "").strip().casefold()
+        not in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+    ):
+        raise _fail(
+            "progressive_functional_form_method_unsupported",
+            "functional-form sensitivity must select one exact host-supported "
+            "method: " + ", ".join(sorted(FUNCTIONAL_FORM_EXECUTABLE_METHODS)),
+            step=step,
+            step_index=step_index,
+            path="custom_method",
         )
     parent_refs = [
         reference
@@ -760,9 +958,7 @@ def _compile_table_one(
     step_index: int,
 ) -> TableOneSpec:
     group_by = str(step.table_one_group_by or "")
-    row_intents = [
-        item for item in step.table_one_variables if item.name != group_by
-    ]
+    row_intents = [item for item in step.table_one_variables if item.name != group_by]
     if not row_intents:
         raise _fail(
             "progressive_table_one_rows_missing",
@@ -974,10 +1170,7 @@ def _compile_distribution(
         step=step,
         step_index=step_index,
     )
-    if (
-        step.reference_exposure_level_index
-        == step.comparison_exposure_level_index
-    ):
+    if step.reference_exposure_level_index == step.comparison_exposure_level_index:
         raise _fail(
             "progressive_distribution_contrast_not_distinct",
             "risk-difference comparison and reference levels must differ",
@@ -1024,6 +1217,7 @@ def _compile_model_terms(
     variables: Mapping[str, Any],
     step: ProgressiveSkeletonStep,
     step_index: int,
+    authorized_time_zero_covariates: frozenset[str] = frozenset(),
 ) -> tuple[list[ModelTermSpec], list[str], list[str], str, str]:
     names = [item.name for item in step.model_terms]
     _require_variables(
@@ -1043,13 +1237,60 @@ def _compile_model_terms(
         )
     compiled: list[ModelTermSpec] = []
     for index, item in enumerate(step.model_terms):
+        variable = variables[item.name]
+        variable_role = str(getattr(variable.role, "value", variable.role) or "")
+        if item.role == "covariate" and item.name != step.outcome and variable_role in {
+            "id",
+            "time",
+            "index",
+            "meta",
+            "outcome",
+        }:
+            raise _fail(
+                "progressive_covariate_semantic_role_ineligible",
+                f"covariate {item.name!r} has owner-declared semantic role "
+                f"{variable_role!r}; baseline adjustment covariates cannot be "
+                "identifiers, time coordinates, metadata, or outcomes",
+                step=step,
+                step_index=step_index,
+                path=f"model_terms[{index}]",
+            )
+        if (
+            item.role == "covariate"
+            and variable_role
+            in {"vital", "lab", "intervention", "ordinal_score", "composite_score"}
+            and item.name not in authorized_time_zero_covariates
+        ):
+            raise _fail(
+                "progressive_covariate_time_zero_authority_missing",
+                f"covariate {item.name!r} has owner-declared dynamic clinical "
+                f"role {variable_role!r}, but no exact user-reviewed "
+                "at-or-before-time-zero authority; availability in the source "
+                "catalog is not baseline adjustment authority",
+                step=step,
+                step_index=step_index,
+                path=f"model_terms[{index}]",
+            )
         observed = observed_levels_for(name=item.name, variables=dict(variables))
+        declared, _declared_basis = declared_domain_for_variable(
+            variables[item.name]
+        )
+        closed_domain = observed or list(declared or ())
         if item.coding == "continuous":
+            if declared:
+                raise _fail(
+                    "progressive_model_continuous_coding_declared_domain",
+                    f"continuous term {item.name!r} conflicts with its "
+                    f"{_declared_basis or 'declared'} closed domain",
+                    step=step,
+                    step_index=step_index,
+                    path=f"model_terms[{index}]",
+                )
             levels = None
             reference = None
             transform = "identity"
         elif item.coding == "ordinal_linear":
-            if len(observed) < 2:
+            if len(closed_domain) < 2:
                 raise _fail(
                     "progressive_model_levels_unavailable",
                     f"ordinal term {item.name!r} has no closed ordered domain",
@@ -1057,13 +1298,13 @@ def _compile_model_terms(
                     step_index=step_index,
                     path=f"model_terms[{index}]",
                 )
-            levels = [level_spelling(value) for value in observed]
+            levels = [level_spelling(value) for value in closed_domain]
             reference = None
             transform = "declared_level_index"
         else:
             minimum = 2
-            if len(observed) < minimum or (
-                item.coding == "binary" and len(observed) != 2
+            if len(closed_domain) < minimum or (
+                item.coding == "binary" and len(closed_domain) != 2
             ):
                 raise _fail(
                     "progressive_model_levels_unavailable",
@@ -1072,9 +1313,9 @@ def _compile_model_terms(
                     step_index=step_index,
                     path=f"model_terms[{index}]",
                 )
-            levels = [level_spelling(value) for value in observed]
+            levels = [level_spelling(value) for value in closed_domain]
             reference_value = _level_at(
-                observed,
+                closed_domain,
                 item.reference_level_index,
                 label=f"model_terms[{index}].reference_level_index",
                 step=step,
@@ -1104,12 +1345,8 @@ def _compile_model_terms(
     covariates = [item.name for item in compiled if item.role == "covariate"]
     exposure_term = exposures[0]
     treatment_coded = exposure_term.coding in {"binary", "categorical"}
-    exposure_levels = (
-        list(exposure_term.levels or ()) if treatment_coded else []
-    )
-    reference = (
-        str(exposure_term.reference_level or "") if treatment_coded else ""
-    )
+    exposure_levels = list(exposure_term.levels or ()) if treatment_coded else []
+    reference = str(exposure_term.reference_level or "") if treatment_coded else ""
     if exposure_levels:
         if len(exposure_levels) == 2:
             primary_contrast = next(
@@ -1178,11 +1415,21 @@ def _compile_adjusted_association(
         step_index=step_index,
         path="adjusted_association",
     )
+    adjustment_authority = AdjustmentSetAuthority.from_context(context)
+    temporal_roles = adjustment_authority.operational_temporal_roles
+    authorized_time_zero_covariates = frozenset(
+        name
+        for name in adjustment_authority.operational_covariates
+        if adjustment_authority.selection == "exact"
+        and temporal_roles.get(name)
+        in {"baseline_static", "at_or_before_time_zero"}
+    )
     terms, covariates, exposure_levels, reference, primary_contrast = (
         _compile_model_terms(
             variables=variables,
             step=step,
             step_index=step_index,
+            authorized_time_zero_covariates=authorized_time_zero_covariates,
         )
     )
     if outcome in covariates:
@@ -1247,8 +1494,7 @@ def _compile_measurement_spec(
         finding = exc.errors(include_input=False)[0]
         raise _fail(
             "progressive_measurement_audit_spec_invalid",
-            "compiled measurement audit violates its typed contract: "
-            f"{finding['msg']}",
+            f"compiled measurement audit violates its typed contract: {finding['msg']}",
             step=step,
             step_index=step_index,
             path="outputs",
@@ -1275,8 +1521,7 @@ def _compile_robustness_spec(
         finding = exc.errors(include_input=False)[0]
         raise _fail(
             "progressive_robustness_replay_spec_invalid",
-            "compiled robustness replay violates its typed contract: "
-            f"{finding['msg']}",
+            f"compiled robustness replay violates its typed contract: {finding['msg']}",
             step=step,
             step_index=step_index,
             path="outputs",
@@ -1306,6 +1551,10 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    if step.module_id == "absolute_risk_context":
+        raw_names.extend(
+            value for value in (step.primary_exposure, step.outcome) if value
+        )
     visualization_raw_names = [
         name for name in raw_names if name not in reserved_coordinates
     ]
@@ -1376,14 +1625,16 @@ def _compile_inputs(
     if (
         step.module_id not in {"cohort_definition", "visualization"}
         and not (
-            runtime_contract is not None
-            and runtime_contract.required_product_inputs
+            runtime_contract is not None and runtime_contract.required_product_inputs
         )
         and "artifact:analysis_cohort" in producers
     ):
         inputs.append("artifact:analysis_cohort")
     refs = list(step.product_inputs)
-    if step.module_id == "visualization" and len(refs) > _MAX_VISUALIZATION_SOURCE_PRODUCTS:
+    if (
+        step.module_id == "visualization"
+        and len(refs) > _MAX_VISUALIZATION_SOURCE_PRODUCTS
+    ):
         raise _fail(
             "progressive_visualization_source_budget_exceeded",
             "a rendering-only visualization binds too many direct result sources "
@@ -1422,9 +1673,7 @@ def _compile_inputs(
         )
         if (
             runtime_contract is not None
-            and (
-                reference.producer_step_id != owner or owner not in step.depends_on
-            )
+            and (reference.producer_step_id != owner or owner not in step.depends_on)
         ) or (strict_visualization_reference and owner not in step.depends_on):
             raise _fail(
                 "progressive_product_dependency_mismatch",
@@ -1448,13 +1697,10 @@ def _compile_inputs(
         # those steps, but its table/report product must not become a second
         # data-frame input that the executor neither reads nor receipts.
         parsed_reference = typed_product(reference.product_id)
-        if (
-            step.module_id not in _COHORT_FRAME_ONLY_MODULES
-            and not (
-                step.module_id == "report"
-                and parsed_reference is not None
-                and parsed_reference[0] == "figure"
-            )
+        if step.module_id not in _COHORT_FRAME_ONLY_MODULES and not (
+            step.module_id == "report"
+            and parsed_reference is not None
+            and parsed_reference[0] == "figure"
         ):
             inputs.append(reference.product_id)
     inputs = list(dict.fromkeys(inputs))
@@ -1742,8 +1988,26 @@ def _compile_one_step(
     method = (
         "ordinal_stratified_descriptive_analysis"
         if ordered_stratified_contract
+        else "descriptive_cohort_summary"
+        if _is_ungrouped_baseline_summary(step)
         else step.custom_method or _METHOD_BY_MODULE[step.module_id]
     )
+    sensitivity_spec_ids = list(step.sensitivity_spec_ids)
+    if step.module_id == "robustness_replay":
+        # Foundation robustness intents are already validated, typed host
+        # authority.  The model chooses the replay step layout, but it must not
+        # be able to orphan one of those intents merely by omitting its id from
+        # the step materialization.  Preserve any separately prespecified
+        # timing/functional-form ids and mechanically close the foundation ids
+        # onto their registered replay owner.
+        sensitivity_spec_ids = list(
+            dict.fromkeys(
+                [
+                    *sensitivity_spec_ids,
+                    *(intent.spec_id for intent in skeleton.robustness_intents),
+                ]
+            )
+        )
     kwargs: dict[str, Any] = {
         "step_id": step.step_id,
         "planned_analysis_role": step.planned_analysis_role,
@@ -1753,7 +2017,7 @@ def _compile_one_step(
         "method": method,
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],
-        "sensitivity_spec_ids": list(step.sensitivity_spec_ids),
+        "sensitivity_spec_ids": sensitivity_spec_ids,
         "literature_citation_keys": citation_keys,
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,
@@ -2052,10 +2316,17 @@ def compile_progressive_plan(
         ),
         context=context,
         analysis_type=canonical_type,
+        robustness_replay_required=any(
+            step.module_id == "robustness_replay" for step in skeleton.steps
+        ),
+        required_binary_display_label_scopes=(
+            required_binary_display_label_scopes(context, skeleton.steps)
+        ),
+        required_reader_display_label_keys=(
+            required_reader_display_label_keys(context, skeleton.design_selection)
+        ),
     )
-    allowed_modules = set(
-        progressive_module_ids_for_analysis_types((canonical_type,))
-    )
+    allowed_modules = set(progressive_module_ids_for_analysis_types((canonical_type,)))
     for index, step in enumerate(skeleton.steps):
         if step.module_id not in allowed_modules:
             raise _fail(
@@ -2184,9 +2455,7 @@ def compile_progressive_plan(
                 host_reporting_source_key if index == target_index else None
             ),
             host_interpretation_source_key=(
-                host_interpretation_source_key
-                if skeleton_step.model_terms
-                else None
+                host_interpretation_source_key if skeleton_step.model_terms else None
             ),
             host_missing_data_binding=(
                 host_missing_data_binding
@@ -2246,9 +2515,12 @@ def compile_progressive_plan(
                 {
                     "research_question": context.research_question,
                     "analysis_type": canonical_type,
-                    "steps": [
-                        step.model_dump(mode="json") for step in compiled_steps
-                    ],
+                    "design_selection": (
+                        skeleton.design_selection.model_dump(mode="json")
+                        if skeleton.design_selection is not None
+                        else None
+                    ),
+                    "steps": [step.model_dump(mode="json") for step in compiled_steps],
                     "cohort": cohort.to_dict(),
                     "endpoint": (
                         context.endpoint.model_dump(mode="json")
@@ -2292,5 +2564,7 @@ __all__ = [
     "assert_immutable_prefix",
     "compile_progressive_plan",
     "progressive_cohort_concept_ids",
+    "required_binary_display_label_scopes",
+    "required_reader_display_label_keys",
     "validate_progressive_foundation",
 ]

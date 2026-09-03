@@ -30,6 +30,10 @@ from typing import Literal, Tuple
 from ..contracts.method_kernels import CURATED_METHOD_KERNELS
 from ..contracts.method_packages import BASELINE_PACKAGES, CURATED_METHOD_PACKAGES
 from .analysis_method_suite import AnalysisMethod, get_suite
+from .method_adapter_catalog import (
+    MethodAdapterContract,
+    get_method_adapter_contract,
+)
 from .analysis_types import (
     CATALOG_DETAIL_LADDER,
     canonical_analysis_family,
@@ -147,7 +151,25 @@ class ScientificAction:
     alternative_action_ids: Tuple[str, ...] = ()
     primary_for_analysis_types: Tuple[str, ...] = ()
     notes: str = ""
+    method_adapter: MethodAdapterContract | None = None
     runtime_contract: ScientificActionRuntimeContract | None = None
+
+    @property
+    def adapter_status(
+        self,
+    ) -> Literal[
+        "full_action",
+        "typed_subcontract",
+        "supporting_only",
+        "none",
+    ]:
+        """Say whether host code owns the whole action or only supports it."""
+
+        if self.method_adapter is not None:
+            return self.method_adapter.scope
+        if self.execution_mode == "host_owned":
+            return "supporting_only"
+        return "none"
 
 
 @dataclass(frozen=True)
@@ -265,6 +287,7 @@ def _compile_action(
         )
     action_id = f"{family}.{method.key}"
     runtime_contract = _RUNTIME_CONTRACTS.get(action_id)
+    method_adapter = get_method_adapter_contract(action_id)
     return ScientificAction(
         action_id=action_id,
         analysis_family=family,
@@ -272,7 +295,12 @@ def _compile_action(
         name=method.name,
         purpose=method.purpose,
         tier=method.tier,
-        execution_mode=("host_owned" if runtime_contract is not None else _execution_mode(method)),
+        execution_mode=(
+            "host_owned"
+            if runtime_contract is not None
+            or (method_adapter is not None and method_adapter.scope == "full_action")
+            else _execution_mode(method)
+        ),
         produces=method.produces,
         runner=method.runner,
         kernel_imports=tuple(
@@ -285,6 +313,7 @@ def _compile_action(
         alternative_action_ids=method.alternative_action_ids,
         primary_for_analysis_types=method.primary_for_analysis_types,
         notes=method.notes,
+        method_adapter=method_adapter,
         runtime_contract=runtime_contract,
     )
 
@@ -520,9 +549,8 @@ def resolve_scientific_action_request(
         requested_action_id=wanted,
         selected_action_ids=(),
         alternative_action_ids=(),
-        missing_requirements=action.required_inputs or (
-            "registered execution owner or reviewed Coder implementation",
-        ),
+        missing_requirements=action.required_inputs
+        or ("registered execution owner or reviewed Coder implementation",),
         issue_code="scientific_action_not_available",
         requires_user_confirmation=False,
         detail=(
@@ -616,14 +644,10 @@ def validate_plan_scientific_action_selections(
     for step in getattr(plan, "steps", ()):
         action_id = getattr(step, "scientific_action_id", None)
         if action_id is None:
-            outputs = tuple(
-                str(item) for item in getattr(step, "expected_outputs", ())
-            )
+            outputs = tuple(str(item) for item in getattr(step, "expected_outputs", ()))
             role = str(getattr(step, "planned_analysis_role", "") or "")
             result_outputs = tuple(
-                item
-                for item in outputs
-                if not item.startswith(("figure:", "report:"))
+                item for item in outputs if not item.startswith(("figure:", "report:"))
             )
             exact_action_ids = tuple(
                 action.action_id
@@ -653,7 +677,10 @@ def validate_plan_scientific_action_selections(
             for action in catalog.actions
             if action.method_key == method_key
         )
-        if exact_method_actions and selected_action.action_id not in exact_method_actions:
+        if (
+            exact_method_actions
+            and selected_action.action_id not in exact_method_actions
+        ):
             raise ValueError(
                 "scientific_action_method_mismatch: Planner step "
                 f"{getattr(step, 'step_id', '<unknown>')!r} declares method "
@@ -705,6 +732,20 @@ def planner_scientific_action_guide(
             f"{tier}/{mode}:{','.join(action_ids)}"
             for (tier, mode), action_ids in grouped.items()
         )
+        typed_subcontracts = [
+            action.action_id
+            for action in catalog.actions
+            if action.adapter_status == "typed_subcontract"
+        ]
+        if typed_subcontracts:
+            lines.append("typed_subcontracts:" + ",".join(typed_subcontracts))
+        support_only = [
+            action.action_id
+            for action in catalog.actions
+            if action.adapter_status == "supporting_only"
+        ]
+        if support_only:
+            lines.append("host_support_only:" + ",".join(support_only))
         return "\n".join(lines)
     lines = [
         "SCIENTIFIC ACTIONS (inferred family; exact ids):",
@@ -714,13 +755,12 @@ def planner_scientific_action_guide(
         "family's ids: "
         + ", ".join(action.action_id for action in catalog.actions)
         + ".",
-        "Set scientific_action_id only when a result step actually selects one "
-        "of those actions. Cohort-definition, Table 1, raw distribution, and "
-        "figure-only support steps do not gain a cross-family action id merely "
-        "because they emit an artifact; leave it null unless the exact current-"
-        "family action above represents that analysis. unavailable=fail-closed; "
-        "alternatives need user confirmation; never substitute methods, import "
-        "another family prefix, or invent ids.",
+        "Set scientific_action_id only when a result step selects that exact "
+        "action. Cohort-definition, Table 1, raw distribution, and figure-only "
+        "support steps do not gain an action id merely because they emit an "
+        "artifact; otherwise leave it null. unavailable=fail-closed; alternatives "
+        "require user confirmation; never substitute methods, import another family "
+        "prefix, or invent ids.",
     ]
     if not catalog.primary_contract_registered:
         lines.append(
@@ -743,6 +783,10 @@ def planner_scientific_action_guide(
     if detail in {"full", "without_guardrails"}:
         for action in catalog.actions:
             entry = f"{action.action_id}: {action.name}"
+            if action.adapter_status == "typed_subcontract":
+                entry += "; host=partial"
+            elif action.adapter_status == "supporting_only":
+                entry += "; host=support"
             if detail == "full":
                 entry += f"; {action.purpose}"
                 resources = (*action.kernel_imports, *action.software_packages)

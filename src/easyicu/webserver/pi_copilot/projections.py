@@ -6,13 +6,31 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
-from .contracts import PiCopilotError
+from pydantic import BaseModel, ConfigDict, Field
+
+from . import cohort_eligibility
+from .contracts import PiCopilotError, plan_approval_allowed
+from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
 
 MAX_PROJECTION_BYTES = 32_768
 MAX_TEXT_CHARS = 2_000
 MAX_LIST_ITEMS = 80
+
+
+class StudySetupReceipt(BaseModel):
+    """Path-free StudyContext configuration projected for Copilot review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.pi-study-setup-receipt/1"] = (
+        "easyicu.pi-study-setup-receipt/1"
+    )
+    study_context_id: str
+    revision: int = Field(ge=0)
+    configured_fields: List[str] = Field(default_factory=list, max_length=24)
+    configuration: Mapping[str, Any]
 
 _SENSITIVE_TEXT_PATTERNS = (
     re.compile(r"\b(?:subject|stay|hadm|patient|entity)[ _-]?ids?\b", re.I),
@@ -136,6 +154,10 @@ def project_study_context(
         "source_count",
         "module_count",
         "exclude_readmissions",
+        # The removal half of the cohort statement. Without it the model writes
+        # to a slot it can never read back, so it cannot tell an unstated
+        # exclusion from one it already recorded.
+        "exclusion_statement",
     )
     projected_cohort = {
         key: cohort[key]
@@ -154,6 +176,7 @@ def project_study_context(
             "question": question,
             "purpose": _bounded_text(context.get("purpose"), 800),
             "data_source": {
+                "label": _bounded_text(source.get("label"), 160),
                 "source_type": source.get("source_type") or source.get("type"),
                 "database": source.get("database") or source.get("source_id"),
                 "path_digest": path_digest(source.get("path")),
@@ -177,6 +200,12 @@ def project_study_context(
                     40,
                 )
             ),
+            "covariate_operationalizations": {
+                _bounded_text(key, 80): _bounded_text(value, 80)
+                for key, value in dict(
+                    context.get("covariate_operationalizations") or {}
+                ).items()
+            },
             "execution_concepts": {
                 **(
                     {"outcome": _bounded_text(execution_concepts.get("outcome"), 80)}
@@ -190,6 +219,16 @@ def project_study_context(
                         )
                     }
                     if execution_concepts.get("primary_exposure")
+                    else {}
+                ),
+                **(
+                    {
+                        "primary_exposure_aggregation": _bounded_text(
+                            execution_concepts.get("primary_exposure_aggregation"),
+                            16,
+                        )
+                    }
+                    if execution_concepts.get("primary_exposure_aggregation")
                     else {}
                 ),
                 "covariates": [
@@ -225,6 +264,9 @@ def project_study_context(
                         "landmark_hours",
                         "require_alive_at_landmark",
                         "exclude_negative_event_times",
+                        "event_time_variable",
+                        "observation_duration_variable",
+                        "observation_duration_unit",
                     )
                     if spec.get(key) is not None
                 }
@@ -270,6 +312,66 @@ def project_study_context(
     )
 
 
+def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
+    """Project the exact bounded StudyContext fields used by workflow review."""
+
+    projected = project_study_context(study)
+    if not projected.get("present"):
+        return StudySetupReceipt(
+            study_context_id="",
+            revision=0,
+            configured_fields=[],
+            configuration={},
+        )
+    source = projected.get("data_source")
+    source = dict(source) if isinstance(source, Mapping) else {}
+    configuration: Dict[str, Any] = {
+        key: projected.get(key)
+        for key in (
+            "question",
+            "purpose",
+            "cohort",
+            "modules",
+            "outcome",
+            "primary_exposure",
+            "covariates",
+            "covariate_selection",
+            "covariate_operationalizations",
+            "execution_concepts",
+            "analysis_design",
+            "sensitivity_specs",
+            "time_window",
+            "comparator",
+            "export_format",
+            "analysis_goal",
+            "confirmations",
+        )
+    }
+    for field in (
+        "crossdb_selection",
+        "covariate_rationales",
+        "covariate_temporal_roles",
+    ):
+        raw = study.get(field)
+        configuration[field] = dict(raw) if isinstance(raw, Mapping) else {}
+    configuration["data_source"] = {
+        key: value
+        for key, value in source.items()
+        if key in {"label", "source_type", "database", "path_digest", "status"}
+        and value not in (None, "")
+    }
+    configuration["cohort_eligibility_authority"] = (
+        cohort_eligibility.validated_authority(study) or {}
+    )
+    configuration = ensure_safe_projection(configuration)
+    return StudySetupReceipt(
+        study_context_id=str(projected.get("id") or ""),
+        revision=int(projected.get("revision") or 0),
+        configured_fields=[key for key, value in configuration.items() if bool(value)],
+        configuration=configuration,
+    )
+
+
 def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     if not snapshot:
         return {"present": False}
@@ -278,6 +380,10 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     progress = []
     for event in events[-20:]:
         if not isinstance(event, Mapping):
+            continue
+        if str(event.get("type") or "") == "end":
+            # Terminal state is projected once below; a raw end event created
+            # a second content-free "end" row in the conversation timeline.
             continue
         label = _bounded_text(event.get("label"), 240)
         if label:
@@ -306,14 +412,61 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     result = snapshot.get("result")
     result = result if isinstance(result, Mapping) else {}
     run_id = stable_code(result.get("run_id"))
+    gate = result.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    gate_checks = {
+        str(item.get("id") or "").strip(): bool(item.get("passed"))
+        for item in (gate.get("checks") or [])
+        if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+    }
     artifacts = result.get("artifacts")
     artifacts = artifacts if isinstance(artifacts, list) else []
+    artifact_names = {
+        str(row.get("name") or "").strip()
+        for row in artifacts
+        if isinstance(row, Mapping)
+    }
+    analysis_artifacts_present = bool(
+        "result_tables.json" in artifact_names
+        or "figure_gallery.json" in artifact_names
+    )
+    # ``numeric_verified`` is the manuscript-to-table provenance gate.  It is
+    # intentionally false for an analysis-only run that stops before a fully
+    # evidence-bound manuscript, so it must not erase completed and
+    # automatically validated result tables/figures from the Web workflow.
+    # The separate numeric/evidence/reportable fields continue to keep
+    # publication claims fail-closed.
+    analysis_results_available = bool(
+        gate_checks.get("execution_complete") is True
+        and analysis_artifacts_present
+        and (
+            gate_checks.get("analysis_validated") is True
+            or (
+                gate_checks.get("numeric_verified") is True
+                and gate_checks.get("evidence_complete") is True
+            )
+        )
+    )
+    diagnostic_only = (
+        str(gate.get("status") or "") == "blocked"
+        and not bool(result.get("human_review_pending"))
+        and not analysis_results_available
+    )
+    diagnostic_artifacts = {
+        "run_context.json",
+        "quality_gate.json",
+        "scientific_readiness.json",
+        "source_run_manifest.json",
+        "evidence_ledger.json",
+    }
     artifact_refs = []
     for row in artifacts[:80]:
         if not isinstance(row, Mapping):
             continue
         name = _bounded_text(row.get("name"), 160)
         digest = _bounded_text(row.get("sha256"), 64).lower()
+        if diagnostic_only and name not in diagnostic_artifacts:
+            continue
         if (
             not run_id
             or not name
@@ -348,8 +501,6 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 ),
             }
         )
-    gate = result.get("gate")
-    gate = gate if isinstance(gate, Mapping) else {}
     return ensure_safe_projection(
         {
             "present": True,
@@ -366,8 +517,57 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "artifact_refs": artifact_refs,
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
+            "execution_complete": gate_checks.get("execution_complete") is True,
+            "analysis_validated": gate_checks.get("analysis_validated") is True,
+            "numeric_verified": gate_checks.get("numeric_verified") is True,
+            "evidence_complete": gate_checks.get("evidence_complete") is True,
+            "manuscript_ready": gate_checks.get("manuscript_ready") is True,
+            "analysis_results_available": analysis_results_available,
             "reportable": bool(gate.get("reportable")),
             "human_review_pending": bool(result.get("human_review_pending")),
+        }
+    )
+
+
+def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Project a durable, path-free completed-run result for Guided Copilot."""
+
+    if not isinstance(review, Mapping) or not review.get("ok"):
+        return {"present": False}
+    gate = review.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    projection = project_job(
+        {
+            "id": review.get("run_id"),
+            "kind": "agent-run",
+            "status": "done",
+            "result": {
+                "run_id": review.get("run_id"),
+                "gate": gate,
+                "artifacts": review.get("artifacts") or [],
+                "human_review_pending": False,
+            },
+        }
+    )
+    return ensure_safe_projection(
+        {
+            key: value
+            for key, value in projection.items()
+            if key
+            in {
+                "present",
+                "run_id",
+                "artifact_refs",
+                "gate_status",
+                "gate_reason_code",
+                "execution_complete",
+                "analysis_validated",
+                "numeric_verified",
+                "evidence_complete",
+                "manuscript_ready",
+                "analysis_results_available",
+                "reportable",
+            }
         }
     )
 
@@ -386,7 +586,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             url,
         ):
             return None
-        return {
+        resource = {
             "kind": kind,
             "url": url,
             "label": _bounded_text(value.get("label"), 160),
@@ -397,6 +597,19 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "pmid": _bounded_text(value.get("pmid"), 32),
             "authority_class": stable_code(value.get("authority_class")),
         }
+        retrieval_fit = stable_code(value.get("retrieval_fit"))
+        if retrieval_fit in {
+            "direct_retrieval_fit",
+            "adjacent_retrieval_fit",
+            "unclassified",
+        }:
+            resource["retrieval_fit"] = retrieval_fit
+            resource["retrieval_rationale"] = _bounded_text(
+                value.get("retrieval_rationale"), 600
+            )
+        if value.get("relevance"):
+            resource["relevance"] = _bounded_text(value.get("relevance"), 600)
+        return resource
     if kind in {
         "research_artifact",
         "research_document",
@@ -420,6 +633,21 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "media_type": _bounded_text(value.get("media_type"), 120),
             "sha256": digest,
         }
+    if kind == "idea_plan":
+        run_id = stable_code(value.get("run_id"))
+        artifact = _bounded_text(value.get("artifact"), 160)
+        if not run_id or artifact != "idea_plan.json":
+            return None
+        return {
+            "kind": kind,
+            "run_id": run_id,
+            "artifact": artifact,
+            "label": _bounded_text(
+                value.get("label") or "Idea Mining plan preview", 160
+            ),
+            "media_type": "application/json",
+            "authority_class": "idea_mining_planning_only",
+        }
     if kind == "data_package_review":
         study_id = stable_code(value.get("study_context_id"))
         digest = _bounded_text(value.get("review_sha256"), 64).lower()
@@ -438,6 +666,70 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "review_sha256": digest,
             "label": _bounded_text(value.get("label"), 160),
             "media_type": "application/json",
+        }
+    if kind == "data_workbench_snapshot":
+        view = stable_code(value.get("view"))
+        digest = _bounded_text(value.get("snapshot_sha256"), 64).lower()
+        if (
+            view
+            not in {
+                "cohort_summary",
+                "feature_distribution",
+                "icd_cohort_preview",
+                "patient_timeline",
+                "crossdb_comparison",
+            }
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
+            return None
+        return {
+            "kind": kind,
+            "view": view,
+            "snapshot_sha256": digest,
+            "label": _bounded_text(value.get("label") or "Data Workbench", 160),
+            "media_type": "application/json",
+        }
+    if kind == "native_workspace":
+        route = stable_code(value.get("route"))
+        study_id = stable_code(value.get("study_context_id"))
+        revision = value.get("study_revision")
+        state = stable_code(value.get("state"))
+        job_id = stable_code(value.get("job_id"))
+        source_id = stable_code(value.get("source_id"))
+        expected_database = stable_code(value.get("expected_database"))
+        entry_mode = stable_code(value.get("entry_mode"))
+        extraction_scope = stable_code(value.get("extraction_scope"))
+        allowed_databases = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
+        allowed_scopes = {"study_required", "all_supported", "reuse_prepared_full"}
+        if (
+            route != "extraction"
+            or not study_id
+            or not isinstance(revision, int)
+            or revision < 0
+            or state not in {"setup", "running", "review"}
+            or (source_id and not re.fullmatch(r"src_[a-f0-9]{12}", source_id))
+            or (expected_database and expected_database not in allowed_databases)
+            or (entry_mode and entry_mode != "source_binding")
+            or (extraction_scope and extraction_scope not in allowed_scopes)
+        ):
+            return None
+        return {
+            "kind": kind,
+            "route": route,
+            "state": state,
+            "study_context_id": study_id,
+            "study_revision": revision,
+            "label": _bounded_text(value.get("label") or "Data Extraction", 160),
+            "media_type": "application/vnd.easyicu.native-workspace",
+            **({"job_id": job_id} if job_id else {}),
+            **({"source_id": source_id} if source_id else {}),
+            **({"entry_mode": entry_mode} if entry_mode else {}),
+            **({"extraction_scope": extraction_scope} if extraction_scope else {}),
+            **(
+                {"expected_database": expected_database}
+                if expected_database
+                else {}
+            ),
         }
     if kind in {"file", "webpage"}:
         file_name = _bounded_text(value.get("file"), 240).replace("\\", "/")
@@ -465,6 +757,53 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             **({"checked_sha256": checked_digest} if kind == "webpage" else {}),
         }
     return None
+
+
+def project_transcript(
+    rows: Any, *, limit: int = 200
+) -> list[Dict[str, Any]]:
+    """Bound the transcript and strip machine-facing identifiers from replies.
+
+    Assistant turns have machine-facing identifiers removed. User turns remain
+    verbatim except for exact, known host-generated legacy action text that was
+    previously persisted under the user role.
+    """
+
+    if not isinstance(rows, list):
+        return []
+    projected: list[Dict[str, Any]] = []
+    for row in rows[:limit]:
+        if not isinstance(row, Mapping):
+            continue
+        role = str(row.get("role") or "")
+        if role not in {"assistant", "user"}:
+            projected.append(dict(row))
+            continue
+        content = row.get("content")
+        if not isinstance(content, list):
+            projected.append(dict(row))
+            continue
+        blocks: list[Any] = []
+        for block in content:
+            if (
+                isinstance(block, Mapping)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ):
+                blocks.append(
+                    {
+                        **block,
+                        "text": (
+                            sanitize_user_visible_text(block["text"])
+                            if role == "assistant"
+                            else project_user_turn_text(block["text"])
+                        ),
+                    }
+                )
+                continue
+            blocks.append(block)
+        projected.append({**row, "content": blocks})
+    return projected
 
 
 def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -535,6 +874,92 @@ def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]
     ]
     if resources:
         payload["resources"] = resources
+    idea_mining = event.get("idea_mining")
+    if isinstance(idea_mining, Mapping):
+        idea = idea_mining.get("idea")
+        feasibility = idea_mining.get("feasibility")
+        if isinstance(idea, Mapping):
+            concepts = [
+                {
+                    key: _bounded_text(row.get(key), 180)
+                    for key in (
+                        "concept_id",
+                        "label",
+                        "module",
+                        "role",
+                        "status",
+                    )
+                    if row.get(key) is not None
+                }
+                | (
+                    {"available": bool(row.get("available"))}
+                    if isinstance(row.get("available"), bool)
+                    else {}
+                )
+                for row in list(idea.get("mapped_concepts") or [])[:24]
+                if isinstance(row, Mapping)
+            ]
+            payload["idea_mining"] = {
+                "run_id": stable_code(idea_mining.get("run_id")),
+                "selected_idea_id": stable_code(
+                    idea_mining.get("selected_idea_id")
+                ),
+                "idea": {
+                    key: _bounded_text(idea.get(key), 1600)
+                    for key in (
+                        "idea_title",
+                        "population",
+                        "exposure_or_predictor",
+                        "outcome",
+                        "analysis_family",
+                        "rationale",
+                        "go_no_go",
+                        "go_no_go_reason",
+                        "next_action",
+                        "plan_status",
+                    )
+                    if idea.get(key) is not None
+                }
+                | {
+                    "mapped_concepts": concepts,
+                    "unresolved_slots": [
+                        _bounded_text(value, 120)
+                        for value in list(idea.get("unresolved_slots") or [])[:8]
+                    ],
+                    "design_support": (
+                        {
+                            key: idea["design_support"].get(key)
+                            for key in (
+                                "card_id",
+                                "version",
+                                "file_sha256",
+                                "trust_level",
+                                "review_status",
+                                "summary",
+                                "population",
+                                "time_zero",
+                                "outcome_family",
+                                "requires_confirmation",
+                                "stop_conditions",
+                                "citations",
+                                "authority",
+                            )
+                            if idea["design_support"].get(key) is not None
+                        }
+                        if isinstance(idea.get("design_support"), Mapping)
+                        else {}
+                    ),
+                },
+                "feasibility": (
+                    {
+                        "status": stable_code(feasibility.get("status")),
+                        "reason": _bounded_text(feasibility.get("reason"), 1600),
+                        "reportable": feasibility.get("reportable") is True,
+                    }
+                    if isinstance(feasibility, Mapping)
+                    else {}
+                ),
+            }
     return ensure_safe_projection(payload)
 
 
@@ -570,7 +995,11 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     waiting_for_plan_review = (
         str(row.get("run_status") or "") == "human_review_pending"
         and bool(
-            {"operator_plan_approval_required", "plan_scientific_changes_required"}
+            {
+                "operator_plan_approval_required",
+                "plan_scientific_changes_required",
+                "scientific_plan_review_policy_stale",
+            }
             & set(pending_review_reason_codes)
         )
     )
@@ -611,9 +1040,7 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             {
                 "execution_phase": "plan_review",
                 "human_plan_review_pending": True,
-                "plan_approval_allowed": bool(
-                    row.get("plan_approval_allowed") is not False
-                ),
+                "plan_approval_allowed": plan_approval_allowed(row),
                 "analysis_executed": False,
                 "scientific_results_available": False,
                 "artifact_semantics": "plan_stage_placeholders_not_analysis_results",
@@ -732,6 +1159,8 @@ def stable_code(value: Any) -> Optional[str]:
 
 
 __all__ = [
+    "StudySetupReceipt",
+    "project_transcript",
     "bounded_json_projection",
     "ensure_safe_projection",
     "path_digest",
@@ -740,6 +1169,7 @@ __all__ = [
     "project_job",
     "project_run_row",
     "project_study_context",
+    "project_study_setup_receipt",
     "reject_sensitive_message",
     "stable_code",
 ]

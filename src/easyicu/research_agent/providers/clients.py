@@ -706,12 +706,12 @@ class OpenAIClient:
             _refresh_reviewed_transport_dispatch(self)
             return
         # Swap in the fresh client with a plain reference assignment (atomic in
-        # CPython). Do NOT close the old client synchronously: the single
-        # OpenAIClient is shared across the writer's 8-way ThreadPoolExecutor
-        # (agents/core.py), and a peer thread may be mid-request on the old client.
+        # CPython). Do NOT close the old client synchronously: callers outside
+        # the manuscript writer may share one OpenAIClient across concurrent
+        # requests, and a peer thread may be mid-request on the old client.
         # Closing its httpx pool here tears that in-flight request down -- which
         # itself surfaces as a "connection reset" that re-enters this same
-        # transient branch and triggers cascading rebuilds across all writers.
+        # transient branch and triggers cascading rebuilds across all callers.
         # The old pool is reclaimed by GC once no thread holds it; rebuilds are
         # rare and the client is per-run, so the transient leak is bounded.
         self._client = new_client

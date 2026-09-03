@@ -87,6 +87,20 @@ python tools/run_research_agent_bench.py \
 ## Files
 
 - `meta_benchmark.jsonl` — one JSON object per item (the machine-readable spec).
-- `tests/research_agent/test_meta_benchmark_spec.py` — a coverage lint: asserts
+- `qualification12_literature_design_pack_20260825.json` — two reviewed
+  comparator/design-analogue sources per item, with seven aggregate design
+  dimensions, exact full-text/supplement receipts, and the explicit rule that
+  published effect estimates are **not** benchmark answers.
+- `tools/build_qualification12_literature_design_pack.py` — reproducibly rebuilds
+  the tracked seed pack from the external full-text review manifests.
+- `tools/audit_qualification12_literature_design_pack.py` — zero-Provider audit
+  of question identity, typed authority, seven-dimension coverage, and optional
+  external source-file digests.
+- `tests/research_agent/core/test_meta_benchmark_spec.py` — a coverage lint: asserts
   the spec spans all six axes, includes enough fail-closed probes, and does not
   simply re-test canonical-9 coordinates. It validates the *spec*, not a run.
+
+The design pack is an input to planning, not a Qualification12 result. Loading
+it does not authorize a manuscript claim, and a fail-closed benchmark item must
+remain fail-closed even when an analogue paper demonstrates that the method is
+possible with richer data.

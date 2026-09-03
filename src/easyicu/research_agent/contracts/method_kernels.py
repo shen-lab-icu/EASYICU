@@ -18,7 +18,7 @@ claiming LESS than we have -- dead code -- was invisible by construction.
 
 This module closes the other direction.  It is the declared inventory of
 kernels that are reachable *through the Coder* rather than through a host
-runner, and ``tests/research_agent/test_method_kernel_reachability.py`` asserts
+runner, and ``tests/research_agent/execution/test_method_kernel_reachability.py`` asserts
 that every module under ``methods/`` is reachable by exactly one of the two
 routes:
 

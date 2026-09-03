@@ -84,11 +84,17 @@ def infer_numeric_claim_identity(
 
     lower = bool(
         re.search(r"(?:ci|interval)_(?:95_)?(?:low|lower|lcl)(?:_|$)", normalized)
-        or re.search(r"(?:ci|interval)(?:_|\[|$).*\[0\]$", source)
+        or re.search(
+            r"(?:^|_)(?:ci|interval)(?:_[a-z0-9]+)*_0$",
+            normalized,
+        )
     )
     upper = bool(
         re.search(r"(?:ci|interval)_(?:95_)?(?:high|upper|ucl)(?:_|$)", normalized)
-        or re.search(r"(?:ci|interval)(?:_|\[|$).*\[1\]$", source)
+        or re.search(
+            r"(?:^|_)(?:ci|interval)(?:_[a-z0-9]+)*_1$",
+            normalized,
+        )
     )
     if lower:
         estimand = NumericEstimand.CONFIDENCE_INTERVAL_LOWER

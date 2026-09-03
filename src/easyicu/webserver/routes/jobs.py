@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import threading
 from typing import Any, Dict, Optional
 
@@ -20,6 +24,96 @@ from easyicu.webserver.routes.request_parsing import body_bool
 
 submission_router = APIRouter()
 lifecycle_router = APIRouter()
+
+
+def _launch_local_path(path: Path) -> str:
+    """Open one server-authorized local path with the operating-system shell."""
+
+    if sys.platform == "darwin":
+        command = ["/usr/bin/open", str(path)]
+    elif os.name == "nt":  # pragma: no cover - exercised on Windows builds
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return "application"
+    else:  # pragma: no cover - exercised on Linux builds
+        command = ["xdg-open", str(path)]
+    try:
+        subprocess.run(  # noqa: S603 - executable and path are server-owned
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+        return "finder" if path.is_dir() and sys.platform == "darwin" else "application"
+    except subprocess.CalledProcessError:
+        if sys.platform != "darwin" or not path.is_file():
+            raise
+        subprocess.run(  # noqa: S603 - fixed Finder reveal command
+            ["/usr/bin/open", "-R", str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+        return "finder"
+
+
+def _declared_extraction_output_files(result: Dict[str, Any]) -> set[str]:
+    declared: set[str] = set()
+    for key in ("files", "definition_files"):
+        rows = result.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                name = str(row.get("file") or "").strip()
+                if name:
+                    declared.add(name)
+    for key in ("manifest", "readme", "feature_definitions", "feature_definitions_csv", "column_metadata"):
+        name = str(result.get(key) or "").strip()
+        if name:
+            declared.add(name)
+    return declared
+
+
+def _study_source_matches(
+    *,
+    requested_path: str,
+    requested_database: str,
+    bound_source: Dict[str, Any],
+    registered_export_path: Any,
+) -> bool:
+    """Accept the bound path or its manifest-sealed raw extraction source."""
+
+    try:
+        bound_path = context_store.normalize_path(bound_source.get("path"))
+        normalized_request = context_store.normalize_path(requested_path)
+    except context_store.StudyContextError:
+        return False
+    if not bound_path or not normalized_request:
+        return False
+    if bound_path == normalized_request:
+        return True
+    if not registered_export_path:
+        return False
+    try:
+        claimed_export = context_store.normalize_path(registered_export_path)
+    except context_store.StudyContextError:
+        return False
+    if claimed_export != bound_path:
+        return False
+    try:
+        binding = dataio.resolve_registered_export_binding(
+            claimed_export, requested_database
+        )
+        sealed_raw_path = context_store.normalize_path(
+            binding.get("source_data_path")
+        )
+    except (dataio.ExportCohortError, context_store.StudyContextError):
+        return False
+    return bool(sealed_raw_path and sealed_raw_path == normalized_request)
 
 
 def submit_job(kind: str, runner: Any):
@@ -105,19 +199,6 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
             )
         bound_source = study_context.get("data_source")
         bound_source = bound_source if isinstance(bound_source, dict) else {}
-        try:
-            bound_path = context_store.normalize_path(bound_source.get("path"))
-            requested_path = context_store.normalize_path(path)
-        except context_store.StudyContextError as exc:
-            raise HTTPException(status_code=400, detail=exc.detail) from exc
-        if not bound_path or bound_path != requested_path:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "study_context_source_mismatch",
-                    "study_context_id": study_context_id,
-                },
-            )
         if str(bound_source.get("database") or "").strip() != database:
             raise HTTPException(
                 status_code=409,
@@ -126,7 +207,19 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
                     "study_context_id": study_context_id,
                 },
             )
-
+        if not _study_source_matches(
+            requested_path=path,
+            requested_database=database,
+            bound_source=bound_source,
+            registered_export_path=body.get("registered_export_path"),
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "study_context_source_mismatch",
+                    "study_context_id": study_context_id,
+                },
+            )
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
 
@@ -272,6 +365,91 @@ def jobs_cancel(job_id: str, body: Optional[Dict[str, Any]] = None) -> dict:
     snap = job.snapshot()
     snap["cancel_request_accepted"] = requested
     return snap
+
+
+@lifecycle_router.post("/api/jobs/{job_id}/open-output")
+def jobs_open_output(job_id: str, body: Optional[Dict[str, Any]] = None) -> dict:
+    """Open a completed extraction folder or one declared output file locally.
+
+    The client never supplies an absolute path. The job result owns the output
+    directory, and individual files must be present in its declared artifact
+    list. This keeps the endpoint from becoming arbitrary host-file access.
+    """
+
+    job = job_store.MANAGER.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"error": "unknown_job"})
+    if job.kind != "extract" or job.status != "done" or not isinstance(job.result, dict):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "extraction_output_unavailable"},
+        )
+    result = job.result
+    raw_out_dir = str(result.get("out_dir") or "").strip()
+    if not raw_out_dir:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "extraction_output_unavailable"},
+        )
+    try:
+        out_dir = Path(raw_out_dir).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "extraction_output_missing"},
+        ) from exc
+    if not out_dir.is_dir():
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "extraction_output_missing"},
+        )
+
+    requested_file = str((body or {}).get("file") or "").strip()
+    target = out_dir
+    target_kind = "folder"
+    if requested_file:
+        if Path(requested_file).name != requested_file or requested_file in {".", ".."}:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_extraction_output_file"},
+            )
+        if requested_file not in _declared_extraction_output_files(result):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "extraction_output_file_not_declared"},
+            )
+        try:
+            target = (out_dir / requested_file).resolve(strict=True)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "extraction_output_file_missing"},
+            ) from exc
+        if target.parent != out_dir:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "extraction_output_path_escape"},
+            )
+        if not target.is_file():
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "extraction_output_file_invalid"},
+            )
+        target_kind = "file"
+
+    try:
+        open_method = _launch_local_path(target)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "local_open_unavailable"},
+        ) from exc
+    return {
+        "ok": True,
+        "target": target_kind,
+        "name": target.name,
+        "method": open_method or ("finder" if target_kind == "folder" else "application"),
+    }
 
 
 @lifecycle_router.get("/api/jobs/{job_id}/events")

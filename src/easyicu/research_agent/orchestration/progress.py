@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from ..authority.run_heartbeat import record_active_run_progress
 from ..authority.runtime_artifacts import AuditLogger
 from ..providers.structured_retry import StructuredRetryProgress
+from ..providers.structured_diagnostics import (
+    safe_projected_validation_issues,
+    safe_validation_stage,
+)
 
 
 class NonFatalProgressCallbackError(RuntimeError):
@@ -96,17 +101,46 @@ def planner_retry_progress_callback(
     def callback(event: StructuredRetryProgress) -> None:
         attempt = int(event.attempt or 0)
         total = int(event.total_attempts or 0)
+        planning_unit = {
+            "progressive_planner_outline": "structure",
+            "progressive_planner_foundation": "rules",
+            "progressive_planner_step_materialization": "step",
+        }.get(str(event.role or "").strip(), "plan")
+        unit_label = {
+            "structure": "Study structure",
+            "rules": "Cohort and analysis rules",
+            "step": "Current executable plan step",
+            "plan": "Plan draft",
+        }[planning_unit]
+        diagnostic: dict[str, Any] = {}
+        validation_stage = safe_validation_stage(event.validation_stage)
+        if validation_stage:
+            diagnostic["validation_stage"] = validation_stage
+        validation_issues = safe_projected_validation_issues(
+            event.validation_issues
+        )
+        if validation_issues:
+            diagnostic["validation_issues"] = validation_issues
+            diagnostic["validation_issue_count"] = len(validation_issues)
+        violation_digest = str(event.violation_sha256 or "").strip().lower()
+        if len(violation_digest) == 64 and all(
+            char in "0123456789abcdef" for char in violation_digest
+        ):
+            diagnostic["violation_sha256"] = violation_digest
+        reason_code = str(event.reason_code or "").strip()
+        if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
+            diagnostic["reason_code"] = reason_code
         if event.phase == "started":
-            label = f"Generating plan draft {attempt}/{total}."
+            label = f"{unit_label} validation attempt {attempt}/{total} started."
             status = "running"
         elif event.phase == "rejected":
             label = (
-                f"Plan draft {attempt}/{total} did not satisfy the scientific "
+                f"{unit_label} attempt {attempt}/{total} did not satisfy its "
                 + ("contract; retrying." if attempt < total else "contract.")
             )
             status = "running" if attempt < total else "error"
         elif event.phase == "accepted":
-            label = f"Plan draft {attempt}/{total} passed contract validation."
+            label = f"{unit_label} attempt {attempt}/{total} passed validation."
             status = "complete"
         else:  # pragma: no cover - Literal contract guards this path
             return
@@ -117,6 +151,9 @@ def planner_retry_progress_callback(
             total=total,
             status=status,
             run_id=run_id,
+            planning_unit=planning_unit,
+            retry_phase=event.phase,
+            **diagnostic,
         )
 
     return callback

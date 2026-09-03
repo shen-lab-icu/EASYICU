@@ -22,12 +22,17 @@ import re
 from pathlib import PurePosixPath
 import textwrap
 from typing import List, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
 
 from .bibtex import (
     render_thebibliography_block,
     sanitise_bibtex_key,
 )
-from ..literature import CitationRecord, LiteratureBundle
+from ..literature import (
+    CitationRecord,
+    LiteratureBundle,
+    manuscript_citable_keys,
+)
 
 
 # Map common Markdown constructs → LaTeX. Intentionally small; this is
@@ -45,12 +50,29 @@ _MD_LINK_PATTERN = re.compile(
     r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)"
 )
 _NUMERIC_FOOTNOTE_MARKER_PATTERN = re.compile(r"\[\^(?P<id>[A-Za-z0-9_-]+)\]")
+_BOUND_NUMERIC_MARKER_PATTERN = re.compile(
+    r"(?P<value>[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?)"
+    r"\[\^(?P<id>[A-Za-z0-9_-]+)\]"
+)
 _NUMERIC_FOOTNOTE_DEFINITION_PATTERN = re.compile(
     r"^\[\^(?P<id>[A-Za-z0-9_-]+)\]:\s*(?P<text>.+)$"
 )
 _LITERATURE_CITATION_PATTERN = re.compile(
-    r"\[@(?P<key>[A-Za-z0-9_.:-]+)\]"
+    r"\[(?P<keys>@[A-Za-z0-9_.:-]+"
+    r"(?:\s*;\s*@[A-Za-z0-9_.:-]+)*)\]"
 )
+_UNICODE_SCIENTIFIC_NOTATION_PATTERN = re.compile(
+    r"(?P<coefficient>\d+(?:\.\d+)?)\s*[×x]\s*10(?P<exponent>[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)"
+)
+_ASCII_SCIENTIFIC_NOTATION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<coefficient>\d+(?:\.\d+)?)[eE]"
+    r"(?P<exponent>[+-]?\d+)(?![A-Za-z0-9_])"
+)
+_ASCII_SCIENTIFIC_NUMERIC_FOOTNOTE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<coefficient>\d+(?:\.\d+)?)[eE]"
+    r"(?P<exponent>[+-]?\d+)\[\^(?P<id>[A-Za-z0-9_-]+)\]"
+)
+_SUPERSCRIPT_TRANSLATION = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _STANDARD_SECTION_HEADINGS = frozenset(
     {
         "abstract",
@@ -74,9 +96,18 @@ _STANDARD_SECTION_HEADINGS = frozenset(
 # pdflatex tries to render ``<!`` as text.
 _HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.S)
 _LATEX_SPECIAL = {
-    "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#",
-    "_": r"\_", "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}",
-    "^": r"\textasciicircum{}", "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+    "\\": r"\textbackslash{}",
+    "<": r"\textless{}",
+    ">": r"\textgreater{}",
 }
 
 
@@ -103,7 +134,30 @@ def _escape_url(url: str) -> str:
     )
 
 
-def _md_inline_to_latex(line: str) -> str:
+def _validated_claim_base_url(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    candidate = value.strip().rstrip("/")
+    parsed = urlsplit(candidate)
+    local_http = parsed.scheme == "http" and parsed.hostname in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }
+    if (parsed.scheme != "https" and not local_http) or not parsed.netloc:
+        raise ValueError("claim_base_url must be HTTPS or an HTTP localhost URL")
+    if parsed.username or parsed.password:
+        raise ValueError("claim_base_url must not contain credentials")
+    return candidate
+
+
+def _claim_link(claim_id: str, claim_base_url: Optional[str]) -> str:
+    if claim_base_url:
+        return _escape_url(f"{claim_base_url}#claim-{claim_id}")
+    return "claim-" + re.sub(r"[^A-Za-z0-9.-]+", "-", claim_id).strip("-")
+
+
+def _md_inline_to_latex(line: str, *, claim_base_url: Optional[str] = None) -> str:
     """Convert markdown inline syntax to LaTeX.
 
     The function expects raw markdown — do NOT pre-escape special
@@ -126,9 +180,10 @@ def _md_inline_to_latex(line: str) -> str:
             rendered = r"\href{" + url + "}{" + label + "}"
         else:
             # Internal evidence links are manuscript audit metadata, not
-            # literature citations.  Keep the stable label readable without
-            # dumping a filesystem-shaped path into every page footnote.
-            rendered = r"\textsuperscript{\texttt{" + label + "}}"
+            # literature citations.  The interactive number links and the
+            # provenance appendix carry their audit identity; repeating long
+            # machine ids after every sentence makes the reader PDF unusable.
+            rendered = ""
         placeholders.append(rendered)
         return f"\x00{len(placeholders) - 1}\x00"
 
@@ -141,20 +196,67 @@ def _md_inline_to_latex(line: str) -> str:
         return f"\x00{len(placeholders) - 1}\x00"
 
     def _numeric_marker(match: "re.Match[str]") -> str:
+        target = _claim_link(match.group("id"), claim_base_url)
+        command = r"\href" if claim_base_url else r"\hyperlink"
         placeholders.append(
-            r"\textsuperscript{\texttt{"
+            r"\textsuperscript{"
+            + command
+            + "{"
+            + target
+            + r"}{\texttt{"
             + _escape_latex(match.group("id"))
-            + "}}"
+            + "}}}"
         )
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    def _bound_numeric_marker(match: "re.Match[str]") -> str:
+        target = _claim_link(match.group("id"), claim_base_url)
+        command = r"\href" if claim_base_url else r"\hyperlink"
+        value = _escape_latex(match.group("value"))
+        placeholders.append(command + "{" + target + "}{" + value + "}")
         return f"\x00{len(placeholders) - 1}\x00"
 
     def _literature_citation(match: "re.Match[str]") -> str:
+        keys = [
+            sanitise_bibtex_key(part.strip().lstrip("@"))
+            for part in match.group("keys").split(";")
+        ]
+        placeholders.append(r"\cite{" + ",".join(keys) + "}")
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    def _scientific_notation(match: "re.Match[str]") -> str:
+        exponent = str(
+            int(match.group("exponent").translate(_SUPERSCRIPT_TRANSLATION))
+        )
         placeholders.append(
-            r"\cite{" + sanitise_bibtex_key(match.group("key")) + "}"
+            "$"
+            + _escape_latex(match.group("coefficient"))
+            + r"\times 10^{"
+            + _escape_latex(exponent)
+            + "}$"
         )
         return f"\x00{len(placeholders) - 1}\x00"
 
+    def _scientific_numeric_marker(match: "re.Match[str]") -> str:
+        target = _claim_link(match.group("id"), claim_base_url)
+        command = r"\href" if claim_base_url else r"\hyperlink"
+        value = (
+            "$"
+            + _escape_latex(match.group("coefficient"))
+            + r"\times 10^{"
+            + _escape_latex(str(int(match.group("exponent"))))
+            + "}$"
+        )
+        placeholders.append(command + "{" + target + "}{" + value + "}")
+        return f"\x00{len(placeholders) - 1}\x00"
+
     line = _LITERATURE_CITATION_PATTERN.sub(_literature_citation, line)
+    line = _ASCII_SCIENTIFIC_NUMERIC_FOOTNOTE_PATTERN.sub(
+        _scientific_numeric_marker, line
+    )
+    line = _UNICODE_SCIENTIFIC_NOTATION_PATTERN.sub(_scientific_notation, line)
+    line = _ASCII_SCIENTIFIC_NOTATION_PATTERN.sub(_scientific_notation, line)
+    line = _BOUND_NUMERIC_MARKER_PATTERN.sub(_bound_numeric_marker, line)
     line = _NUMERIC_FOOTNOTE_MARKER_PATTERN.sub(_numeric_marker, line)
     line = _MD_LINK_PATTERN.sub(_link, line)
     line = _BOLD_PATTERN.sub(_bold, line)
@@ -167,6 +269,10 @@ def _md_inline_to_latex(line: str) -> str:
 
     # Restore placeholders from the literal NUL markers inserted above.
     line = re.sub("\x00(\\d+)\x00", _restore, line)
+    # Internal evidence links deliberately render as empty strings in the PDF.
+    # Remove the space they leave before punctuation instead of producing
+    # visible ``word .`` artefacts throughout the manuscript.
+    line = re.sub(r"[ \t]+([,.;:!?])", r"\1", line)
     return line
 
 
@@ -181,7 +287,9 @@ def scaffold_to_latex(
     inline_bibliography: bool = False,
     venue_template: str = "article",
     figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
+    supplementary_figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
     draft_watermark: bool = False,
+    claim_base_url: Optional[str] = None,
 ) -> str:
     """Convert the markdown manuscript scaffold into a LaTeX document.
 
@@ -195,18 +303,25 @@ def scaffold_to_latex(
     don't want a separate biber/bibtex run.
     """
     authors = list(authors or ["EasyICU research-agent"])
+    claim_base_url = _validated_claim_base_url(claim_base_url)
 
     # Strip HTML comments (``<!-- ... -->``) — produced by the binder
     # when evidence ids are unresolved. pdflatex would otherwise emit
     # raw ``<!`` text into the rendered PDF.
     markdown = _HTML_COMMENT_PATTERN.sub("", markdown)
+    # A strict evidence filter can remove an unsupported generated title while
+    # preserving the Markdown H1 marker. Treat a bare leading H1 as absent
+    # metadata; the caller-supplied host title remains authoritative.
+    markdown = re.sub(r"\A\s*#\s*(?:\n|\Z)", "", markdown, count=1)
 
     if bibliography is not None:
-        allowed_citation_keys = {record.key for record in bibliography.citations}
-        requested_citation_keys = set(_LITERATURE_CITATION_PATTERN.findall(markdown))
-        unknown_citation_keys = sorted(
-            requested_citation_keys - allowed_citation_keys
-        )
+        allowed_citation_keys = set(manuscript_citable_keys(bibliography))
+        requested_citation_keys = {
+            part.strip().lstrip("@")
+            for match in _LITERATURE_CITATION_PATTERN.finditer(markdown)
+            for part in match.group("keys").split(";")
+        }
+        unknown_citation_keys = sorted(requested_citation_keys - allowed_citation_keys)
         if unknown_citation_keys:
             raise ValueError(
                 "manuscript cites keys absent from the run-bound bibliography: "
@@ -223,7 +338,9 @@ def scaffold_to_latex(
         m = _HEADING_PATTERN.match(line)
         if m:
             if current_body or sections:
-                sections.append((current_level, current_title, "\n".join(current_body).strip()))
+                sections.append(
+                    (current_level, current_title, "\n".join(current_body).strip())
+                )
             current_level = len(m.group("hashes"))
             current_title = m.group("text").strip()
             current_body = []
@@ -259,6 +376,7 @@ def scaffold_to_latex(
     parts.append(r"\date{\today}")
     parts.append("")
     parts.append(r"\begin{document}")
+    parts.append(r"\sloppy")
     parts.append(r"\maketitle")
     parts.append("")
     if draft_watermark:
@@ -271,13 +389,23 @@ def scaffold_to_latex(
             ]
         )
 
-    section_cmd = {1: r"\section", 2: r"\section", 3: r"\subsection", 4: r"\subsubsection"}
+    section_cmd = {
+        1: r"\section",
+        2: r"\section",
+        3: r"\subsection",
+        4: r"\subsubsection",
+    }
 
     if leading_title_body:
-        parts.append(_render_body(leading_title_body))
+        parts.append(_render_body(leading_title_body, claim_base_url=claim_base_url))
         parts.append("")
 
     for level, title_text, body in body_sections:
+        if level == 0 and title_text.strip().casefold() == "body":
+            if body:
+                parts.append(_render_body(body, claim_base_url=claim_base_url))
+                parts.append("")
+            continue
         cmd = section_cmd.get(level, r"\paragraph")
         if title_text.strip().lower() in {"title"}:
             continue  # already in \maketitle
@@ -285,16 +413,16 @@ def scaffold_to_latex(
             parts.append(r"\section{Discussion}")
             parts.append("")
             if body:
-                parts.append(_render_body(body))
+                parts.append(_render_body(body, claim_base_url=claim_base_url))
                 parts.append("")
             continue
         parts.append(cmd + "{" + _escape_latex(title_text) + "}")
         parts.append("")
         if body:
-            parts.append(_render_body(body))
+            parts.append(_render_body(body, claim_base_url=claim_base_url))
             parts.append("")
 
-    if bibliography is not None and bibliography.citations:
+    if manuscript_citable_keys(bibliography):
         if inline_bibliography:
             block = render_thebibliography_block(bibliography)
             if block:
@@ -306,10 +434,12 @@ def scaffold_to_latex(
             parts.append(r"\bibliography{" + bibliography_basename + "}")
             parts.append("")
 
-    # Auto-embed registered figures as a Figures appendix.
+    # Keep main and supplementary displays visibly separate. This prevents a
+    # routine quality-control plot from being mistaken for a main result and
+    # makes it obvious when a reader contains only one composite main figure.
     if figure_paths:
         parts.append(r"\clearpage")
-        parts.append(r"\section*{Figures}")
+        parts.append(r"\section*{Main figures}")
         parts.append("")
         for idx, (fig_id, fig_rel_path) in enumerate(figure_paths, start=1):
             normalized_figure_path = str(fig_rel_path).replace("\\", "/")
@@ -331,9 +461,41 @@ def scaffold_to_latex(
                 + "}"
             )
             parts.append(
-                r"\caption{" + _escape_latex(fig_id.replace("_", " ").title()) + "}"
+                r"\caption{" + _escape_latex(fig_id.replace("_", " ").strip()) + "}"
             )
-            parts.append(r"\label{fig:" + fig_id + "}")
+            label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
+            parts.append(r"\label{fig:" + label_key + "}")
+            parts.append(r"\end{figure}")
+            parts.append("")
+
+    if supplementary_figure_paths:
+        parts.append(r"\clearpage")
+        parts.append(r"\section*{Supplementary figures}")
+        parts.append("")
+        for fig_id, fig_rel_path in supplementary_figure_paths:
+            normalized_figure_path = str(fig_rel_path).replace("\\", "/")
+            figure_parts = PurePosixPath(normalized_figure_path).parts
+            if (
+                not normalized_figure_path
+                or normalized_figure_path.startswith("/")
+                or ".." in figure_parts
+                or figure_parts[:2] == ("evidence", "evidence")
+            ):
+                raise ValueError(
+                    "supplementary_figure_paths must contain one safe run-relative evidence path"
+                )
+            parts.append(r"\begin{figure}[htbp]")
+            parts.append(r"\centering")
+            parts.append(
+                r"\includegraphics[width=\textwidth]{"
+                + _escape_latex(normalized_figure_path)
+                + "}"
+            )
+            parts.append(
+                r"\caption{" + _escape_latex(fig_id.replace("_", " ").strip()) + "}"
+            )
+            label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
+            parts.append(r"\label{fig:supp-" + label_key + "}")
             parts.append(r"\end{figure}")
             parts.append("")
 
@@ -352,11 +514,12 @@ def latex_template_preamble(venue_template: str = "article") -> str:
     key = (venue_template or "article").strip().lower()
     common = r"""
         \usepackage{graphicx}
-        \usepackage{hyperref}
+        \usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=teal!55!black,urlcolor=blue!55!black]{hyperref}
         \usepackage{booktabs}
         \usepackage{longtable}
         \usepackage{xcolor}
         \usepackage[hang,small,bf]{caption}
+        \setlength{\emergencystretch}{4em}
     """
     if key == "nature":
         head = r"\documentclass{nature}"
@@ -365,22 +528,29 @@ def latex_template_preamble(venue_template: str = "article") -> str:
     elif key == "lancet":
         head = r"\documentclass[review]{elsarticle}"
     else:
-        head = r"\documentclass[11pt]{article}" + "\n" + r"\usepackage[a4paper,margin=1in]{geometry}"
+        head = (
+            r"\documentclass[11pt]{article}"
+            + "\n"
+            + r"\usepackage[a4paper,margin=1in]{geometry}"
+        )
     return (head + "\n" + textwrap.dedent(common).strip()).strip()
 
 
-def _render_body(body: str) -> str:
+def _render_body(body: str, *, claim_base_url: Optional[str] = None) -> str:
     """Render a section body: bullets become itemize, paragraphs stay as-is."""
     lines = body.splitlines()
     out: List[str] = []
     bullet_buffer: List[str] = []
+    provenance_started = False
 
     def flush_bullets() -> None:
         if not bullet_buffer:
             return
         out.append(r"\begin{itemize}")
         for b in bullet_buffer:
-            out.append("  \\item " + _md_inline_to_latex(b))
+            out.append(
+                "  \\item " + _md_inline_to_latex(b, claim_base_url=claim_base_url)
+            )
         out.append(r"\end{itemize}")
         bullet_buffer.clear()
 
@@ -388,12 +558,23 @@ def _render_body(body: str) -> str:
         definition = _NUMERIC_FOOTNOTE_DEFINITION_PATTERN.match(line.strip())
         if definition:
             flush_bullets()
+            if not provenance_started:
+                out.extend([r"\section*{Numeric provenance}", ""])
+                provenance_started = True
+            definition_text = _escape_latex(definition.group("text"))
+            definition_text = (
+                definition_text.replace(r"\_", r"\_\allowbreak{}")
+                .replace(";", r";\allowbreak{}")
+                .replace(".", r".\allowbreak{}")
+            )
             out.append(
-                r"\par\noindent\textsuperscript{\texttt{"
+                r"\begin{sloppypar}\par\noindent\footnotesize\hypertarget{claim-"
+                + re.sub(r"[^A-Za-z0-9.-]+", "-", definition.group("id")).strip("-")
+                + r"}{}\textsuperscript{\texttt{"
                 + _escape_latex(definition.group("id"))
                 + r"}}\texttt{"
-                + _escape_latex(definition.group("text"))
-                + "}"
+                + definition_text
+                + r"}\end{sloppypar}"
             )
             continue
         m = _BULLET_PATTERN.match(line)
@@ -405,7 +586,7 @@ def _render_body(body: str) -> str:
             if stripped == "":
                 out.append("")
             else:
-                out.append(_md_inline_to_latex(stripped))
+                out.append(_md_inline_to_latex(stripped, claim_base_url=claim_base_url))
     flush_bullets()
     return "\n".join(out)
 

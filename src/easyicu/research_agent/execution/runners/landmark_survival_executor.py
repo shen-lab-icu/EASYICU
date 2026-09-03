@@ -115,8 +115,10 @@ def landmark_survival_executor_scaffold(
     ).strip()
     if receipt_code:
         prologue += "\n\n" + receipt_code.strip()
-    prologue += "\n\n" + textwrap.dedent(
-        f"""
+    prologue += (
+        "\n\n"
+        + textwrap.dedent(
+            f"""
         summary = run_landmark_survival_suite(
             frame=analysis_frame,
             authority=authority,
@@ -127,7 +129,8 @@ def landmark_survival_executor_scaffold(
             input_sha256=bound.sha256,
         )
         """
-    ).strip()
+        ).strip()
+    )
     epilogue: list[str] = []
     if receipt_code:
         epilogue.append('summary["plausibility_audit"] = plausibility_audit')
@@ -141,7 +144,9 @@ def landmark_survival_executor_scaffold(
             "print(json.dumps(summary, ensure_ascii=False, allow_nan=False))",
         ]
     )
-    return HostScaffoldedScript(prologue=prologue, body="", epilogue="\n".join(epilogue))
+    return HostScaffoldedScript(
+        prologue=prologue, body="", epilogue="\n".join(epilogue)
+    )
 
 
 def landmark_survival_executor_code(
@@ -225,19 +230,13 @@ def _table_one(frame: Any, sealed: LandmarkSurvivalRuntimeAuthority):
             values = numeric.loc[frame[group].eq(exposure_value)].dropna()
             row[f"{label}_n"] = int(len(values))
             row[f"{label}_mean"] = float(values.mean()) if len(values) else None
-            row[f"{label}_sd"] = (
-                float(values.std(ddof=1)) if len(values) > 1 else None
+            row[f"{label}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else None
+            row[f"{label}_median"] = float(values.median()) if len(values) else None
+            row[f"{label}_q1"] = float(values.quantile(0.25)) if len(values) else None
+            row[f"{label}_q3"] = float(values.quantile(0.75)) if len(values) else None
+            means[exposure_value] = (
+                float(values.mean()) if len(values) else float("nan")
             )
-            row[f"{label}_median"] = (
-                float(values.median()) if len(values) else None
-            )
-            row[f"{label}_q1"] = (
-                float(values.quantile(0.25)) if len(values) else None
-            )
-            row[f"{label}_q3"] = (
-                float(values.quantile(0.75)) if len(values) else None
-            )
-            means[exposure_value] = float(values.mean()) if len(values) else float("nan")
             variances[exposure_value] = (
                 float(values.var(ddof=1)) if len(values) > 1 else float("nan")
             )
@@ -255,7 +254,10 @@ def _render_figure(
     *,
     km_table: Any,
     cox_row: Mapping[str, Any],
+    rmst_table: Any | None,
+    time_varying_table: Any | None,
     risk_flow: Any,
+    ph_table: Any,
     sealed: LandmarkSurvivalRuntimeAuthority,
     out_dir: Path,
 ) -> dict[str, Path]:
@@ -272,24 +274,27 @@ def _render_figure(
         make_figure_contract,
         save_publication_figure,
     )
+    from ...figures.display_labels import display_label
 
     palette = apply_publication_style()
-    fig = plt.figure(figsize=(183 / 25.4, 118 / 25.4), constrained_layout=False)
+    fig = plt.figure(figsize=(183 / 25.4, 150 / 25.4), constrained_layout=False)
     grid = fig.add_gridspec(
+        4,
         2,
-        2,
-        width_ratios=(1.5, 1.0),
-        height_ratios=(1.0, 0.9),
+        width_ratios=(1.42, 1.0),
+        height_ratios=(1.0, 0.85, 0.85, 0.46),
         left=0.09,
         right=0.975,
         top=0.93,
-        bottom=0.12,
-        wspace=0.42,
-        hspace=0.52,
+        bottom=0.10,
+        wspace=0.38,
+        hspace=0.72,
     )
-    ax_km = fig.add_subplot(grid[:, 0])
+    ax_km = fig.add_subplot(grid[:3, 0])
+    ax_risk = fig.add_subplot(grid[3, 0], sharex=ax_km)
     ax_hr = fig.add_subplot(grid[0, 1])
-    ax_flow = fig.add_subplot(grid[1, 1])
+    ax_flow = fig.add_subplot(grid[1:3, 1])
+    ax_ph = fig.add_subplot(grid[3, 1])
     labels = {
         0: sealed.comparator_group_label,
         1: sealed.exposed_group_label,
@@ -309,46 +314,174 @@ def _render_figure(
     ax_km.set_xlim(0.0, sealed.endpoint_horizon_days - sealed.landmark_hours / 24.0)
     ax_km.set_xlabel(f"Days after the {sealed.landmark_hours:g}-hour landmark")
     ax_km.set_ylabel("Survival probability")
-    ax_km.set_title("Landmark Kaplan-Meier survival", loc="left")
+    ax_km.set_title("Unadjusted landmark Kaplan-Meier survival", loc="left")
     ax_km.legend(loc="lower left", fontsize=6.4)
-    ax_km.grid(axis="y", color=palette["neutral_light"], linewidth=0.55)
-    add_panel_label(ax_km, "A", x=-0.09)
+    add_panel_label(ax_km, "a", x=-0.09, fontsize=8.0)
+
+    horizon = sealed.endpoint_horizon_days - sealed.landmark_hours / 24.0
+    risk_times = np.linspace(0.0, horizon, 5)
+    risk_rows: list[list[str]] = []
+    for value in (0, 1):
+        group = km_table.loc[km_table["exposure_group"].eq(value)].sort_values(
+            "time_from_landmark_days"
+        )
+        counts: list[str] = []
+        for time_point in risk_times:
+            eligible = group.loc[group["time_from_landmark_days"].le(time_point)]
+            counts.append(
+                str(
+                    int(
+                        (eligible.iloc[-1] if not eligible.empty else group.iloc[0])[
+                            "at_risk"
+                        ]
+                    )
+                )
+            )
+        risk_rows.append(counts)
+    ax_risk.axis("off")
+    table = ax_risk.table(
+        cellText=risk_rows,
+        rowLabels=[labels[0], labels[1]],
+        colLabels=[f"{value:g}" for value in risk_times],
+        cellLoc="center",
+        rowLoc="right",
+        bbox=[0.0, 0.0, 1.0, 1.0],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(5.7)
+    for cell in table.get_celld().values():
+        cell.set_linewidth(0.0)
+    ax_risk.text(
+        -0.02,
+        0.98,
+        "Number at risk",
+        transform=ax_risk.transAxes,
+        fontsize=6.2,
+        fontweight="bold",
+        va="top",
+    )
+
+    ph_statuses = {
+        str(value).strip()
+        for value in ph_table.get("ph_status", [])
+        if str(value).strip()
+    }
+    authorization_values = {
+        bool(value) for value in ph_table.get("paper_authorization_allowed", [])
+    }
+    ph_violation = any(value.startswith("violation_") for value in ph_statuses)
+    headline_hr_authorized = not ph_violation and authorization_values != {False}
 
     hazard_ratio = float(cox_row["hazard_ratio"])
     ci_low = float(cox_row["ci_low"])
     ci_high = float(cox_row["ci_high"])
-    ax_hr.errorbar(
-        hazard_ratio,
-        0,
-        xerr=np.array([[hazard_ratio - ci_low], [ci_high - hazard_ratio]]),
-        fmt="o",
-        color=palette["blue"],
-        capsize=3,
-        linewidth=1.2,
+    promotes_time_varying = bool(
+        not headline_hr_authorized
+        and time_varying_table is not None
+        and len(time_varying_table) > 0
     )
-    ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    ax_hr.set_xscale("log")
-    lower_limit = min(ci_low * 0.9, 0.9)
-    upper_limit = max(ci_high * 1.1, 1.1)
-    ax_hr.set_xlim(lower_limit, upper_limit)
-    tick_candidates = (0.25, 0.5, 1.0, 2.0, 4.0)
-    ticks = [tick for tick in tick_candidates if lower_limit <= tick <= upper_limit]
-    ax_hr.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
-    ax_hr.xaxis.set_minor_locator(NullLocator())
-    ax_hr.xaxis.set_minor_formatter(NullFormatter())
-    ax_hr.set_yticks([0], [sealed.exposed_group_label])
-    ax_hr.set_xlabel("Adjusted hazard ratio (95% CI)")
-    ax_hr.set_title("Adjusted Cox association", loc="left")
-    ax_hr.text(
-        0.03,
-        0.08,
-        f"HR {hazard_ratio:.2f} ({ci_low:.2f}–{ci_high:.2f})",
-        transform=ax_hr.transAxes,
-        fontsize=6.4,
-        ha="left",
-        va="bottom",
-    )
-    add_panel_label(ax_hr, "B", x=-0.16, y=1.05)
+    if headline_hr_authorized:
+        ax_hr.errorbar(
+            hazard_ratio,
+            0,
+            xerr=np.array([[hazard_ratio - ci_low], [ci_high - hazard_ratio]]),
+            fmt="o",
+            color=palette["blue"],
+            capsize=3,
+            linewidth=1.2,
+        )
+        ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        ax_hr.set_xscale("log")
+        lower_limit = min(ci_low * 0.9, 0.9)
+        upper_limit = max(ci_high * 1.1, 1.1)
+        ax_hr.set_xlim(lower_limit, upper_limit)
+        tick_candidates = (0.25, 0.5, 1.0, 2.0, 4.0)
+        ticks = [tick for tick in tick_candidates if lower_limit <= tick <= upper_limit]
+        ax_hr.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
+        ax_hr.xaxis.set_minor_locator(NullLocator())
+        ax_hr.xaxis.set_minor_formatter(NullFormatter())
+        ax_hr.set_yticks([0], [sealed.exposed_group_label])
+        ax_hr.set_xlabel("Adjusted hazard ratio (95% CI)")
+        ax_hr.set_title("Adjusted Cox association", loc="left")
+        ax_hr.text(
+            0.03,
+            0.08,
+            f"HR {hazard_ratio:.2f} ({ci_low:.2f}–{ci_high:.2f})",
+            transform=ax_hr.transAxes,
+            fontsize=6.4,
+            ha="left",
+            va="bottom",
+        )
+    elif promotes_time_varying:
+        exposure_rows = time_varying_table.loc[
+            time_varying_table["is_exposure"].astype(bool)
+        ].sort_values("interval_index")
+        if len(exposure_rows) != len(sealed.time_varying_interval_cutpoints_days) + 1:
+            raise ValueError(
+                "landmark survival figure lacks every time-varying exposure interval"
+            )
+        estimates = exposure_rows["hazard_ratio"].to_numpy(dtype=float)
+        lows = exposure_rows["ci_low"].to_numpy(dtype=float)
+        highs = exposure_rows["ci_high"].to_numpy(dtype=float)
+        positions = np.arange(len(exposure_rows))
+        ax_hr.errorbar(
+            estimates,
+            positions,
+            xerr=np.vstack((estimates - lows, highs - estimates)),
+            fmt="o",
+            color=palette["blue"],
+            capsize=3,
+            linewidth=1.2,
+        )
+        ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        ax_hr.set_xscale("log")
+        ax_hr.set_yticks(
+            positions,
+            [
+                f"{row.interval_start_days:g}–{row.interval_end_days:g} d"
+                for row in exposure_rows.itertuples()
+            ],
+        )
+        ax_hr.invert_yaxis()
+        ax_hr.set_xlabel("Adjusted interval-specific HR (95% CI)")
+        ax_hr.set_title("Time-varying adjusted association", loc="left")
+    else:
+        if rmst_table is None or len(rmst_table) != 1:
+            raise ValueError(
+                "landmark survival requires one RMST contrast when PH is rejected"
+            )
+        rmst_row = rmst_table.iloc[0]
+        difference = float(rmst_row["rmst_difference_days"])
+        difference_low = float(rmst_row["ci_low"])
+        difference_high = float(rmst_row["ci_high"])
+        ax_hr.errorbar(
+            difference,
+            0,
+            xerr=np.array(
+                [[difference - difference_low], [difference_high - difference]]
+            ),
+            fmt="o",
+            color=palette["blue"],
+            capsize=3,
+            linewidth=1.2,
+        )
+        ax_hr.axvline(0.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        span = max(abs(difference_low), abs(difference_high), 0.25)
+        ax_hr.set_xlim(-1.15 * span, 1.15 * span)
+        ax_hr.set_yticks([0], [sealed.exposed_group_label])
+        ax_hr.set_xlabel("RMST difference, days (95% CI)")
+        ax_hr.set_title("PH-free survival contrast", loc="left")
+        ax_hr.text(
+            0.03,
+            0.08,
+            f"RMST difference {difference:.2f} d "
+            f"({difference_low:.2f} to {difference_high:.2f})",
+            transform=ax_hr.transAxes,
+            fontsize=6.2,
+            ha="left",
+            va="bottom",
+        )
+    add_panel_label(ax_hr, "b", x=-0.16, y=1.05, fontsize=8.0)
 
     display = risk_flow.tail(4).copy()
     display_labels = {
@@ -365,7 +498,10 @@ def _render_figure(
     ax_flow.barh(y, display["count"], color=palette["teal"])
     ax_flow.set_yticks(
         y,
-        [display_labels.get(value, value.replace("_", " ")) for value in display["stage"]],
+        [
+            display_labels.get(value, value.replace("_", " "))
+            for value in display["stage"]
+        ],
         fontsize=5.8,
     )
     for row_index, count in enumerate(display["count"].astype(int)):
@@ -381,35 +517,116 @@ def _render_figure(
     ax_flow.invert_yaxis()
     ax_flow.set_xlabel(f"{sealed.analysis_unit_label} (n)")
     ax_flow.set_title("Risk-set accounting", loc="left")
-    add_panel_label(ax_flow, "C", x=-0.16, y=1.05)
+    add_panel_label(ax_flow, "c", x=-0.16, y=1.05, fontsize=8.0)
+
+    ph_display = ph_table.copy()
+    required_ph_columns = {"covariate", "p_value", "declared_alpha"}
+    if not required_ph_columns.issubset(ph_display.columns):
+        missing = sorted(required_ph_columns - set(ph_display.columns))
+        raise ValueError(
+            "landmark survival PH diagnostics lack columns: " + ", ".join(missing)
+        )
+    ph_values = np.asarray(ph_display["p_value"], dtype=float)
+    alpha_values = np.asarray(ph_display["declared_alpha"], dtype=float)
+    if (
+        len(ph_values) == 0
+        or not np.isfinite(ph_values).all()
+        or np.any(ph_values <= 0)
+        or np.any(ph_values > 1)
+        or not np.isfinite(alpha_values).all()
+        or np.any(alpha_values <= 0)
+        or np.any(alpha_values >= 1)
+        or not np.allclose(alpha_values, alpha_values[0])
+    ):
+        raise ValueError(
+            "landmark survival PH diagnostics require finite p values and one "
+            "declared alpha in (0, 1)"
+        )
+    ph_display["p_value"] = np.maximum(ph_values, np.finfo(float).tiny)
+    ph_display["neg_log10_p"] = -np.log10(ph_display["p_value"])
+    ph_display = ph_display.sort_values("neg_log10_p", ascending=True)
+    ph_labels = [
+        "Global" if value == "global" else display_label(value)
+        for value in ph_display["covariate"]
+    ]
+    y_ph = np.arange(len(ph_display))
+    alpha = float(alpha_values[0])
+    ax_ph.barh(y_ph, ph_display["neg_log10_p"], color=palette["orange"])
+    ax_ph.axvline(
+        -np.log10(alpha),
+        color=palette["neutral"],
+        linestyle="--",
+        linewidth=0.8,
+    )
+    ax_ph.set_yticks(y_ph, ph_labels, fontsize=5.3)
+    ax_ph.set_xlabel(r"Schoenfeld test $-\log_{10}(p)$")
+    ax_ph.set_title("Proportional-hazards diagnostics", loc="left")
+    add_panel_label(ax_ph, "d", x=-0.16, y=1.05, fontsize=8.0)
 
     contract = make_figure_contract(
         figure_id="landmark_survival_suite",
         core_claim=(
-            "Post-landmark survival and the adjusted hazard-ratio association "
-            "are shown only after explicit exposure-timing and risk-set exclusions."
+            "Post-landmark survival and risk-set accounting are shown with the "
+            "signed proportional-hazards decision; a constant Cox effect is "
+            + (
+                "shown only because the assumption was not rejected."
+                if headline_hr_authorized
+                else "withheld because the assumption was rejected."
+            )
         ),
         panels=[
             {
-                "panel_id": "A",
-                "title": "Landmark Kaplan-Meier survival",
+                "panel_id": "a",
+                "title": "Unadjusted landmark Kaplan-Meier survival",
                 "role": "temporal_absolute_risk",
                 "chart_type": "kaplan_meier_curve",
-                "claim": "Absolute post-landmark survival is displayed by the frozen incident-exposure groups.",
+                "claim": "Unadjusted absolute post-landmark survival is displayed by the frozen incident-exposure groups.",
                 "evidence_ids": [],
                 "review_risk": "This is an observational landmark comparison and does not identify a causal exposure effect.",
             },
             {
-                "panel_id": "B",
-                "title": "Adjusted Cox association",
-                "role": "survival_effect",
-                "chart_type": "hazard_ratio_forest",
-                "claim": "The adjusted hazard ratio quantifies the prespecified descriptive prognostic association.",
+                "panel_id": "b",
+                "title": (
+                    "Adjusted Cox association"
+                    if headline_hr_authorized
+                    else (
+                        "Time-varying adjusted association"
+                        if promotes_time_varying
+                        else "PH-free survival contrast"
+                    )
+                ),
+                "role": ("survival_effect"),
+                "chart_type": (
+                    "hazard_ratio_forest"
+                    if headline_hr_authorized
+                    else (
+                        "time_varying_hazard_ratio_forest"
+                        if promotes_time_varying
+                        else "rmst_difference_forest"
+                    )
+                ),
+                "claim": (
+                    "The adjusted hazard ratio quantifies the prespecified descriptive prognostic association."
+                    if headline_hr_authorized
+                    else (
+                        "The prespecified extended Cox model reports adjusted interval-specific associations instead of one constant hazard ratio."
+                        if promotes_time_varying
+                        else "The unadjusted restricted-mean survival-time difference gives a PH-free descriptive group contrast over the post-landmark horizon."
+                    )
+                ),
                 "evidence_ids": [],
-                "review_risk": "Interpretation depends on proportional-hazards diagnostics and residual confounding remains possible.",
+                "review_risk": (
+                    "Interpretation depends on proportional-hazards diagnostics and residual confounding remains possible."
+                    if headline_hr_authorized
+                    else (
+                        "Interval-specific hazard ratios remain observational sensitivities and do not establish a causal ventilation effect."
+                        if promotes_time_varying
+                        else "The RMST contrast is unadjusted and observational; do not recover or quote the source-table hazard ratio as a constant headline effect."
+                    )
+                ),
             },
             {
-                "panel_id": "C",
+                "panel_id": "c",
                 "title": "Risk-set accounting",
                 "role": "cohort_accounting",
                 "chart_type": "cohort_flow",
@@ -417,12 +634,37 @@ def _render_figure(
                 "evidence_ids": [],
                 "review_risk": "Excluded prevalent or timing-unknown exposure rows define the supported estimand boundary.",
             },
+            {
+                "panel_id": "d",
+                "title": "Proportional-hazards diagnostics",
+                "role": "diagnostics",
+                "chart_type": "schoenfeld_plot",
+                "claim": "Schoenfeld-residual tests disclose whether the fitted Cox proportional-hazards assumption is rejected.",
+                "evidence_ids": [],
+                "review_risk": "A diagnostic p value does not repair non-proportional hazards; the signed handling policy still governs reportability.",
+            },
         ],
         export_formats=("svg", "pdf", "png"),
-        source_data=("landmark_km_curve.csv", "landmark_cox_summary.csv", "landmark_risk_set_flow.csv"),
+        source_data=(
+            "landmark_km_curve.csv",
+            "landmark_cox_summary.csv",
+            "landmark_risk_set_flow.csv",
+            "landmark_ph_diagnostics.csv",
+            *(("landmark_rmst_summary.csv",) if rmst_table is not None else ()),
+            *(
+                ("landmark_time_varying_cox_summary.csv",)
+                if time_varying_table is not None
+                else ()
+            ),
+        ),
         statistics_note=(
-            "Kaplan-Meier estimates use the post-landmark clock. The Cox model "
-            "reports a Wald 95% confidence interval and a Schoenfeld residual audit."
+            "Kaplan-Meier estimates are unadjusted and use the post-landmark clock; "
+            "their direction can differ from the covariate-adjusted Cox estimate. "
+            "The Cox model reports a Wald 95% confidence interval and a Schoenfeld "
+            "residual audit. The constant hazard-ratio estimate is replaced by "
+            "prespecified interval-specific coefficients when available and an "
+            "unadjusted restricted-mean survival-time difference whenever the "
+            "signed PH policy rejects reportability."
         ),
         image_integrity_note="All plotted values are rendered from digest-bound upstream result tables.",
     )
@@ -435,6 +677,101 @@ def _render_figure(
     )
     plt.close(fig)
     return outputs
+
+
+def build_survival_manuscript_projection(*, interval_count: int) -> dict[str, object]:
+    """Build the reporting projection owned by the signed survival executor."""
+
+    if interval_count <= 0:
+        raise ValueError("survival manuscript projection requires intervals")
+    rmst_fragments = [
+        {"text": "Through "},
+        {"numeric_path": "rmst.tau_days_from_landmark", "format_spec": ".0f"},
+        {
+            "text": (
+                " days after the landmark, the unadjusted Kaplan–Meier plug-in "
+                "restricted mean survival time was "
+            )
+        },
+        {"numeric_path": "rmst.exposed_rmst_days", "format_spec": ".3f"},
+        {"text": " days in the exposed group and "},
+        {"numeric_path": "rmst.comparator_rmst_days", "format_spec": ".3f"},
+        {
+            "text": (
+                " days in the comparator group, an exposed-minus-comparator "
+                "difference of "
+            )
+        },
+        {"numeric_path": "rmst.difference_days", "format_spec": ".3f"},
+        {"text": " days (95% CI, "},
+        {"numeric_path": "rmst.ci_low", "format_spec": ".3f"},
+        {"text": " to "},
+        {"numeric_path": "rmst.ci_high", "format_spec": ".3f"},
+        {"text": "; p = "},
+        {"numeric_path": "rmst.p_value", "format_spec": ".6g"},
+        {"text": ")."},
+    ]
+    interval_fragments = [
+        {
+            "text": (
+                "The adjusted piecewise time-varying association estimates "
+                "for the exposed-versus-comparator contrast were "
+            )
+        }
+    ]
+    for index in range(interval_count):
+        prefix = f"time_varying_adjusted_association.intervals[{index}]"
+        if index:
+            interval_fragments.append({"text": "; "})
+        interval_fragments.extend(
+            [
+                {"text": "days "},
+                {"numeric_path": f"{prefix}.start_days", "format_spec": ".0f"},
+                {"text": "–"},
+                {"numeric_path": f"{prefix}.end_days", "format_spec": ".0f"},
+                {"text": ": hazard ratio "},
+                {"numeric_path": f"{prefix}.hazard_ratio", "format_spec": ".3f"},
+                {"text": " (95% CI, "},
+                {"numeric_path": f"{prefix}.ci_low", "format_spec": ".3f"},
+                {"text": " to "},
+                {"numeric_path": f"{prefix}.ci_high", "format_spec": ".3f"},
+                {"text": "; p = "},
+                {"numeric_path": f"{prefix}.p_value", "format_spec": ".6g"},
+                {"text": ")"},
+            ]
+        )
+    interval_fragments.append(
+        {
+            "text": (
+                ". These interval-specific estimates were retained because "
+                "the proportional-hazards assumption was rejected."
+            )
+        }
+    )
+    return {
+        "schema_version": "easyicu.manuscript_projection/1",
+        "claims": [
+            {
+                "claim_id": "primary_rmst_contrast",
+                "targets": [
+                    {"kind": "abstract_label", "label": "Results"},
+                    {"kind": "markdown_heading", "label": "Primary association"},
+                ],
+                "fragments": rmst_fragments,
+            },
+            {
+                "claim_id": "time_varying_association_intervals",
+                "targets": [
+                    {"kind": "abstract_label", "label": "Results"},
+                    {
+                        "kind": "markdown_heading",
+                        "label": "Sensitivity and subgroup analyses",
+                    },
+                ],
+                "fragments": interval_fragments,
+            },
+        ],
+    }
 
 
 def run_landmark_survival_suite(
@@ -455,6 +792,8 @@ def run_landmark_survival_suite(
 
     from ...figures.base import km_estimate
     from ...methods.ph_schoenfeld import ph_test
+    from ...methods.rmst import rmst, rmst_difference
+    from ...methods.time_varying_cox import fit_piecewise_time_varying_cox
 
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
@@ -471,7 +810,11 @@ def run_landmark_survival_suite(
         sealed.exposure_onset_column,
         sealed.event_column,
         sealed.followup_time_column,
-        *(column for column in sealed.adjustment_columns if column not in sealed.categorical_adjustment_columns),
+        *(
+            column
+            for column in sealed.adjustment_columns
+            if column not in sealed.categorical_adjustment_columns
+        ),
     }
     for column in numeric_columns:
         working[column] = pd.to_numeric(working[column], errors="coerce")
@@ -486,10 +829,7 @@ def run_landmark_survival_suite(
         & np.isfinite(followup)
         & followup.ge(0)
         & followup.le(float(sealed.endpoint_horizon_days))
-        & (
-            event.eq(1)
-            | followup.ge(float(sealed.endpoint_horizon_days))
-        )
+        & (event.eq(1) | followup.ge(float(sealed.endpoint_horizon_days)))
     )
     landmark_days = sealed.landmark_hours / 24.0
     alive_at_landmark = followup.gt(landmark_days)
@@ -517,15 +857,38 @@ def run_landmark_survival_suite(
     analysis[sealed.derived_event_column] = event.loc[eligible_mask].astype(int)
     analysis[sealed.derived_time_column] = followup.loc[eligible_mask] - landmark_days
     if len(analysis) < 100 or analysis[sealed.derived_exposure_column].nunique() != 2:
-        raise ValueError("landmark survival risk set lacks an estimable exposure contrast")
+        raise ValueError(
+            "landmark survival risk set lacks an estimable exposure contrast"
+        )
     if int(analysis[sealed.derived_event_column].sum()) < 10:
         raise ValueError("landmark survival risk set has insufficient event support")
+
+    missingness_measurement_audit = {
+        "source_n": int(len(working)),
+        "landmark_population_n": int(len(analysis)),
+        "source_missing_n_by_column": {
+            column: int(working[column].isna().sum())
+            for column in sealed.required_columns
+        },
+        "landmark_missing_n_by_model_column": {
+            column: int(analysis[column].isna().sum())
+            for column in sealed.adjustment_columns
+        },
+    }
 
     risk_rows = [
         ("source_rows", len(working)),
         ("valid_fixed_horizon_endpoint", int(endpoint_valid.sum())),
-        ("alive_and_observed_at_landmark", int((endpoint_valid & alive_at_landmark).sum())),
-        ("exposure_status_and_timing_supported", int((endpoint_valid & alive_at_landmark & status_valid & timing_known).sum())),
+        (
+            "alive_and_observed_at_landmark",
+            int((endpoint_valid & alive_at_landmark).sum()),
+        ),
+        (
+            "exposure_status_and_timing_supported",
+            int(
+                (endpoint_valid & alive_at_landmark & status_valid & timing_known).sum()
+            ),
+        ),
         ("landmark_analysis_population", len(analysis)),
     ]
     risk_flow = pd.DataFrame(
@@ -535,7 +898,9 @@ def run_landmark_survival_suite(
                 "stage": stage,
                 "count": int(count),
                 "source_denominator": int(len(working)),
-                "percent_of_source": 100.0 * count / len(working) if len(working) else None,
+                "percent_of_source": (
+                    100.0 * count / len(working) if len(working) else None
+                ),
                 "excluded_since_prior_stage": (
                     0 if index == 0 else int(risk_rows[index - 1][1] - count)
                 ),
@@ -547,7 +912,9 @@ def run_landmark_survival_suite(
     table_one = _table_one(analysis, sealed)
     km_rows: list[dict[str, Any]] = []
     for exposure_value in (0, 1):
-        subset = analysis.loc[analysis[sealed.derived_exposure_column].eq(exposure_value)]
+        subset = analysis.loc[
+            analysis[sealed.derived_exposure_column].eq(exposure_value)
+        ]
         estimate = km_estimate(
             subset[sealed.derived_time_column], subset[sealed.derived_event_column]
         )
@@ -601,10 +968,15 @@ def run_landmark_survival_suite(
         )
         encoded.loc[model_source[column].isna(), :] = float("nan")
         if encoded.empty:
-            raise ValueError(f"landmark survival categorical column {column!r} has no contrast")
+            raise ValueError(
+                f"landmark survival categorical column {column!r} has no contrast"
+            )
         pieces.append(encoded)
     model_frame = pd.concat(pieces, axis=1).dropna().astype(float)
-    if len(model_frame) < 100 or int(model_frame[sealed.derived_event_column].sum()) < 10:
+    if (
+        len(model_frame) < 100
+        or int(model_frame[sealed.derived_event_column].sum()) < 10
+    ):
         raise ValueError("landmark survival complete-case model is not estimable")
     covariates = [
         column
@@ -631,9 +1003,7 @@ def run_landmark_survival_suite(
             "p_value": summary["p"].astype(float),
         }
     )
-    primary_rows = cox_table.loc[
-        cox_table["term"].eq(sealed.derived_exposure_column)
-    ]
+    primary_rows = cox_table.loc[cox_table["term"].eq(sealed.derived_exposure_column)]
     if len(primary_rows) != 1:
         raise ValueError("landmark survival Cox result lacks one exposure row")
     primary_row = primary_rows.iloc[0].to_dict()
@@ -674,18 +1044,129 @@ def run_landmark_survival_suite(
     ph_table["ph_status"] = ph_status
     ph_table["paper_authorization_allowed"] = not ph_violation
 
+    rmst_table = None
+    if sealed.rmst_product is not None:
+        tau = float(sealed.endpoint_horizon_days) - landmark_days
+        comparator = analysis.loc[analysis[sealed.derived_exposure_column].eq(0)]
+        exposed_group = analysis.loc[analysis[sealed.derived_exposure_column].eq(1)]
+        comparator_rmst = rmst(
+            comparator[sealed.derived_time_column],
+            comparator[sealed.derived_event_column],
+            tau,
+        )
+        exposed_rmst = rmst(
+            exposed_group[sealed.derived_time_column],
+            exposed_group[sealed.derived_event_column],
+            tau,
+        )
+        contrast = rmst_difference(
+            analysis[sealed.derived_time_column],
+            analysis[sealed.derived_event_column],
+            analysis[sealed.derived_exposure_column],
+            tau,
+        )
+        contrast_ci_low, contrast_ci_high = contrast["ci"]
+        rmst_table = pd.DataFrame(
+            [
+                {
+                    "contrast": (
+                        f"{sealed.exposed_group_label} versus "
+                        f"{sealed.comparator_group_label}"
+                    ),
+                    "tau_days_from_landmark": tau,
+                    "exposed_rmst_days": exposed_rmst.rmst,
+                    "exposed_rmst_ci_low": exposed_rmst.ci_low,
+                    "exposed_rmst_ci_high": exposed_rmst.ci_high,
+                    "comparator_rmst_days": comparator_rmst.rmst,
+                    "comparator_rmst_ci_low": comparator_rmst.ci_low,
+                    "comparator_rmst_ci_high": comparator_rmst.ci_high,
+                    "rmst_difference_days": -float(contrast["diff"]),
+                    "standard_error": float(contrast["se_diff"]),
+                    "ci_low": -float(contrast_ci_high),
+                    "ci_high": -float(contrast_ci_low),
+                    "p_value": float(contrast["p_value"]),
+                    "adjustment": "unadjusted_kaplan_meier_plugin",
+                }
+            ]
+        )
+
+    time_varying_table = None
+    exposure_intervals = None
+    if sealed.time_varying_effect_method is not None:
+        time_varying_table = fit_piecewise_time_varying_cox(
+            model_frame,
+            duration_col=sealed.derived_time_column,
+            event_col=sealed.derived_event_column,
+            covariates=covariates,
+            interval_cutpoints=sealed.time_varying_interval_cutpoints_days,
+            exposure_col=sealed.derived_exposure_column,
+        )
+        exposure_intervals = time_varying_table.loc[time_varying_table["is_exposure"]]
+        if len(exposure_intervals) != (
+            len(sealed.time_varying_interval_cutpoints_days) + 1
+        ):
+            raise ValueError(
+                "landmark survival time-varying result lacks every exposure interval"
+            )
+
+    reportable_survival_results = None
+    if rmst_table is not None and exposure_intervals is not None:
+        rmst_row = rmst_table.iloc[0]
+        reportable_survival_results = {
+            "schema_version": "easyicu.survival_reporting/1",
+            "execution_owner": "landmark_survival_executor_v1",
+            "interpretation_ceiling": "descriptive_prognostic_association_not_causal",
+            "contrast": str(rmst_row["contrast"]),
+            "constant_hazard_ratio_authorized": not ph_violation,
+            "proportional_hazards_status": ph_status,
+            "rmst": {
+                "method": str(rmst_row["adjustment"]),
+                "tau_days_from_landmark": float(rmst_row["tau_days_from_landmark"]),
+                "exposed_rmst_days": float(rmst_row["exposed_rmst_days"]),
+                "comparator_rmst_days": float(rmst_row["comparator_rmst_days"]),
+                "difference_days": float(rmst_row["rmst_difference_days"]),
+                "ci_low": float(rmst_row["ci_low"]),
+                "ci_high": float(rmst_row["ci_high"]),
+                "p_value": float(rmst_row["p_value"]),
+            },
+            "time_varying_adjusted_association": {
+                "method": str(sealed.time_varying_effect_method),
+                "adjustment_columns": list(sealed.adjustment_columns),
+                "intervals": [
+                    {
+                        "start_days": float(row.interval_start_days),
+                        "end_days": float(row.interval_end_days),
+                        "hazard_ratio": float(row.hazard_ratio),
+                        "ci_low": float(row.ci_low),
+                        "ci_high": float(row.ci_high),
+                        "p_value": float(row.p_value),
+                    }
+                    for row in exposure_intervals.itertuples(index=False)
+                ],
+            },
+            "manuscript_projection": build_survival_manuscript_projection(
+                interval_count=len(exposure_intervals)
+            ),
+        }
+
     out_dir.mkdir(parents=True, exist_ok=True)
     table_one_path = out_dir / "landmark_table_one.csv"
     risk_path = out_dir / "landmark_risk_set_flow.csv"
     km_path = out_dir / "landmark_km_curve.csv"
     cox_path = out_dir / "landmark_cox_summary.csv"
     ph_path = out_dir / "landmark_ph_diagnostics.csv"
+    rmst_path = out_dir / "landmark_rmst_summary.csv"
+    time_varying_path = out_dir / "landmark_time_varying_cox_summary.csv"
     analysis_path = out_dir / "landmark_analysis_cohort.parquet"
     table_one.to_csv(table_one_path, index=False)
     risk_flow.to_csv(risk_path, index=False)
     km_table.to_csv(km_path, index=False)
     cox_table.to_csv(cox_path, index=False)
     ph_table.to_csv(ph_path, index=False)
+    if rmst_table is not None:
+        rmst_table.to_csv(rmst_path, index=False)
+    if time_varying_table is not None:
+        time_varying_table.to_csv(time_varying_path, index=False)
     analysis.to_parquet(analysis_path, index=False)
     receipt = {
         "schema_version": "easyicu.landmark_survival_runtime_receipt/1",
@@ -703,13 +1184,28 @@ def run_landmark_survival_suite(
         "n_source": int(len(working)),
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
+        "missingness_measurement_audit": missingness_measurement_audit,
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
+        "effect_measure": sealed.effect_measure,
+        "contrast": (
+            f"{sealed.exposed_group_label} versus {sealed.comparator_group_label}"
+        ),
         "hazard_ratio": float(primary_row["hazard_ratio"]),
         "ci_low": float(primary_row["ci_low"]),
         "ci_high": float(primary_row["ci_high"]),
         "ph_global_p_value": global_p,
         "ph_exposure_p_value": exposure_p,
         "ph_status": ph_status,
+        "non_ph_alternative": sealed.non_ph_alternative,
+        "time_varying_effect_method": sealed.time_varying_effect_method,
+        "time_varying_interval_cutpoints_days": list(
+            sealed.time_varying_interval_cutpoints_days
+        ),
+        "rmst_difference_days": (
+            None
+            if rmst_table is None
+            else float(rmst_table.loc[0, "rmst_difference_days"])
+        ),
         "paper_authorization_allowed": not ph_violation,
         "interpretation": sealed.interpretation,
         "analysis_only": True,
@@ -717,7 +1213,9 @@ def run_landmark_survival_suite(
     }
     receipt_path = out_dir / "landmark_survival_runtime_receipt.json"
     receipt_path.write_text(
-        json.dumps(receipt, indent=2, ensure_ascii=False, sort_keys=True, allow_nan=False),
+        json.dumps(
+            receipt, indent=2, ensure_ascii=False, sort_keys=True, allow_nan=False
+        ),
         encoding="utf-8",
     )
     output_files = {
@@ -728,6 +1226,10 @@ def run_landmark_survival_suite(
         sealed.ph_product: ph_path.name,
         sealed.receipt_product: receipt_path.name,
     }
+    if sealed.rmst_product is not None:
+        output_files[sealed.rmst_product] = rmst_path.name
+    if sealed.time_varying_cox_product is not None:
+        output_files[sealed.time_varying_cox_product] = time_varying_path.name
     return {
         "status": "ok",
         "analysis_family": "survival",
@@ -740,11 +1242,31 @@ def run_landmark_survival_suite(
         "n_source": int(len(working)),
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
+        "missingness_measurement_audit": missingness_measurement_audit,
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
+        "effect_measure": sealed.effect_measure,
+        "contrast": (
+            f"{sealed.exposed_group_label} versus {sealed.comparator_group_label}"
+        ),
         "hazard_ratio": float(primary_row["hazard_ratio"]),
         "hazard_ratio_ci_low": float(primary_row["ci_low"]),
         "hazard_ratio_ci_high": float(primary_row["ci_high"]),
         "proportional_hazards_status": ph_status,
+        "non_ph_alternative": sealed.non_ph_alternative,
+        "time_varying_effect_method": sealed.time_varying_effect_method,
+        "time_varying_interval_cutpoints_days": list(
+            sealed.time_varying_interval_cutpoints_days
+        ),
+        "rmst_difference_days": (
+            None
+            if rmst_table is None
+            else float(rmst_table.loc[0, "rmst_difference_days"])
+        ),
+        **(
+            {"reportable_survival_results": reportable_survival_results}
+            if reportable_survival_results is not None
+            else {}
+        ),
         "paper_authorization_allowed": False,
         "analysis_only": True,
         "human_attestation_required": True,
@@ -758,12 +1280,15 @@ def run_landmark_survival_figure(
     *,
     km_table: Any,
     cox_table: Any,
+    rmst_table: Any | None,
     risk_flow: Any,
+    ph_table: Any,
     source_paths: Mapping[str, Path],
     authority: LandmarkSurvivalRuntimeAuthority | Mapping[str, Any],
     out_dir: Path,
+    time_varying_table: Any | None = None,
 ) -> dict[str, Any]:
-    """Render only from the three digest-bound result tables it declares."""
+    """Render only from the digest-bound result tables the authority declares."""
 
     import pandas as pd
 
@@ -780,7 +1305,14 @@ def run_landmark_survival_figure(
         sealed.km_product: "landmark_km_curve.csv",
         sealed.cox_product: "landmark_cox_summary.csv",
         sealed.risk_set_product: "landmark_risk_set_flow.csv",
+        sealed.ph_product: "landmark_ph_diagnostics.csv",
     }
+    if sealed.rmst_product is not None:
+        source_filename_by_product[sealed.rmst_product] = "landmark_rmst_summary.csv"
+    if sealed.time_varying_cox_product is not None:
+        source_filename_by_product[sealed.time_varying_cox_product] = (
+            "landmark_time_varying_cox_summary.csv"
+        )
     copied_sources: list[str] = []
     for product in sealed.figure_input_products:
         source = Path(source_paths[product]).resolve()
@@ -795,10 +1327,63 @@ def run_landmark_survival_figure(
     outputs = _render_figure(
         km_table=pd.DataFrame(km_table),
         cox_row=primary.iloc[0].to_dict(),
+        rmst_table=None if rmst_table is None else pd.DataFrame(rmst_table),
+        time_varying_table=(
+            None if time_varying_table is None else pd.DataFrame(time_varying_table)
+        ),
         risk_flow=pd.DataFrame(risk_flow),
+        ph_table=pd.DataFrame(ph_table),
         sealed=sealed,
         out_dir=out_dir,
     )
+    receipt_path = out_dir / "landmark_survival_figure_runtime_receipt.json"
+    ph_statuses = {
+        str(value).strip()
+        for value in pd.DataFrame(ph_table).get("ph_status", pd.Series(dtype=str))
+        if str(value).strip()
+    }
+    ph_rejected = any(status.startswith("violation_") for status in ph_statuses)
+    promotes_rmst = bool(
+        ph_rejected
+        and time_varying_table is None
+        and sealed.non_ph_alternative == "unadjusted_rmst_difference"
+        and sealed.rmst_product is not None
+        and rmst_table is not None
+    )
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": (
+                    "easyicu.landmark_survival_figure_runtime_receipt/1"
+                ),
+                "adjustment_columns": list(sealed.adjustment_columns),
+                "effect_measure": sealed.effect_measure,
+                "promoted_adjustment_columns": (
+                    [] if promotes_rmst else list(sealed.adjustment_columns)
+                ),
+                "promoted_effect_measure": (
+                    "restricted_mean_survival_time_difference"
+                    if promotes_rmst
+                    else (
+                        "interval_specific_hazard_ratio"
+                        if ph_rejected and time_varying_table is not None
+                        else sealed.effect_measure
+                    )
+                ),
+                "source_sha256": {
+                    product: hashlib.sha256(
+                        Path(source_paths[product]).read_bytes()
+                    ).hexdigest()
+                    for product in sealed.figure_input_products
+                },
+            },
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    outputs["runtime_receipt"] = receipt_path
     figure_file = outputs.get("svg") or outputs.get("png")
     if figure_file is None:
         raise ValueError("landmark survival figure export is missing")
@@ -852,7 +1437,10 @@ def landmark_survival_figure_executor_code(
         summary = run_landmark_survival_figure(
             km_table=bindings[{sealed.km_product!r}].frame,
             cox_table=bindings[{sealed.cox_product!r}].frame,
+            rmst_table={f"bindings[{sealed.rmst_product!r}].frame" if sealed.rmst_product is not None else "None"},
+            time_varying_table={f"bindings[{sealed.time_varying_cox_product!r}].frame" if sealed.time_varying_cox_product is not None else "None"},
             risk_flow=bindings[{sealed.risk_set_product!r}].frame,
+            ph_table=bindings[{sealed.ph_product!r}].frame,
             source_paths={{key: value.path for key, value in bindings.items()}},
             authority=authority,
             out_dir=Path(os.environ["STEP_OUT_DIR"]),

@@ -194,6 +194,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         static_concepts=_STATIC_CORE,
         exposure_concept="kdigo",
         operational_exposure="aki_stage_max",
+        task_protocol_version="e3_kdigo_gradient/20260824-v1",
         notes=(
             "Use aki_stage_max over ICU hours 0-24 as the ordered KDIGO stage "
             "(0-3). Retain its ordinal interpretation and report stage-specific "
@@ -206,6 +207,7 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         static_concepts=_STATIC_CORE,
         exposure_concept="bili",
         operational_exposure="bili_max",
+        task_protocol_version="m1_hepatobiliary_missingness/20260824-v1",
     ),
     Canonical9MaterializationSpec(
         task_id="m2_mortality_prediction",
@@ -405,6 +407,8 @@ def validate_canonical9_mimic_iv_plan() -> None:
             )
     for task_id in (
         "e2_lactate_mortality",
+        "e3_kdigo_gradient",
+        "m1_hepatobiliary_missingness",
         "h1_ventilation_survival",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",

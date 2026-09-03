@@ -40,8 +40,8 @@ from easyicu.concept_output_sources import (
 )
 from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import structural_outcome_unavailability
-from easyicu.webserver.input_validation import parse_bool
 from easyicu.webserver import entity_ids as entity_id_contract
+from easyicu.webserver import primary_cohort
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
@@ -69,7 +69,9 @@ _EXPORT_METADATA_FILES = {
     "feature_definitions.json",
 }
 _NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
-DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
+DEFAULT_OBSERVATION_WINDOW_HOURS = (
+    primary_cohort.DEFAULT_OBSERVATION_WINDOW_HOURS
+)
 _WORKSPACE_SAMPLE_LIMIT = 500
 
 _COHORT_PROGRESS_MESSAGES = {
@@ -521,17 +523,18 @@ def _is_presence_rate_module(module: object) -> bool:
     return _presence_rate_kind(module) is not None
 
 
-_SUPPORTED_COHORT_PRESETS = {
-    "all_icu",
-    "adult_first",
-    "adult_all",
-    "sepsis3",
-    "aki",
-    "ventilation",
-    "vasopressor",
-    "respiratory",
-    "icd",
-}
+_SUPPORTED_COHORT_PRESETS = set(primary_cohort.SUPPORTED_COHORT_PRESETS)
+
+
+def normalize_export_cohort_preset(value: Any) -> str:
+    """Return one canonical Data Extraction cohort preset or fail closed."""
+
+    try:
+        return primary_cohort.normalize_preset(value)
+    except primary_cohort.PrimaryCohortContractError as exc:
+        raise ExportCohortError(exc.code, exc.detail) from exc
+
+
 _ICD_SUPPORTED_DATABASES = {"miiv", "mimic", "miii", "eicu"}
 _CONCEPT_DERIVED_COHORTS = {
     "sepsis3": {
@@ -1315,110 +1318,17 @@ def _coerce_int(
 
 
 def _split_icd_tokens(raw: Any) -> List[str]:
-    import re
-
-    text = str(raw or "").upper().replace("，", ",").replace("；", ";")
-    tokens: List[str] = []
-    for part in re.split(r"[\s,;]+", text):
-        token = part.strip().replace(".", "")
-        if not token:
-            continue
-        if "-" in token:
-            start, end = [p.strip() for p in token.split("-", 1)]
-            if (
-                len(start) == len(end)
-                and len(start) >= 2
-                and start[:-2] == end[:-2]
-                and start[-2:].isdigit()
-                and end[-2:].isdigit()
-            ):
-                prefix = start[:-2]
-                lo, hi = int(start[-2:]), int(end[-2:])
-                if 0 <= hi - lo <= 50:
-                    tokens.extend(f"{prefix}{i:02d}" for i in range(lo, hi + 1))
-                    continue
-        tokens.append(token)
-    seen: Set[str] = set()
-    out: List[str] = []
-    for token in tokens:
-        if token not in seen:
-            seen.add(token)
-            out.append(token)
-    return out[:64]
+    return list(primary_cohort.normalize_diagnosis_tokens(raw))
 
 
 def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = cohort if isinstance(cohort, dict) else {}
-    has_explicit_contract = isinstance(cohort, dict) and bool(cohort)
-    preset = (
-        str(
-            raw.get("preset") or ("adult_first" if has_explicit_contract else "all_icu")
-        )
-        .strip()
-        .lower()
-    )
-    if preset not in _SUPPORTED_COHORT_PRESETS:
-        raise ExportCohortError(
-            "unsupported_cohort_preset",
-            {"preset": preset, "supported": sorted(_SUPPORTED_COHORT_PRESETS)},
-        )
-
-    include = _split_icd_tokens(
-        raw.get("icd_include")
-        or raw.get("include_diagnoses")
-        or raw.get("include")
-        or ""
-    )
-    exclude = _split_icd_tokens(
-        raw.get("icd_exclude")
-        or raw.get("exclude_diagnoses")
-        or raw.get("exclude")
-        or ""
-    )
     try:
-        icd_enabled = (
-            parse_bool(raw.get("icd_enabled"), default=False) or preset == "icd"
-        )
-        exclude_readmissions = parse_bool(
-            raw.get("exclude_readmissions"), default=preset == "adult_first"
-        )
-    except ValueError as exc:
-        raise ExportCohortError(
-            "invalid_cohort_boolean",
-            {"fields": ["icd_enabled", "exclude_readmissions"]},
-        ) from exc
-    if not icd_enabled:
-        include = []
-        exclude = []
-    if preset == "icd" and not include and not exclude:
-        raise ExportCohortError("empty_icd_filter", {"preset": preset})
-
-    age_min = _coerce_int(
-        raw.get("age_min"), 18 if preset == "adult_first" else 0, 0, 120
-    )
-    age_max = _coerce_int(raw.get("age_max"), 100, 0, 120)
-    if age_min > age_max:
-        age_min, age_max = age_max, age_min
-    if preset == "adult_first":
-        age_min = max(18, age_min)
-    min_los = _coerce_int(raw.get("min_icu_los_hours"), 0, 0, 24 * 30)
-    window = _coerce_int(
-        raw.get("observation_window_hours"),
-        DEFAULT_OBSERVATION_WINDOW_HOURS,
-        1,
-        DEFAULT_OBSERVATION_WINDOW_HOURS,
-    )
-
+        normalized = primary_cohort.normalize_execution_cohort(raw)
+    except primary_cohort.PrimaryCohortContractError as exc:
+        raise ExportCohortError(exc.code, exc.detail) from exc
     return {
-        "preset": preset,
-        "age_min": age_min,
-        "age_max": age_max,
-        "min_icu_los_hours": min_los,
-        "observation_window_hours": window,
-        "exclude_readmissions": exclude_readmissions,
-        "icd_enabled": icd_enabled,
-        "icd_include": include,
-        "icd_exclude": exclude,
+        **normalized,
         "sepsis_definition": _normalize_sepsis_definition(raw.get("sepsis_definition")),
     }
 
@@ -1454,7 +1364,7 @@ def _read_table_columns(path: Path, columns: List[str]) -> Any:
     import pandas as pd
 
     present = set(_read_columns(path))
-    wanted = [c for c in columns if c in present]
+    wanted = list(dict.fromkeys(c for c in columns if c in present))
     if path.suffix == ".parquet":
         return pd.read_parquet(path, columns=wanted or None)
     if wanted:
@@ -1740,8 +1650,12 @@ def _resolve_export_cohort(
     filtered = pf.filter(
         age_min=normalized["age_min"] if normalized["age_min"] > 0 else None,
         age_max=normalized["age_max"] if normalized["age_max"] < 100 else None,
-        first_icu_stay=normalized["exclude_readmissions"]
-        or normalized["preset"] == "adult_first",
+        first_icu_stay=(
+            True
+            if normalized["exclude_readmissions"]
+            or normalized["preset"] == "adult_first"
+            else None
+        ),
         los_min=(
             normalized["min_icu_los_hours"]
             if normalized["min_icu_los_hours"] > 0
@@ -1855,6 +1769,208 @@ def _resolve_export_cohort(
         "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
         "sepsis_load_kwargs": sepsis_load_kwargs,
     }
+
+
+def preview_export_cohort(
+    data_path: str,
+    database: str,
+    cohort: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve an extraction cohort and return aggregate, path-free metadata.
+
+    The extraction owner remains the single authority for cohort semantics.
+    This adapter intentionally discards the resolved identifier vector, id
+    column, loader kwargs, and host path before returning to Copilot.
+    """
+
+    import easyicu.api as api
+
+    resolved = _resolve_export_cohort(
+        str(data_path),
+        database,
+        cohort,
+        None,
+        api,
+    )
+    return {
+        "schema_version": "easyicu_export_cohort_preview_v1",
+        "database": normalize_database_key(database),
+        "cohort_size": int(resolved.get("cohort_size") or 0),
+        "cohort_contract": dict(resolved.get("cohort_contract") or {}),
+        "cohort_report": dict(resolved.get("cohort_report") or {}),
+        "privacy": {
+            "patient_ids_returned": False,
+            "raw_rows_returned": False,
+            "host_path_returned": False,
+        },
+    }
+
+
+def normalize_export_cohort_contract(
+    cohort: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Compile one public, path-free Data Extraction cohort contract."""
+
+    return _normalize_export_cohort(dict(cohort) if isinstance(cohort, Mapping) else None)
+
+
+def resolve_registered_export_binding(
+    export_path: str,
+    database: str,
+) -> Dict[str, Any]:
+    """Resolve a registered module export to its sealed raw-source binding.
+
+    The returned paths are host-internal inputs for other WebApp owner modules
+    and must never be projected to the browser or model.
+    """
+
+    try:
+        requested_database = normalize_database_key(database)
+    except KeyError as exc:
+        raise ExportCohortError(
+            "registered_export_database_unknown",
+            {"database": str(database or "")[:40]},
+        ) from exc
+    try:
+        registered_path = Path(export_path).expanduser().resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("registered_export_path_unavailable") from exc
+    if not registered_path.is_dir():
+        raise ExportCohortError("registered_export_path_unavailable")
+
+    manifest = _read_export_manifest(registered_path)
+    if not manifest:
+        raise ExportCohortError("registered_export_manifest_required")
+    try:
+        manifest_database = normalize_database_key(manifest.get("database"))
+    except KeyError as exc:
+        raise ExportCohortError("registered_export_manifest_database_unknown") from exc
+    if manifest_database != requested_database:
+        raise ExportCohortError(
+            "registered_export_database_mismatch",
+            {
+                "requested_database": requested_database,
+                "manifest_database": manifest_database,
+            },
+        )
+
+    raw_source = str(manifest.get("data_path") or "").strip()
+    source_authority_receipt: Optional[Dict[str, Any]] = None
+    if raw_source:
+        try:
+            raw_path = Path(raw_source).expanduser().resolve(strict=True)
+        except (FileNotFoundError, OSError) as exc:
+            raise ExportCohortError("registered_export_source_path_unavailable") from exc
+        if not raw_path.is_dir():
+            raise ExportCohortError("registered_export_source_path_unavailable")
+    else:
+        # Legacy module exports predate the sealed ``data_path`` coordinate.
+        # They may be migrated only through the host-only, digest-bound source
+        # authority; never infer a raw directory from a sibling, label, or
+        # database name.  Import locally so the generic Data Extraction owner
+        # remains independent of an optional Web-host migration capability.
+        from easyicu.webserver import raw_source_authority
+
+        try:
+            raw_source_binding = (
+                raw_source_authority.resolve_raw_mimic_iv_source_binding(
+                    export_path=registered_path,
+                    database=requested_database,
+                )
+            )
+        except raw_source_authority.RawSourceAuthorityError as exc:
+            raise ExportCohortError(
+                "registered_export_raw_source_authority_invalid",
+                {"authority_error": exc.code},
+            ) from exc
+        if raw_source_binding is None:
+            raise ExportCohortError("registered_export_source_path_required")
+        raw_path = raw_source_binding.source_root
+        source_authority_receipt = raw_source_binding.public_receipt()
+    return {
+        "database": requested_database,
+        "export_path": str(registered_path),
+        "source_data_path": str(raw_path),
+        "manifest": manifest,
+        "source_authority_receipt": source_authority_receipt,
+    }
+
+
+def preview_registered_export_icd_cohort(
+    export_path: str,
+    database: str,
+    cohort: Optional[Mapping[str, Any]],
+    *,
+    include_codes: Sequence[str],
+    exclude_codes: Sequence[str],
+) -> Dict[str, Any]:
+    """Preview an ICD cohort from a registered EasyICU export.
+
+    Registered sources point at the module export used by the review surfaces,
+    while cohort filtering is owned by the raw-table extraction path recorded
+    in that export's manifest. Resolve that binding host-side and return only
+    the aggregate, path-free preview contract.
+    """
+
+    try:
+        binding = resolve_registered_export_binding(export_path, database)
+    except ExportCohortError as exc:
+        code_map = {
+            "registered_export_database_unknown": "icd_preview_database_unknown",
+            "registered_export_path_unavailable": "icd_preview_export_path_unavailable",
+            "registered_export_manifest_required": "icd_preview_export_manifest_required",
+            "registered_export_manifest_database_unknown": "icd_preview_manifest_database_unknown",
+            "registered_export_database_mismatch": "icd_preview_database_mismatch",
+            "registered_export_source_path_required": "icd_preview_source_path_required",
+            "registered_export_source_path_unavailable": "icd_preview_source_path_unavailable",
+            "registered_export_raw_source_authority_invalid": "icd_preview_source_authority_invalid",
+        }
+        raise ExportCohortError(
+            code_map.get(exc.error, exc.error),
+            {
+                key: value
+                for key, value in exc.detail.items()
+                if key != "error"
+            },
+        ) from exc
+    manifest = binding["manifest"]
+    requested_database = str(binding["database"])
+    raw_path = str(binding["source_data_path"])
+
+    manifest_cohort = manifest.get("cohort_contract")
+    base_cohort = (
+        dict(cohort)
+        if isinstance(cohort, Mapping) and cohort
+        else (
+            dict(manifest_cohort)
+            if isinstance(manifest_cohort, Mapping)
+            else {}
+        )
+    )
+    base_cohort.update(
+        {
+            "icd_enabled": True,
+            "icd_include": list(include_codes),
+            "icd_exclude": list(exclude_codes),
+        }
+    )
+    try:
+        return preview_export_cohort(
+            raw_path, requested_database, base_cohort
+        )
+    except ExportCohortError:
+        raise
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("icd_preview_source_tables_unavailable") from exc
+    except Exception as exc:
+        from easyicu.patient_filter import PatientFilterCriterionError
+
+        if isinstance(exc, PatientFilterCriterionError):
+            raise ExportCohortError(
+                str(exc.code or "patient_filter_criterion_unavailable"),
+                {"criterion": str(exc.criterion or "")[:80]},
+            ) from exc
+        raise
 
 
 def _module_uses_sepsis_kwargs(concepts: List[str]) -> bool:
@@ -2067,16 +2183,38 @@ def make_export_runner(
                 module_kwargs = dict(load_kwargs)
                 if _module_uses_sepsis_kwargs(list(load_plan.source_concepts)):
                     module_kwargs.update(sepsis_load_kwargs)
-                df = api.load_concepts(
-                    list(load_plan.source_concepts),
-                    patient_ids=patient_ids,
-                    database=database,
-                    data_path=str(data_path),
-                    use_sofa2=use_sofa2,
-                    merge=True,
-                    verbose=False,
-                    **module_kwargs,
+                from easyicu.datasource import (
+                    DuckDBQueryInterrupted,
+                    get_duckdb_interrupt_callback,
                 )
+
+                def unregister_cancel() -> None:
+                    pass
+
+                register_cancel = getattr(job, "register_cancel_callback", None)
+                if callable(register_cancel):
+                    unregister_cancel = register_cancel(
+                        get_duckdb_interrupt_callback()
+                    )
+                try:
+                    if getattr(job, "cancel_requested", False):
+                        break
+                    df = api.load_concepts(
+                        list(load_plan.source_concepts),
+                        patient_ids=patient_ids,
+                        database=database,
+                        data_path=str(data_path),
+                        use_sofa2=use_sofa2,
+                        merge=True,
+                        verbose=False,
+                        **module_kwargs,
+                    )
+                except DuckDBQueryInterrupted:
+                    if getattr(job, "cancel_requested", False):
+                        break
+                    raise
+                finally:
+                    unregister_cancel()
                 if isinstance(df, dict):
                     df = {
                         key: _materialize_concept_load_plan(sub, load_plan)
@@ -2743,8 +2881,7 @@ def validate_research_pipeline_source(
             {"database": requested},
         ) from exc
 
-    candidates = (path / "_manifest.json", path / "easyicu_export_manifest.json")
-    if not any(item.exists() for item in candidates):
+    if prepared_export_manifest_path(path) is None:
         raw_files = sorted(
             item.suffix.lower()
             for item in path.iterdir()
@@ -2837,6 +2974,21 @@ def validate_research_pipeline_source(
         "path": str(path),
         "binding": binding,
     }
+
+
+def prepared_export_manifest_path(path: Path) -> Optional[Path]:
+    """Return the export-package manifest in ``path``, or None if absent.
+
+    One public answer to "is this directory a prepared EasyICU export package
+    rather than a converted raw database", so callers stop re-listing the
+    marker filenames.
+    """
+
+    for name in _MODULE_MANIFESTS:
+        candidate = path / name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _read_export_manifest(path: Path) -> Dict[str, Any]:

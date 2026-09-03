@@ -31,7 +31,7 @@
 
    Consumers must destructure from this owner at the top of their IIFE:
      const { esc } = window.EU_HTML;
-   Do not add another local `function esc(` — tests/test_webserver_html_escape_owner.py
+   Do not add another local `function esc(` — tests/webserver/test_static_frontend_ownership.py
    fails the build if one reappears. */
 (function () {
   const ENTITIES = {

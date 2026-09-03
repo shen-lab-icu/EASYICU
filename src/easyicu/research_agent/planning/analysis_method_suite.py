@@ -19,7 +19,7 @@ There is no single place that declares, per family, the full method suite. This
 module is that place.
 
 Design contract (kept honest by
-``tests/research_agent/test_analysis_method_suite.py``):
+``tests/research_agent/execution/test_analysis_method_suite.py``):
 
 * Every suite ``family`` is a real :data:`StudyDesignFamily` and has a record in
   ``capability_registry``.

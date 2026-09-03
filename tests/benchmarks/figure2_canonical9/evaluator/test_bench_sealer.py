@@ -21,6 +21,7 @@ from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
     seal_figure2_run_task_authority,
 )
 from easyicu.research_agent.authority.runtime_artifacts import (
+    encode_step_attempt_history_jsonl,
     load_run_artifact_authority,
     write_run_checkpoint,
 )
@@ -28,7 +29,7 @@ from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
 )
 from easyicu.research_agent.schema import AnalysisManifest
-from tests.figure2_test_support import (
+from tests.support.figure2 import (
     install_ready_input_binding,
     ready_submission_manifest_fields,
     seal_test_run_input_capsule,
@@ -107,6 +108,7 @@ def _build_run(
     capsule_outcome: str = OUTCOME_CONCEPT,
     seal_capsule: bool = True,
     manifest_authority_updates: dict[str, object] | None = None,
+    externalize_attempt_history: bool = False,
 ) -> Path:
     run_dir = tmp_path / run_name
     run_dir.mkdir()
@@ -178,12 +180,43 @@ def _build_run(
         capsule=donor_capsule,
     )
 
+    history_ref = None
+    if externalize_attempt_history:
+        history_rows = [
+            {
+                "step_id": "00_fixture_step",
+                "attempt": 1,
+                "status": "ok",
+            }
+        ]
+        history_record = evidence.register_text(
+            kind="log",
+            description="Externalized fixture step-attempt history.",
+            text=encode_step_attempt_history_jsonl(history_rows),
+            filename="step_attempt_history.jsonl",
+            evidence_id="step_attempt_history",
+            producer="pipeline",
+            generation_mode="system",
+            publish_aliases=False,
+        )
+        history_ref = {
+            "schema_version": "easyicu.step_attempt_history_ref/1",
+            "format": "jsonl",
+            "evidence_id": history_record.evidence_id,
+            "relative_path": history_record.relative_path,
+            "sha256": history_record.sha256,
+            "record_count": len(history_rows),
+        }
+
     manifest = _production_manifest(
         run_dir,
         evidence,
         readiness=manifest_gates,
     )
     payload = manifest.model_dump(mode="json")
+    if history_ref is not None:
+        payload["step_attempt_history"] = []
+        payload["step_attempt_history_ref"] = history_ref
     payload.update(manifest_authority_updates or {})
     assert "figure2_task_authority" not in payload
     assert write_run_checkpoint(run_dir / "manifest.json", payload) == 1
@@ -263,6 +296,28 @@ def test_exact_task_seals_current_final_checkpoint(completed_run: Path) -> None:
         == sealed
     )
     AnalysisManifest.model_validate_json(json.dumps(current), strict=True)
+
+
+def test_exact_task_seals_final_checkpoint_with_externalized_attempt_history(
+    tmp_path: Path,
+) -> None:
+    run_dir = _build_run(
+        tmp_path,
+        run_name="run_external_history",
+        externalize_attempt_history=True,
+    )
+    before = _checkpoint_state(run_dir)
+    selected = load_run_artifact_authority(run_dir)
+    assert selected is not None
+    assert selected["step_attempt_history"] == [
+        {"attempt": 1, "status": "ok", "step_id": "00_fixture_step"}
+    ]
+
+    sealed = _seal(run_dir)
+
+    _assert_checkpoint_unchanged(run_dir, before)
+    assert sealed.checkpoint_sequence == before[1]
+    assert len(_task_authority_sidecars(run_dir)) == 1
 
 
 def test_same_authority_is_idempotent_without_checkpoint_advance(

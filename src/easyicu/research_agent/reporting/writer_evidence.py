@@ -26,7 +26,7 @@ from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
-from ..scalar_utils import _first_present_scalar
+from ..scalar_utils import _first_present_scalar, _flatten_scalar_dict
 from .p_values import prepare_p_values_for_writer, render_claim_value_for_writer
 
 __all__ = [
@@ -197,6 +197,7 @@ def _preferred_writer_evidence_names(
     preferred = [
         "table_one",
         "cohort_summary",
+        "research_context",
         "outcome_incidence",
         "outcome_rate",
         "mortality_rate",
@@ -207,12 +208,18 @@ def _preferred_writer_evidence_names(
         "causal_audit_report",
         "causal_audit_summary",
         "reporting_checklist",
+        "publication_figure_contract",
     ]
     out: List[str] = [name for name in preferred if is_citable(name)]
     step_aliases = [name for name in sorted(aliases) if re.match(r"^\d{2}[_-]", name)]
     for name in step_aliases:
         if name not in out and is_citable(name):
             out.append(name)
+    if per_step_records is not None:
+        for claim in evidence.authoritative_numeric_claims(per_step_records):
+            name = str(claim.evidence_id)
+            if name not in out and is_citable(name):
+                out.append(name)
     if out:
         return out
     clean_names: List[str] = []
@@ -363,6 +370,239 @@ _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT = {
     "p_value",
 }
 
+_REPORTABLE_NUMERIC_PREFIXES = (
+    "reportable_descriptive_results.",
+    "reportable_secondary_results.",
+    "reportable_survival_results.",
+)
+_REPORTABLE_NUMERIC_CAP_PER_STEP = 50
+
+
+def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
+    """Return one unambiguous scalar for the compact writer digest.
+
+    A top-level p-value is already the step's declared primary value.  Generated
+    summaries also commonly nest the only p-value beside its estimate and
+    confidence interval; expose that value only when exactly one nested
+    candidate exists.  Multiple nested hypothesis tests remain absent instead
+    of assigning an arbitrary p-value to the primary result.
+    """
+
+    if key == "p_value":
+        value = summary.get(key)
+        if value is not None and not isinstance(value, (dict, list)):
+            return value
+        nested = []
+        for path, nested_value in _flatten_scalar_dict(dict(summary)).items():
+            if not path.endswith(".p_value"):
+                continue
+            # A functional-form comparison tests non-linearity/model shape;
+            # it is not the primary exposure-outcome association test. Keep
+            # it under an explicit named field below instead of promoting the
+            # only nested p-value to a generic primary p-value.
+            if "functional_form_comparison" in path.split("."):
+                continue
+            nested.append(nested_value)
+        return nested[0] if len(nested) == 1 else None
+    return _first_present_scalar(summary, (key,))
+
+
+def _functional_form_nonlinearity_p_value(summary: Mapping[str, Any]) -> Any:
+    for path in (
+        ("functional_form_comparison",),
+        ("scientific_runtime_receipt", "functional_form_comparison"),
+    ):
+        current: Any = summary
+        for key in path:
+            current = current.get(key) if isinstance(current, Mapping) else None
+        if not isinstance(current, Mapping):
+            continue
+        value = current.get("nonlinearity_p_value", current.get("p_value"))
+        if value is not None and not isinstance(value, (dict, list)):
+            return value
+    return None
+
+
+def _registered_population_flow(summary: Mapping[str, Any]) -> Dict[str, int] | None:
+    receipt = summary.get("scientific_runtime_receipt")
+    flow = receipt.get("population_flow") if isinstance(receipt, Mapping) else None
+    if not isinstance(flow, Mapping):
+        return None
+    projected: Dict[str, int] = {}
+    for key, value in flow.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        number = int(value)
+        if number < 0 or float(value) != number:
+            continue
+        projected[str(key)] = number
+    if "source_cohort" not in projected or not any(
+        key in projected
+        for key in (
+            "valid_exposure_primary_population",
+            "complete_case_model_population",
+            "alive_and_under_observation_at_landmark",
+        )
+    ):
+        return None
+    return projected
+
+
+def _has_envelope_writer_authority(
+    record: Mapping[str, Any], *, evidence: EvidenceStore | None
+) -> bool:
+    """Return whether Writer received the host's verified scalar projection.
+
+    ``authoritative_writer_records`` adds the envelope evidence id only after
+    the sidecar and the legacy summary agree exactly. Canonical scalar
+    reconstruction intentionally drops unregistered prose metadata, so
+    downstream reporting must not require those dropped strings again.
+    """
+
+    return bool(
+        evidence is not None
+        and str(record.get("writer_result_envelope_evidence_id") or "").strip()
+    )
+
+
+def _descriptive_reporting_is_authorized(
+    *,
+    record: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    payload: Any,
+    evidence: EvidenceStore | None,
+) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    overall = payload.get("overall_outcome")
+    exposures = payload.get("exposures")
+    if not isinstance(overall, Mapping) or not isinstance(exposures, list):
+        return False
+    raw_owner_authority = (
+        payload.get("schema_version") == "easyicu.absolute_risk_reporting/1"
+        and payload.get("execution_owner") == "absolute_risk_context_executor_v1"
+    )
+    envelope_owner_authority = (
+        _has_envelope_writer_authority(record, evidence=evidence)
+        and record.get("deterministic_standard_analysis") == "absolute_risk_context"
+        and summary.get("analysis_family") == "absolute_risk_context"
+    )
+    return bool(raw_owner_authority or envelope_owner_authority)
+
+
+def _secondary_reporting_is_authorized(
+    *,
+    record: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    payload: Any,
+    ordered_contract: Any,
+    evidence: EvidenceStore | None,
+) -> bool:
+    if not isinstance(payload, Mapping) or not isinstance(ordered_contract, Mapping):
+        return False
+    if not isinstance(payload.get("continuous_level_summaries"), list):
+        return False
+    if not isinstance(payload.get("continuous_trend"), Mapping):
+        return False
+    raw_owner_authority = (
+        payload.get("schema_version") == "easyicu.ordered_stratified_reporting/1"
+        and ordered_contract.get("execution_owner")
+        == "ordered_stratified_executor_v1"
+    )
+    envelope_owner_authority = (
+        _has_envelope_writer_authority(record, evidence=evidence)
+        and record.get("deterministic_standard_analysis")
+        == "ordered_stratified_analysis"
+        and summary.get("analysis_family") == "association"
+        and summary.get("analysis_role") == "secondary"
+    )
+    return bool(raw_owner_authority or envelope_owner_authority)
+
+
+def _survival_reporting_is_authorized(
+    *,
+    record: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    payload: Any,
+    evidence: EvidenceStore | None,
+) -> bool:
+    """Authorize the deterministic non-PH survival projection for Writer."""
+
+    if not isinstance(payload, Mapping):
+        return False
+    rmst = payload.get("rmst")
+    time_varying = payload.get("time_varying_adjusted_association")
+    if not isinstance(rmst, Mapping) or not isinstance(time_varying, Mapping):
+        return False
+    intervals = time_varying.get("intervals")
+    if not isinstance(intervals, list) or not intervals:
+        return False
+    if payload.get("constant_hazard_ratio_authorized") is not False:
+        return False
+    if not str(payload.get("proportional_hazards_status") or "").startswith(
+        "violation_"
+    ):
+        return False
+    raw_owner_authority = (
+        payload.get("schema_version") == "easyicu.survival_reporting/1"
+        and payload.get("execution_owner") == "landmark_survival_executor_v1"
+    )
+    envelope_owner_authority = (
+        _has_envelope_writer_authority(record, evidence=evidence)
+        and record.get("deterministic_standard_analysis")
+        == "signed_landmark_survival_suite"
+        and summary.get("analysis_family") == "survival"
+        and summary.get("analysis_role") == "primary"
+    )
+    return bool(raw_owner_authority or envelope_owner_authority)
+
+
+def _executed_method_boundary_rows(
+    records: Sequence[Mapping[str, Any]], *, evidence: EvidenceStore | None
+) -> List[Dict[str, Any]]:
+    """Render only methods backed by a verified current result envelope."""
+
+    rows: List[Dict[str, Any]] = []
+    for record in records:
+        if (
+            str(record.get("status") or "").strip().lower() != "ok"
+            or not _has_envelope_writer_authority(record, evidence=evidence)
+        ):
+            continue
+        summary = record.get("step_summary")
+        if not isinstance(summary, Mapping):
+            continue
+        row: Dict[str, Any] = {"step_id": str(record.get("step_id") or "unknown_step")}
+        for key in ("generation_mode", "deterministic_standard_analysis"):
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                row[key] = value
+        for key in (
+            "analysis_family",
+            "analysis_role",
+            "analysis_set",
+            "method",
+            "estimator_kind",
+            "effect_scale",
+        ):
+            value = summary.get(key)
+            if isinstance(value, (str, int, float, bool)) and str(value).strip():
+                row[key] = value
+        contracts = summary.get("model_contracts")
+        if isinstance(contracts, list):
+            fit_methods = sorted(
+                {
+                    str(contract.get("fit_method") or "").strip()
+                    for contract in contracts
+                    if isinstance(contract, Mapping)
+                    and str(contract.get("fit_method") or "").strip()
+                }
+            )
+            if fit_methods:
+                row["fit_methods"] = fit_methods
+        rows.append(row)
+    return rows
+
 
 def _render_writer_evidence_digest(
     per_step_records: Sequence[Dict[str, Any]] | None = None,
@@ -382,8 +622,9 @@ def _render_writer_evidence_digest(
                     "research_question": context.research_question,
                     "cohort_name": context.cohort.cohort_name,
                     "database": context.cohort.database,
-                    "n_stays": context.cohort.n_stays,
-                    "n_patients": context.cohort.n_patients,
+                    "source_export_n_stays": context.cohort.n_stays,
+                    "source_export_n_patients": context.cohort.n_patients,
+                    "source_population_role": "pre_analysis_source_export",
                     "target_outcome": context.target_outcome,
                 },
                 ensure_ascii=False,
@@ -394,97 +635,6 @@ def _render_writer_evidence_digest(
     run_dir = Path(run_dir or ".")
     has_panel_primary = _robustness_panel_has_primary_effect(
         run_dir, evidence=evidence
-    )
-    preferred_keys = (
-        "sample_size",
-        "n_total",
-        "n_total_stays",
-        "n_death",
-        "n_complete",
-        "n_complete_case",
-        "complete_case_n",
-        "outcome_rate",
-        "overall_mortality_rate",
-        "overall_ci_low",
-        "overall_ci_high",
-        "mortality_rate",
-        "median_age",
-        "estimate",
-        "effect_estimate",
-        "primary_or",
-        "odds_ratio",
-        "adjusted_or",
-        "primary_hr",
-        "hazard_ratio",
-        "adjusted_hr",
-        "primary_ate",
-        "ate",
-        "average_treatment_effect",
-        "treatment_effect",
-        "risk_difference",
-        "mean_difference",
-        "coef",
-        "coefficient",
-        "beta",
-        "primary_beta",
-        "ci_lower",
-        "ci_upper",
-        "ci_low",
-        "ci_high",
-        "primary_ci_low",
-        "primary_ci_high",
-        "primary_or_ci",
-        "primary_hr_ci",
-        "primary_effect_ci",
-        "estimate_ci_low",
-        "estimate_ci_high",
-        "p_value",
-        "median_los_icu",
-        "mean_los_icu",
-        "median_los_hosp",
-        "mean_los_hosp",
-        "median_los_hospital",
-        "mean_los_hospital",
-        "los_icu_median",
-        "los_hosp_median",
-        "icu_los_median",
-        "hospital_los_median",
-        "auroc",
-        "statistic:auroc",
-        "auc",
-        "statistic:auc",
-        "cv_auroc",
-        "statistic:cv_auroc",
-        "held_out_auroc",
-        "statistic:held_out_auroc",
-        "mean_auroc",
-        "statistic:mean_auroc",
-        "auroc_median",
-        "statistic:auroc_ci_lower",
-        "statistic:auroc_ci_upper",
-        "brier_score",
-        "statistic:brier_score",
-        "held_out_brier",
-        "statistic:held_out_brier",
-        "brier_median",
-        "calibration_slope",
-        "statistic:calibration_slope",
-        "calibration_slope_median",
-        "calibration_intercept",
-        "statistic:calibration_intercept",
-        "calibration_intercept_median",
-        "baseline_prevalence",
-        "statistic:baseline_prevalence",
-        "split_strategy",
-        "statistic:split_strategy",
-        "silhouette_score",
-        "silhouette",
-        "n_clusters",
-        "cluster_count",
-        "spearman_rho",
-        "rho",
-        "skipped",
-        "error",
     )
     records = [dict(record) for record in current_step_records(per_step_records or [])]
     for record in records:
@@ -500,15 +650,21 @@ def _render_writer_evidence_digest(
             lines.append("  {}")
             continue
         digest_row: Dict[str, Any] = {}
-        for key in preferred_keys:
+        for key in WRITER_DIGEST_PREFERRED_KEYS:
             if (
                 has_panel_primary
                 and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT
             ):
                 continue
-            scalar = _first_present_scalar(summary, (key,))
+            scalar = _preferred_writer_scalar(summary, key)
             if scalar is not None:
                 digest_row[key] = scalar
+        functional_form_p = _functional_form_nonlinearity_p_value(summary)
+        if functional_form_p is not None:
+            digest_row["functional_form_nonlinearity_p_value"] = functional_form_p
+        population_flow = _registered_population_flow(summary)
+        if population_flow is not None:
+            digest_row["registered_population_flow"] = population_flow
         if "primary_predictor" in summary:
             digest_row["primary_predictor"] = str(summary["primary_predictor"])
         elif "predictor" in summary:
@@ -525,6 +681,46 @@ def _render_writer_evidence_digest(
                 digest_row.setdefault("primary_ci_low", ci_values[0])
                 digest_row.setdefault("primary_ci_high", ci_values[1])
         digest_row.update(_summarise_table_one_rows(summary.get("table_one_rows")))
+        reportable_descriptive = summary.get("reportable_descriptive_results")
+        if _descriptive_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_descriptive,
+            evidence=evidence,
+        ):
+            # This compact result is emitted by the deterministic owner from
+            # the same validated table used by the figure. Keep counts, risks,
+            # uncertainty and measurement-source groups together for Writer.
+            digest_row["reportable_descriptive_results"] = dict(
+                reportable_descriptive
+            )
+        reportable_secondary = summary.get("reportable_secondary_results")
+        ordered_contract = summary.get("ordered_stratified_contract")
+        if _secondary_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_secondary,
+            ordered_contract=ordered_contract,
+            evidence=evidence,
+        ):
+            # This is a compact, host-issued view of a validated secondary
+            # result table. Keep it intact in the primary digest so a nested
+            # diagnostic cap cannot hide the planned continuous outcome.
+            digest_row["reportable_secondary_results"] = dict(
+                reportable_secondary
+            )
+        reportable_survival = summary.get("reportable_survival_results")
+        if _survival_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_survival,
+            evidence=evidence,
+        ):
+            # Non-proportional hazards make the constant Cox coefficient an
+            # invalid headline. Keep the owner-issued absolute-time and
+            # interval-specific alternatives together and ahead of the
+            # diagnostic-leaf cap.
+            digest_row["reportable_survival_results"] = dict(reportable_survival)
         artifact_bindings = record.get("writer_artifact_bindings")
         primary_candidate = summary.get("primary_association_path")
         declared_primary_candidate = bool(primary_candidate)
@@ -592,6 +788,21 @@ def _render_writer_evidence_digest(
             "  "
             + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )
+    method_rows = _executed_method_boundary_rows(records, evidence=evidence)
+    lines.extend(
+        [
+            "## EXECUTED METHOD BOUNDARY",
+            "Only the verified current-run methods listed below were executed. "
+            "A planned or cited method absent from this block was not executed.",
+        ]
+    )
+    if method_rows:
+        lines.extend(
+            "- " + json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+            for row in method_rows
+        )
+    else:
+        lines.append("- none")
     primary = "\n".join(lines)
     primary = _append_blocked_outcome_gate_block(
         primary,
@@ -731,12 +942,13 @@ def _render_writer_evidence_digest_v2(
         if not isinstance(summary, dict):
             continue
         for key in WRITER_DIGEST_PREFERRED_KEYS:
-            if _first_present_scalar(summary, (key,)) is not None:
+            if _preferred_writer_scalar(summary, key) is not None:
                 primary_step_field_keys.add((step_id, key))
 
     secondary_lines: List[str] = []
     derived_lines: List[str] = []
     scientific_claim_lines: List[str] = []
+    numeric_citation_lines: List[str] = []
     if evidence is not None:
         scientific_claims = evidence.authoritative_scientific_claims(all_records)
         if scientific_claims:
@@ -758,6 +970,22 @@ def _render_writer_evidence_digest_v2(
             if claim.source_field == "__easyicu_numeric_claim_overflow__":
                 continue
             claims_by_step.setdefault(claim.step_id, []).append(claim)
+        if claims_by_step:
+            numeric_citation_lines.extend(
+                [
+                    "Writer instruction: every numeric value must cite the exact "
+                    "evidence ID assigned to its step below. Do not substitute a "
+                    "different step alias or a semantically similar artifact."
+                ]
+            )
+            for step_id in sorted(claims_by_step):
+                evidence_ids = list(
+                    dict.fromkeys(claim.evidence_id for claim in claims_by_step[step_id])
+                )
+                numeric_citation_lines.append(
+                    f"- {step_id}: "
+                    + ", ".join(f"{{evidence:{item}}}" for item in evidence_ids)
+                )
         for step_id in sorted(claims_by_step.keys()):
             step_claims = claims_by_step[step_id]
             # Preserve registration order (which matches step_summary
@@ -792,6 +1020,7 @@ def _render_writer_evidence_digest_v2(
                         for src_step, src_field in getattr(c, "derived_from", [])
                     )
                     derived_lines.append(f"  {c.source_field}={c.value}")
+                    derived_lines.append(f"    cite={{evidence:{c.evidence_id}}}")
                     derived_lines.append(f"    formula={c.formula}")
                     if sources:
                         derived_lines.append(f"    sources={sources}")
@@ -806,9 +1035,30 @@ def _render_writer_evidence_digest_v2(
             truncated = False
             cap = max(0, int(secondary_cap_per_step))
             secondary_total = len(secondary_claims)
-            if cap and secondary_total > cap:
-                secondary_claims = secondary_claims[:cap]
+            # Typed reportable payloads are deliberately compact Writer
+            # contracts, unlike arbitrary diagnostic leaves. Give those
+            # values priority and a bounded 50-leaf reservation so a default
+            # cap cannot expose only the first group while silently hiding an
+            # overall result or a later source state.
+            reportable_claims = [
+                claim
+                for claim in secondary_claims
+                if claim.source_field.startswith(_REPORTABLE_NUMERIC_PREFIXES)
+            ][:_REPORTABLE_NUMERIC_CAP_PER_STEP]
+            ordinary_claims = [
+                claim
+                for claim in secondary_claims
+                if not claim.source_field.startswith(_REPORTABLE_NUMERIC_PREFIXES)
+            ]
+            effective_cap = (
+                max(cap, len(reportable_claims)) if cap else secondary_total
+            )
+            selected_claims = reportable_claims + ordinary_claims[
+                : max(0, effective_cap - len(reportable_claims))
+            ]
+            if len(selected_claims) < secondary_total:
                 truncated = True
+            secondary_claims = selected_claims
             secondary_lines.append(f"- {step_id}")
             for c in secondary_claims:
                 secondary_lines.append(
@@ -818,10 +1068,11 @@ def _render_writer_evidence_digest_v2(
                         value=c.value,
                         canonical=c.canonical,
                     )
+                    + f"; cite={{evidence:{c.evidence_id}}}"
                 )
             if truncated:
                 secondary_lines.append(
-                    f"  ... ({secondary_total - cap} more leaves omitted; raise writer_digest_secondary_cap_per_step to see)"
+                    f"  ... ({secondary_total - len(secondary_claims)} more leaves omitted; raise writer_digest_secondary_cap_per_step to see)"
                 )
     else:
         # Fallback path: walk step_summary directly. Cheaper than the
@@ -869,6 +1120,14 @@ def _render_writer_evidence_digest_v2(
                 )
 
     extra_blocks: List[str] = []
+    if numeric_citation_lines:
+        extra_blocks.extend(
+            [
+                "",
+                "## numeric citation authority",
+                *numeric_citation_lines,
+            ]
+        )
     robustness_lines = _render_robustness_panel_block(
         run_dir=run_dir,
         evidence=evidence,
@@ -1173,6 +1432,18 @@ def _primary_effect_interpretation_lines(
             "describe the estimate's units or contrast."
         ]
 
+    ph_status = str(summary.get("proportional_hazards_status") or "").strip()
+    if ph_status.startswith("violation_"):
+        return [
+            "primary interpretation: HEADLINE EFFECT UNAUTHORIZED -- the signed "
+            "proportional-hazards policy rejected a constant Cox effect. Do not "
+            "report the Cox point estimate or confidence interval in the Abstract, "
+            "Primary association, Discussion, Conclusion, title, or figure headline. "
+            "State that the PH assumption was rejected and that the Cox coefficient "
+            "is retained only as a diagnostic artifact; use an authorized non-PH or "
+            "absolute-time estimand if one exists."
+        ]
+
     scale = summary.get("effect_scale") or summary.get("primary_estimate_label")
     if not scale:
         return [
@@ -1225,6 +1496,9 @@ def _render_robustness_panel_block(
         Path(run_dir), records if evidence is not None else None
     ):
         return []
+    executed = _render_executed_robustness_authority(records)
+    if executed:
+        return executed
     panel = _load_writer_robustness_panel(run_dir=run_dir, evidence=evidence)
     if panel is None:
         return []
@@ -1245,7 +1519,8 @@ def _render_robustness_panel_block(
             f"point={_fmt_panel_number(primary.point_estimate)}, "
             f"CI=[{_fmt_panel_number(primary.ci_low)}, "
             f"{_fmt_panel_number(primary.ci_high)}], "
-            f"n={primary.n}"
+            f"n={primary.n}, "
+            f"cite={{evidence:{primary.evidence_id}}}"
         )
         lines.extend(
             _primary_effect_interpretation_lines(
@@ -1279,6 +1554,69 @@ def _render_robustness_panel_block(
             f"worst on {axis} axis: "
             f"spec_id={row.spec_id}, point={_fmt_panel_number(row.point_estimate)}"
         )
+    return lines
+
+
+def _render_executed_robustness_authority(
+    records: Sequence[Mapping[str, Any]] | None,
+) -> List[str]:
+    """Prefer one executed typed robustness result over a stale panel."""
+
+    candidates: list[Mapping[str, Any]] = []
+    for record in records or ():
+        if str(record.get("status") or "").strip().lower() != "ok":
+            continue
+        summary = record.get("step_summary")
+        if not isinstance(summary, Mapping):
+            continue
+        rows = summary.get("robustness_rows")
+        converged = summary.get("n_converged_variants")
+        if (
+            summary.get("analysis_family") == "robustness_sensitivity"
+            and isinstance(rows, list)
+            and rows
+            and isinstance(converged, (int, float))
+            and converged > 0
+        ):
+            candidates.append(record)
+    if len(candidates) != 1:
+        return []
+    record = candidates[0]
+    summary = record["step_summary"]
+    rows = [
+        row for row in summary["robustness_rows"] if isinstance(row, Mapping)
+    ]
+    summary_evidence = record.get("step_summary_evidence_id")
+    if not str(summary_evidence or "").strip():
+        return []
+    independent = [
+        row
+        for row in rows
+        if row.get("converged") is True and row.get("independent_variant") is True
+    ]
+    lines = [
+        "EXECUTED ROBUSTNESS AUTHORITY: this typed executed result supersedes "
+        "any empty or stale pipeline robustness panel for manuscript claims.",
+        "primary display anchor: "
+        f"label={summary.get('primary_effect_label')}, "
+        f"scale={summary.get('primary_effect_scale')}, "
+        f"point={_fmt_panel_number(summary.get('primary_estimate'))}, "
+        f"CI=[{_fmt_panel_number(summary.get('primary_ci_low'))}, "
+        f"{_fmt_panel_number(summary.get('primary_ci_high'))}], "
+        f"cite={{evidence:{summary_evidence}}}",
+        "executed variants: "
+        f"n_converged={int(summary['n_converged_variants'])}, "
+        f"n_independent={len(independent)}, "
+        f"cite={{evidence:{summary_evidence}}}",
+    ]
+    if summary.get("primary_effect_is_nonlinear_curve_summary") is False:
+        lines.append(
+            "interpretation boundary: the scalar is a display anchor, not a "
+            "summary of the entire nonlinear curve."
+        )
+    for limitation in summary.get("limitations") or ():
+        if str(limitation or "").strip():
+            lines.append(f"limitation: {str(limitation).strip()}")
     return lines
 
 

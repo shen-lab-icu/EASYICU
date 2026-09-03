@@ -67,7 +67,10 @@ from ..research_context.typed import (
     materialized_research_inputs_from_authority,
     parse_research_context_json,
 )
-from ..cohort.artifact_facts import observed_domain_for_series
+from ..cohort.artifact_facts import (
+    logical_dtype_for_series,
+    observed_domain_for_series,
+)
 
 RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
@@ -142,7 +145,7 @@ def _validate_v2_context_input_authority(
                 else set()
             )
             expected_facts = {
-                "dtype": str(frame[column].dtype),
+                "dtype": logical_dtype_for_series(frame[column]),
                 "observed_domain": observed_domain_for_series(frame[column]),
                 "source_files": expected_source_files,
             }
@@ -578,6 +581,57 @@ def build_scientific_identity(
     if capability_workflow is not None:
         payload["capability_workflow"] = dict(capability_workflow)
     return _jsonable(payload)
+
+
+def align_resume_scientific_identity_layout(
+    *,
+    generated: Mapping[str, Any],
+    sealed: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Preserve a sealed trajectory coordinate when staging changes its name.
+
+    A fresh run may receive a trajectory whose source filename is not the
+    cohort's canonical sibling, so its identity is stored at the top level.
+    Resume stages those same verified bytes as ``cohort.parquet`` and
+    ``cohort_trajectory.parquet``.  Rebuilding identity from the staged names
+    alone would move the identical trajectory envelope under ``cohort`` and
+    falsely report study drift.
+
+    Only that representation-only move is accepted here.  Every other field
+    and the trajectory digest/size must already be identical; otherwise the
+    generated identity is returned unchanged and the ordinary capsule equality
+    gate rejects the resume.
+    """
+
+    generated_payload = _jsonable(dict(generated))
+    sealed_payload = _jsonable(dict(sealed))
+    if generated_payload == sealed_payload:
+        return generated_payload
+
+    generated_trajectory = _scientific_trajectory_envelope(generated_payload)
+    sealed_trajectory = _scientific_trajectory_envelope(sealed_payload)
+    if (
+        generated_trajectory is None
+        or sealed_trajectory is None
+        or generated_trajectory != sealed_trajectory
+    ):
+        return generated_payload
+
+    def _without_trajectory_layout(payload: Mapping[str, Any]) -> Dict[str, Any]:
+        normalized = _jsonable(dict(payload))
+        normalized.pop("trajectory", None)
+        cohort = normalized.get("cohort")
+        if isinstance(cohort, Mapping):
+            cohort_without_trajectory = dict(cohort)
+            cohort_without_trajectory.pop("trajectory", None)
+            normalized["cohort"] = cohort_without_trajectory
+        return normalized
+
+    if _without_trajectory_layout(generated_payload) != _without_trajectory_layout(
+        sealed_payload
+    ):
+        return generated_payload
+    return sealed_payload
 
 
 def _tree_sha256(root: Path, *, relative_paths: Optional[Sequence[Path]] = None) -> str:

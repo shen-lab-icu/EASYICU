@@ -19,6 +19,7 @@ def contract_promoted_from_source(
     contract_path: Path,
     *,
     source_ids: Sequence[str],
+    source_data: Sequence[str] | None = None,
 ):
     """Preserve usable source-contract semantics in a run-level contract."""
 
@@ -85,7 +86,7 @@ def contract_promoted_from_source(
                 or "The manuscript-facing figure is promoted from registered step-level evidence."
             ),
             panels=panels,
-            source_data=list(source_ids),
+            source_data=list(source_data if source_data is not None else source_ids),
             statistics_note=statistics_note,
         )
     except Exception:
@@ -107,7 +108,7 @@ def contract_promoted_from_source(
                     "evidence_ids": list(source_ids),
                 }
             ],
-            source_data=list(source_ids),
+            source_data=list(source_data if source_data is not None else source_ids),
             statistics_note=_PROMOTION_NOTE,
         )
 

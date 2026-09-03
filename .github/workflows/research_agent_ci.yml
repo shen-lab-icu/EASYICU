@@ -5,29 +5,73 @@ on:
     paths:
       - "src/easyicu/research_agent/**"
       - "tests/research_agent/**"
-      - "tests/test_arch_measure.py"
+      - "tests/governance/test_arch_measure.py"
+      - "tests/governance/test_research_agent_module_graph.py"
       - "tools/arch_measure.py"
       - "tools/arch_baselines/execution_phase.json"
+      - "tools/arch_baselines/research_agent_module_graph.json"
+      - "tools/research_agent_module_graph.py"
       - "examples/research_agent_*.py"
+      - "pyproject.toml"
       - ".github/workflows/research_agent_ci.yml"
   pull_request:
     paths:
       - "src/easyicu/research_agent/**"
       - "tests/research_agent/**"
-      - "tests/test_arch_measure.py"
+      - "tests/governance/test_arch_measure.py"
+      - "tests/governance/test_research_agent_module_graph.py"
       - "tools/arch_measure.py"
       - "tools/arch_baselines/execution_phase.json"
+      - "tools/arch_baselines/research_agent_module_graph.json"
+      - "tools/research_agent_module_graph.py"
       - "examples/research_agent_*.py"
+      - "pyproject.toml"
       - ".github/workflows/research_agent_ci.yml"
 
 permissions:
   contents: read
+
+concurrency:
+  # 2026-08-30: no workflow declared a concurrency group, so a burst of pushes
+  # left several full runs (ci.yml medians ~39 min) racing to completion and
+  # only the last one mattered. Feature branches and PRs now cancel the run
+  # they supersede; main keeps every run so the merge record stays complete.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # T1.1 — research_agent has its own CI gate so a regression in the
 # minimum supported Python/runtime dependency stack shows up before it
 # lands in the main suite. The job installs the package's complete core
 # runtime explicitly, then installs EasyICU editable without extras.
 jobs:
+  architecture:
+    name: research_agent architecture
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install architecture test dependency
+        run: python -m pip install "pytest>=7.0"
+
+      - name: Enforce execution-phase architecture ratchet
+        run: python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
+
+      - name: Enforce research-agent module graph ratchet
+        if: ${{ !cancelled() }}
+        run: >-
+          python tools/research_agent_module_graph.py
+          --diff tools/arch_baselines/research_agent_module_graph.json
+
+      - name: Run architecture contract tests
+        if: ${{ !cancelled() }}
+        run: pytest tests/governance/test_arch_measure.py tests/governance/test_research_agent_module_graph.py -q -m ""
+
   test:
     name: research_agent tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -51,7 +95,7 @@ jobs:
           # hide an import required by the agent test collection.
           # FLOORS MUST NOT DROP BELOW pyproject.toml's [project.dependencies]:
           # a lower floor here lets CI pass on a version the package forbids.
-          # tests/test_ci_dependency_floors.py locks the two together.
+          # tests/governance/test_ci_dependency_floors.py locks the two together.
           pip install \
             "pandas>=1.5" \
             "openpyxl>=3.1" \
@@ -71,6 +115,7 @@ jobs:
             "statsmodels>=0.14" \
             "patsy>=0.5.6" \
             "packaging>=23.0" \
+            "Send2Trash>=1.8" \
             "openai>=1.40.0" \
             "mcp>=1.28,<2" \
             "fastapi>=0.115" \
@@ -79,21 +124,13 @@ jobs:
           # import easyicu.research_agent succeeds.
           pip install --no-deps -e .
 
-      - name: Run research_agent test suite
+      - name: Compile Python source and tests
+        run: python -m compileall -q src tests
+
+      - name: Run research_agent functional contract suite
         run: |
-          python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
-          # 2026-08-22: the module-graph baseline had no runner at all. Nothing
-          # in tests/ or .github/ referenced arch_baselines/
-          # research_agent_module_graph.json, so only the acyclicity assertion in
-          # tests/test_research_agent_module_graph.py was live and the canonical
-          # surface / module-count ratchet silently drifted 8 days and 54 modules
-          # (519 -> 573) before anyone ran --diff by hand. A gate nobody runs is
-          # not a gate; run it here, next to the arch_measure ratchet it belongs with.
-          python tools/research_agent_module_graph.py \
-            --diff tools/arch_baselines/research_agent_module_graph.json
-          pytest tests/test_arch_measure.py tests/test_research_agent_module_graph.py -q -m ""
           # Keep fail-closed runner policy tests in their default environment.
-          pytest tests/research_agent/test_runner.py -q -m ""
+          pytest tests/research_agent/execution/test_runner.py -q -m ""
           # 2026-08-17: this job used to re-run the whole 10,577-test
           # research_agent suite that ci.yml already runs, doubling the wall
           # clock of every research_agent PR for zero extra coverage. This
@@ -106,16 +143,16 @@ jobs:
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             pytest tests/research_agent -q -m "" -n auto --dist loadfile \
               -k "contract or boundary or package or schema or import" \
-              --ignore=tests/research_agent/test_runner.py
+              --ignore=tests/research_agent/execution/test_runner.py
 
   # The `test` job above proves the MINIMUM dependency stack, which by design
-  # has no `anthropic`, so tests/research_agent/test_anthropic_messages_client.py
+  # has no `anthropic`, so tests/research_agent/providers/test_anthropic_messages_client.py
   # importorskips there. That skip is only safe while some job still exercises
   # the real adapter -- otherwise CI goes green while the native Claude
   # Messages transport is never tested at all. This job is that guarantee: it
   # installs the `agentic` extra, ASSERTS the SDK actually imports (so the
   # importorskip can never quietly swallow the whole file), and then runs the
-  # adapter tests. tests/test_repository_contract.py locks this job in place.
+  # adapter tests. tests/governance/test_repository_contract.py locks this job in place.
   anthropic-adapter:
     name: anthropic adapter (agentic extra)
     runs-on: ubuntu-latest
@@ -141,4 +178,4 @@ jobs:
 
       - name: Run the native Anthropic adapter tests
         run: |
-          pytest tests/research_agent/test_anthropic_messages_client.py -q -m ""
+          pytest tests/research_agent/providers/test_anthropic_messages_client.py -q -m ""

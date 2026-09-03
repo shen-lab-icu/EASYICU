@@ -28,7 +28,7 @@ helpers that WRITE the figure contract file / build the canonicalization repair
 candidate live in the sibling ``figure_contract_preparation`` module — the
 read-only-gate vs writes-files boundary is deliberate (Codex-ordered split).
 
-Imports only leaf modules (schema / contracts / audits / plan_utils /
+Imports only leaf modules (schema / contracts / audits /
 declared_product_contract / robustness_* / runtime_artifacts /
 deterministic_robustness / ordered_stratified_contract) so there is no import
 cycle with ``execution.phase``.
@@ -67,14 +67,20 @@ from ..contracts.declared_product import (
 from ..contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ..robustness.membership import replay_locked_memberships
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
-from ..plan_utils import (
-    _normalised_expected_output_names,
-    _primary_exposure_contract_findings,
-    _primary_exposure_measurement_filter_findings,
+from ..contracts.model_covariates import (
     _primary_exposure_overadjustment_findings,
     _primary_model_leakage_findings,
-    _step_contract_findings,
+)
+from ..contracts.step_families import (
+    _normalised_expected_output_names,
     _step_expects_figure,
+)
+from .step_contract import (
+    _step_contract_findings,
+)
+from .step_result_evidence import (
+    _primary_exposure_contract_findings,
+    _primary_exposure_measurement_filter_findings,
 )
 from ..contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,

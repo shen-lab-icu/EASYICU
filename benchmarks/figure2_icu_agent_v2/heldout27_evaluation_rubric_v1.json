@@ -1,0 +1,166 @@
+{
+  "schema_version": "easyicu.heldout27_evaluation_rubric/1",
+  "rubric_ref": "easyicu.figure2_icu_agent_v2/heldout27-rubric-20260901-v1",
+  "status": "design_frozen_no_run_authority",
+  "bound_taskbank_path": "benchmarks/figure2_icu_agent_v2/heldout27_taskbank_v1.jsonl",
+  "bound_taskbank_sha256": "55b711822008583a319d0dfd5f7f62bb6c8b585adacec59f8f7bf45f787ccf59",
+  "evaluation_unit": "task",
+  "primary_endpoint": {
+    "name": "reportable_without_postrun_repair",
+    "type": "binary",
+    "definition": "A declared task-arm run reaches a valid terminal state, satisfies every hard gate, and is judged reportable by blinded clinical and methods review without any repair after the run terminal timestamp.",
+    "denominator": "all 27 predeclared task-arm runs in each arm",
+    "failures_in_denominator": [
+      "agent refusal or safe block on a Heldout27 bound-result task",
+      "budget exhaustion",
+      "agent-caused timeout",
+      "invalid or incomplete analysis",
+      "missing mandatory artifact",
+      "critical scientific or semantic error",
+      "unbound numeric or manuscript claim",
+      "postrun human or developer repair"
+    ]
+  },
+  "arm_neutral_review_bundle": {
+    "required_artifacts": [
+      "cohort_and_denominator_record",
+      "analysis_result_tables",
+      "required_figures",
+      "diagnostics_and_sensitivity_record",
+      "evidence_manifest_with_file_hashes",
+      "bounded_interpretation_report",
+      "resource_and_terminal_run_receipt"
+    ],
+    "fairness_rule": "The evaluator scores scientific content and traceability, not use of an EasyICU class, field name, reason code, or file layout. EasyICU artifacts and generic-agent artifacts must be projected into the same review schema before blinding.",
+    "generic_arm_equivalence": "The generic arm may construct its evidence manifest and hashes with generic code and shell tools; absence of the EasyICU EvidenceStore API is not itself a scoring failure."
+  },
+  "hard_gates": [
+    {
+      "gate_id": "HG01_TERMINAL_INTEGRITY",
+      "criterion": "The declared run reaches one unambiguous terminal state within the frozen budget and has a complete run receipt.",
+      "failure_is_critical": true
+    },
+    {
+      "gate_id": "HG02_POPULATION_TIME_AUTHORITY",
+      "criterion": "Population, patient or stay identity, eligibility, time origin, predictor or treatment window, follow-up, and denominator conform to the task contract.",
+      "failure_is_critical": true
+    },
+    {
+      "gate_id": "HG03_TASK_SEMANTIC_GUARDRAILS",
+      "criterion": "Every task-specific semantic guardrail is satisfied; unknown, structurally unavailable, missing, and observed-negative states are not silently collapsed.",
+      "failure_is_critical": true
+    },
+    {
+      "gate_id": "HG04_MANDATORY_OUTPUTS",
+      "criterion": "Every task-specific expected output is present, readable, and internally consistent.",
+      "failure_is_critical": true
+    },
+    {
+      "gate_id": "HG05_DIAGNOSTIC_AUTHORITY",
+      "criterion": "All analysis-family diagnostics and task-requested sensitivity analyses are present and support the reported interpretation.",
+      "failure_is_critical": true
+    },
+    {
+      "gate_id": "HG06_EVIDENCE_BINDING",
+      "criterion": "Every headline number and reportable claim resolves to a frozen artifact and digest; displayed values agree with source artifacts.",
+      "failure_is_critical": true
+    },
+    {
+      "gate_id": "HG07_INTERPRETATION_CEILING",
+      "criterion": "The report does not exceed the design's causal, validation, transportability, or clinical-utility authority.",
+      "failure_is_critical": true
+    },
+    {
+      "gate_id": "HG08_CONTAMINATION_AND_REPAIR",
+      "criterion": "The run used only its declared task packet and frozen resources, with no cross-task memory, repository access, hidden answer material, resume, selective retry, or postrun repair.",
+      "failure_is_critical": true
+    }
+  ],
+  "task_specific_derivation": {
+    "rule": "For each frozen task row, the evaluator must instantiate criteria before formal launch using only the fields listed below. Instantiation is mechanical and may not add result-dependent criteria.",
+    "fields": {
+      "question": "Defines the scientific objective that must be answered.",
+      "target_outcome": "Defines the outcome authority and required interpretation target.",
+      "exposure_or_index": "Defines the exposure, intervention, predictor, or index authority.",
+      "time_origin": "Defines time zero or landmark authority.",
+      "measurement_policy": "Creates a critical measurement and missingness criterion.",
+      "expected_outputs": "Each list item creates one mandatory artifact criterion.",
+      "semantic_guardrails": "Each list item creates one critical fail-closed criterion.",
+      "required_stages": "Each list item creates one stage-completion criterion."
+    },
+    "minimum_items_per_task": 6,
+    "prohibited_after_first_provider_call": [
+      "adding or deleting a criterion",
+      "changing criticality",
+      "changing a denominator, time window, reference group, or expected disposition",
+      "changing a score after learning arm identity"
+    ]
+  },
+  "analysis_family_requirements": {
+    "descriptive": [
+      "explicit eligible and analyzable denominators",
+      "missing, structurally unavailable, and observed-negative states remain distinct",
+      "uncertainty or sampling variability reported where applicable"
+    ],
+    "association": [
+      "prespecified adjustment set and reference group",
+      "absolute outcome summaries alongside adjusted relative estimates",
+      "functional-form, missingness, and influential-observation diagnostics",
+      "no causal language"
+    ],
+    "prediction": [
+      "patient-level split before preprocessing or feature selection",
+      "no post-window features or outcome leakage",
+      "held-out discrimination and calibration",
+      "class balance and missing-data handling reported"
+    ],
+    "time_to_event": [
+      "valid time zero, eligibility, event, censoring, and observation window",
+      "proportional-hazards diagnostics when a proportional-hazards model is used",
+      "absolute event or survival estimates alongside relative effects",
+      "competing events interpreted consistently with the selected estimand"
+    ],
+    "causal_emulation": [
+      "explicit eligibility, strategies, assignment window, time zero, outcome, estimand, and analysis plan",
+      "no post-treatment adjustment",
+      "overlap or positivity and covariate-balance diagnostics",
+      "residual and unmeasured confounding limitations foregrounded"
+    ],
+    "phenotyping": [
+      "outcomes excluded from feature and cluster selection",
+      "cluster number and preprocessing selected without outcome optimization",
+      "cluster size, stability, missingness, and sampling-density diagnostics",
+      "no biological-subtype or transportability claim without external validation"
+    ]
+  },
+  "secondary_dimensions": [
+    "problem_formulation",
+    "literature_grounding",
+    "data_concept_cohort_authority",
+    "estimand_method_selection",
+    "execution_validity",
+    "diagnostics_sensitivity",
+    "evidence_artifact_binding",
+    "interpretation_safety",
+    "reproducibility_efficiency"
+  ],
+  "dimension_scale": {
+    "0": "failed, absent, invalid, or critically unsafe",
+    "1": "partially complete or correct but materially limited",
+    "2": "complete, correct, traceable, and appropriate for the task contract",
+    "non_compensation_rule": "No dimension total or average can override a failed hard gate."
+  },
+  "human_review": {
+    "reviewers": [
+      "one ICU clinical reviewer",
+      "one statistics or epidemiology reviewer"
+    ],
+    "initial_review": "independent and blinded to arm label, task execution order, and the other reviewer's score",
+    "adjudication": "A third qualified reviewer adjudicates primary-endpoint disagreement without changing the frozen rubric.",
+    "reliability": [
+      "unadjudicated Cohen kappa for the binary primary endpoint",
+      "unadjudicated quadratic-weighted kappa for each secondary dimension"
+    ],
+    "blinding_limit": "Artifact style may reveal the producing system; the manuscript must describe review as arm-label blinded rather than absolutely blinded."
+  }
+}

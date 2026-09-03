@@ -14,7 +14,7 @@ EasyICU 为性能默认让每个源在 DuckDB 里各自预聚合（per-source ME
 本模块把它收敛为**单一、可单测**的策略函数 ``compute_pooling_decision``，
 ``concept.py`` 只读结果、不再内联重算。
 
-语义与原内联实现逐字等价（见 ``tests/test_ricu_alignment.py``）。
+语义与原内联实现逐字等价（见 ``tests/core/test_ricu_alignment.py``）。
 """
 
 from __future__ import annotations

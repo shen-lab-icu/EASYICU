@@ -1033,7 +1033,7 @@ def _apply_domain(fact: Dict[str, Any], variable: ConceptDescriptor) -> None:
     """
 
     observed = _closed_observed_levels(variable.observed_domain)
-    declared, basis = _declared_domain(variable)
+    declared, basis = declared_domain_for_variable(variable)
     if declared is not None:
         fact["allowed_values"] = list(declared)
         fact["allowed_values_basis"] = basis
@@ -1102,7 +1102,7 @@ def _transform_preserves_concept_values(transform: Any) -> bool:
     return str(transform or "") in _VALUE_PRESERVING_TRANSFORMS
 
 
-def _declared_domain(
+def declared_domain_for_variable(
     variable: ConceptDescriptor,
 ) -> tuple[Optional[List[Any]], Optional[str]]:
     """Return the highest-authority declared domain for one descriptor.
@@ -1115,6 +1115,25 @@ def _declared_domain(
     ordinal = getattr(variable, "ordinal_levels", None)
     if ordinal:
         return list(ordinal), "declared_ordinal_levels"
+    valid_range = list(getattr(variable, "valid_range", None) or ())
+    if bool(getattr(variable, "is_ordinal", False)) and len(valid_range) == 2:
+        lower, upper = valid_range
+        if (
+            isinstance(lower, (int, float))
+            and not isinstance(lower, bool)
+            and isinstance(upper, (int, float))
+            and not isinstance(upper, bool)
+            and float(lower).is_integer()
+            and float(upper).is_integer()
+        ):
+            lower_int = int(lower)
+            upper_int = int(upper)
+            level_count = upper_int - lower_int + 1
+            if 2 <= level_count <= 512:
+                return (
+                    list(range(lower_int, upper_int + 1)),
+                    "declared_ordinal_integer_range",
+                )
     levels = _dictionary_declared_levels(getattr(variable, "source_concept", None))
     if levels:
         return levels, "declared_concept_dictionary_levels"
@@ -1227,7 +1246,11 @@ def resolved_raw_input_contracts(
         # sandbox actually executes against, so a guess winning on this path
         # would undo the fix on the other one.
         declared_levels, declared_basis = (
-            _declared_domain(variable) if variable is not None else (None, None)
+            (
+                declared_domain_for_variable(variable)
+                if variable is not None
+                else (None, None)
+            )
         )
         if declared_basis == "declared_concept_dictionary_levels" and not (
             _transform_preserves_concept_values(fact.get("representation_transform"))
@@ -1727,6 +1750,7 @@ __all__ = [
     "binding_preserves_analysis_range",
     "canonical_column_binding",
     "descriptor_physical_updates",
+    "declared_domain_for_variable",
     "effective_analysis_plausibility_range",
     "materialized_input_prompt_attachment",
     "materialized_input_prompt_projection",

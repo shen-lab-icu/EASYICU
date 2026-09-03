@@ -52,7 +52,10 @@ from ..intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
 )
-from ..cohort.artifact_facts import observed_domain_for_series
+from ..cohort.artifact_facts import (
+    logical_dtype_for_series,
+    observed_domain_for_series,
+)
 from ..intake.legacy_materialization import (
     load_verified_legacy_materialization_provenance,
 )
@@ -82,9 +85,86 @@ from ..trajectory.contract import infer_fixed_window_trajectory_metadata
 _observed_domain = observed_domain_for_series
 
 
+def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
+    authority = frame.attrs.get("easyicu_planning_authority")
+    if not isinstance(authority, dict):
+        return {}
+    if (
+        authority.get("kind") != "metadata_only_planning_catalog"
+        or authority.get("patient_rows_read") is not False
+    ):
+        return {}
+    projected = {
+        "evidence_stage": "metadata_only_planning",
+        "patient_rows_read": False,
+    }
+    replacement = authority.get("replacement_row_identity")
+    if replacement is None:
+        return projected
+    if not isinstance(replacement, dict):
+        raise MaterializedMetadataError(
+            "metadata-only replacement-row identity must be an object"
+        )
+    output_column = replacement.get("output_identity_column")
+    mapping_sha256 = replacement.get("mapping_file_sha256")
+    mapped_rows = replacement.get("mapped_cohort_rows")
+    derivation = replacement.get("patient_group_derivation")
+    coordinates = replacement.get("authority_coordinates")
+    if (
+        not isinstance(output_column, str)
+        or output_column not in frame.columns
+        or not isinstance(mapping_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", mapping_sha256) is None
+        or isinstance(mapped_rows, bool)
+        or not isinstance(mapped_rows, int)
+        or mapped_rows != int(len(frame))
+        or not isinstance(derivation, dict)
+        or derivation != {"algorithm": "prefix_before_:s", "delimiter": ":s"}
+        or not isinstance(coordinates, dict)
+        or coordinates.get("schema_version")
+        != "easyicu.patient_grouping_runtime_authority/1"
+        or not isinstance(coordinates.get("authority_ref"), str)
+        or not coordinates.get("authority_ref")
+        or coordinates.get("mapping_sha256") != mapping_sha256
+        or coordinates.get("grouping_derivation") != "prefix_before_:s"
+        or coordinates.get("provider_visible_values") is not False
+    ):
+        raise MaterializedMetadataError(
+            "metadata-only replacement-row identity authority is invalid"
+        )
+    safe_coordinates = {
+        key: coordinates[key]
+        for key in (
+            "schema_version",
+            "authority_ref",
+            "database",
+            "export_manifest_file",
+            "export_manifest_sha256",
+            "mapping_sha256",
+            "grouping_derivation",
+            "provider_visible_values",
+        )
+        if key in coordinates
+    }
+    projected["replacement_row_identity"] = {
+        "output_identity_column": output_column,
+        "mapping_file_sha256": mapping_sha256,
+        "mapped_cohort_rows": mapped_rows,
+        "patient_group_derivation": dict(derivation),
+        "authority_coordinates": safe_coordinates,
+    }
+    return projected
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+# Archived callers may still import this historical private helper. Keep it as
+# an identity alias while the interpretation-free artifact-facts leaf owns the
+# physical-to-logical dtype contract used by both context creation and sealing.
+_logical_dtype = logical_dtype_for_series
 
 
 def _safe_get_concept_info(name: str) -> Optional[Dict[str, Any]]:
@@ -615,6 +695,7 @@ def build_research_context(
         provenance={
             **episode.provenance,
             **granularity.provenance(),
+            **_planning_catalog_provenance(df),
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
             **(
@@ -757,7 +838,8 @@ def _describe_column(
 ) -> ConceptDescriptor:
     series = df[col]
     sample = series.dropna().head(50).tolist() if len(series) else []
-    hint = classify_variable(col, str(series.dtype), sample)
+    logical_dtype = _logical_dtype(series)
+    hint = classify_variable(col, logical_dtype, sample)
 
     # role fix-ups: respect user-declared id/time/outcome
     role = hint.role
@@ -867,7 +949,7 @@ def _describe_column(
         name=col,
         description=description,
         role=role,
-        dtype=str(series.dtype),
+        dtype=logical_dtype,
         unit=hint.unit,
         valid_range=list(hint.valid_range) if hint.valid_range else None,
         observed_domain=observed_domain_for_series(series),
@@ -1045,7 +1127,7 @@ def _infer_outcome_semantics(
         }
     if outcome in {"death", "mortality"}:
         return {
-            "label": "all-cause mortality",
+            "label": "mortality without a specified setting or horizon",
             "description": "Binary mortality outcome flag; confirm whether this refers to ICU, hospital, or fixed-horizon mortality before interpretation.",
             "source_concept": "mortality_unspecified",
             "substitution_note": (
@@ -1185,13 +1267,23 @@ def _enrich_target_outcome_descriptor(
             or requested_semantic != "declared_primary_outcome"
         ):
             descriptor.source_concept = requested_semantic
-        if owner_metadata_present and owner_semantic != requested_semantic:
+        if (
+            owner_metadata_present
+            and requested_semantic != "mortality_unspecified"
+            and owner_semantic != requested_semantic
+        ):
             explicit_note = (
                 f"Endpoint-definition conflict: the research question requests "
                 f"{semantics['label']}, but the owner-issued concept metadata for "
                 f"'{target_outcome}' defines {descriptor.description!r}. Do not "
                 "reinterpret or execute this endpoint until the physical concept "
                 "and requested definition agree."
+            )
+        elif owner_metadata_present and requested_semantic == "mortality_unspecified":
+            explicit_note = (
+                f"The research question leaves mortality setting and horizon "
+                f"unspecified; '{target_outcome}' therefore retains its "
+                f"owner-issued clinical definition ({descriptor.description!r})."
             )
         elif owner_metadata_present:
             explicit_note = (
@@ -1286,7 +1378,10 @@ def build_naive_research_context(
         id_columns=id_cols,
         time_columns=time_cols,
         outcome_columns=out_cols,
-        provenance=granularity.provenance(),
+        provenance={
+            **granularity.provenance(),
+            **_planning_catalog_provenance(df),
+        },
     )
 
     descriptors: List[ConceptDescriptor] = []

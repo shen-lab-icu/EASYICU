@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
@@ -19,10 +19,22 @@ from ..schema import (
     AnalysisStep,
     ResearchContext,
 )
-from ..reporting.manuscript_sections import render_manuscript_sections
+from ..reporting.manuscript_sections import (
+    repair_named_manuscript_sections,
+    repair_existing_manuscript_sections,
+    render_manuscript_sections,
+)
+from ..reporting.administrative_authority import ManuscriptAdministrativeAuthority
 
-from ._support import _NATURE_WRITING_GUIDE, _SYSTEM_GUIDE, _WRITER_GUIDE, _format_context, _strip_code_fence
+from ._support import (
+    _NATURE_WRITING_GUIDE,
+    _SYSTEM_GUIDE,
+    _WRITER_GUIDE,
+    _format_context,
+    _strip_code_fence,
+)
 from .coder import _coder_prompt_payload_bytes
+from . import writer_display_labels as _writer_display
 
 # ---------------------------------------------------------------------------
 # Analyzer (interpretation)
@@ -31,6 +43,31 @@ from .coder import _coder_prompt_payload_bytes
 
 _ANALYZER_PROMPT_BYTE_LIMIT = 48_000
 _WRITER_PROMPT_BYTE_LIMIT = 64_000
+
+
+def _project_writer_evidence_digest(
+    section_name: str,
+    evidence_digest: Optional[str],
+) -> str:
+    """Project the lossless evidence subset required by one manuscript role."""
+
+    digest = str(evidence_digest or "")
+    if str(section_name).strip().casefold() in {"abstract", "results"}:
+        methods_marker = "\n## EXECUTED METHOD BOUNDARY"
+        numeric_marker = "\n## numeric citation authority"
+        if methods_marker in digest and numeric_marker in digest:
+            before_methods, methods_and_after = digest.split(methods_marker, 1)
+            _, numeric_and_after = methods_and_after.split(numeric_marker, 1)
+            return (
+                before_methods.rstrip()
+                + numeric_marker
+                + numeric_and_after
+            )
+        return digest
+    marker = "\n## secondary numbers"
+    if marker not in digest:
+        return digest
+    return digest.split(marker, 1)[0].rstrip() + "\n"
 
 
 class ReportingPromptBudgetError(RuntimeError):
@@ -166,13 +203,20 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str],
         literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
+        language: Optional[str] = None,
         max_tokens: int = 2048,
     ) -> str:
-        lang_inst = _writer_language_instruction(self.language)
-        evidence_list = (
-            ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
-        )
+        lang_inst = _writer_display.writer_language_instruction(language or self.language)
+        evidence_list = ", ".join(str(eid) for eid in evidence_ids) or "(none)"
         reporting_context = scoped_reporting_context(context)
+        section_evidence_digest = _project_writer_evidence_digest(
+            section_name,
+            evidence_digest,
+        )
+        display_labels = _writer_display.normalise_reader_display_labels(
+            reader_display_labels
+        )
         messages = [
             LLMMessage(
                 role="system",
@@ -212,6 +256,47 @@ class WriterAgent:
                     "interest are manuscript metadata and do not need evidence citations.\n"
                     "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
                     f"- Only use ids from this list: {evidence_list}\n\n"
+                    "NUMERIC AUTHORITY RULE:\n"
+                    "- Copy a current-study number only when that exact literal value "
+                    "appears in the MACHINE EVIDENCE DIGEST, and use the exact "
+                    "`{evidence:<id>}` citation shown for its owning fact.\n"
+                    "- Do not calculate, infer, transform, or reconstruct a new count, "
+                    "rate, difference, interval, or other numeric value from values in "
+                    "the digest or RESEARCH CONTEXT. Standard display rounding is "
+                    "allowed because the Host verifies the displayed literal against "
+                    "the canonical claim: use integer counts, normally one decimal for "
+                    "percentages, and normally two or three decimals for estimates and "
+                    "confidence limits. Never print machine-precision tails.\n"
+                    "- Name every reported statistic in the same sentence (for example, "
+                    "odds ratio, AUROC, Brier score, calibration slope, adjusted Rand "
+                    "index, or Bayesian information criterion). Never write only "
+                    "`point estimate`, `score`, or `range` when the metric is known.\n"
+                    "- RESEARCH CONTEXT supplies study semantics only; it never "
+                    "authorizes a numeric claim. A derived value is usable only when "
+                    "the host has registered it explicitly in the evidence digest.\n"
+                    "- If an exact value-and-owner pair is absent, omit the numeric "
+                    "sentence rather than estimating it.\n\n"
+                    "EXECUTION AUTHORITY RULE:\n"
+                    "- Treat only entries in the MACHINE EVIDENCE DIGEST section "
+                    "`EXECUTED METHOD BOUNDARY` as methods executed in the "
+                    "current study. If that section says `none`, make no "
+                    "completed-method claim.\n"
+                    "- A plan intent, literature application, sensitivity id, or "
+                    "research-context preference is not proof that a method was "
+                    "executed. State that landmarking, time-varying analysis, "
+                    "matching, weighting, imputation, flexible functional forms, "
+                    "subgroups, or sensitivity variants were implemented only when "
+                    "the MACHINE EVIDENCE DIGEST supplies an executed result or "
+                    "typed execution contract for that method.\n"
+                    "- Phrases such as `aligned with`, `following`, `consistent "
+                    "with`, or `using the principles of` still claim method "
+                    "implementation. Do not use them for a method absent from "
+                    "the executed-method boundary.\n"
+                    "- When planned and executed methods differ, report only the "
+                    "executed method and state the resulting interpretation limit; "
+                    "never promote planned prose into a completed-method claim.\n"
+                    "- Do not claim that an LLM generated analysis code unless the "
+                    "machine digest explicitly records that generation mode.\n\n"
                     "SCIENTIFIC CLAIM RULE:\n"
                     "- The machine digest may contain a `host-authorized scientific "
                     "claims` block. For any current-study direction, comparison, or "
@@ -252,7 +337,16 @@ class WriterAgent:
                     "that restate the digest.\n"
                     "- If you cannot support a sentence from the listed evidence, omit it "
                     "silently; do not narrate the gap.\n\n"
-                    "LANGUAGE POLICY:\n"
+                    "PROBLEM-SPECIFIC NARRATIVE RULE:\n"
+                    "- Organize the section around this research question's population, "
+                    "time zero, exposure or representation, estimand, and failure modes. "
+                    "Do not pad the section with generic pipeline praise or sentences "
+                    "that could be transplanted unchanged into an unrelated ICU study.\n"
+                    "- When the primary clinical contrast is unavailable or blocked, "
+                    "state the scientific boundary once, explain its consequence, and "
+                    "do not repeat the same refusal throughout the section.\n\n"
+                    + _writer_display.reader_display_label_instruction(display_labels)
+                    + "LANGUAGE POLICY:\n"
                     "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
                     "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"
                     "- Allowed: 'was associated with', 'correlated with', 'observed alongside', "
@@ -260,7 +354,7 @@ class WriterAgent:
                     "SECTION-SPECIFIC LENGTH TARGET:\n"
                     f"- {section_name}: follow the requested length and paragraph structure exactly.\n\n"
                     "MACHINE EVIDENCE DIGEST:\n"
-                    + (evidence_digest or "(none)")
+                    + (section_evidence_digest or "(none)")
                     + "\n\nRUN-BOUND LITERATURE DIGEST:\n"
                     + (literature_digest or "(none)")
                     + "\n\nRESEARCH CONTEXT:\n"
@@ -288,6 +382,8 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> str:
         return render_manuscript_sections(
             call_section=self._call_section,
@@ -296,20 +392,62 @@ class WriterAgent:
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
+                "reader_display_labels": reader_display_labels or {},
+                "language": self.language,
             },
+            administrative_authority=administrative_authority,
         )
 
-
-def _writer_language_instruction(language: str) -> str:
-    if language == "zh":
-        return (
-            "OUTPUT LANGUAGE: zh / Simplified Chinese. Keep section headings "
-            "as markdown headings. Preserve every `{evidence:<id>}` placeholder "
-            "and `{claim:<step>.<claim>}` token exactly as ASCII; do not translate "
-            "evidence ids, claim refs, filenames, variable "
-            "names, or code-like tokens."
+    def repair_existing(
+        self,
+        manuscript: str,
+        *,
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        return repair_existing_manuscript_sections(
+            manuscript,
+            call_section=self._call_section,
+            common={
+                "context": context,
+                "evidence_ids": evidence_ids,
+                "evidence_digest": evidence_digest,
+                "literature_digest": literature_digest,
+                "reader_display_labels": reader_display_labels or {},
+                "language": self.language,
+            },
+            administrative_authority=administrative_authority,
         )
-    return (
-        "OUTPUT LANGUAGE: en / English. Preserve every `{evidence:<id>}` "
-        "placeholder and `{claim:<step>.<claim>}` token exactly as ASCII."
-    )
+
+    def repair_sections(
+        self,
+        manuscript: str,
+        *,
+        section_errors: Dict[str, tuple[str, ...]],
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        """Repair section owners rejected by an adjacent deterministic gate."""
+
+        return repair_named_manuscript_sections(
+            manuscript,
+            section_errors=section_errors,
+            call_section=self._call_section,
+            common={
+                "context": context,
+                "evidence_ids": evidence_ids,
+                "evidence_digest": evidence_digest,
+                "literature_digest": literature_digest,
+                "reader_display_labels": reader_display_labels or {},
+                "language": self.language,
+            },
+            administrative_authority=administrative_authority,
+        )

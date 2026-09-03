@@ -10,11 +10,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
+from .reader_numeric_display import round_reader_numeric_display
 from .scientific_claims import ScientificClaim
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
+EvidenceResolver = Callable[[str], bool]
+
+_NUMERIC_PROVENANCE_FOOTNOTE_RE = re.compile(r"\[\^claim_\d+\]")
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,13 @@ class ScientificClaimExpansion:
     scaffold: str
     missing_claim_refs: tuple[str, ...]
     malformed_sentences: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ScientificClaimPlacement:
+    scaffold: str
+    inserted_claim_refs: tuple[str, ...]
+    missing_claim_refs: tuple[str, ...]
 
 
 _RESULT_TOKEN_RE = re.compile(
@@ -57,7 +68,9 @@ _VALID_EVIDENCE_TOKEN_RE = re.compile(
     r"(?<!\{)\{evidence:[A-Za-z0-9][A-Za-z0-9_.-]*"
     r"(?:\s*,\s*(?:evidence:)?[A-Za-z0-9][A-Za-z0-9_.-]*)*\}(?!\}))"
 )
-_LITERATURE_CITATION_MARKER_RE = re.compile(r"\[@[A-Za-z0-9_.:-]+\]")
+_LITERATURE_CITATION_MARKER_RE = re.compile(
+    r"\[[^\[\]]*@[A-Za-z0-9_.:-]+[^\[\]]*\]"
+)
 _AUTHORITY_PLACEHOLDER_PREFIX_RE = re.compile(r"\{+\s*(?:claim|evidence)\s*:", re.I)
 _QUALITATIVE_SCIENTIFIC_ASSERTION_RE = re.compile(
     r"\b(?:independently\s+)?associated\s+with\b|"
@@ -116,10 +129,13 @@ _HEADING_RESULT_CONTEXT_RE = re.compile(
     re.I,
 )
 _HEADING_NUMERIC_RE = re.compile(r"(?:\d|%|\bp\s*[<=>])", re.I)
+_VERSIONED_TERM_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*-\d+\b")
 _HEADING_RESULT_VERB_RE = re.compile(
     r"\b(?:was|were|had|showed|demonstrated|differ(?:ed|s)?|varied)\b",
     re.I,
 )
+_RESULTS_HEADING_RE = re.compile(r"^##\s+results\s*$", re.I | re.MULTILINE)
+_NEXT_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
 
 
 def _looks_manuscript_metadata_sentence(sentence: str) -> bool:
@@ -180,6 +196,79 @@ def _looks_result_like_sentence(sentence: str) -> bool:
     return bool(_RESULT_TOKEN_RE.search(prose))
 
 
+def _evidence_refs(sentence: str) -> tuple[str, ...]:
+    refs: list[str] = []
+    for match in _VALID_EVIDENCE_TOKEN_RE.finditer(sentence):
+        body = match.group(0).strip("{}").strip()
+        for item in body.split(","):
+            ref = item.strip()
+            if ref.lower().startswith("evidence:"):
+                ref = ref.split(":", 1)[1].strip()
+            if ref:
+                refs.append(ref)
+    return tuple(dict.fromkeys(refs))
+
+
+def _has_registered_evidence(
+    sentence: str,
+    *,
+    resolve_evidence: EvidenceResolver | None,
+) -> bool:
+    if resolve_evidence is None:
+        return False
+    refs = _evidence_refs(sentence)
+    return bool(refs) and any(resolve_evidence(ref) for ref in refs)
+
+
+def _has_nonnumeric_literature_context(sentence: str) -> bool:
+    if _LITERATURE_CITATION_MARKER_RE.search(sentence) is None:
+        return False
+    prose = _VALID_EVIDENCE_TOKEN_RE.sub(
+        "", _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
+    )
+    prose = _VERSIONED_TERM_RE.sub("", prose)
+    return _HEADING_NUMERIC_RE.search(prose) is None
+
+
+def _canonical_duplicate_claim_token(
+    sentence: str,
+    *,
+    resolve_claim: ClaimResolver,
+) -> str | None:
+    """Collapse exact host prose followed by its duplicate claim token.
+
+    A bounded repair may conservatively emit both the digest's exact rendered
+    sentence and the token that represents it.  Keeping both would duplicate
+    the claim, while rejecting the entire manuscript loses valid host-owned
+    prose.  Canonicalize only an exact normalized text match; any paraphrase or
+    additional assertion remains malformed and fail-closed.
+    """
+
+    matches = list(_SCIENTIFIC_CLAIM_TOKEN_RE.finditer(sentence))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    suffix = sentence[match.end() :].strip()
+    if suffix and suffix not in {".", "!", "?", "。", "！", "？"}:
+        return None
+    claim = resolve_claim(match.group("ref"))
+    if claim is None:
+        return None
+    observed = _VALID_EVIDENCE_TOKEN_RE.sub("", sentence[: match.start()])
+
+    def normalized(value: str) -> str:
+        without_terminal_punctuation = re.sub(
+            r"(?:[.!?。！？]\s*)+$",
+            "",
+            value.strip(),
+        )
+        return " ".join(without_terminal_punctuation.split())
+
+    if normalized(observed) != normalized(claim.render_text()):
+        return None
+    return f"{{claim:{claim.claim_ref}}}"
+
+
 def _split_sentences(text: str) -> list[str]:
     parts = [
         part.strip()
@@ -204,6 +293,108 @@ def _split_markdown_heading_prefix(content: str) -> tuple[str, str]:
     return match.group(1), content[match.end() :]
 
 
+def _results_section_span(manuscript: str) -> tuple[int, int] | None:
+    heading = _RESULTS_HEADING_RE.search(manuscript or "")
+    if heading is None:
+        return None
+    next_heading = _NEXT_H2_RE.search(manuscript, heading.end())
+    return heading.end(), next_heading.start() if next_heading else len(manuscript)
+
+
+def _claim_target_position(
+    results_section: str,
+    *,
+    claim: ScientificClaim,
+) -> int:
+    if claim.analysis_role == "sensitivity":
+        pattern = r"^###\s+.*(?:sensitivity|robustness).*$"
+    elif claim.claim_type == "association":
+        pattern = r"^###\s+.*(?:primary\s+association|association|primary\s+model).*$"
+    else:
+        pattern = r"^###\s+.*(?:primary\s+outcome|outcome|cohort).*$"
+    heading = re.search(pattern, results_section, re.I | re.MULTILINE)
+    return heading.end() if heading is not None else 0
+
+
+def place_scientific_claim_tokens_in_results(
+    scaffold: str,
+    *,
+    claims: Sequence[ScientificClaim],
+) -> ScientificClaimPlacement:
+    """Ensure every host-authorized claim is represented inside Results.
+
+    A Writer may repeat a claim in the Abstract or Conclusion while omitting
+    it from the actual Results section.  The claim registry already defines
+    the reportable set, so placement is structural rather than scientific:
+    this function inserts only complete host-owned claim tokens and never
+    authors prose or derives a value.
+    """
+
+    ordered_claims = list(claims)
+    span = _results_section_span(scaffold)
+    if span is None:
+        return ScientificClaimPlacement(
+            scaffold=scaffold,
+            inserted_claim_refs=(),
+            missing_claim_refs=tuple(claim.claim_ref for claim in ordered_claims),
+        )
+    start, end = span
+    results_section = scaffold[start:end]
+    existing_refs = {
+        match.group("ref")
+        for match in _SCIENTIFIC_CLAIM_TOKEN_RE.finditer(results_section)
+    }
+    missing_claims = [
+        claim for claim in ordered_claims if claim.claim_ref not in existing_refs
+    ]
+    if not missing_claims:
+        return ScientificClaimPlacement(
+            scaffold=scaffold,
+            inserted_claim_refs=(),
+            missing_claim_refs=(),
+        )
+
+    insertions: dict[int, list[str]] = {}
+    for claim in missing_claims:
+        position = _claim_target_position(results_section, claim=claim)
+        insertions.setdefault(position, []).append(claim.placeholder)
+    repaired_results = results_section
+    for position in sorted(insertions, reverse=True):
+        block = "\n\n" + "\n\n".join(insertions[position])
+        repaired_results = (
+            repaired_results[:position] + block + repaired_results[position:]
+        )
+    return ScientificClaimPlacement(
+        scaffold=scaffold[:start] + repaired_results + scaffold[end:],
+        inserted_claim_refs=tuple(claim.claim_ref for claim in missing_claims),
+        missing_claim_refs=(),
+    )
+
+
+def missing_scientific_claims_in_results(
+    manuscript: str,
+    *,
+    claims: Sequence[ScientificClaim],
+) -> tuple[str, ...]:
+    """Return host-authorized claims absent from the final Results prose."""
+
+    span = _results_section_span(manuscript)
+    if span is None:
+        return tuple(claim.claim_ref for claim in claims)
+    start, end = span
+    normalized_results = " ".join(
+        _NUMERIC_PROVENANCE_FOOTNOTE_RE.sub("", manuscript[start:end]).split()
+    )
+    return tuple(
+        claim.claim_ref
+        for claim in claims
+        if " ".join(
+            round_reader_numeric_display(claim.render_reader_text())[0].split()
+        )
+        not in normalized_results
+    )
+
+
 def _heading_requires_evidence(content: str) -> bool:
     stripped = content.strip()
     if not stripped:
@@ -217,8 +408,13 @@ def _heading_requires_evidence(content: str) -> bool:
         semantic
     ):
         return True
+    # Versioned clinical or data terms such as ``Sepsis-3`` and ``SOFA-2``
+    # identify the study coordinate; their suffix is not a reported numeric
+    # result.  Any surrounding assertion ("was higher", "20%") remains caught
+    # by the unchanged assertion and numeric checks.
+    numeric_semantic = _VERSIONED_TERM_RE.sub("", semantic)
     return bool(
-        _HEADING_NUMERIC_RE.search(semantic)
+        _HEADING_NUMERIC_RE.search(numeric_semantic)
         and _HEADING_RESULT_CONTEXT_RE.search(semantic)
     )
 
@@ -227,6 +423,7 @@ def filter_evidence_bound_scaffold(
     scaffold: str,
     *,
     resolve_claim: ClaimResolver,
+    resolve_evidence: EvidenceResolver | None = None,
 ) -> ScaffoldPolicyResult:
     """Filter unsupported result prose while preserving Markdown structure."""
 
@@ -253,6 +450,21 @@ def filter_evidence_bound_scaffold(
         if not content.strip():
             filtered_lines.append(line)
             continue
+        canonical_line_claim = _canonical_duplicate_claim_token(
+            content,
+            resolve_claim=resolve_claim,
+        )
+        if canonical_line_claim is not None:
+            content = canonical_line_claim
+        elif (
+            _SCIENTIFIC_CLAIM_TOKEN_RE.search(content) is not None
+            and _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(content.strip()) is None
+        ):
+            rejected = content.strip()
+            unsupported_scientific_claims.append(rejected)
+            filtered_claims.append(rejected)
+            filtered_lines.append("")
+            continue
         sentences = _split_sentences(content)
         if (
             len(sentences) == 1
@@ -266,6 +478,12 @@ def filter_evidence_bound_scaffold(
             continue
         kept: list[str] = []
         for sentence in sentences:
+            canonical_claim = _canonical_duplicate_claim_token(
+                sentence,
+                resolve_claim=resolve_claim,
+            )
+            if canonical_claim is not None:
+                sentence = canonical_claim
             if _contains_malformed_authority_placeholder(sentence):
                 rejected = sentence.strip()
                 unsupported_scientific_claims.append(rejected)
@@ -293,6 +511,18 @@ def filter_evidence_bound_scaffold(
                 filtered_claims.append(rejected)
                 continue
             if _looks_result_like_sentence(sentence):
+                # Registered evidence may authorize a numeric fact; the later
+                # numeric-provenance gate still binds every value to its exact
+                # owner and refuses foreign or ambiguous citations.  Exact
+                # literature keys may authorize nonnumeric background context,
+                # while numeric literature claims remain fail-closed.  Neither
+                # route bypasses the qualitative scientific-claim gate above.
+                if _has_registered_evidence(
+                    sentence,
+                    resolve_evidence=resolve_evidence,
+                ) or _has_nonnumeric_literature_context(sentence):
+                    kept.append(sentence.strip())
+                    continue
                 rejected = sentence.strip()
                 removed.append(rejected)
                 filtered_claims.append(rejected)
@@ -343,7 +573,7 @@ def expand_scientific_claim_tokens(
             out.append(f"{structure_prefix}[scientific claim missing: {claim_ref}]")
             continue
         out.append(
-            f"{structure_prefix}{claim.render_text()} "
+            f"{structure_prefix}{claim.render_reader_text()} "
             f"{{evidence:{claim.evidence_id}}}"
         )
     return ScientificClaimExpansion(
@@ -356,7 +586,10 @@ def expand_scientific_claim_tokens(
 __all__ = [
     "ScaffoldPolicyResult",
     "ScientificClaimExpansion",
+    "ScientificClaimPlacement",
     "expand_scientific_claim_tokens",
     "filter_evidence_bound_scaffold",
     "malformed_authority_placeholder_sentences",
+    "missing_scientific_claims_in_results",
+    "place_scientific_claim_tokens_in_results",
 ]

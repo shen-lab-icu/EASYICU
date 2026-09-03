@@ -11,10 +11,11 @@ import copy
 import hashlib
 import json
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
@@ -32,6 +33,24 @@ class SourcePathLeaseError(Exception):
     def __init__(self, detail: Dict[str, Any]) -> None:
         self.detail = detail
         super().__init__(str(detail.get("error") or "source_path_lease_error"))
+
+
+class RegisteredExportSelectionError(Exception):
+    """Typed failure to resolve one registered export for local review."""
+
+    def __init__(self, detail: Dict[str, Any]) -> None:
+        self.detail = detail
+        super().__init__(
+            str(detail.get("error") or "registered_export_selection_error")
+        )
+
+
+@dataclass(frozen=True)
+class RegisteredExportSelection:
+    """Registered source and its validated export description."""
+
+    source: Mapping[str, Any]
+    description: Mapping[str, Any]
 
 
 class SourcePathLease:
@@ -327,6 +346,67 @@ def load_registry() -> Dict[str, Any]:
         "crossdb_paths": crossdb_paths,
         "config_path": str(_CONFIG_PATH),
     }
+
+
+def resolve_registered_export(
+    requested_path: Any = None,
+) -> RegisteredExportSelection:
+    """Resolve an explicit or active registered export and validate it once."""
+
+    registry = load_registry()
+    sources = [item for item in registry.get("sources") or [] if isinstance(item, dict)]
+    requested = str(requested_path or "").strip()
+    if requested:
+        selected_path = _norm_path(requested)
+        source = next(
+            (
+                item
+                for item in sources
+                if _norm_path(str(item.get("path") or "")) == selected_path
+            ),
+            None,
+        )
+        if source is None:
+            raise RegisteredExportSelectionError(
+                {
+                    "error": "source_not_registered",
+                    "path_hash": _registered_path_hash(selected_path),
+                }
+            )
+    else:
+        active_path = registry.get("active_path")
+        if not active_path:
+            raise RegisteredExportSelectionError({"error": "no_active_export"})
+        selected_path = _norm_path(str(active_path))
+        source = next(
+            (
+                item
+                for item in sources
+                if _norm_path(str(item.get("path") or "")) == selected_path
+            ),
+            None,
+        )
+        if source is None:
+            raise RegisteredExportSelectionError(
+                {
+                    "error": "active_source_not_registered",
+                    "path_hash": _registered_path_hash(selected_path),
+                }
+            )
+
+    description = dataio.describe_export_source(str(source.get("path") or ""))
+    if not description.get("ok"):
+        raise RegisteredExportSelectionError(
+            {"error": "invalid_export", "detail": description.get("error")}
+        )
+    return RegisteredExportSelection(
+        source=copy.deepcopy(source),
+        description=copy.deepcopy(description),
+    )
+
+
+def _registered_path_hash(path: str) -> str:
+    return hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12]
 
 
 @_registry_locked

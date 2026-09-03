@@ -17,6 +17,7 @@ dashboards with no reviewable scientific logic.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import zipfile
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
@@ -24,9 +25,114 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequen
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..schema import ValidationFinding
+from .contracts import (
+    ARTICLE_DISPLAY_PURPOSE_CONFLICT,
+    ArticleDisplayPolicyError,
+    ArticleDisplayPolicyRequest,
+    decide_article_display,
+)
 
 
 PUBLICATION_FIGURE_SKILL_POLICY_VERSION = "publication_figure_skill_policy_v6"
+
+
+_RATIO_TICK_CANDIDATES = (
+    0.1,
+    0.125,
+    0.2,
+    0.25,
+    0.33,
+    0.5,
+    0.67,
+    0.8,
+    0.9,
+    1.0,
+    1.1,
+    1.25,
+    1.5,
+    2.0,
+    2.5,
+    3.0,
+    4.0,
+    5.0,
+    8.0,
+    10.0,
+    20.0,
+    50.0,
+)
+
+
+def configure_ratio_axis(
+    axis: Any,
+    *,
+    lows: Sequence[float],
+    highs: Sequence[float],
+    null_value: float | None = 1.0,
+) -> list[float]:
+    """Configure a readable log-ratio axis and return its labelled ticks.
+
+    Matplotlib's default log formatter expands clinically narrow ranges into
+    overlapping scientific notation such as ``9 x 10^-1``. This shared figure
+    owner instead labels a small set of plain, round multipliers and suppresses
+    minor labels. The function deliberately refuses non-positive intervals.
+    """
+
+    finite_lows = [float(value) for value in lows]
+    finite_highs = [float(value) for value in highs]
+    if not finite_lows or not finite_highs or len(finite_lows) != len(finite_highs):
+        raise ValueError("ratio axis requires paired lower and upper bounds")
+    if any(value <= 0 for value in [*finite_lows, *finite_highs]):
+        raise ValueError("ratio axis bounds must be positive")
+    span_values = [*finite_lows, *finite_highs]
+    if null_value is not None:
+        if null_value <= 0:
+            raise ValueError("ratio axis null must be positive")
+        span_values.append(float(null_value))
+    span_low = min(span_values)
+    span_high = max(span_values)
+    ticks = [
+        value
+        for value in _RATIO_TICK_CANDIDATES
+        if span_low * 0.97 <= value <= span_high * 1.03
+    ]
+    if null_value is not None and float(null_value) not in ticks:
+        ticks.append(float(null_value))
+    if len(ticks) < 2:
+        ticks = [round(span_low, 2), round(span_high, 2)]
+    ticks = sorted(set(ticks))
+    if len(ticks) > 4:
+        selected = {ticks[0], ticks[-1]}
+        if null_value is not None:
+            selected.add(float(null_value))
+        while len(selected) < 4:
+            ordered = sorted(selected)
+            gaps = list(zip(ordered, ordered[1:]))
+            gap_low, gap_high = max(
+                gaps,
+                key=lambda bounds: math.log(bounds[1]) - math.log(bounds[0]),
+            )
+            candidates = [
+                value for value in ticks if gap_low < value < gap_high
+            ]
+            if not candidates:
+                break
+            midpoint = (math.log(gap_low) + math.log(gap_high)) / 2.0
+            selected.add(
+                min(candidates, key=lambda value: abs(math.log(value) - midpoint))
+            )
+        ticks = sorted(selected)
+
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
+
+    def plain_number(value: float, _position: int) -> str:
+        return f"{value:.2f}".rstrip("0").rstrip(".") or "0"
+
+    axis.set_xscale("log")
+    axis.xaxis.set_major_locator(FixedLocator(ticks))
+    axis.xaxis.set_major_formatter(FuncFormatter(plain_number))
+    axis.xaxis.set_minor_locator(FixedLocator([]))
+    axis.xaxis.set_minor_formatter(NullFormatter())
+    return ticks
 
 
 FigureArchetype = Literal[
@@ -361,6 +467,34 @@ def _normalise_panels(
         for key in list(raw):
             if key not in allowed:
                 metadata[key] = raw.pop(key)
+        article_role = str(metadata.get("article_role") or raw.get("role") or "")
+        requested_placement = metadata.get("placement")
+        if requested_placement not in {"main", "supplementary"}:
+            requested_placement = None
+        decision = decide_article_display(
+            ArticleDisplayPolicyRequest(
+                article_role=article_role,
+                requested_placement=requested_placement,
+                analysis_type=str(metadata.get("analysis_type") or ""),
+                scientific_status=str(
+                    metadata.get("scientific_status") or "analysis_only"
+                ),
+                central_to_question=bool(metadata.get("central_to_question", False)),
+                interpretation_critical=bool(
+                    metadata.get("interpretation_critical", False)
+                ),
+                terminal_diagnostic=bool(metadata.get("terminal_diagnostic", False)),
+            )
+        )
+        declared_purpose = metadata.get("display_purpose")
+        if declared_purpose not in {None, "", decision.display_purpose}:
+            raise ArticleDisplayPolicyError(
+                ARTICLE_DISPLAY_PURPOSE_CONFLICT,
+                "Declared display purpose conflicts with the typed article role.",
+            )
+        metadata["placement"] = decision.placement
+        metadata["display_purpose"] = decision.display_purpose
+        metadata["display_policy_reason_code"] = decision.reason_code
         if metadata:
             raw["metadata"] = metadata
         parsed.append(PanelSpec.model_validate(raw))
@@ -1080,6 +1214,7 @@ __all__ = [
     "make_figure_contract",
     "audit_figure_contract",
     "apply_publication_style",
+    "configure_ratio_axis",
     "add_panel_label",
     "save_publication_figure",
     "audit_publication_exports",

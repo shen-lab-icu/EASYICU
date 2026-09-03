@@ -14,6 +14,7 @@ plan cannot be approved first and downgraded only after provider work has run.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
@@ -23,16 +24,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..canonical_json import canonical_sha256
 from ..concept_availability import normalize_database_name
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+)
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
-from ..literature import LiteratureBundle
+from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
     window_extends_after_anchor,
 )
+from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
+from .adjustment_authority import AdjustmentSetAuthority
 from .dependence_authority import (
     context_patient_group_authority,
     dependence_matches_context,
@@ -40,13 +46,17 @@ from .dependence_authority import (
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from .publication_readiness import build_publication_readiness_facts
-from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
+from .sensitivity_authority import (
+    EXECUTABLE_METHODS_BY_STRATEGY,
+    FUNCTIONAL_FORM_EXECUTABLE_METHODS,
+)
 from .capability_registry import assess_scientific_capability
 
 
 ScientificReviewSeverity = Literal["blocker", "major", "minor"]
 ScientificRemediationRoute = Literal[
     "agent_plan_revision",
+    "runtime_capability",
     "study_authority_change",
     "external_evidence",
     "independent_review",
@@ -74,8 +84,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/1"] = (
-        "easyicu.plan_scientific_review/1"
+    schema_version: Literal["easyicu.plan_scientific_review/4"] = (
+        "easyicu.plan_scientific_review/4"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -137,14 +147,55 @@ def model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
 
 
 def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str]]:
+    """Classify post-zero exposure opportunity from owner-issued coordinates.
+
+    A concept's clinical definition window remains the first authority.  The
+    Web host may also bind an exact physical feature-materialization window in
+    ``data_constraints`` before a concrete wide-column descriptor exists (for
+    example while candidate planning is metadata-only).  That outer window is
+    *not* promoted to a clinical-definition anchor; it only establishes that
+    a primary feature can be observed after ICU admission, so association
+    plans must close early-event/exposure opportunity.
+    """
+
     exposure = str(context.primary_exposure or "").strip()
     if not exposure:
         return False, None
     descriptor = context.variable(exposure)
     window = str(getattr(descriptor, "analysis_window", "") or "").strip()
-    if not window:
+    if window:
+        return window_extends_after_anchor(window), window
+
+    preferences = context.user_preferences
+    raw_constraints = getattr(preferences, "data_constraints", None)
+    if not isinstance(raw_constraints, str) or not raw_constraints.strip():
         return False, None
-    return window_extends_after_anchor(window), window
+    try:
+        constraints = json.loads(raw_constraints)
+    except json.JSONDecodeError:
+        return False, None
+    if not isinstance(constraints, Mapping):
+        return False, None
+    confirmations = constraints.get("confirmations")
+    materialization = constraints.get("materialization_window")
+    if (
+        not isinstance(confirmations, Mapping)
+        or confirmations.get("feature_time_window") is not True
+        or not isinstance(materialization, Mapping)
+        or materialization.get("role") != "outer_observation_window"
+        or str(materialization.get("anchor") or "").strip().casefold()
+        != "icu admission"
+    ):
+        return False, None
+    try:
+        hours = float(materialization["hours"])
+    except (KeyError, TypeError, ValueError):
+        return False, None
+    if hours <= 0:
+        return False, None
+    # This label deliberately names the physical coordinate, rather than
+    # implying a phenotype definition or a follow-up horizon.
+    return True, f"outer_materialization:icu_admission[0,{hours:g}]h"
 
 
 def repeat_units_possible(context: ResearchContext) -> bool:
@@ -156,6 +207,31 @@ def repeat_units_possible(context: ResearchContext) -> bool:
     n_patients = context.cohort.n_patients
     n_stays = context.cohort.n_stays
     if n_patients is not None and n_stays is not None and n_stays > n_patients:
+        return True
+    # Both counts being known and equal is itself owner-issued proof that every
+    # stay belongs to a different person, so dependence is already ruled out.
+    counts_establish_one_stay_per_patient = (
+        n_patients is not None and n_stays is not None and n_stays <= n_patients
+    )
+    # Otherwise a stay-level cohort without patient identity cannot establish
+    # that every row belongs to a different person. Treat dependence as
+    # possible rather than silently upgrading "unknown" to "independent". The
+    # review below can then offer the governed remedies: materialize patient
+    # grouping or use an owner-issued one-stay/readmission restriction.
+    analysis_unit = str(provenance.get("analysis_unit") or "").strip().casefold()
+    if (
+        provenance.get("evidence_stage") == "metadata_only_planning"
+        and analysis_unit == "icu_stay"
+        and context_patient_group_authority(context) is None
+    ):
+        return True
+    if (
+        n_stays is not None
+        and n_stays > 1
+        and analysis_unit == "icu_stay"
+        and not counts_establish_one_stay_per_patient
+        and context_patient_group_authority(context) is None
+    ):
         return True
     text = " ".join(
         [
@@ -190,9 +266,9 @@ def patient_identity_available(context: ResearchContext) -> bool:
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
-        "landmark_analysis",
+        "signed_landmark_survival_suite",
         "time_varying_exposure_model",
-        "clone_censor_weight",
+        "landmark_analysis",
     }
 )
 _EXECUTABLE_DEPENDENCE_METHODS = frozenset(
@@ -289,16 +365,55 @@ def _step_requires_temporal_inference(step: AnalysisStep) -> bool:
     )
 
 
+def _signed_temporal_result_projection(
+    step: AnalysisStep, plan: AnalysisPlan
+) -> bool:
+    """Recognize a sensitivity table projected from one signed estimator.
+
+    The landmark runtime can mechanically expose separate named sensitivity
+    tables after its single signed fit.  Those child nodes consume only the
+    signed primary's products; they do not refit patient rows and therefore do
+    not need a second temporal estimator.  The graph and sensitivity ids must
+    both close exactly so Planner prose cannot obtain this exemption.
+    """
+
+    if (
+        step.planned_analysis_role != "sensitivity"
+        or step.scientific_capability is not None
+        or step.model_requirements
+        or step.family_primary_result_requirement is not None
+        or not step.sensitivity_spec_ids
+    ):
+        return False
+    candidates = [
+        primary
+        for primary in plan.steps
+        if primary.planned_analysis_role == "primary"
+        and _method_head(primary) in _EXECUTABLE_TEMPORAL_METHODS
+        and set(step.sensitivity_spec_ids).issubset(primary.sensitivity_spec_ids)
+        and set(step.inputs)
+        and set(step.inputs).issubset(primary.expected_outputs)
+    ]
+    return len(candidates) == 1
+
+
 def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
     """Require every applicable estimator to close its own temporal design."""
 
+    if plan is None:
+        return False
     applicable = [
         step
         for step in scientific_steps(plan)
         if executable_scientific_step(step) and _step_requires_temporal_inference(step)
+        and not _signed_temporal_result_projection(step, plan)
     ]
     return bool(applicable) and all(
-        _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS for step in applicable
+        _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS
+        and (_method_head(step) != "time_varying_exposure_model" or (
+            step.scientific_capability == "association_time_varying_exposure_v1"
+            and any(str(ref).startswith("scientific_runtime_contract:") for ref in step.icu_rule_refs)
+        )) for step in applicable
     )
 
 
@@ -344,6 +459,16 @@ def repeated_unit_design_closed(
         method = _method_head(step)
         model_requirements = tuple(step.model_requirements)
         distribution = step.exposure_outcome_distribution_spec
+        patient_group = context_patient_group_authority(context)
+        signed_landmark_dependence = bool(
+            method in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
+            and patient_group is not None
+            and patient_group.group_source in step.inputs
+            and any(
+                str(value).startswith("scientific_runtime_contract:")
+                for value in step.icu_rule_refs
+            )
+        )
         counts_only_distribution = bool(
             distribution is not None
             and distribution.schema_version
@@ -353,6 +478,8 @@ def repeated_unit_design_closed(
             model_requirements
             or distribution is not None
             or method in _EXECUTABLE_DEPENDENCE_METHODS
+            or method == "signed_landmark_restricted_cubic_spline"
+            or signed_landmark_dependence
             or method == "non_readmission_restriction"
         ):
             continue
@@ -382,6 +509,8 @@ def repeated_unit_design_closed(
         # other's authority. Once both present contracts are closed, the step
         # is complete regardless of the human-readable method label.
         if model_requirements or distribution is not None:
+            continue
+        if signed_landmark_dependence:
             continue
         if has_patient_authority and method in _EXECUTABLE_DEPENDENCE_METHODS:
             continue
@@ -441,6 +570,40 @@ def required_method_layers_for_plan(
         for step in steps
     ):
         required.add("missing_data")
+    plan_tokens = " ".join(
+        [
+            str(plan.analysis_type or ""),
+            *(
+                token
+                for step in steps
+                for token in (
+                    str(step.method or ""),
+                    str(step.intent or ""),
+                    *(str(output or "") for output in step.expected_outputs),
+                )
+            ),
+        ]
+    ).casefold()
+    if str(plan.analysis_type or "").casefold() == "survival":
+        if any(
+            marker in plan_tokens
+            for marker in (
+                "cox",
+                "proportional hazard",
+                "ph_diagnostic",
+                "ph diagnostic",
+            )
+        ):
+            required.add("survival_assumption")
+        if any(
+            marker in plan_tokens
+            for marker in (
+                "rmst",
+                "restricted mean survival",
+                "restricted_mean_survival",
+            )
+        ):
+            required.add("survival_estimand")
     return tuple(sorted(required))
 
 
@@ -488,15 +651,22 @@ def method_source_facts(
     }
 
 
-def _literature_facts(literature: Optional[LiteratureBundle]) -> dict[str, Any]:
+def _literature_facts(
+    literature: Optional[LiteratureBundle],
+    context: ResearchContext,
+) -> dict[str, Any]:
     if literature is None:
         return {
             "search_conducted": False,
             "sources_returning": [],
             "queries": {},
             "direct_comparator_keys": [],
+            "design_analogue_keys": [],
+            "comparison_source_keys": [],
             "direct_comparator_years": [],
+            "comparison_source_years": [],
             "newest_direct_comparator_year": None,
+            "newest_comparison_source_year": None,
             "search_year": datetime.now(timezone.utc).year,
         }
     provenance = literature.search_provenance
@@ -514,10 +684,32 @@ def _literature_facts(literature: Optional[LiteratureBundle]) -> dict[str, Any]:
             and item.publication_type_eligible
         }
     )
+    analogue_keys = sorted(
+        {
+            item.citation_key
+            for item in literature.screening_decisions
+            if item.disposition == "include"
+            and item.evidence_role == "design_analogue"
+            and item.population_match
+            and item.design_excerpt_available
+            and item.publication_type_eligible
+        }
+    )
+    comparison_keys = sorted(
+        set(direct_keys)
+        | (set(analogue_keys) if not context.primary_exposure else set())
+    )
     years = sorted(
         {
             int(citations[key].year)
             for key in direct_keys
+            if key in citations and str(citations[key].year).isdigit()
+        }
+    )
+    comparison_years = sorted(
+        {
+            int(citations[key].year)
+            for key in comparison_keys
             if key in citations and str(citations[key].year).isdigit()
         }
     )
@@ -531,8 +723,14 @@ def _literature_facts(literature: Optional[LiteratureBundle]) -> dict[str, Any]:
         "sources_returning": list(provenance.sources_returning if provenance else ()),
         "queries": dict(provenance.search_queries if provenance else {}),
         "direct_comparator_keys": direct_keys,
+        "design_analogue_keys": analogue_keys,
+        "comparison_source_keys": comparison_keys,
         "direct_comparator_years": years,
+        "comparison_source_years": comparison_years,
         "newest_direct_comparator_year": years[-1] if years else None,
+        "newest_comparison_source_year": (
+            comparison_years[-1] if comparison_years else None
+        ),
         "search_year": search_year,
     }
 
@@ -543,11 +741,9 @@ def _literature_design_bindings(
 ) -> dict[str, Any]:
     """Join typed Planner adoption claims to sealed source evidence."""
 
-    citations = (
-        {item.key: item for item in literature.citations}
-        if literature is not None
-        else {}
-    )
+    citations = {
+        item.key: item for item in manuscript_citable_records(literature)
+    }
     screening = (
         {item.citation_key: item for item in literature.screening_decisions}
         if literature is not None
@@ -637,6 +833,29 @@ def _sensitivity_facts(
 ) -> dict[str, Any]:
     requested = _requested_sensitivity_axes(context)
     typed_specs = {spec.spec_id: spec for spec in _sensitivity_specs(context)}
+    unsupported_spec_ids = {
+        spec_id
+        for spec_id, spec in typed_specs.items()
+        if (not EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
+            or (spec.strategy == "time_varying" and spec.time_varying_execution is None))
+    }
+
+    def review_axis(spec: Any) -> str:
+        return {
+            "repeated_stays": "readmission",
+            "missing_data": "missing",
+        }.get(spec.axis, spec.axis)
+
+    supported_axes = {
+        review_axis(spec)
+        for spec_id, spec in typed_specs.items()
+        if spec_id not in unsupported_spec_ids
+    }
+    unsupported_only_axes = {
+        review_axis(spec)
+        for spec_id, spec in typed_specs.items()
+        if spec_id in unsupported_spec_ids
+    } - supported_axes
     executed_spec_ids: set[str] = set()
     executable: set[str] = set()
     typed_executable: set[str] = set()
@@ -661,6 +880,21 @@ def _sensitivity_facts(
         if executable_scientific_step(step):
             executable.update(axes)
             method = _method_head(step)
+            if (
+                step.planned_analysis_role == "sensitivity"
+                and method in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+                and step.scientific_capability
+                == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and step.sensitivity_spec_ids
+                and len(step.expected_outputs) == 1
+                and str(step.expected_outputs[0]).startswith("table:")
+            ):
+                # The progressive compiler signs this exact custom-sensitivity
+                # shape against the primary adjusted-association product. It is
+                # plan-owned typed authority awaiting whole-plan approval, not
+                # a prose mention or an unregistered robustness-axis alias.
+                executable.add("functional_form")
+                typed_executable.add("functional_form")
             for spec_id in step.sensitivity_spec_ids:
                 spec = typed_specs.get(spec_id)
                 if (
@@ -668,6 +902,31 @@ def _sensitivity_facts(
                     and method in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
                 ):
                     executed_spec_ids.add(spec_id)
+            # A signed runtime method is the host-bound implementation of the
+            # exact StudyContext digest. Its primary step may execute typed
+            # landmark, spline, and linear contracts without mislabelling the
+            # primary estimator as a separate sensitivity step. Credit only
+            # strategies explicitly supported by that signed method and only
+            # when their source coordinates are present in the governed step.
+            # Ordinary Planner prose and generic method names never reach this
+            # branch.
+            if method == "signed_landmark_restricted_cubic_spline":
+                step_inputs = set(step.inputs)
+                for spec_id, spec in typed_specs.items():
+                    if method not in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]:
+                        continue
+                    required_inputs = set(spec.execution_variables)
+                    if spec.strategy == "landmark":
+                        required_inputs.update(
+                            value
+                            for value in (
+                                spec.event_time_variable,
+                                spec.observation_duration_variable,
+                            )
+                            if value
+                        )
+                    if required_inputs.issubset(step_inputs):
+                        executed_spec_ids.add(spec_id)
         else:
             protocol_only.update(axes)
     replay_steps = [
@@ -677,6 +936,28 @@ def _sensitivity_facts(
         and step.robustness_replay_spec is not None
         and _has_scientific_output(step)
     ]
+    plan_specs_by_id = {spec.spec_id: spec for spec in plan.robustness_specs}
+    for step in replay_steps:
+        for spec_id in step.sensitivity_spec_ids:
+            typed_spec = typed_specs.get(spec_id)
+            plan_spec = plan_specs_by_id.get(spec_id)
+            if typed_spec is None or plan_spec is None:
+                continue
+            missing_override = dict(plan_spec.missing_override or {})
+            if (
+                typed_spec.axis == "missing_data"
+                and typed_spec.strategy == "complete_case"
+                and plan_spec.axis == "missing"
+                and str(missing_override.get("strategy") or "")
+                .strip()
+                .casefold()
+                == "complete_case"
+            ):
+                # ``robustness_sensitivity`` is the deterministic replay owner
+                # for a locked plan-level complete-case spec.  The context and
+                # plan ids must agree exactly; prose or a method label alone is
+                # never enough to credit execution.
+                executed_spec_ids.add(spec_id)
     plan_spec_axes = {
         {"missing": "missing", "cohort": "cohort", "outcome": "outcome_definition"}[
             spec.axis
@@ -696,9 +977,14 @@ def _sensitivity_facts(
     if "readmission" in executable and not repeated_unit_design_closed(context, plan):
         executable.discard("readmission")
         protocol_only.add("readmission")
-    missing_spec_ids = sorted(set(typed_specs) - executed_spec_ids)
+    missing_spec_ids = sorted(
+        (set(typed_specs) - executed_spec_ids) - unsupported_spec_ids
+    )
     typed_axes = {
-        "readmission" if spec.axis == "repeated_stays" else spec.axis
+        {
+            "repeated_stays": "readmission",
+            "missing_data": "missing",
+        }.get(spec.axis, spec.axis)
         for spec_id, spec in typed_specs.items()
         if spec_id in executed_spec_ids
     }
@@ -709,10 +995,19 @@ def _sensitivity_facts(
         "executable": sorted(executable),
         "typed_executable": sorted(typed_executable),
         "protocol_only": sorted(protocol_only - executable),
-        "missing_required": sorted(requested - executable),
+        "missing_required": sorted(
+            requested - executable - unsupported_only_axes
+        ),
         "typed_spec_ids": sorted(typed_specs),
         "executed_spec_ids": sorted(executed_spec_ids),
         "missing_spec_ids": missing_spec_ids,
+        "unsupported_spec_ids": sorted(unsupported_spec_ids),
+        "unsupported_strategies": sorted(
+            {
+                typed_specs[spec_id].strategy
+                for spec_id in unsupported_spec_ids
+            }
+        ),
         "plan_robustness_spec_ids": sorted(
             spec.spec_id for spec in plan.robustness_specs
         ),
@@ -731,9 +1026,22 @@ def _continuous_linearity_facts(plan: AnalysisPlan) -> dict[str, Any]:
                     identity_terms.append(term.name)
     has_functional_form_sensitivity = any(
         executable_scientific_step(step)
-        and any(
-            token in " ".join([step.step_id, step.intent, step.method or "", *step.expected_outputs]).casefold()
-            for token in ("spline", "nonlinear", "non-linear", "functional form", "fractional polynomial")
+        and (
+            _method_head(step) in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+            or any(
+                token
+                in " ".join(
+                    [step.step_id, step.intent, step.method or "", *step.expected_outputs]
+                ).casefold()
+                for token in (
+                    "spline",
+                    "nonlinear",
+                    "non-linear",
+                    "functional form",
+                    "functional_form",
+                    "fractional polynomial",
+                )
+            )
         )
         for step in scientific_steps(plan)
     )
@@ -743,18 +1051,44 @@ def _continuous_linearity_facts(plan: AnalysisPlan) -> dict[str, Any]:
     }
 
 
+def _model_term_domain_conflicts(
+    context: ResearchContext,
+    plan: AnalysisPlan,
+) -> list[dict[str, Any]]:
+    conflicts: list[dict[str, Any]] = []
+    for step in scientific_steps(plan):
+        for requirement in step.model_requirements:
+            for term in requirement.model_terms or ():
+                variable = context.variable(term.name)
+                if variable is None or term.coding != "continuous":
+                    continue
+                declared_levels, declared_basis = declared_domain_for_variable(variable)
+                if not declared_levels:
+                    continue
+                conflicts.append(
+                    {
+                        "step_id": step.step_id,
+                        "requirement_id": requirement.requirement_id,
+                        "variable": term.name,
+                        "coding": term.coding,
+                        "declared_basis": declared_basis,
+                        "declared_level_count": len(declared_levels),
+                    }
+                )
+    return conflicts
+
+
 def _endpoint_resolved(context: ResearchContext) -> bool:
     target = str(context.target_outcome or "").strip()
     descriptor = context.variable(target) if target else None
     if context.endpoint is None or descriptor is None:
         return False
-    text = " ".join(
-        [str(descriptor.description or ""), str(descriptor.source_concept or "")]
-    ).casefold()
+    description = str(descriptor.description or "").strip()
+    description_text = description.casefold()
     return bool(
-        descriptor.description
-        and "mortality_unspecified" not in text
-        and "declared_primary_outcome" not in text
+        description
+        and "mortality_unspecified" not in description_text
+        and "declared_primary_outcome" not in description_text
         and not any(
             "endpoint-definition conflict" in str(value).casefold()
             for value in descriptor.clinical_caveats
@@ -921,7 +1255,9 @@ _EXTERNAL_EVIDENCE_FINDINGS = frozenset(
         "TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED",
         "LITERATURE_SEARCH_PROVENANCE_INCOMPLETE",
         "DIRECT_COMPARATOR_NOT_ESTABLISHED",
+        "DESIGN_ANALOGUE_NOT_ESTABLISHED",
         "RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED",
+        "RECENT_DESIGN_ANALOGUE_NOT_ESTABLISHED",
         "NOVELTY_NOT_ESTABLISHED",
     }
 )
@@ -932,6 +1268,7 @@ _INDEPENDENT_REVIEW_FINDINGS = frozenset(
         "CLINICAL_DEFINITION_DATABASE_CONFORMANCE_NOT_ESTABLISHED",
     }
 )
+_RUNTIME_CAPABILITY_FINDINGS = frozenset({"TIME_VARYING_RUNTIME_UNAVAILABLE"})
 
 
 def remediation_route_for_finding(
@@ -941,6 +1278,8 @@ def remediation_route_for_finding(
 
     if finding.requires_user_authorization:
         return "study_authority_change"
+    if finding.code in _RUNTIME_CAPABILITY_FINDINGS:
+        return "runtime_capability"
     if finding.code in _EXTERNAL_EVIDENCE_FINDINGS:
         return "external_evidence"
     if finding.code in _INDEPENDENT_REVIEW_FINDINGS:
@@ -992,7 +1331,7 @@ def build_plan_scientific_review(
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
-    literature_facts = _literature_facts(literature)
+    literature_facts = _literature_facts(literature, context)
     method_facts = method_source_facts(plan, context)
     design_bindings = _literature_design_bindings(plan, literature)
     sensitivity = _sensitivity_facts(context, plan)
@@ -1006,6 +1345,7 @@ def build_plan_scientific_review(
     figure_roles = publication_readiness["figure_roles"]
     content_roles = publication_readiness["content_roles"]
     linearity = _continuous_linearity_facts(plan)
+    model_term_domain_conflicts = _model_term_domain_conflicts(context, plan)
     clinical_definitions = _clinical_definition_facts(context)
     time_anchor_alignment = primary_exposure_time_anchor_alignment(context)
     post_baseline, exposure_window = post_baseline_exposure(context)
@@ -1013,20 +1353,49 @@ def build_plan_scientific_review(
     patient_identity = patient_identity_available(context)
     covariates = model_covariates(plan)
     preferences = context.user_preferences
+    adjustment_authority = AdjustmentSetAuthority.from_context(context)
+    if not covariates and any(
+        step.planned_analysis_role == "primary"
+        and _method_head(step) in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
+        for step in plan.steps
+    ):
+        # This method can appear only after the digest-bound runtime owner has
+        # replaced the generic primary step. Its exact adjustment columns are
+        # therefore the operational projection of the sealed StudyContext,
+        # not an inference from plan inputs or available data.
+        covariates = adjustment_authority.operational_covariates
     covariate_selection = (
         preferences.covariate_selection if preferences is not None else "planner_selectable"
     )
-    covariate_rationales = dict(
-        getattr(preferences, "covariate_rationales", {}) or {}
-    )
-    covariate_temporal_roles = dict(
-        getattr(preferences, "covariate_temporal_roles", {}) or {}
-    )
+    covariate_rationales = adjustment_authority.operational_rationales
+    covariate_temporal_roles = adjustment_authority.operational_temporal_roles
     capability_assessment = assess_scientific_capability(
         analysis_type=plan.analysis_type,
         context=context,
         plan=plan,
     )
+    selected_design = (
+        plan.design_selection.selected if plan.design_selection is not None else None
+    )
+    if selected_design is not None and selected_design.reviewable_plan is None:
+        findings.append(
+            PlanScientificFinding(
+                code="REVIEWABLE_PLAN_SPECIFICATION_MISSING",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The selected design does not contain a complete Planner-owned "
+                    "recommendation for researcher review."
+                ),
+                evidence_refs=["analysis_plan.json.design_selection"],
+                remediation=(
+                    "Generate a fresh candidate plan that recommends the cohort "
+                    "and analysis unit, exposure timing and aggregation, outcome "
+                    "follow-up, adjustment/model, missing-data strategy, and "
+                    "sensitivity plus feasibility checks before requesting approval."
+                ),
+            )
+        )
     if (
         require_reportable_capability
         and not capability_assessment.claim_ceiling_allows_reportable
@@ -1072,25 +1441,55 @@ def build_plan_scientific_review(
                 remediation="Persist normalized source queries and record-to-query bindings.",
             )
         )
-    if not literature_facts["direct_comparator_keys"]:
+    direct_required = bool(context.primary_exposure)
+    if not literature_facts["comparison_source_keys"]:
         findings.append(
             PlanScientificFinding(
-                code="DIRECT_COMPARATOR_NOT_ESTABLISHED",
+                code=(
+                    "DIRECT_COMPARATOR_NOT_ESTABLISHED"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_NOT_ESTABLISHED"
+                ),
                 severity="major",
                 dimension="literature",
-                message="No retrieved study passed all population, exposure, outcome, and design-excerpt checks as a direct comparator.",
+                message=(
+                    "No retrieved study passed all population, exposure, outcome, "
+                    "and design-excerpt checks as a direct comparator."
+                    if direct_required
+                    else (
+                        "No retrieved study passed the ICU population, clinical "
+                        "topic, analysis-intent, and design-excerpt checks as a "
+                        "design analogue."
+                    )
+                ),
                 evidence_refs=["preplan_literature_bundle.json.screening_decisions"],
-                remediation="Run a direct observational-comparator search stratum and record source-backed inclusion/exclusion decisions.",
+                remediation=(
+                    "Run a direct observational-comparator search stratum and "
+                    "record source-backed inclusion/exclusion decisions."
+                    if direct_required
+                    else (
+                        "Run a design-analogue search and retain source-backed "
+                        "topic/design inclusion decisions without inventing a P/E/O "
+                        "contrast."
+                    )
+                ),
             )
         )
-    newest = literature_facts["newest_direct_comparator_year"]
+    newest = literature_facts["newest_comparison_source_year"]
     if newest is not None and literature_facts["search_year"] - newest > 5:
         findings.append(
             PlanScientificFinding(
-                code="RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED",
+                code=(
+                    "RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED"
+                    if direct_required
+                    else "RECENT_DESIGN_ANALOGUE_NOT_ESTABLISHED"
+                ),
                 severity="major",
                 dimension="literature",
-                message="The newest direct comparator is more than five years older than the search year.",
+                message=(
+                    "The newest screened comparison source is more than five years "
+                    "older than the search year."
+                ),
                 evidence_refs=["preplan_literature_bundle.json.citations"],
                 remediation="Document whether current similar work is truly absent or retrieval/screening missed it.",
             )
@@ -1101,15 +1500,28 @@ def build_plan_scientific_review(
         if step.planned_analysis_role == "primary"
         for key in step.literature_citation_keys
     }
-    if literature_facts["direct_comparator_keys"] and set(literature_facts["direct_comparator_keys"]).isdisjoint(primary_keys):
+    if literature_facts["comparison_source_keys"] and set(
+        literature_facts["comparison_source_keys"]
+    ).isdisjoint(primary_keys):
         findings.append(
             PlanScientificFinding(
-                code="DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN",
+                code=(
+                    "DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN"
+                ),
                 severity="major",
                 dimension="literature_to_plan",
-                message="A screened direct comparator exists but does not govern any primary analysis step.",
+                message=(
+                    "A screened comparison source exists but does not govern any "
+                    "primary analysis step."
+                ),
                 evidence_refs=["analysis_plan.json", "preplan_literature_bundle.json"],
-                remediation="Bind the exact comparator key to the primary step and record what design element was borrowed or deliberately differed.",
+                remediation=(
+                    "Bind the exact comparator or design-analogue key to the primary "
+                    "step and record what design element was borrowed or deliberately "
+                    "differed."
+                ),
             )
         )
     if method_facts["method_source_gaps"]:
@@ -1288,26 +1700,58 @@ def build_plan_scientific_review(
             )
         )
     needs_temporal_inference = temporal_inference_required(plan)
+    unsupported_timing_spec_ids = [
+        spec.spec_id
+        for spec in _sensitivity_specs(context)
+        if spec.axis == "timing"
+        and (not EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
+             or (spec.strategy == "time_varying" and spec.time_varying_execution is None))
+    ]
     if post_baseline and needs_temporal_inference and not timing_design_closed(plan):
-        findings.append(
-            PlanScientificFinding(
-                code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
-                severity="blocker",
-                dimension="icu_clinical_design",
-                message="Exposure is classified after ICU time zero, but no executable temporal estimator closes exposure opportunity and early events.",
-                evidence_refs=["research_context.json", "analysis_plan.json"],
-                remediation="Create a new, user-authorized landmark/time-varying study version or keep this version descriptive; a protocol-only step cannot close the bias.",
-                requires_user_authorization=True,
-                authorization_question="Should a new study version use a prespecified landmark/time-varying design, or should the current question remain descriptive?",
+        if unsupported_timing_spec_ids:
+            findings.append(
+                PlanScientificFinding(
+                    code="TIME_VARYING_RUNTIME_UNAVAILABLE",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message=(
+                        "The requested time-varying sensitivity has no registered "
+                        "deterministic runtime: "
+                        + ", ".join(sorted(unsupported_timing_spec_ids))
+                        + "."
+                    ),
+                    evidence_refs=[
+                        "research_context.json.user_preferences",
+                        "analysis_plan.json",
+                    ],
+                    remediation=(
+                        "Build and verify a source-bound longitudinal outcome "
+                        "follow-up contract and deterministic time-varying runtime. "
+                        "Preserve the current StudyContext; do not rerun Planner or "
+                        "ask the researcher to choose the same design again."
+                    ),
+                )
             )
-        )
+        else:
+            findings.append(
+                PlanScientificFinding(
+                    code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message="Exposure is classified after ICU time zero, but no executable temporal estimator closes exposure opportunity and early events.",
+                    evidence_refs=["research_context.json", "analysis_plan.json"],
+                    remediation="Create a new, user-authorized landmark/time-varying study version or keep this version descriptive; a protocol-only step cannot close the bias.",
+                    requires_user_authorization=True,
+                    authorization_question="Should a new study version use a prespecified landmark/time-varying design, or should the current question remain descriptive?",
+                )
+            )
     if repeats and not patient_identity and not repeated_unit_design_closed(context, plan):
         findings.append(
             PlanScientificFinding(
                 code="REPEATED_STAY_IDENTITY_UNAVAILABLE",
                 severity="blocker",
                 dimension="icu_clinical_design",
-                message="The cohort retains ICU readmissions but exposes no patient identity, so within-patient dependence cannot be identified or handled.",
+                message="The stay-level cohort does not expose patient identity, so repeated ICU stays cannot be ruled out or handled.",
                 evidence_refs=["research_context.json.cohort.provenance"],
                 remediation="Materialize an authorized patient identifier for clustered/first-stay inference, or prespecify an executable non-readmission restriction using an owner-issued readmission indicator in a new study version.",
                 requires_user_authorization=True,
@@ -1393,7 +1837,7 @@ def build_plan_scientific_review(
         findings.append(
             PlanScientificFinding(
                 code="ADJUSTMENT_SET_NOT_USER_CONFIRMED",
-                severity="major",
+                severity="blocker",
                 dimension="statistical_design",
                 message="The Planner selected an exact covariate roster from candidates the user had not approved as a prespecified adjustment set.",
                 evidence_refs=["research_context.json.user_preferences", "analysis_plan.json.model_requirements"],
@@ -1424,6 +1868,30 @@ def build_plan_scientific_review(
                 authorization_question=(
                     "Do you approve the clinical rationale and baseline timing for "
                     "every exact adjustment covariate in a new study version?"
+                ),
+            )
+        )
+    if model_term_domain_conflicts:
+        conflict_variables = sorted(
+            {str(item["variable"]) for item in model_term_domain_conflicts}
+        )
+        findings.append(
+            PlanScientificFinding(
+                code="MODEL_TERM_CODING_CONFLICTS_WITH_DECLARED_DOMAIN",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "Continuous model coding conflicts with an owner-declared "
+                    "closed variable domain: " + ", ".join(conflict_variables)
+                ),
+                evidence_refs=[
+                    "research_context.json.variables",
+                    "analysis_plan.json.model_requirements",
+                ],
+                remediation=(
+                    "Regenerate the plan using categorical, binary, or ordinal "
+                    "coding that matches the concept owner's declared domain; do "
+                    "not reinterpret factor codes as interval measurements."
                 ),
             )
         )
@@ -1533,15 +2001,23 @@ def build_plan_scientific_review(
                 remediation="Add evidence-producing cohort, baseline, quality, descriptive, primary, or robustness modules as applicable.",
             )
         )
-    if not literature_facts["direct_comparator_keys"]:
+    if not literature_facts["comparison_source_keys"]:
         findings.append(
             PlanScientificFinding(
                 code="NOVELTY_NOT_ESTABLISHED",
                 severity="major",
                 dimension="novelty",
-                message="Without a direct comparator, the system cannot distinguish a genuinely novel design from a new database instantiation.",
+                message=(
+                    "Without a screened direct comparator or eligible design "
+                    "analogue, the system cannot distinguish a genuinely novel "
+                    "design from a new database instantiation."
+                ),
                 evidence_refs=["preplan_literature_bundle.json"],
-                remediation="Complete source-backed direct-comparator screening and a separate five-dimension novelty review before making novelty claims.",
+                remediation=(
+                    "Complete source-backed comparison-source screening and a "
+                    "separate prespecified novelty review before making novelty "
+                    "claims."
+                ),
             )
         )
     else:
@@ -1551,8 +2027,8 @@ def build_plan_scientific_review(
                 severity="major",
                 dimension="novelty",
                 message=(
-                    "A screened direct-comparator candidate exists, but retrieval "
-                    "and deterministic P/E/O screening do not establish novelty. "
+                    "A screened comparison-source candidate exists, but retrieval "
+                    "and deterministic screening do not establish novelty. "
                     "Population, exposure, time zero, estimand, analysis route, and "
                     "clinical contribution still require an independent appraisal."
                 ),
@@ -1581,6 +2057,7 @@ def build_plan_scientific_review(
         ]
         for route in (
             "agent_plan_revision",
+            "runtime_capability",
             "study_authority_change",
             "external_evidence",
             "independent_review",
@@ -1663,22 +2140,27 @@ def build_plan_scientific_review(
             "sensitivity": sensitivity,
             "robustness_readiness": robustness_readiness,
             "linearity": linearity,
+            "model_term_domain_conflicts": model_term_domain_conflicts,
             "clinical_definitions": clinical_definitions,
             "figure_roles": figure_roles,
             "content_roles": content_roles,
             "novelty_status": (
                 "independent_review_required"
-                if literature_facts["direct_comparator_keys"]
+                if literature_facts["comparison_source_keys"]
                 else "not_established"
             ),
             "novelty_review": {
                 "status": (
                     "independent_review_required"
-                    if literature_facts["direct_comparator_keys"]
-                    else "direct_comparator_required"
+                    if literature_facts["comparison_source_keys"]
+                    else "comparison_source_required"
                 ),
                 "direct_comparator_keys": list(
                     literature_facts["direct_comparator_keys"]
+                ),
+                "design_analogue_keys": list(literature_facts["design_analogue_keys"]),
+                "comparison_source_keys": list(
+                    literature_facts["comparison_source_keys"]
                 ),
                 "prespecified_dimensions": list(NOVELTY_REVIEW_DIMENSIONS),
                 "claim_boundary": (
@@ -1690,8 +2172,10 @@ def build_plan_scientific_review(
             "remediation_buckets": remediation_buckets,
             "remediation_boundary": (
                 "Only agent_plan_revision findings may be fed to a fresh Planner "
-                "without changing StudyContext authority. The other lanes require "
-                "user authorization, new external evidence, or independent review."
+                "without changing StudyContext authority. Runtime-capability "
+                "findings require a host implementation receipt; the other lanes "
+                "require user authorization, new external evidence, or independent "
+                "review."
             ),
         },
         context_sha256=canonical_sha256(context_payload),

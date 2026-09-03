@@ -71,9 +71,8 @@ from .planning.cohort_contract import (
     CohortSchemaError,
     coerce_cohort_definition,
 )
-from .planning.literature_contract import (
-    LiteratureDesignBinding,
-)
+from .planning.design_selection import ResearchDesignSelection
+from .planning.literature_contract import LiteratureDesignBinding
 from .planning.robustness_contract import (
     ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
     RobustnessPlanError,
@@ -659,6 +658,14 @@ class UserPreferences(BaseModel):
             "covariate. Post-time-zero measurements cannot satisfy this contract."
         ),
     )
+    covariate_operationalizations: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "User-reviewed mapping from each scientific covariate identity to "
+            "the exact materialized analysis column. Omit identities whose "
+            "source and operational column names are identical."
+        ),
+    )
     # Optional landmark / immortal-time origin (hours) for time-to-event
     # designs. Consumed by the deterministic survival runner; ``None`` means
     # "use the skill's case-neutral default" (24h) rather than a study-specific
@@ -694,25 +701,31 @@ class UserPreferences(BaseModel):
     def _covariate_decisions_match_exact_roster(self) -> "UserPreferences":
         rationale_keys = set(self.covariate_rationales)
         temporal_keys = set(self.covariate_temporal_roles)
+        operational_keys = set(self.covariate_operationalizations)
         roster = set(self.covariates)
-        if rationale_keys - roster or temporal_keys - roster:
+        if rationale_keys - roster or temporal_keys - roster or operational_keys - roster:
             raise ValueError(
-                "covariate rationale/temporal-role keys must belong to covariates"
+                "covariate decision keys must belong to covariates"
             )
         if self.covariate_selection != "exact" and (
-            rationale_keys or temporal_keys
+            rationale_keys or temporal_keys or operational_keys
         ):
             raise ValueError(
-                "covariate rationales and temporal roles require "
+                "covariate rationales, temporal roles, and operationalizations require "
                 "covariate_selection='exact'"
             )
+        if any(
+            not str(value or "").strip()
+            for value in self.covariate_operationalizations.values()
+        ):
+            raise ValueError("covariate operationalizations must be non-empty names")
         return self
 
 
 RESEARCH_CONTEXT_SCHEMA_VERSION = "easyicu.research_context/1"
 
 # Field set that constitutes the immutable schema. A test under
-# ``tests/research_agent/test_research_context_schema.py`` asserts the
+# ``tests/research_agent/planning/test_research_context_schema.py`` asserts the
 # actual ``ResearchContext.model_fields`` match this set so any silent
 # field rename / addition / removal will fail in CI. Bump
 # ``RESEARCH_CONTEXT_SCHEMA_VERSION`` when intentionally changing the
@@ -2437,6 +2450,7 @@ class AnalysisPlan(BaseModel):
             "deterministic retrieval. Empty decisions are omitted for legacy/default-off runs."
         ),
     )
+    design_selection: Optional[ResearchDesignSelection] = Field(default=None, exclude_if=lambda value: value is None)
     rationale: Optional[str] = None
     revision: int = 1
 

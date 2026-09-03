@@ -160,9 +160,12 @@ def run_trajectory_scientific_candidate_selection(
             regularization=sealed.candidate_fit_regularization,
         )
         parameter_count = (k - 1) + 2 * k * n_coordinates
-        bic = -2.0 * float(fit["final_log_likelihood"]) + parameter_count * math.log(
-            n_rows
-        )
+        final_log_likelihood = float(fit["final_log_likelihood"])
+        bic = -2.0 * final_log_likelihood + parameter_count * math.log(n_rows)
+        # AIC is an explicitly diagnostic second criterion.  The signed
+        # protocol continues to select by BIC; reporting AIC cannot change K
+        # or alter a boundary solution after looking at the result.
+        aic = -2.0 * final_log_likelihood + 2.0 * parameter_count
         labels_by_k[k] = labels
         candidate_rows.append(
             {
@@ -170,7 +173,8 @@ def run_trajectory_scientific_candidate_selection(
                 "n_clusters": k,
                 "criterion_value": bic,
                 "bic": bic,
-                "final_log_likelihood": float(fit["final_log_likelihood"]),
+                "aic": aic,
+                "final_log_likelihood": final_log_likelihood,
                 "parameter_count": parameter_count,
                 "seed": seed,
                 "n_iter": int(fit["n_iter"]),
@@ -179,6 +183,10 @@ def run_trajectory_scientific_candidate_selection(
         )
     selected = min(candidate_rows, key=lambda item: (item["bic"], item["n_clusters"]))
     selected_k = int(selected["n_clusters"])
+    aic_selected = min(
+        candidate_rows, key=lambda item: (item["aic"], item["n_clusters"])
+    )
+    aic_selected_k = int(aic_selected["n_clusters"])
     selection = {
         "criterion": sealed.selection_criterion,
         "selection_rule": sealed.selection_rule,
@@ -208,6 +216,9 @@ def run_trajectory_scientific_candidate_selection(
         "clustering_method": "observed_data_diagonal_gaussian_mixture",
         "n_clusters": selected_k,
         "cluster_selection": selection,
+        "diagnostic_criteria": ["bic", "aic"],
+        "diagnostic_aic_selected_n_clusters": aic_selected_k,
+        "diagnostic_criteria_agree": aic_selected_k == selected_k,
         "coordinate_scaling_sha256": scaling_manifest["scaling_manifest_sha256"],
         "scientific_runtime_authority": authority_binding,
         "input_bindings": [
@@ -238,6 +249,36 @@ def run_trajectory_scientific_candidate_selection(
             "reason_code": sealed.minimum_cluster_fraction_reason_code,
             "reportable_result": "no_stable_phenotype_solution",
         }
+    selection_table = pd.DataFrame(
+        [
+            {
+                "n_clusters": int(row["n_clusters"]),
+                "bic": float(row["bic"]),
+                "aic": float(row["aic"]),
+                "final_log_likelihood": float(row["final_log_likelihood"]),
+                "parameter_count": int(row["parameter_count"]),
+                "selected": int(row["n_clusters"]) == selected_k,
+                "aic_minimum": int(row["n_clusters"]) == aic_selected_k,
+                "upper_boundary": int(row["n_clusters"])
+                == max(sealed.candidate_cluster_counts),
+                "scientific_status": (
+                    "failed_closed" if scientific_rejection else "selected"
+                ),
+                "reason_code": (
+                    scientific_rejection["reason_code"]
+                    if scientific_rejection
+                    else "NOT_APPLICABLE"
+                ),
+                "reportable_result": (
+                    scientific_rejection["reportable_result"]
+                    if scientific_rejection
+                    else "candidate_selected_pending_stability"
+                ),
+            }
+            for row in candidate_rows
+        ]
+    )
+    selection_table.to_csv(out_dir / "trajectory_candidate_selection.csv", index=False)
     assignments = pd.DataFrame(
         {id_column: representation[id_column].to_numpy(), "candidate_cluster": labels}
     )
@@ -269,6 +310,9 @@ def run_trajectory_scientific_candidate_selection(
         "selection_rule": sealed.selection_rule,
         "direction": "minimize",
         "selected_criterion_value": float(selected["bic"]),
+        "diagnostic_criteria": ["bic", "aic"],
+        "diagnostic_aic_selected_n_clusters": aic_selected_k,
+        "diagnostic_criteria_agree": aic_selected_k == selected_k,
         "representation_schema_sha256": schema_binding.get("sha256"),
         "candidate_assignments_sha256": _sha256(assignments_path),
         "coordinate_scaling": sealed.scaling_payload,
@@ -320,6 +364,9 @@ def run_trajectory_scientific_candidate_selection(
             "manifest:cluster_selection": "cluster_selection.json",
             "manifest:candidate_cluster_solution_schema": (
                 "candidate_cluster_solution_schema.json"
+            ),
+            "table:trajectory_candidate_selection": (
+                "trajectory_candidate_selection.csv"
             ),
         },
     }

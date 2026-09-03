@@ -60,8 +60,12 @@ def test_materialization_plan_separates_scoring_concepts_from_sealed_columns():
     ):
         assert required in e1_protocol
     assert by_id["e2_lactate_mortality"].operational_exposure == "lact_max"
-    assert by_id["e3_kdigo_gradient"].operational_exposure == "aki_stage_max"
-    assert by_id["m1_hepatobiliary_missingness"].operational_exposure == "bili_max"
+    e3 = by_id["e3_kdigo_gradient"]
+    assert e3.operational_exposure == "aki_stage_max"
+    assert e3.task_protocol_version == "e3_kdigo_gradient/20260824-v1"
+    m1 = by_id["m1_hepatobiliary_missingness"]
+    assert m1.operational_exposure == "bili_max"
+    assert m1.task_protocol_version == "m1_hepatobiliary_missingness/20260824-v1"
     assert by_id["h1_ventilation_survival"].operational_exposure == "mech_vent_max"
     assert by_id["h2_vasopressor_causal"].operational_exposure == "vaso_ind_max"
 
@@ -153,6 +157,9 @@ def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
         "table:e2_landmark_rcs_curve",
         "table:e2_landmark_rcs_contrasts",
         "table:e2_linear_sensitivity",
+        "table:e2_adjusted_absolute_risk",
+        "table:e2_landmark_population_flow",
+        "table:e2_variable_opportunity_sensitivity",
         "log:e2_scientific_runtime_receipt",
     ]
     assert any("descriptive/prognostic" in item for item in e2_row["semantic_guardrails"])

@@ -1,6 +1,6 @@
 """EHRFlowBench-style benchmark runner for the research agent (T2.1).
 
-For every :class:`tests.bench.items.BenchItem` we run the same cohort
+For every :class:`tests.support.benchmark_cases.items.BenchItem` we run the same cohort
 through ``ResearchAgentPipeline`` using the requested benchmark arm(s).
 By default this preserves the historical two-arm context ablation —
 once with the ICU-aware context (this work) and once with the naive
@@ -137,6 +137,9 @@ def _bind_runtime_scientific_projection_options(
         "easyicu.landmark_spline_runtime_authority/1": (
             "current_case_scientific_runtime_authority"
         ),
+        "easyicu.landmark_spline_runtime_authority/2": (
+            "current_case_scientific_runtime_authority"
+        ),
         "easyicu.landmark_survival_runtime_authority/1": (
             "current_case_scientific_runtime_authority"
         ),
@@ -253,6 +256,13 @@ def _operational_exposure_for_item(item: object) -> object:
     # explicit JSON null.  Preserve every other non-null value so whitespace,
     # false booleans, and other malformed coordinates still fail closed.
     return None if legacy_predictor == "" else legacy_predictor
+
+
+def _exposure_concept_for_item(item: object) -> object:
+    """Return the benchmark concept coordinate, distinct from its data column."""
+
+    concept = getattr(item, "primary_predictor", None)
+    return None if concept == "" else concept
 
 
 def _reject_jsonl_duplicate_pairs(
@@ -768,7 +778,7 @@ def _kinds_complete(manifest: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _bench_item_to_task(item):
-    """Adapt a ``tests.bench`` BenchItem to a minimal ``ICUAgentBenchTask``.
+    """Adapt a ``tests.support.benchmark_cases`` BenchItem to a minimal ``ICUAgentBenchTask``.
 
     This lets the §M1 five-dimension Tier-1 scorecard be computed from a run's
     readiness artifacts for legacy and external bench items too. Legacy items
@@ -1089,7 +1099,7 @@ def _figure2_evaluation_attempt(*, run_dir: Path, item) -> Dict[str, Any]:
             run_dir,
             task_id=task_id,
             research_question=str(getattr(item, "research_question", "") or ""),
-            exposure_concept=getattr(item, "primary_predictor", None),
+            exposure_concept=_exposure_concept_for_item(item),
             outcome_concept=getattr(item, "target_outcome", None),
             operational_exposure=_operational_exposure_for_item(item),
         )
@@ -1231,7 +1241,7 @@ def _arm_execution_succeeded(arm: Any) -> bool:
 
 
 def _score_execution_failures(score: Any) -> List[str]:
-    """Return a reason per arm that did not finish executing."""
+    """Return a reason per arm that missed its declared terminal boundary."""
 
     if not isinstance(score, Mapping):
         return ["benchmark item produced no score payload"]
@@ -1244,6 +1254,8 @@ def _score_execution_failures(score: Any) -> List[str]:
         return ["benchmark item produced no scored arm"]
     reasons: List[str] = []
     for label, arm in arms:
+        if arm.get("planner_only_complete"):
+            continue
         if _arm_execution_succeeded(arm):
             continue
         assert isinstance(arm, Mapping)
@@ -1285,9 +1297,158 @@ def _score_execution_failures(score: Any) -> List[str]:
     return reasons
 
 
+def _score_planner_only_pending(
+    *, pending: Any, item: Any, label: str, elapsed_seconds: float
+) -> Dict[str, Any]:
+    """Record a governed plan pause without pretending execution occurred."""
+
+    run_dir = Path(pending.run_dir)
+    required = (run_dir / "analysis_plan.json", run_dir / "human_review_checkpoint.json")
+    if not all(path.is_file() for path in required):
+        missing = [path.name for path in required if not path.is_file()]
+        raise RuntimeError(
+            "planner-only pause is missing terminal artifacts: " + ", ".join(missing)
+        )
+    return {
+        "arm": label,
+        "run_id": pending.run_id,
+        "workdir": str(run_dir),
+        "status": "human_review_pending",
+        "planner_only_complete": True,
+        "human_review_pending": True,
+        "human_review_request_ids": [request.review_id for request in pending.requests],
+        "primary_or": None,
+        "direction_match": None,
+        "expected_direction": getattr(item, "expected_or_direction", None),
+        "icu_findings": {},
+        "workflow_hits": {},
+        "artifact_hits": {},
+        "n_findings": 0,
+        "n_warnings": 0,
+        "n_errors": 0,
+        "n_historical_errors": 0,
+        "gate_status": "planner_review_pending",
+        "execution_complete": False,
+        "step_scientific_requirements_complete": False,
+        "required_step_count": 0,
+        "completed_step_count": 0,
+        "failed_step_ids": [],
+        "missing_step_ids": [],
+        "manuscript_ready": False,
+        "publication_ready": False,
+        "publication_artifacts_ready": False,
+        "execution_paper_eligible": False,
+        "paper_authorized": False,
+        "writer_attempts": 0,
+        "superseded_error_count": 0,
+        "evidence_count": 0,
+        "evidence_kinds": {"complete": False},
+        "evidence_missing_in_manuscript": -1,
+        "five_dim_scorecard": {},
+        "cost_summary": _load_cost_summary(run_dir),
+        "elapsed_seconds": round(elapsed_seconds, 2),
+    }
+
+
+def _score_planner_design_canary(
+    *, result: Any, item: Any, label: str, elapsed_seconds: float
+) -> Dict[str, Any]:
+    """Verify and score a terminal design outline without execution claims."""
+
+    from easyicu.research_agent.authority.evidence_store import sha256_of_file
+    from easyicu.research_agent.planning.progressive_artifacts import (
+        ProgressiveDesignCanaryReceipt,
+    )
+
+    run_dir = Path(result.run_dir)
+    receipt_path = Path(result.receipt_path)
+    if receipt_path.parent.resolve() != run_dir.resolve():
+        raise RuntimeError("design canary receipt is outside its run directory")
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise RuntimeError("design canary receipt is absent or not a regular file")
+    observed_sha256 = sha256_of_file(receipt_path)
+    if observed_sha256 != result.receipt_sha256:
+        raise RuntimeError("design canary receipt SHA-256 mismatch")
+    receipt = ProgressiveDesignCanaryReceipt.model_validate_json(
+        receipt_path.read_text(encoding="utf-8")
+    )
+    checkpoint_path = run_dir / (
+        f"progressive_planner_checkpoint_{receipt.checkpoint_sequence:03d}.json"
+    )
+    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
+        raise RuntimeError("design canary outline checkpoint is absent")
+    if receipt.selected_literature_dimension_count != 7:
+        raise RuntimeError(
+            "design canary selected design did not resolve all seven dimensions"
+        )
+    forbidden = (run_dir / "analysis_plan.json", run_dir / "human_review_checkpoint.json")
+    unexpected = [path.name for path in forbidden if path.exists()]
+    if unexpected:
+        raise RuntimeError(
+            "outline-only design canary emitted downstream artifacts: "
+            + ", ".join(unexpected)
+        )
+    return {
+        "arm": label,
+        "run_id": result.run_id,
+        "workdir": str(run_dir),
+        "status": receipt.status,
+        "planner_only_complete": True,
+        "human_review_pending": False,
+        "design_canary_complete": True,
+        "reason_code": receipt.reason_code,
+        "candidate_design_count": receipt.candidate_design_count,
+        "selected_design_count": len(receipt.selected_design_ids),
+        "rejected_design_count": len(receipt.rejected_design_ids),
+        "selected_literature_dimension_count": (
+            receipt.selected_literature_dimension_count
+        ),
+        "primary_or": None,
+        "direction_match": None,
+        "expected_direction": getattr(item, "expected_or_direction", None),
+        "icu_findings": {},
+        "workflow_hits": {},
+        "artifact_hits": {},
+        "n_findings": 0,
+        "n_warnings": 0,
+        "n_errors": 0,
+        "n_historical_errors": 0,
+        "gate_status": "design_outline_complete",
+        "execution_complete": False,
+        "step_scientific_requirements_complete": False,
+        "required_step_count": 0,
+        "completed_step_count": 0,
+        "failed_step_ids": [],
+        "missing_step_ids": [],
+        "manuscript_ready": False,
+        "publication_ready": False,
+        "publication_artifacts_ready": False,
+        "execution_paper_eligible": False,
+        "paper_authorized": False,
+        "writer_attempts": 0,
+        "superseded_error_count": 0,
+        "evidence_count": 0,
+        "evidence_kinds": {"complete": False},
+        "evidence_missing_in_manuscript": -1,
+        "five_dim_scorecard": {},
+        "cost_summary": dict(receipt.cost_summary),
+        "elapsed_seconds": round(elapsed_seconds, 2),
+    }
+
+
 def _finish_task_on_execution_outcome(task_hard_stop: Any, score: Any) -> None:
     """Close the ledger task on what the run did, not on the call returning."""
 
+    scored_arms = [
+        score.get(label)
+        for label in ("aware", "naive")
+        if isinstance(score, Mapping) and isinstance(score.get(label), Mapping)
+    ]
+    if scored_arms and all(arm.get("planner_only_complete") for arm in scored_arms):
+        # The pipeline has already paused the ledger at the durable human-review
+        # checkpoint. Preserve that state; a pause is neither failure nor a
+        # completed execution and must not be terminalized by the bench wrapper.
+        return
     failures = _score_execution_failures(score)
     if failures:
         task_hard_stop.finish(score=score, error="; ".join(failures)[:1800])
@@ -1542,7 +1703,7 @@ def _run_one_arm(
             pipeline_options,
             runtime_projection,
         )
-        runtime_endpoint = None
+        runtime_endpoint = getattr(item, "endpoint", None)
         runtime_primary_exposure = None
         runtime_contrast_authorized = True
         current_case_authority = opts.get(
@@ -1559,7 +1720,13 @@ def _run_one_arm(
                 current_case_authority
             )
             if isinstance(sealed_current_case, LandmarkSurvivalRuntimeAuthority):
-                runtime_endpoint = sealed_current_case.research_context_endpoint()
+                sealed_endpoint = sealed_current_case.research_context_endpoint()
+                if runtime_endpoint is not None and runtime_endpoint != sealed_endpoint:
+                    raise ValueError(
+                        "external benchmark endpoint conflicts with current-case "
+                        "scientific runtime authority"
+                    )
+                runtime_endpoint = sealed_endpoint
                 runtime_primary_exposure = sealed_current_case.exposure_status_column
             elif isinstance(sealed_current_case, SourceFeasibilityRuntimeAuthority):
                 runtime_contrast_authorized = False
@@ -1623,13 +1790,20 @@ def _run_one_arm(
                 normalized_question,
             )
         )
-        concept_descriptions = (
-            {str(operational_exposure): str(exposure_display_name)}
-            if operational_exposure
+        concept_descriptions = dict(getattr(item, "concept_descriptions", None) or {})
+        if (
+            operational_exposure
             and exposure_display_name
             and display_name_is_question_exposed
-            else None
-        )
+        ):
+            concept_descriptions.setdefault(
+                str(operational_exposure), str(exposure_display_name)
+            )
+        protocol_preferences = task_protocol_preferences_for_item(item)
+        user_preferences = {
+            **dict(getattr(item, "user_preferences", None) or {}),
+            **protocol_preferences,
+        }
         result = pipeline.run(
             question=item.research_question,
             cohort=cohort,
@@ -1655,10 +1829,16 @@ def _run_one_arm(
                 if runtime_contrast_authorized
                 else None
             ),
-            concept_descriptions=concept_descriptions,
+            concept_descriptions=concept_descriptions or None,
             inclusion_criteria=item.inclusion_criteria,
+            exclusion_criteria=(
+                getattr(item, "exclusion_criteria", None) or None
+            ),
             id_columns=(getattr(item, "id_columns", None) or None),
-            user_preferences=task_protocol_preferences_for_item(item),
+            time_columns=(getattr(item, "time_columns", None) or None),
+            outcome_columns=(getattr(item, "outcome_columns", None) or None),
+            time_windows=(getattr(item, "time_windows", None) or None),
+            user_preferences=user_preferences,
             notes=task_protocol_note_for_item(item),
             resume_run_id=resolved_resume_run_id,
             resume_from_step_id=resume_from_step_id,
@@ -1666,6 +1846,35 @@ def _run_one_arm(
             force_writer_probe=bool(force_writer_probe),
         )
         elapsed = time.monotonic() - started
+        from easyicu.research_agent.orchestration.workflow import (
+            HumanReviewPending,
+            PlannerDesignCanaryComplete,
+        )
+
+        if isinstance(result, PlannerDesignCanaryComplete):
+            if not opts.get("planner_only"):
+                raise RuntimeError(
+                    "benchmark received design-canary completion outside "
+                    "planner-only mode"
+                )
+            return _score_planner_design_canary(
+                result=result,
+                item=item,
+                label=label,
+                elapsed_seconds=elapsed,
+            )
+
+        if isinstance(result, HumanReviewPending):
+            if not opts.get("planner_only"):
+                raise RuntimeError(
+                    "benchmark received human-review pause outside planner-only mode"
+                )
+            return _score_planner_only_pending(
+                pending=result,
+                item=item,
+                label=label,
+                elapsed_seconds=elapsed,
+            )
         score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
         score["elapsed_seconds"] = round(elapsed, 2)
         return score
@@ -1897,7 +2106,7 @@ def _figure2_run_is_reusable(run_dir: Path, item: object) -> bool:
             run_dir,
             task_id=str(getattr(item, "key", "") or ""),
             research_question=str(getattr(item, "research_question", "") or ""),
-            exposure_concept=getattr(item, "primary_predictor", None),
+            exposure_concept=_exposure_concept_for_item(item),
             outcome_concept=getattr(item, "target_outcome", None),
             operational_exposure=_operational_exposure_for_item(item),
         )
@@ -2874,6 +3083,7 @@ def _provider_hard_stop_limits(
 ):
     from easyicu.research_agent.authority.provider_hard_stop import (
         ProviderHardStopLimits,
+        validate_provider_transport_reservation_capacity,
     )
 
     required = {
@@ -2892,7 +3102,7 @@ def _provider_hard_stop_limits(
     if present != required:
         missing = ", ".join(sorted(required - present))
         raise ValueError(f"Incomplete Provider hard-stop options: {missing}")
-    return ProviderHardStopLimits(
+    limits = ProviderHardStopLimits(
         max_provider_attempts_per_run=int(
             pipeline_options["max_provider_attempts_per_run"]
         ),
@@ -2914,6 +3124,8 @@ def _provider_hard_stop_limits(
             pipeline_options["provider_output_cost_usd_per_million_tokens"]
         ),
     )
+    validate_provider_transport_reservation_capacity(limits)
+    return limits
 
 
 def _bind_benchmark_cost_price_table(
@@ -3001,6 +3213,8 @@ def _benchmark_pipeline_options(
     development_diagnostic: bool = False,
     development_progressive_resume_checkpoint_path: Optional[Path] = None,
     development_progressive_resume_checkpoint_sha256: Optional[str] = None,
+    development_locked_analysis_plan_path: Optional[Path] = None,
+    development_locked_analysis_plan_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -3046,6 +3260,22 @@ def _benchmark_pipeline_options(
         )
         options["development_progressive_resume_checkpoint_sha256"] = str(
             development_progressive_resume_checkpoint_sha256
+        )
+    locked_plan_values = (
+        development_locked_analysis_plan_path,
+        development_locked_analysis_plan_sha256,
+    )
+    if any(value is not None for value in locked_plan_values):
+        if any(value is None for value in locked_plan_values):
+            raise SystemExit(
+                "--development-locked-analysis-plan and its SHA-256 must be "
+                "supplied together."
+            )
+        options["development_locked_analysis_plan_path"] = Path(
+            development_locked_analysis_plan_path
+        )
+        options["development_locked_analysis_plan_sha256"] = str(
+            development_locked_analysis_plan_sha256
         )
     if enable_pubmed:
         options["enable_pubmed"] = True
@@ -3862,7 +4092,7 @@ def main() -> int:
         SUPPORTED_CLI_ACCOUNT_NAMES,
         SUPPORTED_PROVIDER_NAMES,
     )
-    from tests.bench import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
+    from tests.support.benchmark_cases import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
 
     default_submission_profile_ref = _default_submission_profile_ref()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -4001,6 +4231,24 @@ def main() -> int:
         help=(
             "Exact SHA-256 of --development-progressive-resume-checkpoint. "
             "Formal paper-facing profiles reject this option."
+        ),
+    )
+    parser.add_argument(
+        "--development-locked-analysis-plan",
+        type=Path,
+        default=None,
+        help=(
+            "Development-only locked AnalysisPlan JSON. The exact file SHA-256 "
+            "is required; the current host revalidates and executes it without "
+            "calling Planner."
+        ),
+    )
+    parser.add_argument(
+        "--development-locked-analysis-plan-sha256",
+        default=None,
+        help=(
+            "Exact SHA-256 of --development-locked-analysis-plan. Formal "
+            "paper-facing profiles reject this option."
         ),
     )
     parser.add_argument(
@@ -4544,6 +4792,16 @@ def main() -> int:
             "development_progressive_resume_checkpoint_sha256",
             None,
         ),
+        development_locked_analysis_plan_path=getattr(
+            args,
+            "development_locked_analysis_plan",
+            None,
+        ),
+        development_locked_analysis_plan_sha256=getattr(
+            args,
+            "development_locked_analysis_plan_sha256",
+            None,
+        ),
     )
     planner_strict_json_schema = bool(
         getattr(args, "planner_strict_json_schema", False)
@@ -4574,6 +4832,22 @@ def main() -> int:
         getattr(args, "development_progressive_resume_checkpoint", None)
         is not None
     )
+    locked_plan_requested = (
+        getattr(args, "development_locked_analysis_plan", None) is not None
+    )
+    if locked_plan_requested and not args.ehrflowbench_jsonl:
+        raise SystemExit(
+            "--development-locked-analysis-plan requires --ehrflowbench-jsonl "
+            "so one source question can be selected."
+        )
+    if locked_plan_requested and (
+        _figure2_batch_binding is not None
+        or bool(args.require_figure2_paper_acceptance)
+    ):
+        raise SystemExit(
+            "FORMAL_LOCKED_ANALYSIS_PLAN_FORBIDDEN: cross-run plan execution is "
+            "development-only and cannot enter a formal Figure 2 batch."
+        )
     if progressive_resume_requested and not args.ehrflowbench_jsonl:
         raise SystemExit(
             "--development-progressive-resume-checkpoint requires "
@@ -5060,6 +5334,23 @@ def _external_item_from_row(
 
     diagnostics: List[Dict[str, Any]] = []
 
+    cohort_column_names = {str(column) for column in cohort_columns}
+    id_columns = _external_string_list(row, "id_columns", diagnostics)
+    time_columns = _external_string_list(row, "time_columns", diagnostics)
+    outcome_columns = _external_string_list(row, "outcome_columns", diagnostics)
+    from easyicu.research_agent.intake.external_benchmark_authority import (
+        compile_external_benchmark_study_authority,
+    )
+
+    study_authority = compile_external_benchmark_study_authority(
+        row=row,
+        target_outcome=(str(target) if target is not None else None),
+        cohort_columns=cohort_columns,
+        id_columns=id_columns,
+        time_columns=time_columns,
+        outcome_columns=outcome_columns,
+    )
+
     database_source = "database" if str(row.get("database") or "").strip() else None
     database = str(row.get("database") or "").strip()
     if not database:
@@ -5128,7 +5419,6 @@ def _external_item_from_row(
                 "default": None,
             }
         )
-    cohort_column_names = {str(column) for column in cohort_columns}
     operational_column_present = (
         operational_exposure in cohort_column_names if operational_exposure else None
     )
@@ -5281,7 +5571,10 @@ def _external_item_from_row(
         inclusion_criteria=_external_string_list(
             row, "inclusion_criteria", diagnostics
         ),
-        id_columns=_external_string_list(row, "id_columns", diagnostics),
+        exclusion_criteria=_external_string_list(
+            row, "exclusion_criteria", diagnostics
+        ),
+        id_columns=list(study_authority.id_columns),
         candidate_variables=_external_string_list(
             row, "candidate_variables", diagnostics
         ),
@@ -5316,6 +5609,12 @@ def _external_item_from_row(
         runtime_scientific_projection_sha256=(
             str(row.get("runtime_scientific_projection_sha256") or "").strip() or None
         ),
+        endpoint=study_authority.endpoint,
+        user_preferences=study_authority.user_preferences,
+        concept_descriptions=study_authority.concept_descriptions,
+        time_windows=list(study_authority.time_windows),
+        time_columns=list(study_authority.time_columns),
+        outcome_columns=list(study_authority.outcome_columns),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],
@@ -5552,6 +5851,16 @@ def _run_ehrflowbench_jsonl(
         raise SystemExit(
             "Development Progressive Planner checkpoint resume requires exactly "
             "one selected JSONL item and one arm."
+        )
+    locked_plan_path = (pipeline_options or {}).get(
+        "development_locked_analysis_plan_path"
+    )
+    if locked_plan_path is not None and (
+        len(input_task_ids) != 1 or len(_normalize_arms(arms)) != 1
+    ):
+        raise SystemExit(
+            "Development locked AnalysisPlan execution requires exactly one "
+            "selected JSONL item and one arm."
         )
     hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
     if batch_binding is not None and hard_stop_limits is None:
@@ -5914,6 +6223,34 @@ def _run_ehrflowbench_jsonl(
                 }
             )
         row_pipeline_options = dict(pipeline_options or {})
+        raw_bound_literature = row.get("bound_preplan_literature")
+        if raw_bound_literature is not None:
+            from easyicu.research_agent.literature import LiteratureBundle
+
+            try:
+                bound_literature = LiteratureBundle.model_validate(
+                    raw_bound_literature
+                )
+            except (TypeError, ValueError) as exc:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "invalid_bound_preplan_literature",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            if bound_literature.research_question.strip() != str(question).strip():
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "bound_preplan_literature_question_mismatch",
+                    }
+                )
+                continue
+            row_pipeline_options["bound_preplan_literature"] = (
+                bound_literature.model_dump(mode="json")
+            )
         if frozen_input_authority_by_task and key in frozen_input_authority_by_task:
             # Bind THIS task's frozen input digest so _bind_benchmark_execution_input
             # fails closed if the runtime cohort differs from the authorized input.

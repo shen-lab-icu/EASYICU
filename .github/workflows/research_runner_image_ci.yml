@@ -6,20 +6,28 @@ on:
       - "src/easyicu/research_agent/runner_image/**"
       - "src/easyicu/research_agent/execution/kernel_identity.py"
       - "src/easyicu/research_agent/execution/runner.py"
-      - "tests/research_agent/test_docker_runner.py"
-      - "tests/research_agent/test_execution_kernel_identity.py"
+      - "tests/research_agent/execution/test_docker_runner.py"
+      - "tests/research_agent/authority/test_execution_kernel_identity.py"
       - ".github/workflows/research_runner_image_ci.yml"
   pull_request:
     paths:
       - "src/easyicu/research_agent/runner_image/**"
       - "src/easyicu/research_agent/execution/kernel_identity.py"
       - "src/easyicu/research_agent/execution/runner.py"
-      - "tests/research_agent/test_docker_runner.py"
-      - "tests/research_agent/test_execution_kernel_identity.py"
+      - "tests/research_agent/execution/test_docker_runner.py"
+      - "tests/research_agent/authority/test_execution_kernel_identity.py"
       - ".github/workflows/research_runner_image_ci.yml"
 
 permissions:
   contents: read
+
+concurrency:
+  # 2026-08-30: no workflow declared a concurrency group, so a burst of pushes
+  # left several full runs (ci.yml medians ~39 min) racing to completion and
+  # only the last one mattered. Feature branches and PRs now cancel the run
+  # they supersede; main keeps every run so the merge record stays complete.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build-smoke-sbom:

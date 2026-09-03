@@ -366,6 +366,13 @@ Code contract:
   is the `.figure_contract.json` this same call wrote. Read those paths from
   `saved`; do not reconstruct them by string-building a stem, and do not
   reference a contract variable you never bound in the scope that reads it.
+  KEEP THE RETURN VALUE OF `apply_publication_style` TOO -- it is the figure
+  palette and the only colour source you may use. Call
+  `palette = apply_publication_style(fig)`; take every colour from it
+  (`palette["blue"]`, `"orange"`, `"teal"`, `"red"`, `"baseline"`,
+  `"neutral"`, `"neutral_light"`, `_soft` variants for fills). Never write a
+  hex literal, a named matplotlib colour, or a `cmap` name for any mark, fill,
+  bar, line or legend: one colour per series meaning, not per panel.
   Add only
   documented overrides such as `formats=` or `dpi=` when needed. Do not use
   `inspect.signature`, `__signature__`, parameter-name loops, or dynamic

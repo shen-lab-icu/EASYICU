@@ -12,10 +12,19 @@ import json
 import os
 import tempfile
 import threading
+import statistics
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from easyicu.research_agent.acquisition.catalog import build_available_catalog
+from easyicu.research_agent.cohort.materializer import (
+    MaterializedMetadataError,
+    validate_typed_event_status_domain,
+)
+from easyicu.research_agent.intake.export_package import (
+    ExportPackageError,
+    read_exported_concept,
+)
 from easyicu.webserver import state_paths
 from easyicu.webserver import cohort_review, sources
 from easyicu.webserver.data_package_execution_readiness import (
@@ -33,6 +42,64 @@ class DataPackageReviewError(RuntimeError):
         self.code = str(code)
         self.message = str(message)
         self.details = dict(details or {})
+
+
+def verify_path_free_snapshot(payload: Mapping[str, Any]) -> None:
+    """Public boundary contract for durable browser snapshot projections."""
+
+    def fail(location: tuple[str, ...], reason: str) -> None:
+        raise DataPackageReviewError(
+            "data_package_review_snapshot_path_forbidden",
+            "The aggregate review snapshot contains a host-path-shaped field.",
+            details={
+                "field": ".".join(location)[:500],
+                "reason": reason,
+            },
+        )
+
+    def host_path_value(value: str) -> bool:
+        clean = value.strip()
+        lowered = clean.lower()
+        windows_drive = (
+            len(clean) >= 3
+            and clean[0].isalpha()
+            and clean[1] == ":"
+            and clean[2] in {"/", "\\"}
+        )
+        return bool(
+            clean.startswith("/")
+            or clean.startswith("\\")
+            or windows_drive
+            or lowered.startswith("file://")
+            or clean == "~"
+            or clean.startswith("~/")
+            or clean.startswith("~\\")
+        )
+
+    def visit(value: Any, location: tuple[str, ...]) -> None:
+        if isinstance(value, Mapping):
+            for raw_key, child in value.items():
+                key = str(raw_key)
+                normalized = key.strip().lower()
+                child_location = (*location, key)
+                if (
+                    normalized == "path"
+                    or normalized.endswith("_path")
+                    or normalized.endswith("_paths")
+                ):
+                    fail(child_location, "path_key")
+                visit(child, child_location)
+            return
+        if isinstance(value, (list, tuple)):
+            for index, child in enumerate(value):
+                visit(child, (*location, str(index)))
+            return
+        if isinstance(value, Path):
+            fail(location, "path_object")
+        if isinstance(value, str) and host_path_value(value):
+            fail(location, "absolute_path_value")
+
+    visit(payload, ())
 
 
 class DataPackageReviewSnapshotStore:
@@ -92,60 +159,7 @@ class DataPackageReviewSnapshotStore:
     @staticmethod
     def _verify_path_free(payload: Mapping[str, Any]) -> None:
         """Reject host-path keys and values before durable replay storage."""
-
-        def fail(location: tuple[str, ...], reason: str) -> None:
-            raise DataPackageReviewError(
-                "data_package_review_snapshot_path_forbidden",
-                "The aggregate review snapshot contains a host-path-shaped field.",
-                details={
-                    "field": ".".join(location)[:500],
-                    "reason": reason,
-                },
-            )
-
-        def host_path_value(value: str) -> bool:
-            clean = value.strip()
-            lowered = clean.lower()
-            windows_drive = (
-                len(clean) >= 3
-                and clean[0].isalpha()
-                and clean[1] == ":"
-                and clean[2] in {"/", "\\"}
-            )
-            return bool(
-                clean.startswith("/")
-                or clean.startswith("\\")
-                or windows_drive
-                or lowered.startswith("file://")
-                or clean == "~"
-                or clean.startswith("~/")
-                or clean.startswith("~\\")
-            )
-
-        def visit(value: Any, location: tuple[str, ...]) -> None:
-            if isinstance(value, Mapping):
-                for raw_key, child in value.items():
-                    key = str(raw_key)
-                    normalized = key.strip().lower()
-                    child_location = (*location, key)
-                    if (
-                        normalized == "path"
-                        or normalized.endswith("_path")
-                        or normalized.endswith("_paths")
-                    ):
-                        fail(child_location, "path_key")
-                    visit(child, child_location)
-                return
-            if isinstance(value, (list, tuple)):
-                for index, child in enumerate(value):
-                    visit(child, (*location, str(index)))
-                return
-            if isinstance(value, Path):
-                fail(location, "path_object")
-            if isinstance(value, str) and host_path_value(value):
-                fail(location, "absolute_path_value")
-
-        visit(payload, ())
+        verify_path_free_snapshot(payload)
 
     def _path(self, study_id: str, revision: int, digest: str) -> Path:
         study_key = hashlib.sha256(study_id.encode("utf-8")).hexdigest()[:24]
@@ -263,6 +277,44 @@ def _safe_label(value: Any, *, database: Any) -> str:
     return label
 
 
+def _registered_metadata_aggregate(
+    registered: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Project a bounded aggregate from a validated source registry receipt.
+
+    The registry owner has already scanned the export and sealed its distinct
+    stay denominator, modules, files, and total row count.  Reusing that receipt
+    prevents a conversational pre-Plan review from synchronously reading the
+    entity column of every module in a large prepared export.  Concept-specific
+    semantic checks remain owned by the catalog and execution-readiness paths
+    below; this projection never claims per-concept completeness.
+    """
+
+    summary = registered.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    stays = summary.get("stays")
+    if isinstance(stays, bool) or not isinstance(stays, int) or stays <= 0:
+        return None
+    database = str(registered.get("database") or "").strip()
+    return {
+        "source": {
+            "id": str(registered.get("id") or "").strip(),
+            "label": _safe_label(registered.get("label"), database=database),
+            "database": database,
+        },
+        "summary": {
+            "cohort_size": stays,
+            "modules": summary.get("modules"),
+            "file_count": summary.get("file_count"),
+            "total_records": summary.get("total_rows"),
+        },
+        # Per-concept coverage is deliberately not inferred from row counts.
+        # Event-status semantics and runtime capability are checked below.
+        "coverage": [],
+        "quality": {},
+    }
+
+
 def _execution_concepts(study: Mapping[str, Any]) -> list[tuple[str, str]]:
     raw = study.get("execution_concepts")
     raw = raw if isinstance(raw, Mapping) else {}
@@ -290,6 +342,7 @@ def _review_concept(
     catalog_by_id: Mapping[str, Any],
     coverage_by_module: Mapping[str, Mapping[str, Any]],
     denominator: int,
+    typed_event_receipt: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     concept = catalog_by_id.get(concept_id)
     if concept is None:
@@ -340,6 +393,23 @@ def _review_concept(
             ),
         }
 
+    if role_name == "event_status" and covered != denominator and typed_event_receipt:
+        return {
+            **base,
+            "availability_status": "ready",
+            "reason_code": "typed_event_availability_verified",
+            "evaluable_count": denominator,
+            "missing_count": 0,
+            "absence_semantics": "no_recorded_event",
+            "physical_coverage_pct": None,
+            "physical_coverage_withheld": True,
+            "availability_receipt": dict(typed_event_receipt),
+            "interpretation": (
+                "The sealed event-status owner verified the binary domain; "
+                "entities without a recorded positive event are the negative level."
+            ),
+        }
+
     if role_name == "event_status" and covered != denominator:
         # Typed sparse status columns require their owner-issued availability
         # receipts. A module-level row count alone cannot prove evaluability.
@@ -386,6 +456,37 @@ def _review_concept(
     }
 
 
+def _typed_event_availability_receipt(
+    *, source_path: str, concept: Any, denominator: int
+) -> Optional[Dict[str, Any]]:
+    """Issue a result-blind receipt from sealed event-status authority."""
+
+    if not concept.typed_metadata or str(concept.column_role) != "event_status":
+        return None
+    concept_id = str(concept.concept_id)
+    try:
+        frame = read_exported_concept(Path(source_path), concept_id)
+        if "stay_id" not in frame.columns or concept_id not in frame.columns:
+            return None
+        if frame["stay_id"].isna().any():
+            return None
+        if int(frame["stay_id"].nunique()) > denominator:
+            return None
+        validate_typed_event_status_domain(frame[concept_id], concept=concept_id)
+    except (ExportPackageError, MaterializedMetadataError, OSError, KeyError, ValueError):
+        return None
+    return {
+        "schema_version": "easyicu.typed-event-availability/1",
+        "concept_id": concept_id,
+        "column_role": "event_status",
+        "value_domain": "binary_0_1",
+        "absence_semantics": "no_recorded_event",
+        "denominator_count": denominator,
+        "event_count_withheld": True,
+        "source_authority": "sealed_native_export_metadata",
+    }
+
+
 def build_registered_data_package_review(
     study: Mapping[str, Any],
     *,
@@ -426,7 +527,14 @@ def build_registered_data_package_review(
         )
 
     try:
-        aggregate = cohort_review.cohort_review_summary({"source_path": source_path})
+        aggregate = _registered_metadata_aggregate(registered)
+        if aggregate is None:
+            # Compatibility path for older registry rows that predate the
+            # sealed aggregate summary.  Newly scanned sources use the bounded
+            # projection above and never scan all modules during chat.
+            aggregate = cohort_review.cohort_review_summary(
+                {"source_path": source_path}
+            )
         catalog = build_available_catalog(source_path)
     except cohort_review.CohortReviewError as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -464,16 +572,28 @@ def build_registered_data_package_review(
     }
     catalog_by_id = {str(item.concept_id): item for item in catalog.concepts}
     requested = _execution_concepts(study)
-    concepts = [
-        _review_concept(
-            role=role,
-            concept_id=concept_id,
-            catalog_by_id=catalog_by_id,
-            coverage_by_module=coverage_by_module,
-            denominator=denominator,
+    concepts = []
+    for role, concept_id in requested:
+        catalog_concept = catalog_by_id.get(concept_id)
+        receipt = (
+            _typed_event_availability_receipt(
+                source_path=source_path,
+                concept=catalog_concept,
+                denominator=denominator,
+            )
+            if catalog_concept is not None
+            else None
         )
-        for role, concept_id in requested
-    ]
+        concepts.append(
+            _review_concept(
+                role=role,
+                concept_id=concept_id,
+                catalog_by_id=catalog_by_id,
+                coverage_by_module=coverage_by_module,
+                denominator=denominator,
+                typed_event_receipt=receipt,
+            )
+        )
     blocking = [
         row
         for row in concepts
@@ -619,7 +739,202 @@ def build_registered_data_package_review(
             "inputs": [
                 "registered_source_registry",
                 "available_concept_catalog",
-                "cohort_review_aggregate",
+                "registered_source_aggregate",
+                "typed_study_context",
+            ],
+        },
+    }
+    digest_payload = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    payload["review_sha256"] = hashlib.sha256(digest_payload).hexdigest()
+    return payload
+
+
+def build_plan_bound_data_package_review(
+    study: Mapping[str, Any],
+    *,
+    cohort_file: Path,
+    plan_file: Path,
+) -> Dict[str, Any]:
+    """Build a result-blind preview of the exact cohort bound to a Plan.
+
+    Only Parquet metadata is read: row count, column names, types, and null
+    counts. Values, event rates, group comparisons, and effect estimates never
+    cross this boundary.
+    """
+
+    study_id = str(study.get("id") or "").strip()
+    if not study_id:
+        raise DataPackageReviewError(
+            "data_package_study_required",
+            "A bound StudyContext is required to review the analysis cohort.",
+        )
+    cohort_path = Path(cohort_file)
+    plan_path = Path(plan_file)
+    if (
+        not cohort_path.is_file()
+        or cohort_path.is_symlink()
+        or not plan_path.is_file()
+        or plan_path.is_symlink()
+    ):
+        raise DataPackageReviewError(
+            "plan_bound_data_preview_files_unavailable",
+            "The exact Plan-bound cohort preview files are unavailable.",
+        )
+    try:
+        if plan_path.stat().st_size > 2 * 1024 * 1024:
+            raise DataPackageReviewError(
+                "plan_bound_data_preview_plan_too_large",
+                "The Plan exceeds the bounded data-preview contract.",
+            )
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if not isinstance(plan, Mapping):
+            raise ValueError("plan_not_object")
+        import pyarrow.parquet as pq
+
+        parquet = pq.ParquetFile(cohort_path)
+    except DataPackageReviewError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise DataPackageReviewError(
+            "plan_bound_data_preview_unreadable",
+            "The exact Plan-bound cohort metadata could not be read.",
+            details={"error_type": type(exc).__name__},
+        ) from exc
+
+    denominator = int(parquet.metadata.num_rows or 0)
+    if denominator <= 0:
+        raise DataPackageReviewError(
+            "plan_bound_data_preview_empty",
+            "The exact Plan-bound cohort has no rows.",
+        )
+    columns = list(parquet.schema_arrow.names)
+    selected_design = next(
+        (
+            row
+            for row in ((plan.get("design_selection") or {}).get("candidates") or [])
+            if isinstance(row, Mapping) and row.get("disposition") == "selected"
+        ),
+        {},
+    )
+    required = {
+        str(value).strip()
+        for value in (selected_design.get("required_variables") or [])
+        if str(value).strip()
+    }
+    endpoint = str((plan.get("endpoint") or {}).get("name") or "").strip()
+    missing_required = sorted(required.difference(columns))
+    concepts: list[Dict[str, Any]] = []
+    coverages: list[float] = []
+    partial_count = 0
+    for index, name in enumerate(columns):
+        null_counts: list[int] = []
+        for row_group in range(parquet.metadata.num_row_groups):
+            stats = parquet.metadata.row_group(row_group).column(index).statistics
+            value = stats.null_count if stats is not None else None
+            if isinstance(value, int):
+                null_counts.append(value)
+        null_count = sum(null_counts) if len(null_counts) == parquet.metadata.num_row_groups else None
+        evaluable = denominator - null_count if null_count is not None else None
+        availability = "ready" if null_count == 0 else "partial" if null_count is not None else "semantic_review_required"
+        if availability == "partial":
+            partial_count += 1
+        if evaluable is not None:
+            coverages.append(evaluable / denominator * 100)
+        concepts.append(
+            {
+                "study_role": (
+                    "outcome"
+                    if name == endpoint
+                    else "plan_input"
+                    if name in required
+                    else "supporting_variable"
+                ),
+                "concept_id": name,
+                "module": "analysis_cohort",
+                "column_role": str(parquet.schema_arrow.field(name).type),
+                "availability_status": availability,
+                "reason_code": (
+                    "plan_bound_column_complete"
+                    if null_count == 0
+                    else "plan_bound_column_has_missing_values"
+                    if null_count is not None
+                    else "plan_bound_null_count_unavailable"
+                ),
+                "evaluable_count": evaluable,
+                "denominator_count": denominator,
+                "missing_count": null_count,
+            }
+        )
+
+    source_config = study.get("data_source")
+    source_config = source_config if isinstance(source_config, Mapping) else {}
+    payload: Dict[str, Any] = {
+        "schema_version": "easyicu.data-package-review/2",
+        "review_stage": "post_plan",
+        "status": "blocked" if missing_required else "ready_for_analysis",
+        "code": (
+            "plan_bound_data_preview_missing_required_columns"
+            if missing_required
+            else "plan_bound_data_preview_ready"
+        ),
+        "study_context_id": study_id,
+        "study_context_revision": int(study.get("revision") or 0),
+        "source": {
+            "database": str(source_config.get("database") or ""),
+            "label": _safe_label(
+                source_config.get("label"), database=source_config.get("database")
+            ),
+        },
+        "denominator": {
+            "analysis_unit": "icu_stay" if "stay_id" in columns else "analysis_row",
+            "count": denominator,
+            "basis": "plan_bound_cohort_parquet_metadata",
+        },
+        "cohort_review": {
+            "label": str((study.get("cohort") or {}).get("label") or "")[:1000]
+            if isinstance(study.get("cohort"), Mapping)
+            else "",
+            "time_window": dict(study.get("time_window") or {})
+            if isinstance(study.get("time_window"), Mapping)
+            else {},
+        },
+        "configured_modules": [
+            {"module": "analysis_cohort", "availability_status": "ready"}
+        ],
+        "concepts": concepts,
+        "blocking_findings": [
+            f"plan_required_column_missing:{name}" for name in missing_required
+        ],
+        "quality": {
+            "modules_ok": 1,
+            "modules_warn": 0,
+            "modules_bad": 0,
+            "modules_unknown": 0,
+            "watchlist_count": partial_count,
+            "median_coverage_pct": round(statistics.median(coverages), 1)
+            if coverages
+            else None,
+        },
+        "analysis_results_withheld": True,
+        "result_fields_withheld": [
+            "event_counts",
+            "event_rates",
+            "group_comparisons",
+            "effect_estimates",
+        ],
+        "privacy": {
+            "raw_rows_returned": False,
+            "direct_identifiers_returned": False,
+            "host_paths_returned": False,
+            "secrets_returned": False,
+        },
+        "provenance": {
+            "owner": "easyicu.webserver.data_package_review",
+            "inputs": [
+                "plan_bound_cohort_parquet_metadata",
+                "approved_candidate_plan",
                 "typed_study_context",
             ],
         },
@@ -634,5 +949,7 @@ def build_registered_data_package_review(
 __all__ = [
     "DataPackageReviewError",
     "DataPackageReviewSnapshotStore",
+    "build_plan_bound_data_package_review",
     "build_registered_data_package_review",
+    "verify_path_free_snapshot",
 ]

@@ -18,7 +18,6 @@ from ..schema import (
     DataExtractionRequest,
     DataExtractionResult,
     EvidenceRef,
-    ManuscriptDraftPacket,
     ReflectionMemoryEntry,
     ResearchContext,
     StatisticalAnalysisRequest,
@@ -32,9 +31,14 @@ from ..research_context.temporal_semantics import (
     TemporalAlignmentEngine,
 )
 from ..review.step_semantics import decide_step_scientific_review
-
-from ._support import _coerce_primary_estimate, _empty_df_placeholder, _initial_reflection_memory, _sentences_missing_evidence_tokens, _suggest_repairs_for
-from .reporting import WriterAgent
+from ._support import (
+    _coerce_primary_estimate,
+    _empty_df_placeholder,
+    _initial_reflection_memory,
+    _sentences_missing_evidence_tokens,
+    _suggest_repairs_for,
+)
+from .manuscript import ManuscriptAgent  # noqa: F401 - compatibility re-export
 
 # ---------------------------------------------------------------------------
 # ICU-native worker agents and runtime supervisor
@@ -265,61 +269,6 @@ class VisualizationAgent:
         )
 
 
-class ManuscriptAgent:
-    """Draft-only manuscript agent that stays human-supervised for discussion."""
-
-    def __init__(
-        self,
-        llm: LLMClient,
-        *,
-        language: str = "en",
-        nature_writing_enabled: bool = True,
-        user_writing_advisory: str = "",
-    ) -> None:
-        self.llm = llm
-        self.language = language
-        self.nature_writing_enabled = bool(nature_writing_enabled)
-        self.user_writing_advisory = str(user_writing_advisory or "")
-
-    def build_packet(
-        self,
-        *,
-        context: ResearchContext,
-        semantics: ClinicalSemanticsResolution,
-        evidence_refs: Sequence[EvidenceRef],
-        findings: Sequence[str],
-        caveats: Sequence[str],
-    ) -> ManuscriptDraftPacket:
-        return ManuscriptDraftPacket(
-            title=context.research_question,
-            abstract_focus=context.target_outcome,
-            analysis_family=semantics.analysis_family,
-            evidence_refs=list(evidence_refs),
-            findings=list(findings),
-            caveats=list(caveats),
-        )
-
-    def run(
-        self,
-        *,
-        context: ResearchContext,
-        evidence_ids: Sequence[str],
-        evidence_digest: Optional[str] = None,
-        literature_digest: Optional[str] = None,
-    ) -> str:
-        return WriterAgent(
-            self.llm,
-            language=self.language,
-            nature_writing_enabled=self.nature_writing_enabled,
-            user_writing_advisory=self.user_writing_advisory,
-        ).run(
-            context=context,
-            evidence_ids=evidence_ids,
-            evidence_digest=evidence_digest,
-            literature_digest=literature_digest,
-        )
-
-
 class CriticAgent:
     """Structured evaluator for execute→critique→revise loops.
 
@@ -388,7 +337,10 @@ class CriticAgent:
         concerns: List[str] = []
         if missing:
             concerns.append("Manuscript contains unresolved evidence placeholders.")
-        unsupported = _sentences_missing_evidence_tokens(scaffold)
+        unsupported = _sentences_missing_evidence_tokens(
+            scaffold,
+            available_evidence_ids=available_evidence_ids,
+        )
         if unsupported:
             concerns.append(
                 "Some result-like sentences were filtered or remain unsupported."

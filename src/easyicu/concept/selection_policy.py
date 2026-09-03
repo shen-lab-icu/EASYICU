@@ -96,6 +96,7 @@ def evaluate_concept_selection(
     concept_id: Any,
     *,
     user_intent: Any,
+    owner_confirmed: bool = False,
 ) -> ConceptSelectionDecision:
     """Decide whether ``user_intent`` authorizes this concept selection.
 
@@ -119,7 +120,7 @@ def evaluate_concept_selection(
     text = " ".join(str(user_intent or "").casefold().split())
     explicitly_named = any(term.casefold() in text for term in policy.explicit_terms)
     negated = bool(_NEGATED_EXPLICIT_SELECTION.search(text))
-    allowed = explicitly_named and not negated
+    allowed = (explicitly_named and not negated) or bool(owner_confirmed)
     return ConceptSelectionDecision(
         concept_id=normalized_id,
         allowed=allowed,
@@ -133,9 +134,17 @@ def evaluate_concept_selection(
     )
 
 
+def concept_selection_confirmation_key(concept_id: Any) -> str:
+    """Return the typed owner-confirmation key for an explicit concept."""
+
+    normalized_id = re.sub(r"[^a-z0-9_]+", "_", str(concept_id or "").casefold())
+    return f"concept_selection_{normalized_id}_authorized"
+
+
 __all__ = [
     "ConceptSelectionDecision",
     "ConceptSelectionPolicy",
     "concept_selection_policy",
+    "concept_selection_confirmation_key",
     "evaluate_concept_selection",
 ]

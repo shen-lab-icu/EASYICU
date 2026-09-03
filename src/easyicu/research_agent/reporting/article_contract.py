@@ -76,18 +76,27 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "table_one",
         "baseline characteristics",
         "baseline_characteristics",
+        "cohort summary",
+        "cohort_summary",
     ),
     "data_quality": (
+        "data_quality_audit",
         "audit",
         "missingness",
         "measurement",
         "coverage",
         "quality",
+        "feature availability",
+        "feature_availability",
         "missingness_profile",
         "data_quality_source_status",
         "measurement_missingness",
+        "measurement_audit",
         "measurement_process",
+        "measurement_process_audit",
         "measurement_source",
+        "measurement_quality",
+        "measurement_quality_audit",
     ),
     "primary_estimand": (
         "relationship",
@@ -96,6 +105,8 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "effect estimate",
         "forest plot",
         "adjusted_association_estimates",
+        "landmark_rcs_curve",
+        "landmark_rcs_contrasts",
     ),
     # Keep these aliases role-specific. Bare words such as ``specification`` or
     # ``alternative`` occur in ordinary model-review prose and previously made
@@ -124,6 +135,9 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
     ),
     "phenotype_profile": (
         "phenotype profile",
+        "phenotype_profiles",
+        "trajectory profile",
+        "trajectory_profiles",
         "cluster characteristics",
         "cluster summary",
         "cluster_summary",
@@ -134,7 +148,16 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
     "causal_protocol": ("target trial", "time zero", "estimand"),
     "balance_positivity": ("balance", "positivity", "weight distribution"),
     "causal_contrast": ("causal contrast", "iptw", "g-computation"),
-    "distribution": ("distribution", "prevalence", "density"),
+    "distribution": (
+        "distribution",
+        "prevalence",
+        "density",
+        # The governed descriptive adapter publishes this typed product rather
+        # than the older ``table:distribution_prevalence`` spelling.  It owns
+        # both the exposure prevalence denominator and the outcome-by-exposure
+        # cells, so it satisfies the descriptive distribution display role.
+        "exposure_outcome_distribution",
+    ),
     "descriptive_result": (
         "prevalence",
         "incidence",
@@ -253,9 +276,12 @@ def build_article_analysis_contract(
             and module.module_id != "distribution_prevalence"
         ]
     for module in display_modules:
-        if module.tier == "supplementary":
+        # Data-quality evidence remains mandatory even when its visual
+        # placement is supplementary. Other supplementary suggestions stay
+        # outside the executable article contract as before.
+        if module.tier == "supplementary" and module.role != "data_quality":
             continue
-        required = module.tier in _REQUIRED_TIERS
+        required = module.tier in _REQUIRED_TIERS or module.role == "data_quality"
         requirement = ArticleDisplayRequirement(
             module_id=module.module_id,
             role=module.role,
@@ -587,8 +613,9 @@ def roles_covered_by_plan(
             or step_id in primary_lineage_ids
             for role in roles
         }
-        if requirement.role in eligible_runtime_roles or _plan_outputs_match_requirement(
-            candidate_outputs, requirement
+        if (
+            requirement.role in eligible_runtime_roles
+            or _plan_outputs_match_requirement(candidate_outputs, requirement)
         ):
             covered.add(requirement.role)
     return covered
@@ -678,6 +705,16 @@ def _verified_resolved_input_bindings(
     """Load one exact resolved-input receipt, failing closed on any drift."""
 
     relative_text = str(record.get("resolved_inputs_path") or "").strip()
+    if not relative_text:
+        # Resume revalidation deliberately removes the former execution-time
+        # path from the current step record.  The immutable receipt remains at
+        # the host-owned canonical location and is still bound by its digest.
+        # Recover only that one dependency-neutral location; arbitrary or
+        # legacy paths continue to fail closed below.
+        step_id = str(record.get("step_id") or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", step_id) is None:
+            return None
+        relative_text = f"resolved_inputs/{step_id}.json"
     expected_sha = str(record.get("resolved_inputs_sha256") or "").strip().lower()
     relative = Path(relative_text)
     if (

@@ -4,6 +4,12 @@
   --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-cn: 'IBM Plex Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --type-caption: 12.5px;        /* provenance, timestamps, secondary metadata */
+  --type-meta: 13px;             /* compact status and control support copy */
+  --type-label: 14px;            /* ordinary labels, links, and secondary prose */
+  --type-reading: 16px;          /* long-form evidence and research prose */
+  --type-section: 18px;          /* local section titles */
+  --leading-reading: 1.6;
 
   /* —— Neutral palette (warm-cool off-white base) —— */
   --bg: #FAFAF7;                  /* canvas */
@@ -20,19 +26,19 @@
   --hair-3: #C8C6BD;              /* divider on emphasis */
 
   /* —— Accent (single restrained teal) —— */
-  --accent: oklch(55% 0.07 205);  /* clinical teal */
+  --accent: oklch(52% 0.07 205);  /* clinical teal · AA on accent-soft */
   --accent-ink: oklch(38% 0.06 205);
   --accent-soft: oklch(96% 0.02 205);
   --accent-border: oklch(86% 0.04 205);
 
   /* —— Status (desaturated) —— */
-  --ok: oklch(58% 0.10 150);
+  --ok: oklch(53% 0.10 150);
   --ok-soft: oklch(96% 0.03 150);
-  --warn: oklch(66% 0.12 75);
+  --warn: oklch(48% 0.12 75);
   --warn-soft: oklch(96% 0.04 80);
-  --bad: oklch(56% 0.13 25);
+  --bad: oklch(43% 0.15 25);
   --bad-soft: oklch(96% 0.03 25);
-  --info: oklch(55% 0.08 240);
+  --info: oklch(52% 0.08 240);
   --info-soft: oklch(96% 0.02 240);
 
   /* —— Shape —— */
@@ -66,7 +72,7 @@
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
-  font-size: 13.5px;
+  font-size: 14.5px;
   line-height: 1.45;
   letter-spacing: -0.005em;
 }

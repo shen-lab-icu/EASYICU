@@ -1,9 +1,9 @@
 """Study-design-aware publication figure renderers.
 
-The base :mod:`.skill` deterministically renders the association-family
-publication figure (forest + strata + missingness). That single template is
-correct for association / descriptive studies but is scientifically wrong for
-the other study-design families in ``figure_strategy``: a survival question
+The continuous-association renderer uses registered effect and absolute-risk
+grids when they are available. The base :mod:`.skill` remains the fallback for
+association studies without those tables. A single forest template is
+scientifically wrong for the other study-design families in ``figure_strategy``: a survival question
 answered with an odds-ratio forest, or a prediction question with no ROC /
 calibration curve, reads as the *same* figure regardless of the science.
 
@@ -32,15 +32,17 @@ from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, ResearchContext
 from ..planning.study_design_playbook import StudyDesignFamily
 from .base import RenderedFigure
+from .association import render_continuous_association_figure
 from .causal import render_causal_figure
 from .phenotype import render_phenotype_figure
 from .prediction import render_prediction_figure
 from .survival import render_survival_figure
 
-# Families whose deterministic renderer lives here. ``association`` and
-# ``descriptive`` are intentionally excluded: the base skill already renders
-# them well and intercepting them would be a regression risk.
+# Families whose deterministic renderer lives here. ``descriptive`` remains
+# excluded; association falls through to the base renderer when no registered
+# continuous effect grid is available.
 FAMILY_RENDERERS = {
+    "association": render_continuous_association_figure,
     "time_to_event": render_survival_figure,
     "prediction": render_prediction_figure,
     "phenotyping": render_phenotype_figure,
@@ -58,9 +60,9 @@ def render_family_figure(
 ) -> Optional[RenderedFigure]:
     """Render the family-appropriate publication figure, or ``None``.
 
-    ``None`` is returned both for families handled elsewhere (association /
-    descriptive) and when a family renderer cannot find its required source
-    evidence. Callers must treat ``None`` as "fall through to the existing
+    ``None`` is returned both for families handled elsewhere (descriptive) and
+    when a family renderer cannot find its required source evidence. Callers
+    must treat ``None`` as "fall through to the existing
     association/promotion/skip ladder".
     """
 
@@ -86,6 +88,7 @@ def render_family_figure(
 __all__ = [
     "FAMILY_RENDERERS",
     "RenderedFigure",
+    "render_continuous_association_figure",
     "render_family_figure",
     "render_survival_figure",
     "render_prediction_figure",

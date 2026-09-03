@@ -895,6 +895,8 @@ def run_adjusted_association_from_env(
         "adjusted_effect": estimate,
         "effect_scale": _effect_scale(estimator_kind),
         "primary_estimate": estimate,
+        "primary_ci_low": ci_low,
+        "primary_ci_high": ci_high,
         "primary_estimate_interval": [ci_low, ci_high],
         "output_files": {ADJUSTED_ASSOCIATION_OUTPUT: table_path.name},
         "analysis_role": analysis_role,

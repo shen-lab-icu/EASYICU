@@ -15,8 +15,14 @@ had been for four commits:
 None of them are subtle and all three are detected in seconds. They survived
 because ``CLAUDE.md``'s development-phase policy — correctly — says not to run
 the full suite between small fixes, and nothing cheaper stood in the gap. This
-script is that cheaper thing: the whole set runs in well under a minute, so
-there is no reason to reach ``main`` without it.
+script is that cheaper thing: still far cheaper than the full suite, so there is
+no reason to reach ``main`` without it.
+
+Measured 2026-08-30: ~7.5 minutes end to end. The first four gates are
+effectively free (arch_measure 1.3s, module-graph ratchet 6.5s, import-linter
+0.4s, ruff 0.1s); the size/budget pytest selection dominates at 437s. If you
+need a sub-10-second signal mid-edit, run the first four directly and leave the
+size/budget gate for pre-push.
 
 Usage::
 
@@ -75,12 +81,12 @@ GATES: Sequence[Tuple[str, List[str]]] = (
             "",
             "-p",
             "no:randomly",
-            "tests/test_arch_measure.py",
-            "tests/test_research_agent_module_graph.py",
-            "tests/test_static_architecture_policy.py",
-            "tests/research_agent/test_plan_phase_decomposition.py",
-            "tests/research_agent/test_trajectory_prompt_compaction.py",
-            "tests/research_agent/test_execution_phase_contract.py",
+            "tests/governance/test_arch_measure.py",
+            "tests/governance/test_research_agent_module_graph.py",
+            "tests/governance/test_static_architecture_policy.py",
+            "tests/research_agent/planning/test_plan_phase_decomposition.py",
+            "tests/research_agent/planning/test_trajectory_prompt_compaction.py",
+            "tests/research_agent/gates/test_execution_phase_contract.py",
         ],
     ),
 )

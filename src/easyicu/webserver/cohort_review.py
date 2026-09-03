@@ -402,6 +402,9 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         "feature_selection": _feature_selection_payload(
             feature_catalog, selected_feature_ids, requested_feature_ids
         ),
+        "selected_feature_distributions": _selected_feature_distributions(
+            entity_ids, selected_feature_profiles
+        ),
         "coverage": coverage,
         "quality": quality,
         "table_one": {
@@ -417,6 +420,236 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
         _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
     return payload
+
+
+def materialized_analysis_review(
+    analysis_path: str | Path,
+    requested_variables: Iterable[str],
+) -> Dict[str, Any]:
+    """Review the immutable, run-scoped analysis cohort.
+
+    Completed Research Agent runs remain reviewable after their original
+    registered export is disconnected.  The run-owned parquet is the exact
+    analysis input, so this owner projects bounded stay-level aggregates from
+    it without returning or persisting patient rows.
+    """
+
+    path = Path(analysis_path).expanduser().resolve()
+    if not path.is_file() or path.suffix.lower() != ".parquet":
+        raise CohortReviewError({"error": "analysis_input_not_available"})
+    try:
+        import pyarrow.parquet as pq
+
+        available = [str(name) for name in pq.ParquetFile(path).schema_arrow.names]
+    except Exception as exc:
+        raise CohortReviewError({"error": "analysis_input_unreadable"}) from exc
+
+    entity_column = entity_id_contract.resolve_entity_id_column(available)
+    if not entity_column:
+        raise CohortReviewError({"error": "no_entity_denominator"})
+
+    normalized_requested = [
+        str(value or "").strip().lower()
+        for value in requested_variables
+        if str(value or "").strip()
+    ][:12]
+    by_lower = {column.lower(): column for column in available}
+    suffixes = ("_maximum", "_minimum", "_median", "_mean", "_max", "_min")
+    selected_columns: List[str] = []
+    for requested in normalized_requested:
+        aliases = [requested]
+        aliases.extend(
+            requested[: -len(suffix)]
+            for suffix in suffixes
+            if requested.endswith(suffix) and len(requested) > len(suffix)
+        )
+        match = next((by_lower[alias] for alias in aliases if alias in by_lower), None)
+        if match and match != entity_column and match not in selected_columns:
+            selected_columns.append(match)
+
+    context_columns: List[str] = []
+    for candidates in (_AGE_COLUMNS, _SEX_COLUMNS, _DEATH_COLUMNS, _LOS_COLUMNS):
+        match = next((by_lower[value] for value in candidates if value in by_lower), None)
+        if match and match not in context_columns:
+            context_columns.append(match)
+    read_columns = list(dict.fromkeys([entity_column, *context_columns, *selected_columns]))
+    try:
+        frame = prepared_frames.read_selected_columns(
+            path,
+            read_columns,
+            entity_column=entity_column,
+        )
+    except Exception as exc:
+        raise CohortReviewError({"error": "analysis_input_unreadable"}) from exc
+    if frame is None or getattr(frame, "empty", True):
+        raise CohortReviewError({"error": "no_entity_denominator"})
+
+    frame = frame.copy()
+    if entity_column != "stay_id":
+        frame = frame.rename(columns={entity_column: "stay_id"})
+    frame["stay_id"] = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
+    frame = frame[frame["stay_id"].astype(bool)].drop_duplicates("stay_id")
+    if frame.empty:
+        raise CohortReviewError({"error": "no_entity_denominator"})
+
+    entity_ids = [str(value) for value in frame["stay_id"].tolist()]
+    age_col = _first_column(frame, _AGE_COLUMNS)
+    sex_col = _first_column(frame, _SEX_COLUMNS)
+    death_col = _first_column(frame, _DEATH_COLUMNS)
+    los_col = _first_column(frame, _LOS_COLUMNS)
+    age_by_entity = _entity_numeric(frame, age_col) if age_col else {}
+    sex_by_entity = _entity_text(frame, sex_col) if sex_col else {}
+    death_by_entity = (
+        dataio._stay_bool(frame, death_col, missing_false=True) if death_col else {}
+    )
+    los_by_entity = dataio._stay_numeric(frame, los_col, "median") if los_col else {}
+
+    features: List[Dict[str, Any]] = []
+    for column in selected_columns[:_MAX_COMPARE_FEATURES]:
+        module = _materialized_feature_module(column)
+        features.append(
+            {
+                "id": _feature_id(module, column),
+                "module": module,
+                "column": column,
+                "label": _feature_label(column),
+                "kind": _feature_kind_hint(column),
+                "coverage_pct": _pct(int(frame[column].notna().sum()), len(entity_ids)),
+                "quality_status": _quality_status(
+                    module, _pct(int(frame[column].notna().sum()), len(entity_ids))
+                ),
+            }
+        )
+    feature_profiles = [_selected_feature_profile(frame, feature) for feature in features]
+    selected_feature_ids = [str(feature["id"]) for feature in features]
+    modules: List[Dict[str, Any]] = []
+    for module in sorted({str(feature["module"]) for feature in features}):
+        rows = [feature for feature in features if feature["module"] == module]
+        modules.append(
+            {
+                "module": module,
+                "label": _module_label(module),
+                "rows": len(entity_ids),
+                "feature_count": len(rows),
+                "coverage_pct": min(
+                    (float(row["coverage_pct"]) for row in rows if row["coverage_pct"] is not None),
+                    default=None,
+                ),
+                "quality_status": "ok" if rows else "unknown",
+                "features": rows,
+            }
+        )
+    catalog = {
+        "modules": modules,
+        "features_by_id": {str(feature["id"]): feature for feature in features},
+        "total_modules": len(modules),
+        "total_features": len(features),
+    }
+    coverage = [
+        {
+            "module": feature["module"],
+            "feature": feature["column"],
+            "coverage_pct": feature["coverage_pct"],
+            "quality_status": feature["quality_status"],
+        }
+        for feature in features
+    ]
+    mortality = _bool_summary(
+        entity_ids, death_by_entity, true_label="deceased", false_label="survived"
+    )
+    summary = {
+        "cohort_size": len(entity_ids),
+        "entities": len(entity_ids),
+        "modules": len(modules),
+        "file_count": 1,
+        "total_records": len(entity_ids),
+        "mortality": mortality,
+        "mortality_pct": mortality.get("pct"),
+        "age": {
+            **_numeric_summary(age_by_entity.values()),
+            "bins": _value_bins(age_by_entity.values(), _AGE_BIN_SPECS),
+        },
+        "sex": _sex_summary(list(sex_by_entity.values())),
+        "admission": {"count": 0, "bins": []},
+        "sofa2": {"count": 0, "bins": []},
+        "los_icu_days": {
+            **_numeric_summary(los_by_entity.values()),
+            "bins": _value_bins(los_by_entity.values(), _LOS_BIN_SPECS),
+        },
+        "sepsis3": {"count": 0, "pct": None, "unknown_count": len(entity_ids)},
+        "sepsis_pct": None,
+    }
+    quality = _quality_summary(coverage)
+    return {
+        "ok": True,
+        "mode": "real",
+        "demo": False,
+        "source": {
+            "id": "run_scoped_analysis_input",
+            "label": "Run-scoped analysis cohort",
+            "path_hash": _hash(str(path)),
+            "database": None,
+            "generated": None,
+        },
+        "provenance": {
+            "computed_from": [
+                "immutable_run_analysis_input",
+                "bounded_column_reads",
+                "cohort_level_aggregates",
+                "selected_feature_aggregates",
+            ],
+            "payload_scope": "cohort_aggregate_only",
+            "inference": "descriptive_only",
+        },
+        "privacy": {
+            "raw_rows_returned": False,
+            "direct_identifiers_returned": False,
+            "patient_rows_persisted": False,
+            "secrets_returned": False,
+        },
+        "summary": summary,
+        "groups": _group_payload(
+            entity_ids=entity_ids,
+            age_by_entity=age_by_entity,
+            sex_by_entity=sex_by_entity,
+            death_by_entity=death_by_entity,
+            los_by_entity=los_by_entity,
+            sofa_by_entity={},
+            sepsis_by_entity={},
+            selected_features=feature_profiles,
+        ),
+        "feature_catalog": _feature_catalog_payload(catalog, selected_feature_ids),
+        "feature_selection": _feature_selection_payload(
+            catalog, selected_feature_ids, tuple(selected_feature_ids)
+        ),
+        "selected_feature_distributions": _selected_feature_distributions(
+            entity_ids, feature_profiles
+        ),
+        "coverage": coverage,
+        "quality": quality,
+        "table_one": {
+            "status": "blocked",
+            "reason": "This browser view is descriptive; inferential results remain in the audited analysis artifacts.",
+            "inferential_statistics_allowed": False,
+        },
+        "survival_analysis": {
+            "status": "blocked",
+            "reason": "Timed-outcome review remains in the audited analysis artifacts.",
+        },
+        "sofa_reclassification": {"status": "blocked"},
+        "blocked_features": [],
+    }
+
+
+def _materialized_feature_module(column: str) -> str:
+    lower = str(column or "").strip().lower()
+    if lower in _DEATH_COLUMNS or lower in _LOS_COLUMNS or lower.endswith("_time"):
+        return "outcome"
+    if lower in _AGE_COLUMNS or lower in _SEX_COLUMNS or lower in _ADM_COLUMNS:
+        return "demographics"
+    if "lact" in lower:
+        return "blood_gas"
+    return "analysis"
 
 
 def _summary_cache_key(
@@ -535,41 +768,13 @@ def _reject_unsupported_request(body: Dict[str, Any]) -> None:
 def _resolve_registered_source(
     body: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    registry = source_store.load_registry()
-    sources = [s for s in registry.get("sources") or [] if isinstance(s, dict)]
-    requested = body.get("source_path") or body.get("path")
-    if requested:
-        norm = _norm_path(str(requested))
-        source = next(
-            (s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None
+    try:
+        selection = source_store.resolve_registered_export(
+            body.get("source_path") or body.get("path")
         )
-        if source is None:
-            raise CohortReviewError(
-                {"error": "source_not_registered", "path_hash": _hash(norm)}
-            )
-    else:
-        active = registry.get("active_path")
-        if not active:
-            raise CohortReviewError({"error": "no_active_export"})
-        active_norm = _norm_path(str(active))
-        source = next(
-            (s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm),
-            None,
-        )
-        if source is None:
-            raise CohortReviewError(
-                {
-                    "error": "active_source_not_registered",
-                    "path_hash": _hash(active_norm),
-                }
-            )
-
-    desc = dataio.describe_export_source(str(source.get("path") or ""))
-    if not desc.get("ok"):
-        raise CohortReviewError(
-            {"error": "invalid_export", "detail": desc.get("error")}
-        )
-    return source, desc
+    except source_store.RegisteredExportSelectionError as exc:
+        raise CohortReviewError(dict(exc.detail)) from exc
+    return dict(selection.source), dict(selection.description)
 
 
 def _skip_expensive_whole_module_read(file_meta: Dict[str, Any], file_path: Path) -> bool:
@@ -989,7 +1194,17 @@ def _selected_feature_profile(frame: Any, feature: Dict[str, Any]) -> Dict[str, 
     column = str(feature.get("column") or "")
     kind = _infer_feature_kind(frame, column)
     if kind == "binary":
-        mapping = dataio._stay_bool(frame, column, missing_false=False)
+        # The Cohort owner already defines missing hospital-death event rows as
+        # non-events when it builds the mortality summary above.  Reuse that
+        # exact concept-specific semantic for the selected-feature view so the
+        # same export cannot report 10/10 mortality coverage in one panel and
+        # six unknown outcomes in another.  Other binary concepts remain
+        # fail-closed because their missingness may not mean a negative event.
+        missing_false = (
+            str(feature.get("module") or "").strip().lower() == "outcome"
+            and column.strip().lower() in _DEATH_COLUMNS
+        )
+        mapping = dataio._stay_bool(frame, column, missing_false=missing_false)
         aggregation = "entity_any_positive_pct"
     elif kind == "numeric":
         mapping = dataio._stay_numeric(frame, column, "median")
@@ -1008,6 +1223,80 @@ def _selected_feature_profile(frame: Any, feature: Dict[str, Any]) -> Dict[str, 
         "mapping": mapping,
         "reason": None,
     }
+
+
+def _selected_feature_distributions(
+    entity_ids: List[str], profiles: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Project selected features as bounded stay-level descriptive histograms."""
+
+    total = len(entity_ids)
+    out: List[Dict[str, Any]] = []
+    for profile in profiles[:_MAX_COMPARE_FEATURES]:
+        mapping = profile.get("mapping")
+        mapping = mapping if isinstance(mapping, dict) else {}
+        common = {
+            "id": profile.get("id"),
+            "module": profile.get("module"),
+            "column": profile.get("column"),
+            "label": profile.get("label"),
+            "kind": profile.get("kind"),
+            "aggregation": profile.get("aggregation"),
+            "denominator": total,
+            "observed": len(mapping),
+            "observed_pct": _pct(len(mapping), total),
+        }
+        if profile.get("kind") == "numeric":
+            values = sorted(
+                value
+                for value in (dataio._num(item) for item in mapping.values())
+                if value is not None
+            )
+            bins: List[Dict[str, Any]] = []
+            if values:
+                low, high = values[0], values[-1]
+                if low == high:
+                    bins = [{"low": low, "high": high, "count": len(values)}]
+                else:
+                    width = (high - low) / 8
+                    counts = [0] * 8
+                    for value in values:
+                        index = min(7, int((value - low) / width))
+                        counts[index] += 1
+                    bins = [
+                        {
+                            "low": round(low + index * width, 4),
+                            "high": round(low + (index + 1) * width, 4),
+                            "count": count,
+                        }
+                        for index, count in enumerate(counts)
+                    ]
+            out.append({**common, "summary": _numeric_summary(values), "bins": bins})
+        elif profile.get("kind") == "binary":
+            positive = sum(value is True for value in mapping.values())
+            negative = sum(value is False for value in mapping.values())
+            out.append(
+                {
+                    **common,
+                    "categories": [
+                        {"label": "Positive", "count": positive},
+                        {"label": "Negative", "count": negative},
+                        {"label": "Unknown", "count": max(0, total - positive - negative)},
+                    ],
+                }
+            )
+        else:
+            present = len(mapping)
+            out.append(
+                {
+                    **common,
+                    "categories": [
+                        {"label": "Observed", "count": present},
+                        {"label": "Missing", "count": max(0, total - present)},
+                    ],
+                }
+            )
+    return out
 
 
 def _infer_feature_kind(frame: Any, column: str) -> str:
@@ -1214,62 +1503,74 @@ def _group_profile(
     )
     columns = [label for label, _ in groups]
     member_sets = [members for _, members in groups]
+    rows: List[Dict[str, Any]] = [
+        {
+            "metric": "N",
+            "kind": "count",
+            "values": [len(members) for members in member_sets],
+        }
+    ]
+    # Core profile rows are projections of actual source mappings.  Do not
+    # manufacture a 0% row when the corresponding module is absent: a
+    # run-scoped package may intentionally carry a different selected exposure
+    # (for example sep3_sofa1_max) without the legacy sepsis3_sofa2 module.
+    core_rows = (
+        (
+            bool(death_by_entity),
+            "Mortality %",
+            "percent",
+            [_bool_pct(members, death_by_entity) for members in member_sets],
+            None,
+        ),
+        (
+            bool(sex_by_entity),
+            "Female %",
+            "percent",
+            [_female_pct(members, sex_by_entity) for members in member_sets],
+            None,
+        ),
+        (
+            bool(age_by_entity),
+            "Median age",
+            "numeric",
+            [_median_for(members, age_by_entity) for members in member_sets],
+            "years",
+        ),
+        (
+            bool(sofa_by_entity),
+            "Median SOFA-2",
+            "numeric",
+            [_median_for(members, sofa_by_entity) for members in member_sets],
+            None,
+        ),
+        (
+            bool(los_by_entity),
+            "Median ICU LOS",
+            "numeric",
+            [_median_for(members, los_by_entity) for members in member_sets],
+            "days",
+        ),
+        (
+            bool(sepsis_by_entity),
+            "Sepsis-3 %",
+            "percent",
+            [_bool_pct(members, sepsis_by_entity) for members in member_sets],
+            None,
+        ),
+    )
+    for available, metric, kind, values, unit in core_rows:
+        if not available:
+            continue
+        row: Dict[str, Any] = {"metric": metric, "kind": kind, "values": values}
+        if unit:
+            row["unit"] = unit
+        rows.append(row)
+    rows.extend(_selected_feature_rows(member_sets, selected_features))
     return {
         "status": "descriptive_aggregate_only",
         "columns": columns,
         "inferential_statistics_allowed": False,
-        "rows": [
-            {
-                "metric": "N",
-                "kind": "count",
-                "values": [len(members) for members in member_sets],
-            },
-            {
-                "metric": "Mortality %",
-                "kind": "percent",
-                "values": [
-                    _bool_pct(members, death_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Female %",
-                "kind": "percent",
-                "values": [
-                    _female_pct(members, sex_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Median age",
-                "kind": "numeric",
-                "unit": "years",
-                "values": [
-                    _median_for(members, age_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Median SOFA-2",
-                "kind": "numeric",
-                "values": [
-                    _median_for(members, sofa_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Median ICU LOS",
-                "kind": "numeric",
-                "unit": "days",
-                "values": [
-                    _median_for(members, los_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Sepsis-3 %",
-                "kind": "percent",
-                "values": [
-                    _bool_pct(members, sepsis_by_entity) for members in member_sets
-                ],
-            },
-        ]
-        + _selected_feature_rows(member_sets, selected_features),
+        "rows": rows,
     }
 
 

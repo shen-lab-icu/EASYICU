@@ -19,13 +19,20 @@ from easyicu.research_agent.planning.method_literature import (
 from easyicu.webserver.literature_projection import literature_source_resource
 
 
-_ARTICLE_LIMIT = 8
-_RESOURCE_LIMIT = 8
+_ARTICLE_LIMIT = 6
+_RESOURCE_LIMIT = 6
 _QUERY_LIMIT = 5
 
 
 def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def _tail_text(value: Any, limit: int) -> str:
+    """Keep the result/conclusion end of a bounded abstract projection."""
+
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[-limit:]
 
 
 def _binding_projection(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -46,7 +53,7 @@ def _binding_projection(value: Mapping[str, Any] | None) -> dict[str, Any] | Non
 def _resource_projection(value: Mapping[str, Any]) -> dict[str, Any]:
     """Keep clickability while avoiding a second copy of long evidence text."""
 
-    return {
+    resource = {
         "kind": _text(value.get("kind"), 80),
         "label": _text(value.get("label"), 160),
         "title": _text(value.get("title"), 260),
@@ -59,6 +66,12 @@ def _resource_projection(value: Mapping[str, Any]) -> dict[str, Any]:
         "media_type": _text(value.get("media_type"), 80),
         "authority_class": _text(value.get("authority_class"), 120),
     }
+    if value.get("retrieval_fit"):
+        resource["retrieval_fit"] = _text(value.get("retrieval_fit"), 80)
+        resource["retrieval_rationale"] = (
+            _text(value.get("retrieval_rationale"), 360) or None
+        )
+    return resource
 
 
 def compile_literature_tool_projection(
@@ -68,6 +81,7 @@ def compile_literature_tool_projection(
     idea_receipt_binding: Mapping[str, Any] | None,
     study_authority_binding: Mapping[str, Any] | None,
     bound_idea_run_id: str,
+    searched_idea_was_accepted: bool = False,
 ) -> dict[str, Any]:
     """Compile a compact, claim-bounded Pi result from persisted owner data.
 
@@ -76,7 +90,9 @@ def compile_literature_tool_projection(
     identity; it must never treat truncation here as scientific authority.
     """
 
-    rows = [row for row in list(candidates)[:_ARTICLE_LIMIT] if isinstance(row, Mapping)]
+    rows = [
+        row for row in list(candidates)[:_ARTICLE_LIMIT] if isinstance(row, Mapping)
+    ]
     queries = [
         _text(value, 800)
         for value in list(discovered.get("queries_to_run") or [])[:_QUERY_LIMIT]
@@ -86,12 +102,29 @@ def compile_literature_tool_projection(
         len(str(value or "")) > 800
         for value in list(discovered.get("queries_to_run") or [])[:_QUERY_LIMIT]
     )
-
-    articles = [
+    query_strata = [
         {
-            "citation_key": _text(
-                row.get("citation_key") or row.get("pmid"), 120
-            ),
+            "id": _text(row.get("id"), 80),
+            "returned_count": int(row.get("returned_count") or 0),
+            "retained_count": int(row.get("retained_count") or 0),
+        }
+        for row in list(discovered.get("query_strata") or [])[:_QUERY_LIMIT]
+        if isinstance(row, Mapping)
+    ]
+    strata_counts = {
+        str(row["id"]): int(row["returned_count"])
+        for row in query_strata
+        if row.get("id")
+    }
+
+    articles = []
+    for row in rows:
+        retrieval_screen = row.get("retrieval_screen")
+        retrieval_screen = (
+            retrieval_screen if isinstance(retrieval_screen, Mapping) else {}
+        )
+        article = {
+            "citation_key": _text(row.get("citation_key") or row.get("pmid"), 120),
             "title": _text(row.get("title"), 320),
             "journal": _text(row.get("journal"), 140),
             "year": row.get("year"),
@@ -109,11 +142,16 @@ def compile_literature_tool_projection(
             "screening_status": "retrieval_candidate_unreviewed",
             "evidence_role": "retrieval_candidate",
             "evidence_excerpt": _text(
-                row.get("design_excerpt") or row.get("evidence_quote"), 360
+                row.get("design_excerpt") or row.get("evidence_quote"), 280
             ),
+            "abstract_excerpt": _tail_text(row.get("abstract_excerpt"), 600),
         }
-        for row in rows
-    ]
+        if retrieval_screen:
+            article["retrieval_fit"] = _text(retrieval_screen.get("fit"), 80) or None
+            article["retrieval_rationale"] = (
+                _text(retrieval_screen.get("rationale"), 360) or None
+            )
+        articles.append(article)
 
     method_pack = method_literature_pack()
     method_sources = [
@@ -148,7 +186,11 @@ def compile_literature_tool_projection(
 
     resources: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
-    for source_row in [*rows, *method_sources]:
+    # Browser resources are the topic-search articles the researcher may open.
+    # Method references remain available under the separately labelled
+    # methodology section; mixing them into this list made a zero-hit topic
+    # search look as though STROBE/RECORD were supporting studies.
+    for source_row in rows:
         raw = literature_source_resource(source_row)
         if raw is None:
             continue
@@ -166,16 +208,27 @@ def compile_literature_tool_projection(
         "query_previews": queries,
         "query_previews_truncated": query_previews_truncated,
         "exact_queries_bound_in_host_receipt": bool(study_authority_binding),
-        "query_strata": [
-            {
-                "id": _text(row.get("id"), 80),
-                "returned_count": int(row.get("returned_count") or 0),
-                "retained_count": int(row.get("retained_count") or 0),
-            }
-            for row in list(discovered.get("query_strata") or [])[:_QUERY_LIMIT]
-            if isinstance(row, Mapping)
-        ],
+        "query_strata": query_strata,
+        "retrieval_map": {
+            "clinical_landscape": strata_counts.get("clinical_landscape", 0),
+            "candidate_topic": strata_counts.get("candidate_topic", 0),
+            "direct_observational_candidates": strata_counts.get(
+                "direct_observational_candidates", 0
+            ),
+            "review_or_guideline": strata_counts.get("review_or_guideline", 0),
+            "critical_care_database": strata_counts.get("critical_care_database", 0),
+            "interpretation": (
+                "retrieval_candidates_present_requires_screening"
+                if rows
+                else "no_candidates_in_bounded_strata_not_novelty_evidence"
+            ),
+            "authority": "retrieval_signal_only",
+        },
         "result_count": len(rows),
+        "retrieved_result_count": int(
+            discovered.get("retrieved_result_count") or len(rows)
+        ),
+        "excluded_result_count": int(discovered.get("excluded_result_count") or 0),
         "network_calls": int(discovered.get("network_calls") or 0),
         "articles": articles,
         "methodology": methodology,
@@ -185,7 +238,10 @@ def compile_literature_tool_projection(
             "Agent must re-screen publication type and exact population, "
             "exposure role, outcome, and design against the sealed study."
         ),
-        "idea_handoff_refresh_required": bool(idea_receipt_binding),
+        "idea_plan_refresh_required": bool(idea_receipt_binding),
+        "idea_handoff_refresh_required": bool(
+            idea_receipt_binding and searched_idea_was_accepted
+        ),
         "bound_idea_run_id": _text(bound_idea_run_id, 160) or None,
         "study_literature_authority": _binding_projection(study_authority_binding),
     }

@@ -442,7 +442,7 @@ def literature_source_resource(row: Mapping[str, Any]) -> dict[str, Any] | None:
         if evidence_role == "method"
         else "literature_retrieval_candidate"
     )
-    return {
+    resource = {
         "kind": "literature_source",
         "label": citation["title"][:160],
         "title": citation["title"],
@@ -455,6 +455,15 @@ def literature_source_resource(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "media_type": "text/html",
         "authority_class": authority_class,
     }
+    retrieval_screen = row.get("retrieval_screen")
+    if isinstance(retrieval_screen, Mapping):
+        resource["retrieval_fit"] = (
+            _text(retrieval_screen.get("fit"), 80) or None
+        )
+        resource["retrieval_rationale"] = (
+            _text(retrieval_screen.get("rationale"), 600) or None
+        )
+    return resource
 
 
 __all__ = [

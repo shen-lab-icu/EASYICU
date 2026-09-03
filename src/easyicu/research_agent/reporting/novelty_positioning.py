@@ -40,6 +40,7 @@ class NoveltyComparatorRecord(BaseModel):
     year: Optional[str] = None
     venue: Optional[str] = None
     source_excerpt: Optional[str] = None
+    evidence_role: Literal["direct_comparator", "design_analogue"] = "direct_comparator"
     population_match: bool
     exposure_match: bool
     outcome_match: bool
@@ -49,12 +50,10 @@ class NoveltyComparatorRecord(BaseModel):
 class NoveltyPositioningPacket(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.novelty_positioning/2"] = (
-        "easyicu.novelty_positioning/2"
-    )
-    status: Literal[
-        "not_established", "review_required", "supported", "not_supported"
-    ]
+    schema_version: Literal[
+        "easyicu.novelty_positioning/2", "easyicu.novelty_positioning/3"
+    ] = "easyicu.novelty_positioning/3"
+    status: Literal["not_established", "review_required", "supported", "not_supported"]
     review_disposition: Literal[
         "not_available",
         "independent_pre_review_pass",
@@ -67,6 +66,7 @@ class NoveltyPositioningPacket(BaseModel):
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     literature_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     direct_comparator_keys: list[str] = Field(default_factory=list)
+    design_analogue_keys: list[str] = Field(default_factory=list)
     comparators: list[NoveltyComparatorRecord] = Field(default_factory=list)
     comparison_dimensions: dict[str, NoveltyComparisonDimension]
     reviewer_questions: list[str]
@@ -96,8 +96,10 @@ class NoveltyPositioningPacket(BaseModel):
                     "supported novelty requires an accepted external review "
                     "disposition and reviewer_owner"
                 )
-            if not self.direct_comparator_keys:
-                raise ValueError("supported novelty requires a direct comparator")
+            if not (self.direct_comparator_keys or self.design_analogue_keys):
+                raise ValueError(
+                    "supported novelty requires a direct comparator or design analogue"
+                )
             incomplete = [
                 name
                 for name, dimension in self.comparison_dimensions.items()
@@ -158,6 +160,9 @@ def _study_dimensions(
     context: ResearchContext,
     plan: AnalysisPlan,
 ) -> dict[str, NoveltyComparisonDimension]:
+    selected_design = (
+        plan.design_selection.selected if plan.design_selection is not None else None
+    )
     exposure = context.variable(context.primary_exposure or "")
     outcome = context.variable(context.target_outcome or "")
     primary = next(
@@ -190,13 +195,18 @@ def _study_dimensions(
         )
         if value
     )
-    time_zero = "; ".join(
-        [
-            *[_text(item) for item in context.time_windows],
-            *[_text(item) for item in context.temporal_constraints],
-            _text(getattr(exposure, "analysis_window", None)),
-        ]
-    ) or "No complete time-zero/follow-up authority was declared."
+    time_zero = (
+        "; ".join(
+            [
+                _text(getattr(selected_design, "time_zero", None)),
+                _text(getattr(selected_design, "observation_window", None)),
+                *[_text(item) for item in context.time_windows],
+                *[_text(item) for item in context.temporal_constraints],
+                _text(getattr(exposure, "analysis_window", None)),
+            ]
+        )
+        or "No complete time-zero/follow-up authority was declared."
+    )
     exposure_text = "; ".join(
         value
         for value in (
@@ -210,6 +220,11 @@ def _study_dimensions(
         value
         for value in (
             f"name={context.target_outcome or 'not declared'}",
+            (
+                f"selected_estimand={_text(selected_design.estimand)}"
+                if selected_design is not None
+                else ""
+            ),
             _text(getattr(outcome, "description", None)),
             _text(getattr(outcome, "source_concept", None)),
             _text(context.endpoint),
@@ -220,6 +235,11 @@ def _study_dimensions(
         value
         for value in (
             f"analysis_type={plan.analysis_type or 'not declared'}",
+            (
+                f"selected_method={_text(selected_design.primary_method)}"
+                if selected_design is not None
+                else ""
+            ),
             f"method={_text(primary.method) if primary else 'no primary step'}",
             f"intent={_text(primary.intent) if primary else 'no primary step'}",
             "covariates=" + (", ".join(covariates) if covariates else "none"),
@@ -239,10 +259,32 @@ def _study_dimensions(
         )
         if value
     )
-    contribution = (
-        "No contribution claim is pre-authorized. The independent reviewer must "
-        "distinguish a clinically meaningful or methodological advance from a "
-        "new database/concept instantiation using retained source evidence."
+    contribution = "; ".join(
+        value
+        for value in (
+            (
+                f"planner_positioning={_text(selected_design.novelty_positioning)}"
+                if selected_design is not None
+                else ""
+            ),
+            (
+                f"supports={_text(selected_design.supports)}"
+                if selected_design is not None
+                else ""
+            ),
+            (
+                f"cannot_prove={_text(selected_design.cannot_prove)}"
+                if selected_design is not None
+                else ""
+            ),
+            (
+                "No contribution claim is pre-authorized. The independent "
+                "reviewer must distinguish a clinically meaningful or "
+                "methodological advance from a new database/concept "
+                "instantiation using retained source evidence."
+            ),
+        )
+        if value
     )
     return {
         "population_and_setting": NoveltyComparisonDimension(study=population),
@@ -250,9 +292,7 @@ def _study_dimensions(
             study="; ".join((exposure_text, time_zero))
         ),
         "outcome_and_estimand": NoveltyComparisonDimension(study=endpoint_text),
-        "analysis_and_robustness_route": NoveltyComparisonDimension(
-            study=analysis
-        ),
+        "analysis_and_robustness_route": NoveltyComparisonDimension(study=analysis),
         "data_source_and_transportability": NoveltyComparisonDimension(
             study=transportability
         ),
@@ -275,7 +315,7 @@ def build_unsigned_novelty_positioning_packet(
         decision
         for decision in (literature.screening_decisions if literature else ())
         if decision.disposition == "include"
-        and decision.evidence_role == "direct_comparator"
+        and decision.evidence_role in {"direct_comparator", "design_analogue"}
         and decision.publication_type_eligible
         and decision.citation_key in records_by_key
     ]
@@ -289,6 +329,7 @@ def build_unsigned_novelty_positioning_packet(
                 year=record.year,
                 venue=record.venue,
                 source_excerpt=_text(record.relevance) or None,
+                evidence_role=decision.evidence_role,
                 population_match=decision.population_match,
                 exposure_match=decision.exposure_match,
                 outcome_match=decision.outcome_match,
@@ -296,6 +337,16 @@ def build_unsigned_novelty_positioning_packet(
             )
         )
     keys = [row.citation_key for row in comparators]
+    direct_keys = [
+        row.citation_key
+        for row in comparators
+        if row.evidence_role == "direct_comparator"
+    ]
+    analogue_keys = [
+        row.citation_key
+        for row in comparators
+        if row.evidence_role == "design_analogue"
+    ]
     return NoveltyPositioningPacket(
         status="review_required" if keys else "not_established",
         **novelty_authority_digests(
@@ -309,7 +360,8 @@ def build_unsigned_novelty_positioning_packet(
                 )
             ),
         ),
-        direct_comparator_keys=keys,
+        direct_comparator_keys=direct_keys,
+        design_analogue_keys=analogue_keys,
         comparators=comparators,
         comparison_dimensions=_study_dimensions(context, plan),
         reviewer_questions=[

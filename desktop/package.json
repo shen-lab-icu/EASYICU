@@ -1,0 +1,13 @@
+{
+  "name": "easyicu-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "build:macos": "python3 scripts/build_macos.py"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}

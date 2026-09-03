@@ -94,6 +94,7 @@ from .deterministic_robustness import (
     _SPECIFICATION_GRID_COLUMNS,
     ROBUSTNESS_REPLAY_OUTPUT_FILES,
 )
+from ...figures.robustness import assess_robustness_effect_comparability
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
 
@@ -159,6 +160,19 @@ _SIGNED_LANDMARK_PROJECTION_COLUMNS = frozenset(
         "notes",
     }
 )
+_SIGNED_LANDMARK_ODDS_RATIO_COLUMNS = frozenset(
+    {
+        "spec_id",
+        "axis",
+        "n",
+        "events",
+        "odds_ratio",
+        "ci_low",
+        "ci_high",
+        "converged",
+        "fit_method",
+    }
+)
 
 #: The same, for the specification grid: its guaranteed columns and the stem
 #: the producer writes it to.
@@ -189,6 +203,7 @@ def _binding_is_producer_contract(binding: Any) -> bool:
     return columns is not None and (
         _PRODUCER_CONTRACT_COLUMNS <= columns
         or _SIGNED_LANDMARK_PROJECTION_COLUMNS <= columns
+        or _SIGNED_LANDMARK_ODDS_RATIO_COLUMNS <= columns
     )
 
 
@@ -413,9 +428,15 @@ def _load_matrix(
 
     columns = product_contract.get("columns")
     row_count = product_contract.get("row_count")
+    declared_columns = (
+        {str(name) for name in columns} if isinstance(columns, list) else set()
+    )
+    normalized_columns = set(declared_columns)
+    if _SIGNED_LANDMARK_ODDS_RATIO_COLUMNS <= declared_columns:
+        normalized_columns.update({"point_estimate", "effect_scale"})
     if (
         not isinstance(columns, list)
-        or not set(_READ_COLUMNS).issubset({str(name) for name in columns})
+        or not set(_READ_COLUMNS).issubset(normalized_columns)
         or isinstance(row_count, bool)
         or not isinstance(row_count, int)
         or row_count < 1
@@ -424,6 +445,9 @@ def _load_matrix(
         raise ValueError("robustness matrix product contract is unsupported")
 
     frame = pd.read_csv(path)
+    if _SIGNED_LANDMARK_ODDS_RATIO_COLUMNS <= set(frame.columns):
+        frame = frame.rename(columns={"odds_ratio": "point_estimate"})
+        frame["effect_scale"] = "odds_ratio"
     if not set(_READ_COLUMNS).issubset(set(frame.columns)) or len(frame) != row_count:
         raise ValueError("robustness matrix bytes disagree with its product contract")
     if _canonical_sha256(path) != expected_sha256:
@@ -665,6 +689,34 @@ def _validated_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, str, bool]:
     return rows, effect_scale, bool((~rows["__drawable"]).any())
 
 
+def _interval_text(estimate: float, low: float, high: float) -> str:
+    """Format an interval at the precision that actually separates its ends.
+
+    A fixed precision defeats the purpose here: the rows that need printing are
+    exactly the ones whose interval is tight, and
+    ``0.9999976 [0.9999782, 1.0000170]`` at four significant digits prints as
+    ``1 [1, 1]`` -- which reads as a degenerate interval, the very misreading
+    this annotation exists to prevent. Stopping at the first precision where
+    the two ends merely differ is not enough either: it yields the lopsided
+    ``1 [0.99998, 1]``, whose upper bound is not 1.
+
+    So the precision is derived from the interval itself -- how many
+    significant digits it takes to resolve a half-width at this magnitude --
+    and both ends are printed at that same precision.
+    """
+
+    width = abs(high - low)
+    scale = max(abs(estimate), abs(low), abs(high))
+    if width <= 0.0 or scale <= 0.0 or not math.isfinite(width / scale):
+        digits = 4
+    else:
+        digits = int(math.ceil(math.log10(scale / width))) + 2
+    digits = max(4, min(digits, 12))
+    return (
+        f"{estimate:.{digits}g} [{low:.{digits}g}, {high:.{digits}g}]"
+    )
+
+
 def _reader_label(value: str) -> str:
     return str(value).replace("_", " ").strip()
 
@@ -689,6 +741,22 @@ def run_robustness_figure(
         step_id=step_id,
     )
     rows, effect_scale, has_gap = _validated_rows(frame)
+    # A SHARED SCALE IS NOT A SHARED QUESTION.
+    #
+    # This renderer authorizes its common axis from `effect_scale` alone, and
+    # the planning owner already says why that is not enough: a per-unit OR, a
+    # high-vs-reference OR, and a duplicated complete-case documentation row
+    # all carry "OR" while answering different questions
+    # (figures/robustness.py::assess_robustness_effect_comparability). The
+    # publication renderer consults that owner and drops to a coverage matrix
+    # when it refuses; this standalone figure did not consult it at all.
+    #
+    # It is consulted here rather than enforced: the producer does not yet emit
+    # the identity columns the assessment needs, so a hard gate would refuse
+    # every grid the corpus contains. What it can do is stop the figure from
+    # asserting comparability silently -- the verdict travels with the figure,
+    # in its own note and in the panel metadata a reviewer reads.
+    comparability = assess_robustness_effect_comparability(frame)
     primary_effect_bound, primary_effect_value = _load_statistic(
         run_dir=Path(run_dir),
         inputs=bound_inputs,
@@ -804,7 +872,10 @@ def run_robustness_figure(
             zorder=0,
             label="primary estimate",
         )
-        ax.legend(loc="lower right", frameon=False, fontsize=6.1)
+        # Sensitivity rows and their intervals occupy the lower/right region;
+        # keep the anchor key in the otherwise empty upper-left quadrant so it
+        # cannot obscure a result marker or confidence interval.
+        ax.legend(loc="upper left", frameon=False, fontsize=6.1)
     ax.set_yticks(positions)
     ax.set_yticklabels([_reader_label(label) for label in rows["__label"]])
     ax.invert_yaxis()
@@ -824,6 +895,39 @@ def run_robustness_figure(
             fontsize=6.1,
             color=palette["neutral"],
         )
+    # A REAL INTERVAL THAT CANNOT BE SEEN READS AS NO INTERVAL.
+    #
+    # The grid puts every specification on one axis, so its span is set by the
+    # widest contrast. A specification whose interval is orders of magnitude
+    # tighter then renders inside its own marker: a recorded run drew
+    # OR 0.9999976 [0.9999782, 1.0000170] beside contrasts spanning 1.60-1.72,
+    # and the reader saw a bare point. Left alone that says "this variant has
+    # no interval", which is the opposite of what the matrix recorded. So the
+    # values are printed for exactly those rows -- the figure keeps its shape
+    # and stops asserting a precision claim it did not measure.
+    x_low, x_high = ax.get_xlim()
+    axis_span = abs(x_high - x_low)
+    narrow_rows: list[str] = []
+    if axis_span > 0:
+        for index, drawable in enumerate(rows["__drawable"]):
+            if not drawable:
+                continue
+            low = rows["__low"].iloc[index]
+            high = rows["__high"].iloc[index]
+            if (high - low) / axis_span >= 0.02:
+                continue
+            estimate = rows["__estimate"].iloc[index]
+            narrow_rows.append(str(rows["__label"].iloc[index]))
+            ax.annotate(
+                _interval_text(estimate, low, high),
+                xy=(estimate, index),
+                xytext=(6, 0),
+                textcoords="offset points",
+                va="center",
+                ha="left",
+                fontsize=5.8,
+                color=palette["neutral"],
+            )
     if complete_case_bound:
         ax.set_title(
             "Complete-case n: "
@@ -864,6 +968,14 @@ def run_robustness_figure(
                     "chart_type": panel_template.chart_type,
                     "source_products": list(panel_template.source_products),
                     "source_data": list(source_data_names),
+                    "effect_axis_comparability_authorized": bool(
+                        comparability.authorized
+                    ),
+                    "effect_axis_reason_code": comparability.reason_code,
+                    "effect_axis_missing_identity_columns": list(
+                        comparability.missing_columns
+                    ),
+                    "sub_axis_resolution_rows": list(narrow_rows),
                 },
             }
         ],
@@ -875,6 +987,25 @@ def run_robustness_figure(
                 "introduces no cohort, exposure, outcome, specification, "
                 "missing-data or modeling decision, and draws every locked "
                 "specification."
+            ),
+            *(
+                ()
+                if comparability.authorized
+                else (
+                    "Specifications share an effect scale but not a verified "
+                    "common estimand, contrast, and unit, so their positions on "
+                    "this axis are not authorized as directly comparable. "
+                    + str(comparability.message),
+                )
+            ),
+            *(
+                (
+                    "Intervals narrower than the axis resolution are printed "
+                    "beside their marker so a tight interval is not read as a "
+                    "missing one: " + ", ".join(_reader_label(name) for name in narrow_rows) + ".",
+                )
+                if narrow_rows
+                else ()
             ),
             *_specification_notes(specification_grid),
         ],

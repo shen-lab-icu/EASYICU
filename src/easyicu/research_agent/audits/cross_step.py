@@ -516,6 +516,7 @@ class StepSummaryFractionValidator:
             "_n",
             "_numerator",
             "_replicates",
+            "_rows",
             "_sample_size",
         )
         structural_prefixes = ("n_", "num_", "number_")

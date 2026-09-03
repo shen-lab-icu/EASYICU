@@ -1,0 +1,20 @@
+.gpi-idea-source{display:flex;align-items:center;color:var(--ink-3);font-size:var(--type-meta)}
+.gpi-idea-source-menu{position:relative}
+.gpi-idea-source-menu>summary{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;color:var(--ink-3);cursor:pointer;list-style:none}
+.gpi-idea-source-menu>summary::-webkit-details-marker{display:none}
+.gpi-idea-source-menu>summary:hover,.gpi-idea-source-menu[open]>summary{background:var(--wash);color:var(--ink-1)}
+.gpi-idea-source-menu>summary:focus-visible,.gpi-idea-source-popover button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);outline-offset:2px}
+.gpi-idea-source-popover{position:absolute;z-index:14;left:0;bottom:calc(100% + 8px);width:280px;display:grid;gap:3px;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--paper);box-shadow:0 16px 38px rgba(14,17,22,.14)}
+.gpi-idea-source-popover button{width:100%;min-height:52px;display:flex;align-items:center;gap:11px;padding:7px 10px;border:0;border-radius:9px;background:transparent;color:var(--ink-2);font:inherit;text-align:left;cursor:pointer}
+.gpi-idea-source-popover button:hover{background:var(--wash);color:var(--ink-1)}
+.gpi-idea-source-popover button:disabled{cursor:default;opacity:.5}
+.gpi-idea-source-popover button>span,.gpi-idea-source-popover strong,.gpi-idea-source-popover small{display:block}
+.gpi-idea-source-popover strong{font-size:var(--type-label);line-height:1.4}
+.gpi-idea-source-popover small{margin-top:2px;color:var(--ink-4);font-size:var(--type-caption);line-height:1.4}
+.gpi-idea-source-status{display:flex;align-items:center;gap:8px;min-height:28px;padding:0 5px 5px;flex-wrap:wrap;color:var(--ink-3);font-size:var(--type-caption)}
+.gpi-idea-source-reading{display:inline-flex;align-items:center;gap:6px;color:var(--ink-3)}
+.gpi-idea-source-chip{display:inline-flex;align-items:center;gap:7px;max-width:100%;border:1px solid color-mix(in srgb,var(--accent) 25%,var(--line));background:color-mix(in srgb,var(--accent) 5%,var(--surface));border-radius:8px;padding:5px 7px;color:var(--ink-2)}
+.gpi-idea-source-chip strong{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--type-caption)}
+.gpi-idea-source-chip small{color:var(--ink-4)}
+.gpi-idea-source-chip button{border:0;background:transparent;color:var(--ink-4);cursor:pointer;font-size:16px;line-height:1;padding:0 2px}
+.gpi-idea-source-error{color:var(--danger);flex-basis:100%}

@@ -239,6 +239,70 @@ class ProjectWorkspace:
             )
         return resolved_root
 
+    def existing_project_root(self, project_id: str) -> Path | None:
+        """Return one validated project root without creating workspace state."""
+
+        if self.declared_base_dir.is_symlink():
+            raise PiCopilotError(
+                "pi_workspace_base_root_symlink_blocked",
+                "The Pi workspace root must not be a symbolic link.",
+            )
+        if self.declared_base_dir.resolve(strict=False) != self.base_dir:
+            raise PiCopilotError(
+                "pi_workspace_base_root_changed",
+                "The Pi workspace root changed after this workspace was opened.",
+            )
+        if not self.declared_base_dir.exists():
+            return None
+        if not self.declared_base_dir.is_dir():
+            raise PiCopilotError(
+                "pi_workspace_base_root_not_directory",
+                "The Pi workspace root is not an accessible directory.",
+            )
+
+        projects_root = self.base_dir / "projects"
+        if not projects_root.exists():
+            return None
+        if projects_root.is_symlink():
+            raise PiCopilotError(
+                "pi_workspace_projects_root_symlink_blocked",
+                "The Pi projects directory must not be a symbolic link.",
+            )
+        if not projects_root.is_dir():
+            raise PiCopilotError(
+                "pi_workspace_projects_root_not_directory",
+                "The Pi projects path is not an accessible directory.",
+            )
+        resolved_projects = projects_root.resolve()
+        try:
+            resolved_projects.relative_to(self.base_dir)
+        except ValueError as exc:
+            raise PiCopilotError(
+                "pi_workspace_projects_root_escape",
+                "The Pi projects directory escaped its host-owned workspace root.",
+            ) from exc
+
+        root = projects_root / project_workspace_id(project_id)
+        if not root.exists():
+            return None
+        if root.is_symlink():
+            raise PiCopilotError(
+                "pi_workspace_project_root_symlink_blocked",
+                "The Pi project root must not be a symbolic link.",
+            )
+        if not root.is_dir():
+            raise PiCopilotError(
+                "pi_workspace_project_root_not_directory",
+                "The Pi project path is not an accessible directory.",
+            )
+        resolved_root = root.resolve()
+        if resolved_root.parent != resolved_projects:
+            raise PiCopilotError(
+                "pi_workspace_project_root_escape",
+                "The Pi project root escaped its host-owned projects directory.",
+            )
+        return resolved_root
+
     def _candidate(
         self,
         project_id: str,

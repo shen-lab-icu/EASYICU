@@ -305,6 +305,74 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
     return AvailableCatalog(source=str(export_dir), concepts=concepts)
 
 
+def build_database_capability_catalog(database: str) -> AvailableCatalog:
+    """Build the metadata-only concept menu for one supported database.
+
+    Unlike :func:`build_available_catalog`, this function never inspects an
+    export package or patient table. It projects only concepts that EasyICU's
+    packaged dictionary and database adapters declare executable. Planner-only
+    Web runs use this menu to decide what a later narrow extraction must carry;
+    it is not evidence that any patient has a recorded value.
+    """
+
+    from easyicu.concept.selection_policy import concept_selection_policy
+
+    from ..concept_availability import (
+        explain_concept_availability,
+        normalize_database_name,
+    )
+    from ..concept_catalog import load_concept_catalog
+
+    normalized_database = normalize_database_name(database)
+    dictionary_catalog = load_concept_catalog()
+    meta = _concept_dict_meta()
+    concepts: List[CatalogConcept] = []
+    for concept_id in dictionary_catalog.available_concepts:
+        availability = explain_concept_availability(
+            concept=concept_id,
+            database=normalized_database,
+        )
+        if not availability.available:
+            continue
+        row = meta.get(concept_id, {})
+        aliases = dictionary_catalog.concept_aliases.get(concept_id, [])
+        description = str(row.get("description") or "").strip()
+        if not description and aliases:
+            description = ", ".join(str(value) for value in aliases[:4])
+        category = str(
+            row.get("category")
+            or dictionary_catalog.concept_categories.get(concept_id)
+            or ""
+        )
+        selection_policy = concept_selection_policy(concept_id)
+        concepts.append(
+            CatalogConcept(
+                concept_id=concept_id,
+                description=description,
+                category=category,
+                methodology=_methodology_tag(concept_id, category),
+                column_role=str(row.get("column_role") or ""),
+                selection_mode=(
+                    selection_policy.selection_mode
+                    if selection_policy
+                    else "ordinary"
+                ),
+                selection_note=(
+                    selection_policy.rationale if selection_policy else ""
+                ),
+                canonical_alternative=(
+                    selection_policy.canonical_alternative or ""
+                    if selection_policy
+                    else ""
+                ),
+            )
+        )
+    return AvailableCatalog(
+        source=f"easyicu-database-capability:{normalized_database}",
+        concepts=concepts,
+    )
+
+
 def assess_coverage(
     requested_concepts: Sequence[str],
     catalog: AvailableCatalog,

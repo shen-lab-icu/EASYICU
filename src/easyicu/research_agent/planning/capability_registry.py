@@ -7,7 +7,7 @@ deterministically, and where does the framework fail closed?* The answer used to
 be implicit, spread across the preflight
 dispatch ladder in ``execution.phase``, the ``FAMILY_RENDERERS`` table, and the
 readiness gates in ``reporting.readiness``. Here it is declared once, rendered to a
-matrix, and kept honest by ``tests/research_agent/test_capability_registry.py``,
+matrix, and kept honest by ``tests/research_agent/core/test_capability_registry.py``,
 which cross-checks every claim below against the code that is actually wired
 (``AUXILIARY_DETERMINISTIC_RUNNERS`` and ``figures.FAMILY_RENDERERS``). If a
 runner is added or removed without updating
@@ -32,7 +32,23 @@ from dataclasses import dataclass, field
 import re
 from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
-from ..contracts.capability_ids import CAPABILITY_FAMILIES
+from ..contracts.capability_ids import (
+    CAPABILITY_FAMILIES,
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+    PHENOTYPING_ANALYSIS_KIND,
+    PHENOTYPING_CLUSTER_CAPABILITY_ID,
+    SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+    SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
+)
+from ..contracts.source_feasibility_validation import (
+    source_feasibility_plan_claimed,
+    source_feasibility_plan_contract_errors,
+)
+from ..trajectory.runtime_validation import (
+    signed_trajectory_plan_claimed,
+    signed_trajectory_plan_contract_errors,
+)
 from ..contracts.association_execution import association_execution_verdict
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
@@ -43,6 +59,10 @@ from ..contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
 )
+from ..contracts.time_varying_exposure import (
+    TIME_VARYING_EXPOSURE_CAPABILITY, TIME_VARYING_EXPOSURE_METHOD, TIME_VARYING_ANALYSIS_KIND,
+)
+from ..contracts.prediction_execution import static_prediction_execution_verdict
 from .study_design_playbook import StudyDesignFamily
 
 if TYPE_CHECKING:
@@ -194,6 +214,24 @@ class AuxiliaryRunner:
 
 CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ScientificCapability(
+        family="association", label="Association — source-bound time-updated Cox",
+        primary_analysis="deterministic",
+        primary_estimand="Descriptive counting-process Cox association under an explicit early running-maximum and unmeasured-state specification",
+        primary_runner=TIME_VARYING_ANALYSIS_KIND,
+        primary_runner_module="execution.runners.time_varying_executor",
+        figure="llm_coded", figure_renderer=None,
+        data_contract=("one-stay cohort", "source-bound hospital event/censor follow-up",
+                       "opaque patient-clustered counting-process input", "explicit baseline coding and missingness policy"),
+        fail_closed="Reject source/specification/population drift, missing R survival, invalid intervals, separation or fit warnings.",
+        capability_id=TIME_VARYING_EXPOSURE_CAPABILITY,
+        result_contract="TimeVaryingRuntimeAuthority + easyicu.time_varying_runtime_receipt/1",
+        required_diagnostics=("retained early events and unmeasured states", "patient-cluster count", "convergence and finite clustered covariance"),
+        scientific_validation="analysis_only",
+        scientific_validator_owner="contracts.time_varying_validation",
+        scientific_validator_contract="easyicu.time_varying_runtime_receipt/1",
+        notes="A development execution contract, not proportional-hazards validation, causal identification or publication authority.",
+    ),
+    ScientificCapability(
         family="time_to_event",
         label="Survival / time-to-event",
         primary_analysis="deterministic",
@@ -254,6 +292,42 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         scientific_validation="analysis_only",
     ),
     ScientificCapability(
+        family="causal_emulation",
+        label="Causal feasibility — verified non-use unavailable",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-validated source-feasibility refusal with no treatment contrast "
+            "or effect estimate"
+        ),
+        primary_runner=None,
+        primary_runner_module="execution.runners.source_feasibility_executor",
+        figure="none",
+        figure_renderer=None,
+        data_contract=(
+            "signed source-capture authority",
+            "explicit non-use/control-arm authorization status",
+        ),
+        fail_closed=(
+            "Any plan, authority digest, receipt or table mismatch remains "
+            "diagnostic; the capability never authorizes a causal contrast."
+        ),
+        notes=(
+            "This capability validates a scientific refusal, not a treatment "
+            "effect. It may report that the requested contrast is not identified "
+            "under the current source contract."
+        ),
+        capability_id=SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+        result_contract="easyicu.source_feasibility_runtime_receipt/1 + refusal table",
+        required_diagnostics=(
+            "source-capture boundary",
+            "verified non-use availability",
+            "control-arm and causal-contrast prohibition",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="contracts.source_feasibility_validation",
+        scientific_validator_contract="easyicu.source_feasibility_runtime_receipt/1",
+    ),
+    ScientificCapability(
         family="association",
         label="Association — graded ordinal exposure (dose-response)",
         primary_analysis="llm_coded",
@@ -311,6 +385,48 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ),
     ScientificCapability(
         family="association",
+        label="Association — digest-bound landmark spline",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed adjusted nonlinear association under a signed "
+            "fixed-landmark restricted-cubic-spline contract"
+        ),
+        primary_runner=LANDMARK_SPLINE_ANALYSIS_KIND,
+        primary_runner_module="execution.runners.landmark_spline_executor",
+        figure="deterministic",
+        figure_renderer="base_association_skill",
+        data_contract=(
+            "typed cohort input",
+            "signed exposure, outcome, event-time and observation-duration columns",
+            "signed adjustment set, landmark, knots and reference",
+        ),
+        fail_closed=(
+            "The runtime owner rejects authority-digest drift, incomplete event "
+            "timing or observation opportunity, missing signed columns, invalid "
+            "knots, rank loss, non-convergence, or a plan that changes the signed "
+            "landmark estimand."
+        ),
+        notes=(
+            "The caller-reviewed authority owns study-specific coordinates; the "
+            "host executor only performs the sealed landmark population build, "
+            "spline fit, functional-form comparison and registered products."
+        ),
+        capability_id=LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+        result_contract=(
+            "LandmarkSplineRuntimeAuthority + easyicu.landmark_spline_runtime_receipt/1"
+        ),
+        required_diagnostics=(
+            "landmark eligibility and exposure opportunity",
+            "observed knots and reference",
+            "spline-versus-linear likelihood-ratio comparison",
+            "complete-case model population",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.landmark_spline_executor",
+        scientific_validator_contract="easyicu.landmark_spline_runtime_receipt/1",
+    ),
+    ScientificCapability(
+        family="association",
         label="Association — general / free-form",
         primary_analysis="llm_coded",
         primary_estimand="Agent-coded association for scientific kernels outside the exact single-model host contract",
@@ -342,21 +458,41 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ScientificCapability(
         family="prediction",
         label="Prediction / risk modelling",
-        primary_analysis="llm_coded",
-        primary_estimand="LLM-coded discrimination + calibration (AUROC, calibration); value-provenance verified",
-        primary_runner=None,
-        primary_runner_module=None,
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-fitted static binary risk model with a Planner-owned predictor "
+            "roster, patient-group split, held-out discrimination and calibration"
+        ),
+        primary_runner="static_prediction_model",
+        primary_runner_module="execution.runners.prediction_model_executor",
         figure="deterministic",
         figure_renderer="prediction",
         data_contract=("predictors", "binary outcome", "train/validation split"),
         fail_closed=(
-            "LLM code failure -> repair -> fail-closed. manuscript_numeric_auditor "
-            "catches rounded/hallucinated metrics (caught AUROC 0.766->0.7 in a pilot)."
+            "The owner declines a missing typed outcome/group authority, an ambiguous "
+            "predictor prefix, patient leakage, a single-class split, invalid scores, "
+            "or unsupported model/sensitivity coordinates; it never infers predictors "
+            "from supporting audit inputs."
         ),
-        notes="ROC + calibration figure is deterministic; the model FIT is LLM-coded.",
+        notes=(
+            "The exact static L2-logistic fit and validation are deterministic and "
+            "analysis-only. Dynamic prediction and alternative model families remain "
+            "separate agent-coded capabilities."
+        ),
         capability_id="prediction_risk_model_v1",
-        result_contract="registered discrimination and calibration products",
-        required_diagnostics=("split/leakage", "discrimination", "calibration"),
+        result_contract=(
+            "typed model-column prefix + digest-bound PredictionValidationReceipt + "
+            "registered discrimination/calibration products"
+        ),
+        required_diagnostics=(
+            "patient split/leakage",
+            "development-only preprocessing",
+            "discrimination with interval",
+            "calibration and Brier score",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="prediction_validation_owner",
+        scientific_validator_contract="PredictionValidationReceipt",
     ),
     ScientificCapability(
         family="prediction",
@@ -403,10 +539,13 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ScientificCapability(
         family="phenotyping",
         label="Phenotyping / clustering",
-        primary_analysis="llm_coded",
-        primary_estimand="Agent-planned cluster solution; outcome-by-cluster kept descriptive (not causal)",
-        primary_runner=None,
-        primary_runner_module=None,
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Planner-selected feature roster passed to a deterministic exploratory "
+            "cluster solution; outcome-by-cluster remains descriptive, not causal"
+        ),
+        primary_runner=PHENOTYPING_ANALYSIS_KIND,
+        primary_runner_module="execution.runners.cross_sectional_phenotyping_executor",
         figure="deterministic",
         figure_renderer="phenotyping",
         data_contract=("feature matrix (e.g. first-24h trajectories)", "k selection"),
@@ -415,22 +554,70 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "an LLM failure fails closed to diagnostic_only."
         ),
         notes=(
-            "Cluster heatmap + stability + outcome-by-cluster figure is "
-            "deterministic from registered clustering products. The clustering "
-            "method, feature representation, and k-selection remain agent-owned; "
-            "a dedicated typed trajectory-stability step may use the supporting "
-            "calculator only after the planner has fixed every resampling, refit, "
-            "alignment, and decision parameter. "
-            "The former SOFA-specific KMeans script is not advertised or routed "
-            "as a general auxiliary capability."
+            "The Planner owns the eligible feature roster and exploratory question. "
+            "The host owner fixes outcome exclusion, median imputation, scaling, "
+            "candidate-k scoring, clustering and resampling, then validates their "
+            "cross-step consistency. The receipt never authorizes causal entities, "
+            "biological subtype names, external reproducibility or clinical use."
         ),
-        capability_id="phenotyping_cluster_v1",
-        result_contract="registered clustering, profile, and stability products",
+        capability_id=PHENOTYPING_CLUSTER_CAPABILITY_ID,
+        result_contract=(
+            "easyicu.cross_sectional_phenotyping_runtime_receipt/1 + deterministic "
+            "k-selection and stability replay"
+        ),
         required_diagnostics=(
             "representation",
             "cluster stability",
             "descriptive outcome use",
         ),
+        scientific_validation="reportable",
+        scientific_validator_owner="contracts.phenotyping_validation",
+        scientific_validator_contract=(
+            "easyicu.cross_sectional_phenotyping_runtime_receipt/1"
+        ),
+    ),
+    ScientificCapability(
+        family="phenotyping",
+        label="Phenotyping — signed fixed-window trajectories",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed fixed-window trajectory candidate decision with a "
+            "digest-bound stability design or an explicit non-solution"
+        ),
+        primary_runner=None,
+        primary_runner_module=(
+            "execution.runners.trajectory_scientific_candidate_executor"
+        ),
+        figure="deterministic",
+        figure_renderer="phenotyping",
+        data_contract=(
+            "signed fixed-window representation",
+            "closed candidate-k grid and BIC rule",
+            "signed stability design",
+        ),
+        fail_closed=(
+            "Authority, artifact-digest, candidate-selection or stability drift "
+            "blocks validation; a boundary optimum is reported as no solution "
+            "and never forced into a phenotype."
+        ),
+        notes=(
+            "The receipt authorizes only the signed exploratory trajectory "
+            "decision. It does not establish biological entities, external "
+            "reproducibility, causal effects or clinical use."
+        ),
+        capability_id=SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
+        result_contract=(
+            "signed trajectory representation + candidate selection + stability "
+            "and diagnostic figure receipts"
+        ),
+        required_diagnostics=(
+            "fixed-window representation and missingness",
+            "closed candidate-grid BIC decision",
+            "resampling stability or explicit failed-closed non-solution",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="trajectory.runtime_validation",
+        scientific_validator_contract="signed_trajectory_runtime_bundle_errors",
     ),
     ScientificCapability(
         family="descriptive",
@@ -871,6 +1058,73 @@ def resolve_primary_capability(
     if capability is None or plan is None:
         return _verdict_for(capability, analysis_family=canonical)
 
+    if source_feasibility_plan_claimed(plan):
+        source_capability = get_capability_by_id(
+            SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+        )
+        if canonical != "causal_inference":
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="source_feasibility_family_mismatch",
+                detail=(
+                    "A signed causal source-feasibility refusal may only own a "
+                    "causal-inference plan."
+                ),
+            )
+        contract_errors = source_feasibility_plan_contract_errors(plan)
+        if contract_errors:
+            return _verdict_for(
+                source_capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="source_feasibility_contract_invalid",
+                detail="; ".join(contract_errors),
+            )
+        return _verdict_for(
+            source_capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=(
+                "the sole auxiliary step declares the signed fail-closed source "
+                "feasibility owner and no effect analysis"
+            ),
+        )
+
+    if signed_trajectory_plan_claimed(plan):
+        trajectory_capability = get_capability_by_id(
+            SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID
+        )
+        if canonical != "trajectory_clustering":
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="signed_trajectory_family_mismatch",
+                detail=(
+                    "The signed trajectory runtime may only own a trajectory-"
+                    "clustering plan."
+                ),
+            )
+        contract_errors = signed_trajectory_plan_contract_errors(plan)
+        if contract_errors:
+            return _verdict_for(
+                trajectory_capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="signed_trajectory_contract_invalid",
+                detail="; ".join(contract_errors),
+            )
+        return _verdict_for(
+            trajectory_capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=(
+                "the plan declares the four digest-bound trajectory runtime owners"
+            ),
+        )
+
     primary_steps = [
         step
         for step in tuple(getattr(plan, "steps", ()) or ())
@@ -883,9 +1137,7 @@ def resolve_primary_capability(
 
     primary = primary_steps[0]
     if canonical == "descriptive_epidemiology":
-        descriptive_verdict = exposure_outcome_distribution_execution_verdict(
-            primary
-        )
+        descriptive_verdict = exposure_outcome_distribution_execution_verdict(primary)
         if descriptive_verdict.claimed:
             capability = get_capability_by_id(
                 DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID
@@ -919,6 +1171,84 @@ def resolve_primary_capability(
                     f"{declared_capability.family!r}, not {capability.family!r}."
                 ),
             )
+
+    if capability.capability_id == "prediction_risk_model_v1":
+        if declared and declared != capability.capability_id:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                failure_reason="scientific_capability_step_incompatible",
+                detail=(
+                    f"scientific_capability {declared!r} is not compatible with "
+                    "the static prediction primary capability."
+                ),
+            )
+        prediction_verdict = static_prediction_execution_verdict(primary)
+        if prediction_verdict.claimed:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=True,
+                owner_reason=prediction_verdict.reason,
+            )
+        if prediction_verdict.missing_declarations:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                owner_reason=prediction_verdict.reason,
+                failure_reason="primary_owner_declaration_incomplete",
+                detail=(
+                    "The static prediction primary has not declared: "
+                    + ", ".join(prediction_verdict.missing_declarations)
+                ),
+            )
+        return _verdict_for(
+            capability,
+            analysis_family=canonical,
+            owner_claimed=False,
+            owner_reason=prediction_verdict.reason,
+            failure_reason="primary_capability_owner_mismatch",
+            detail=(
+                "The prediction primary does not match the deterministic static "
+                f"prediction owner: {prediction_verdict.reason}"
+            ),
+        )
+
+    if declared == TIME_VARYING_EXPOSURE_CAPABILITY:
+        time_varying = get_capability_by_id(declared)
+        claimed = (getattr(primary, "method", None) == TIME_VARYING_EXPOSURE_METHOD
+                   and any(str(ref).startswith("scientific_runtime_contract:") for ref in primary.icu_rule_refs)
+                   and not primary.model_requirements)
+        return _verdict_for(time_varying, analysis_family=canonical,
+            owner_claimed=claimed, owner_reason="runtime authority verifies the exact input and counting-process contract",
+            **({} if claimed else {"failure_reason": "scientific_capability_step_incompatible",
+                                   "detail": "Time-varying execution requires its signed owner contract."}))
+
+    if declared == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
+        landmark_capability = get_capability_by_id(declared)
+        if str(getattr(primary, "method", "") or "").strip() != (
+            "signed_landmark_restricted_cubic_spline"
+        ):
+            return _verdict_for(
+                landmark_capability,
+                analysis_family=canonical,
+                failure_reason="scientific_capability_step_incompatible",
+                detail=(
+                    "The digest-bound landmark-spline capability requires the "
+                    "signed landmark spline method; a declaration alone cannot "
+                    "promote another association kernel."
+                ),
+            )
+        return _verdict_for(
+            landmark_capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=(
+                "the primary declares the signed landmark-spline host method; "
+                "the runtime authority separately verifies its digest-bound coordinates"
+            ),
+        )
 
     if capability.capability_id != "association_adjusted_v1":
         if declared and declared != capability.capability_id:
@@ -1153,7 +1483,11 @@ def assess_scientific_capability(
     # Input readiness follows the capability's own declared contract. A
     # phenotyping run has a feature matrix and no exposure/outcome by design;
     # requiring those association coordinates would silently misclassify it.
-    if capability.family in {"association", "causal_emulation"}:
+    if capability.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID:
+        input_contract_resolved = not source_feasibility_plan_contract_errors(plan)
+    elif capability.capability_id == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID:
+        input_contract_resolved = not signed_trajectory_plan_contract_errors(plan)
+    elif capability.family in {"association", "causal_emulation"}:
         input_contract_resolved = bool(exposure and outcome)
     elif capability.family == "prediction":
         input_contract_resolved = bool(outcome and variables)
@@ -1239,8 +1573,7 @@ def assess_scientific_capability(
             ),
         )
     validator_registered = bool(
-        capability.scientific_validation == "reportable"
-        and capability.scientific_validator_owner
+        capability.scientific_validator_owner
         and capability.scientific_validator_contract
     )
     if not validator_registered:
@@ -1258,6 +1591,22 @@ def assess_scientific_capability(
             reason=(
                 "The analysis can execute, but no registered deterministic "
                 "validator establishes its identification claim."
+            ),
+        )
+    if capability.scientific_validation == "analysis_only":
+        return ScientificCapabilityAssessment(
+            capability_id=capability.capability_id,
+            analysis_type=canonical,
+            question_present=True,
+            question_coordinates_resolved=True,
+            input_contract_resolved=True,
+            runtime_data_available=None,
+            execution_backend_available=None,
+            scientific_validator_available=True,
+            claim_ceiling="analysis_only",
+            reason=(
+                "A deterministic validator can establish the declared analysis-only "
+                "result; it does not authorize a reportable identification claim."
             ),
         )
     return ScientificCapabilityAssessment(

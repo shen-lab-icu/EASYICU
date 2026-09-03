@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from ..plan_utils import _output_declares_figure
+from ..planning.figure_step_contract import _output_declares_figure
 
 
 def count_missing_evidence_markers(text: str) -> int:

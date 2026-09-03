@@ -94,16 +94,22 @@ class PlannerKnowHowBinding:
         context: ResearchContext,
         *,
         planning_contract_context: str = "",
+        run_prompt_metrics: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        planner_metrics = (
+            run_prompt_metrics
+            if run_prompt_metrics is not None
+            else planner.last_prompt_metrics
+        )
         strict_transport_schema = bool(
-            planner.last_prompt_metrics.get("structured_output_payload_bytes")
+            planner_metrics.get("structured_output_payload_bytes")
         )
         baseline = planner.request_metrics(
             context,
             planning_contract_context=planning_contract_context,
             strict_transport_schema=strict_transport_schema,
         )
-        metrics = dict(planner.last_prompt_metrics)
+        metrics = dict(planner_metrics)
         precomputed_without = metrics.get("without_know_how_total_bytes")
         if isinstance(precomputed_without, int) and not isinstance(
             precomputed_without, bool

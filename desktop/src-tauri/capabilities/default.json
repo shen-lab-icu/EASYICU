@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The local loading window receives no shell or filesystem capability.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

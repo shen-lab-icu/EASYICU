@@ -3,6 +3,7 @@
     "name": "eicu",
     "profile": {
       "display_name": "eICU",
+      "reference_release": "2.0",
       "aliases": ["eicu", "eicu-crd", "eicu_crd"],
       "display_order": 20
     },
@@ -3935,6 +3936,7 @@
     "name": "mimic",
     "profile": {
       "display_name": "MIMIC-III",
+      "reference_release": "1.4",
       "aliases": ["mimiciii", "mimic-iii", "mimic3", "mimic_iii", "miii"],
       "display_order": 50
     },
@@ -7308,6 +7310,7 @@
     "name": "miiv",
     "profile": {
       "display_name": "MIMIC-IV",
+      "reference_release": "3.1",
       "aliases": ["mimiciv", "mimic-iv", "miiv", "mimic_iv", "mimic-iv-3.1"],
       "display_order": 10
     },
@@ -9294,6 +9297,7 @@
     "name": "hirid",
     "profile": {
       "display_name": "HiRID",
+      "reference_release": "1.1.1",
       "aliases": ["hirid", "hi-rid"],
       "display_order": 40
     },
@@ -10662,6 +10666,7 @@
     "name": "sic",
     "profile": {
       "display_name": "SICdb",
+      "reference_release": "1.0.6",
       "aliases": ["sicdb", "sic", "sic-db"],
       "display_order": 60
     },

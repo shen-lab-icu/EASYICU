@@ -90,6 +90,33 @@ def _extract_json(raw: str) -> Optional[dict]:
     return None
 
 
+def _canonicalize_catalog_selection(
+    values: Sequence[object], catalog: AvailableCatalog
+) -> List[str]:
+    """Bind model-returned concept ids to the catalog's canonical spelling.
+
+    Concept ids are host-owned identifiers. A model may return a clinically
+    conventional spelling such as ``pH`` even though the catalog exposes
+    ``ph``. Accept an unambiguous case-only variant, while preserving unknown
+    or ambiguous values so the coverage owner can still fail closed.
+    """
+
+    exact = {concept.concept_id for concept in catalog.concepts}
+    folded: Dict[str, List[str]] = {}
+    for concept_id in exact:
+        folded.setdefault(concept_id.casefold(), []).append(concept_id)
+    canonical: List[str] = []
+    for raw in values:
+        value = str(raw).strip()
+        if not value:
+            continue
+        matches = folded.get(value.casefold(), [])
+        resolved = value if value in exact or len(matches) != 1 else matches[0]
+        if resolved not in canonical:
+            canonical.append(resolved)
+    return canonical
+
+
 @dataclass
 class ConceptSelection:
     """The agent's chosen concepts + its intended cohort, plus the verdict."""
@@ -169,7 +196,7 @@ class DataFoundationAgent:
                 "Concept selection JSON must contain a selected_concepts list."
             )
             raw_selected = []
-        selected = [str(c) for c in (raw_selected or []) if str(c).strip()]
+        selected = _canonicalize_catalog_selection(raw_selected or [], catalog)
         raw_inclusion = data.get("inclusion_exclusion") or []
         if not isinstance(raw_inclusion, list):
             if not selection_error:
@@ -320,7 +347,7 @@ def acquire_universe_for_question(
     database: str = "miiv",
     require_outcome: bool = True,
     emit_trajectory: bool = True,
-    trajectory_window: Optional[tuple] = (-24.0, 168.0),
+    trajectory_window: Optional[tuple] = None,
     patient_grouping: Optional[PatientGroupingBinding] = None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
@@ -508,6 +535,12 @@ def acquire_universe_for_question(
         if patient_grouping is not None
         else {}
     )
+    # A longitudinal artifact must not silently widen the user-reviewed
+    # materialization window.  Callers that need a different trajectory span
+    # must declare it explicitly.
+    effective_trajectory_window = (
+        cohort_window if trajectory_window is None else trajectory_window
+    )
     paths = materialize_to_parquet(
         output_dir=output_dir,
         stem=stem,
@@ -526,7 +559,12 @@ def acquire_universe_for_question(
         # auto-discovers it and exposes TRAJECTORY_PARQUET.
         emit_trajectory=emit_trajectory,
         trajectory_concepts=[*feature_concepts, *outcome_concepts],
-        trajectory_window=trajectory_window,
+        trajectory_window=effective_trajectory_window,
+        # Fresh concept extraction applies dictionary bounds before
+        # aggregation. Legacy export packages predate typed sidecars, so the
+        # formal pipeline applies the same canonical bounds here and records
+        # every excluded source value in materialization provenance.
+        bounds_violation_policy="exclude_with_receipt",
         **identity_kwargs,
     )
     try:

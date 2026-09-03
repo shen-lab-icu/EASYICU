@@ -72,8 +72,6 @@ _MANUSCRIPT_METADATA_LINE_RE = re.compile(
     r"\s*(?:\*\*)?\s*[:：]?",
     re.I,
 )
-
-
 def _first_resolvable_name(
     resolvable: set[str], candidates: Sequence[str]
 ) -> Optional[str]:
@@ -359,24 +357,79 @@ def _append_evidence_citation(sentence: str, evidence_id: str) -> str:
     return sentence.rstrip() + citation
 
 
+def _remove_unregistered_evidence_placeholders(
+    text: str,
+    *,
+    allowed_evidence_ids: Sequence[str],
+) -> tuple[str, List[str]]:
+    """Delete only evidence tokens absent from the current registry.
+
+    The unchanged strict evidence gate remains responsible for the surrounding
+    sentence. A result sentence left without a registered citation is still
+    rejected; this helper only prevents one stale token from poisoning a
+    sentence that already carries current evidence authority.
+    """
+
+    allowed = {
+        str(evidence_id).strip()
+        for evidence_id in allowed_evidence_ids
+        if str(evidence_id).strip()
+    }
+    removed: List[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        evidence_id = match.group("id").strip()
+        if evidence_id in allowed:
+            return match.group(0)
+        removed.append(evidence_id)
+        return ""
+
+    rewritten = re.sub(
+        r"[ \t]*\{evidence:(?P<id>[^{}]+)\}",
+        _replace,
+        text,
+    )
+    return rewritten, removed
+
+
+def _writer_repair_target_span(scaffold: str, target: str) -> Optional[Tuple[int, int]]:
+    """Locate a policy-normalized rejected sentence in the original draft."""
+
+    exact_start = scaffold.find(target)
+    if exact_start >= 0:
+        return exact_start, exact_start + len(target)
+    tokens = [token for token in re.split(r"\s+", target.strip()) if token]
+    if not tokens:
+        return None
+    match = re.search(r"\s+".join(re.escape(token) for token in tokens), scaffold)
+    return (match.start(), match.end()) if match is not None else None
+
+
 def _apply_writer_evidence_repair_decisions(
     scaffold: str,
     *,
     missing_sentences: Sequence[str],
     decisions: Sequence[Mapping[str, object]],
+    allowed_evidence_ids: Sequence[str] = (),
     allowed_claim_refs: Sequence[str] = (),
 ) -> tuple[str, List[Dict[str, object]]]:
     """Apply a validated writer citation/drop/claim decision without rewriting.
 
     The LLM chooses only among registered citations, one exact registered host
     claim, and deletion. This host function preserves every cited sentence
-    byte-for-byte apart from appending the selected evidence placeholders. A
-    claim decision replaces the whole sentence with one exact host-issued
-    token; no model-authored direction, population, number, or interpretation
-    survives that replacement.
+    byte-for-byte apart from removing unregistered evidence placeholders and
+    appending the selected registered placeholders. Existing registered
+    citations are preserved. A claim decision replaces the whole sentence
+    with one exact host-issued token; no model-authored direction, population,
+    number, or interpretation survives that replacement.
     """
 
     sentences = [str(sentence).strip() for sentence in missing_sentences]
+    allowed_evidence = {
+        str(evidence_id).strip()
+        for evidence_id in allowed_evidence_ids
+        if str(evidence_id).strip()
+    }
     allowed_claims = {
         str(claim_ref).strip()
         for claim_ref in allowed_claim_refs
@@ -398,10 +451,13 @@ def _apply_writer_evidence_repair_decisions(
         ):
             raise ValueError("writer evidence repair index is invalid or duplicated")
         target = sentences[index]
-        if target not in rewritten:
+        target_span = _writer_repair_target_span(rewritten, target)
+        if target_span is None:
             raise ValueError(
                 "writer evidence repair target is absent from the current scaffold"
             )
+        target_start, target_end = target_span
+        matched_target = rewritten[target_start:target_end]
         action = str(decision.get("action") or "").strip().lower()
         raw_ids = decision.get("evidence_ids", [])
         if not isinstance(raw_ids, (list, tuple)):
@@ -414,9 +470,23 @@ def _apply_writer_evidence_repair_decisions(
         if action == "cite":
             if not evidence_ids:
                 raise ValueError("cite decision requires at least one evidence id")
-            replacement = target
+            if allowed_evidence and any(
+                evidence_id not in allowed_evidence for evidence_id in evidence_ids
+            ):
+                raise ValueError(
+                    "cite decision requires registered allowed evidence ids"
+                )
+            replacement = matched_target
+            if allowed_evidence:
+                replacement, _ = _remove_unregistered_evidence_placeholders(
+                    replacement,
+                    allowed_evidence_ids=tuple(allowed_evidence),
+                )
+                replacement = replacement.lstrip(" \t")
             for evidence_id in evidence_ids:
-                replacement = _append_evidence_citation(replacement, evidence_id)
+                token = "{evidence:" + evidence_id + "}"
+                if token not in replacement:
+                    replacement = _append_evidence_citation(replacement, evidence_id)
         elif action == "claim":
             if evidence_ids:
                 raise ValueError("claim decision cannot include evidence ids")
@@ -424,9 +494,8 @@ def _apply_writer_evidence_repair_decisions(
             if claim_ref not in allowed_claims:
                 raise ValueError("claim decision requires an allowed claim_ref")
             token = "{claim:" + claim_ref + "}"
-            target_offset = rewritten.find(target)
-            line_start = rewritten.rfind("\n", 0, target_offset) + 1
-            before_target = rewritten[line_start:target_offset]
+            line_start = rewritten.rfind("\n", 0, target_start) + 1
+            before_target = rewritten[line_start:target_start]
             if before_target.lstrip().startswith("#"):
                 # Scientific findings do not belong in a manuscript title or
                 # heading.  A model-selected claim is safely dropped here; the
@@ -448,8 +517,10 @@ def _apply_writer_evidence_repair_decisions(
                 raise ValueError("drop decision cannot include evidence ids")
             replacement = ""
         else:
-            raise ValueError("writer evidence repair action must be cite, claim, or drop")
-        rewritten = rewritten.replace(target, replacement, 1)
+            raise ValueError(
+                "writer evidence repair action must be cite, claim, or drop"
+            )
+        rewritten = rewritten[:target_start] + replacement + rewritten[target_end:]
         seen.add(index)
         applied.append(
             {
@@ -787,6 +858,21 @@ def _parsed_numeric_literal(value_str: str) -> tuple[float, bool] | None:
     raw = value_str.strip()
     has_percent = raw.endswith("%")
     stripped = raw.rstrip("%").replace(",", "")
+    unicode_scientific = re.fullmatch(
+        r"(?P<coefficient>[-+]?(?:\d+(?:\.\d+)?|\.\d+))\s*[×x]\s*"
+        r"10(?P<exponent>[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+)",
+        stripped,
+    )
+    if unicode_scientific is not None:
+        superscript_digits = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
+        try:
+            coefficient = float(unicode_scientific.group("coefficient"))
+            exponent = int(
+                unicode_scientific.group("exponent").translate(superscript_digits)
+            )
+            return coefficient * (10.0**exponent), False
+        except (OverflowError, ValueError):
+            return None
     try:
         return float(stripped), has_percent
     except ValueError:
@@ -844,7 +930,13 @@ def _claim_numeric_distance(
         if abs(candidate) > 1e-9:
             rel = abs(candidate - canonical) / abs(candidate)
         else:
-            rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+            # Relative tolerance is undefined at zero.  Treating every
+            # manuscript value below 1e-12 as relatively identical to zero
+            # lets scientific-notation p-values bind to unrelated zero-count
+            # audit fields.  Exact equality was handled above; near-zero
+            # values may now match only through display-aware absolute
+            # rounding below.
+            rel = float("inf")
         abs_window = max(
             display_abs_tol,
             window * max(abs(candidate), abs(canonical)),
@@ -1034,6 +1126,18 @@ def _contextual_source_score(context: str, claim: NumericClaim) -> int:
 
     if "missingness" in text and ".missingness." in source:
         score += 3
+
+    # A rounded display value can legitimately match several registered
+    # numbers.  For example, ``0.5`` may be both an exact spline-knot
+    # quantile and the one-decimal rendering of a 0.46 missingness fraction.
+    # The scientific role named in the prose must outrank a merely nearby
+    # value from another field; otherwise the binder creates a real hash for
+    # the wrong fact.  Keep this rule vocabulary-based and case-neutral.
+    if re.search(r"\b(?:spline[-\s]+)?knots?\b", text):
+        if re.search(r"(?:^|[._-])spline[_-]?knot[_-]?quantiles?(?:\[|$)", source):
+            score += 10
+        elif ".missingness." in source:
+            score -= 6
     return score
 
 
@@ -1381,10 +1485,7 @@ def _select_numeric_claim(
             prose_effect_scale is not None
             and claim.effect_scale is not prose_effect_scale
         )
-        and not (
-            prose_estimand is not None
-            and claim.estimand is not prose_estimand
-        )
+        and not (prose_estimand is not None and claim.estimand is not prose_estimand)
     ]
     if not candidates:
         return None, False
@@ -1549,7 +1650,8 @@ def _prose_effect_scale(
         local_prefix,
         re.I,
     ) or re.match(
-        r"\s*(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
+        r"\s*(?:(?:icu|hospital)\s+)?"
+        r"(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
         local_suffix,
         re.I,
     ):
@@ -1571,7 +1673,9 @@ def _prose_effect_scale(
     if not mentions:
         return None
 
-    following = sorted((item for item in mentions if item[0] >= end), key=lambda x: x[0])
+    following = sorted(
+        (item for item in mentions if item[0] >= end), key=lambda x: x[0]
+    )
     if following:
         label_start, _label_end, scale = following[0]
         between = text[end:label_start]
@@ -1585,7 +1689,9 @@ def _prose_effect_scale(
     return next(iter(scales)) if len(scales) == 1 else None
 
 
-def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[NumericEstimand]:
+def _prose_numeric_estimand(
+    text: str, *, start: int, end: int
+) -> Optional[NumericEstimand]:
     """Classify an explicitly labelled point estimate or ordered CI endpoint."""
 
     prefix = text[max(0, start - 180) : start]
@@ -1595,12 +1701,7 @@ def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[Nume
         if re.match(r"\s*" + separator + r"\s*" + _PLAIN_PROSE_NUMBER, suffix):
             return NumericEstimand.CONFIDENCE_INTERVAL_LOWER
     if re.search(
-        _CI_MARKER
-        + r".{0,80}?"
-        + _PLAIN_PROSE_NUMBER
-        + r"\s*"
-        + separator
-        + r"\s*$",
+        _CI_MARKER + r".{0,80}?" + _PLAIN_PROSE_NUMBER + r"\s*" + separator + r"\s*$",
         prefix,
         flags=re.I | re.S,
     ):
@@ -1635,6 +1736,17 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     are unbroken by prose, so the next sentence's words can never enter.
     """
 
+    context_start, context_end = _numeric_sentence_bounds(
+        text,
+        start=start,
+        end=end,
+    )
+    return text[context_start:context_end]
+
+
+def _numeric_sentence_bounds(text: str, *, start: int, end: int) -> Tuple[int, int]:
+    """Return the exact sentence span used by numeric provenance binding."""
+
     context_start = 0
     for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
         context_start = match.end()
@@ -1652,7 +1764,7 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     max_chars = 1600
     context_start = max(context_start, start - max_chars)
     context_end = min(context_end, end + max_chars)
-    return text[context_start:context_end]
+    return context_start, context_end
 
 
 #: A markdown link whose target is an evidence artefact, as the writer emits
@@ -1758,20 +1870,36 @@ def repair_miscited_numeric_citations(
         if detail is None:
             continue
         distinct_candidates = {
-            (claim.step_id, claim.evidence_id, claim.source_field)
+            (claim.step_id, claim.evidence_id, claim.source_field): claim
             for claim, _distance in candidates
         }
-        if len(distinct_candidates) != 1:
-            continue
-        citable_candidates = [
-            claim
-            for claim, _distance in candidates
-            if claim.step_id in resolvable or claim.evidence_id in resolvable
-        ]
-        if len(citable_candidates) != 1:
+        selected_claim: Optional[NumericClaim] = None
+        if len(distinct_candidates) == 1:
+            selected_claim = next(iter(distinct_candidates.values()))
+        elif re.search(r"\b(?:icu\s+)?stays?\b", context, flags=re.I):
+            canonical_stay_claims = {
+                (claim.step_id, claim.evidence_id, claim.source_field): claim
+                for claim, _distance in candidates
+                if claim.source_field == "cohort.n_stays"
+            }
+            if len(canonical_stay_claims) == 1:
+                selected_claim = next(iter(canonical_stay_claims.values()))
+        elif re.search(r"\bpatients?\b", context, flags=re.I):
+            canonical_patient_claims = {
+                (claim.step_id, claim.evidence_id, claim.source_field): claim
+                for claim, _distance in candidates
+                if claim.source_field == "cohort.n_patients"
+            }
+            if len(canonical_patient_claims) == 1:
+                selected_claim = next(iter(canonical_patient_claims.values()))
+        if selected_claim is None:
             continue
         owner = next(
-            (item for item in sorted(detail["owned_by"]) if item in resolvable),
+            (
+                item
+                for item in (selected_claim.evidence_id, selected_claim.step_id)
+                if item in resolvable
+            ),
             None,
         )
         if owner is None:
@@ -1980,15 +2108,192 @@ def bind_numeric_values(
                 # The one refusal that names its own fix. Reported beside the
                 # value list so the reader is not left to guess which sentence
                 # cited what.
-                f" Miscited: {miscited[:3]}"
-                if miscited
-                else ""
+                f" Miscited: {miscited[:3]}" if miscited else ""
             ),
-            detail={"untraced": untraced, "miscited": miscited} if miscited
+            detail={"untraced": untraced, "miscited": miscited}
+            if miscited
             else {"untraced": untraced},
         )
 
     return bound, binding_map, untraced
+
+
+def drop_untraceable_numeric_sentences(
+    manuscript: str,
+    *,
+    evidence: EvidenceStore,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Remove only sentences that the unchanged STRICT numeric gate rejects.
+
+    Writer prose is optional; numeric authority is not.  A model can still
+    calculate a plausible number or attach a real value to the wrong evidence
+    owner after being told not to.  Rather than guessing a replacement or
+    weakening :func:`bind_numeric_values`, test each numeric sentence against
+    that same gate, remove the complete rejected sentence, record why it was
+    removed, and let the caller run the full-document STRICT binder again.
+    """
+
+    if not manuscript:
+        return manuscript, []
+    skip_spans = _spans_to_skip(manuscript)
+    rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
+        start, end = match.start("value"), match.end("value")
+        if _position_is_inside(start, skip_spans):
+            continue
+        value = match.group("value")
+        if _is_bibliographic_year_context(
+            manuscript,
+            start=start,
+            end=end,
+            value=value,
+        ):
+            continue
+        span = _numeric_sentence_bounds(manuscript, start=start, end=end)
+        if span in rejected_by_span:
+            continue
+        sentence = manuscript[span[0] : span[1]]
+        try:
+            bind_numeric_values(
+                sentence,
+                evidence=evidence,
+                enforcement_mode=EvidenceEnforcementMode.STRICT,
+                per_step_records=per_step_records,
+            )
+        except EvidenceEnforcementError as exc:
+            detail = dict(exc.detail or {})
+            rejected_by_span[span] = {
+                "sentence": sentence.strip(),
+                "untraced": [str(item) for item in detail.get("untraced", [])],
+                "miscited": list(detail.get("miscited", [])),
+            }
+
+    if not rejected_by_span:
+        return manuscript, []
+    merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
+    for (start, end), detail in sorted(rejected_by_span.items()):
+        if merged and start <= merged[-1][1]:
+            previous_start, previous_end, previous_details = merged[-1]
+            merged[-1] = (
+                previous_start,
+                max(previous_end, end),
+                [*previous_details, detail],
+            )
+        else:
+            merged.append((start, end, [detail]))
+    filtered = manuscript
+    for start, end, _details in reversed(merged):
+        filtered = filtered[:start] + filtered[end:]
+    removed: List[Dict[str, Any]] = []
+    for start, end, details in merged:
+        if len(details) == 1:
+            removed.append(details[0])
+            continue
+        removed.append(
+            {
+                "sentence": manuscript[start:end].strip(),
+                "untraced": list(
+                    dict.fromkeys(
+                        value
+                        for detail in details
+                        for value in detail.get("untraced", [])
+                    )
+                ),
+                "miscited": [
+                    item
+                    for detail in details
+                    for item in detail.get("miscited", [])
+                ],
+            }
+        )
+    return filtered, removed
+
+
+def repair_single_variant_robustness_metric_prose(
+    scaffold: str,
+    *,
+    panel: Any,
+) -> tuple[str, List[Dict[str, str]]]:
+    """Render one converged metric variant as point estimate plus its CI.
+
+    A panel envelope is not a range of point estimates when only one variant
+    exists. Replace only numeric sentences that explicitly cite the panel and
+    label the metric, using the row's own evidence owner and registered values.
+    """
+
+    if not scaffold or panel is None or int(getattr(panel, "n_variants", 0)) != 1:
+        return scaffold, []
+    variants = [
+        row
+        for row in getattr(panel, "rows", ())
+        if row.spec_id != panel.primary_spec_id
+        and row.converged
+        and row.point_estimate is not None
+        and row.ci_low is not None
+        and row.ci_high is not None
+        and row.evidence_id
+    ]
+    if len(variants) != 1:
+        return scaffold, []
+    row = variants[0]
+    metric_match = re.search(r"\bmetric=([A-Za-z0-9_+-]+)", row.notes or "")
+    if metric_match is None:
+        return scaffold, []
+    raw_metric = metric_match.group(1).casefold()
+    metric_labels = {
+        "auroc": "AUROC",
+        "auc": "AUROC",
+        "brier": "Brier score",
+        "brier_score": "Brier score",
+    }
+    metric_label = metric_labels.get(raw_metric)
+    if metric_label is None:
+        return scaffold, []
+    canonical = (
+        f"The evaluated robustness specification had an {metric_label} of "
+        f"{row.point_estimate:.12g} (95% CI, {row.ci_low:.12g}–"
+        f"{row.ci_high:.12g}) {{evidence:{row.evidence_id}}}."
+        if metric_label == "AUROC"
+        else f"The evaluated robustness specification had a {metric_label} of "
+        f"{row.point_estimate:.12g} (95% CI, {row.ci_low:.12g}–"
+        f"{row.ci_high:.12g}) {{evidence:{row.evidence_id}}}."
+    )
+    paragraph_parts = re.split(r"(\n\s*\n)", scaffold)
+    repairs: List[Dict[str, str]] = []
+    for paragraph_index in range(0, len(paragraph_parts), 2):
+        sentences = re.split(r"(?<=[.!?])\s+", paragraph_parts[paragraph_index])
+        for sentence_index, sentence in enumerate(sentences):
+            trailing_citation = ""
+            if sentence_index + 1 < len(sentences) and re.fullmatch(
+                r"\{evidence:robustness_panel[^}]*\}",
+                sentences[sentence_index + 1].strip(),
+            ):
+                trailing_citation = sentences[sentence_index + 1].strip()
+            candidate_sentence = " ".join(
+                part for part in (sentence, trailing_citation) if part
+            )
+            lowered = candidate_sentence.casefold()
+            if "{evidence:robustness_panel" not in lowered:
+                continue
+            if metric_label.casefold() not in lowered and raw_metric not in lowered:
+                continue
+            if not _NUMERIC_IN_PROSE_RE.search(candidate_sentence):
+                continue
+            sentences[sentence_index] = canonical
+            if trailing_citation:
+                sentences[sentence_index + 1] = ""
+            repairs.append(
+                {
+                    "source": "single_variant_robustness_panel",
+                    "metric": metric_label,
+                    "evidence_id": row.evidence_id,
+                }
+            )
+        paragraph_parts[paragraph_index] = " ".join(
+            sentence for sentence in sentences if sentence
+        )
+    return "".join(paragraph_parts), repairs
 
 
 def enforce_writer_claim_language(
@@ -2039,5 +2344,6 @@ __all__ = [
     "_demote_unresolved_evidence_placeholders",
     "_remove_tbd_sentences",
     "bind_numeric_values",
+    "drop_untraceable_numeric_sentences",
     "enforce_writer_claim_language",
 ]

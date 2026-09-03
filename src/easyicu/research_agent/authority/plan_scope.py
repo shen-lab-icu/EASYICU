@@ -105,9 +105,50 @@ def completed_step_record_matches_plan(
         and _step_scientific_signature(sealed_step) == _step_scientific_signature(step)
         and (
             legacy_host_without_scope
-            or recorded_plan_scope == list(expected_plan_scope)
+            or _plan_scope_signatures_match(
+                recorded_plan_scope,
+                list(expected_plan_scope),
+            )
         )
     )
+
+
+def _drop_legacy_empty_literature_design_decisions(value: Any) -> Any:
+    """Normalize one schema-added empty design field for legacy comparison."""
+
+    if isinstance(value, list):
+        return [
+            _drop_legacy_empty_literature_design_decisions(item) for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: _drop_legacy_empty_literature_design_decisions(item)
+        for key, item in value.items()
+        if not (key == "literature_design_decisions" and item == [])
+    }
+
+
+def _plan_scope_signatures_match(
+    recorded: Sequence[Optional[str]],
+    expected: Sequence[Optional[str]],
+) -> bool:
+    """Compare plan scope with one fail-closed legacy schema normalization."""
+
+    if list(recorded) == list(expected):
+        return True
+    if len(recorded) != 4 or len(expected) != 4:
+        return False
+    if recorded[:2] != expected[:2] or recorded[3:] != expected[3:]:
+        return False
+    try:
+        recorded_payload = json.loads(str(recorded[2]))
+        expected_payload = json.loads(str(expected[2]))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return _drop_legacy_empty_literature_design_decisions(
+        recorded_payload
+    ) == _drop_legacy_empty_literature_design_decisions(expected_payload)
 
 
 def verified_plan_scientific_scope_count(paths: Sequence[Path]) -> int:
@@ -296,6 +337,7 @@ _ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "know_how_decisions",
         "evalue_conversion_spec",
         "subgroup_analysis_spec",
+        "design_selection",
     }
 )
 _ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS = frozenset({"steps"})

@@ -670,10 +670,17 @@ class PreflightRun:
         return network_policy_report(self.manifest)
 
 
-def load_manifest(run_dir: Path) -> Dict[str, Any]:
+def load_manifest(
+    run_dir: Path, *, prefer_partial: bool = False
+) -> Dict[str, Any]:
     """Prefer the final manifest; fall back to the partial (stopped) manifest."""
 
-    for name in ("manifest.json", "manifest_partial.json"):
+    names = (
+        ("manifest_partial.json", "manifest.json")
+        if prefer_partial
+        else ("manifest.json", "manifest_partial.json")
+    )
+    for name in names:
         p = run_dir / name
         if p.is_file():
             return json.loads(p.read_text(encoding="utf-8"))
@@ -936,8 +943,14 @@ def run_preflight(
         run_kwargs["resume_from_step_id"] = resume_from_step_id
 
     raised: Optional[str] = None
-    run_dir = Path(workdir)
-    run_id = ""
+    # A fail-closed resume can raise before returning PipelineResult while still
+    # persisting the authoritative partial manifest in the existing run. Keep
+    # that caller-owned coordinate so the harness reports the recorded failure
+    # instead of falling back to the work root and presenting an empty run.
+    run_dir = (
+        Path(workdir) / resume_run_id if resume_run_id is not None else Path(workdir)
+    )
+    run_id = resume_run_id or ""
     with provider_transport_spy() as spy:
         try:
             result = pipeline.run(**run_kwargs)
@@ -946,7 +959,9 @@ def run_preflight(
         except Exception as exc:  # noqa: BLE001 - a raise IS a graph-level outcome
             raised = f"{type(exc).__name__}: {exc}"
 
-    manifest = load_manifest(run_dir)
+    # A raised resume writes its newest fail-closed attempt to the partial
+    # checkpoint; the prior final manifest is historical and must not hide it.
+    manifest = load_manifest(run_dir, prefer_partial=raised is not None)
     # The initial probe prevents a known-bad host from launching generated
     # code.  Probe again after a run so an isolation backend that becomes
     # unavailable while a nested session starts is reported explicitly rather

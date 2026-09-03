@@ -14,15 +14,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from .time_varying_runtime import TimeVaryingRuntimeAuthority
+
 from ..contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     association_execution_verdict,
     sole_primary_model_requirement,
 )
+from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.figure_plan import landmark_association_composite_panels
+from ..contracts.dependence import PlannedDependenceRequirement
+from ..contracts.model_terms import ModelTermSpec
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -76,8 +84,47 @@ class _AuthorityBase(BaseModel):
     def _verify_digest(self) -> None:
         body = self.model_dump(mode="json", exclude={"execution_contract_sha256"})
         observed = hashlib.sha256(_canonical_bytes(body)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
+            and body.get("authority_kind") == "landmark_spline_association"
+            and body.get("schema_version")
+            == "easyicu.landmark_spline_runtime_authority/1"
+            and body.get("adjusted_absolute_risk_product") is None
+            and body.get("population_flow_product") is None
+            and body.get("variable_opportunity_sensitivity_product") is None
+        ):
+            legacy = dict(body)
+            legacy.pop("adjusted_absolute_risk_product", None)
+            legacy.pop("population_flow_product", None)
+            legacy.pop("variable_opportunity_sensitivity_product", None)
+            legacy.pop("dependence", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
+            and body.get("authority_kind") == "landmark_spline_association"
+            and body.get("schema_version")
+            == "easyicu.landmark_spline_runtime_authority/2"
+            and body.get("dependence") is None
+        ):
+            legacy = dict(body)
+            legacy.pop("dependence", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
+            and body.get("authority_kind") == "landmark_survival_suite"
+            and body.get("time_varying_effect_method") is None
+            and body.get("time_varying_interval_cutpoints_days") == []
+            and body.get("time_varying_cox_product") is None
+        ):
+            legacy = dict(body)
+            legacy.pop("time_varying_effect_method", None)
+            legacy.pop("time_varying_interval_cutpoints_days", None)
+            legacy.pop("time_varying_cox_product", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
         if observed != self.execution_contract_sha256:
-            raise ValueError("current-run scientific execution-contract digest mismatch")
+            raise ValueError(
+                "current-run scientific execution-contract digest mismatch"
+            )
 
     def _require_rule_ref(self, step: AnalysisStep) -> None:
         if self.plan_rule_ref not in set(step.icu_rule_refs):
@@ -87,7 +134,7 @@ class _AuthorityBase(BaseModel):
 
 
 class AssociationModelGridLandmarkFilter(BaseModel):
-    """Retain rows alive at one declared landmark."""
+    """Retain rows alive and, when declared, observed at one landmark."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -96,6 +143,20 @@ class AssociationModelGridLandmarkFilter(BaseModel):
     event_time_column: str = Field(min_length=1)
     landmark_hours: float = Field(gt=0)
     exclude_negative_event_times: Literal[True]
+    observation_duration_column: str | None = Field(default=None, min_length=1)
+    observation_duration_unit: Literal["hours", "days"] | None = None
+
+    @model_validator(mode="after")
+    def _closed_observation_duration(self) -> "AssociationModelGridLandmarkFilter":
+        supplied = (
+            self.observation_duration_column is not None,
+            self.observation_duration_unit is not None,
+        )
+        if supplied[0] != supplied[1]:
+            raise ValueError(
+                "landmark observation duration column and unit must be declared together"
+            )
+        return self
 
 
 class AssociationModelGridLevelFilter(BaseModel):
@@ -148,6 +209,7 @@ class AssociationModelGridVariant(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     analysis_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    exposure_column: str | None = Field(default=None, min_length=1)
     filters: Tuple[AssociationModelGridFilter, ...] = ()
     nonlinear_terms: Tuple[AssociationModelGridNonlinearTerm, ...] = ()
     metadata: Dict[str, ModelGridMetadataValue]
@@ -202,6 +264,15 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             raise ValueError("association model-grid analysis ids must be unique")
         if self.reference_variant_id not in ids:
             raise ValueError("model-grid reference variant must be declared")
+        reference = next(
+            item
+            for item in self.variants
+            if item.analysis_id == self.reference_variant_id
+        )
+        if reference.exposure_column is not None:
+            raise ValueError(
+                "model-grid reference variant must retain the parent exposure"
+            )
         if len(self.metadata_columns) != len(set(self.metadata_columns)):
             raise ValueError("model-grid metadata columns must be unique")
         if any(
@@ -219,8 +290,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             raise ValueError("model-grid output aliases may rename only core results")
         alias_values = list(self.output_aliases.values())
         if len(alias_values) != len(set(alias_values)) or any(
-            not value or not value.replace("_", "a").isalnum()
-            for value in alias_values
+            not value or not value.replace("_", "a").isalnum() for value in alias_values
         ):
             raise ValueError("model-grid output aliases must be unique identifiers")
         reserved = {
@@ -271,7 +341,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             )
         return parent
 
-    def _candidate(self, plan: AnalysisPlan) -> AnalysisStep:
+    def _candidate_or_none(self, plan: AnalysisPlan) -> AnalysisStep | None:
         by_output = [
             step for step in plan.steps if self.output_product in step.expected_outputs
         ]
@@ -281,11 +351,50 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             if step.planned_analysis_role == "sensitivity"
             and tuple(step.sensitivity_spec_ids) == self.sensitivity_ids
         ]
-        if len(candidates) != 1:
+        if len(candidates) > 1:
             raise CurrentCaseScientificAuthorityError(
                 "association model-grid requires one exact sensitivity step"
             )
-        return candidates[0]
+        return candidates[0] if candidates else None
+
+    def _candidate(self, plan: AnalysisPlan) -> AnalysisStep:
+        candidate = self._candidate_or_none(plan)
+        if candidate is None:
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid requires one exact sensitivity step"
+            )
+        return candidate
+
+    def _insert_candidate(
+        self,
+        *,
+        plan: AnalysisPlan,
+        parent: AnalysisStep,
+        parent_index: int,
+    ) -> tuple[AnalysisPlan, AnalysisStep]:
+        """Add one host-owned grid child without repurposing Planner steps."""
+
+        step_id = f"host_association_model_grid_{self.execution_contract_sha256[:12]}"
+        if any(step.step_id == step_id for step in plan.steps):
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid host step id collides with an existing step"
+            )
+        candidate = AnalysisStep(
+            step_id=step_id,
+            planned_analysis_role="sensitivity",
+            intent=self.plan_intent,
+            inputs=[],
+            expected_outputs=[self.output_product],
+            method=self.plan_method,
+            scientific_capability="association_adjusted_v1",
+            icu_rule_refs=[self.plan_rule_ref],
+            sensitivity_spec_ids=list(self.sensitivity_ids),
+            literature_citation_keys=list(parent.literature_citation_keys),
+            literature_design_bindings=list(parent.literature_design_bindings),
+        )
+        steps = list(plan.steps)
+        steps.insert(parent_index + 1, candidate)
+        return plan.model_copy(update={"steps": steps}), candidate
 
     def required_columns_from_requirement(self, requirement: Any) -> Tuple[str, ...]:
         """Return exact cohort columns for one already-validated parent model."""
@@ -301,10 +410,23 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             for item in variant.filters:
                 if isinstance(item, AssociationModelGridLandmarkFilter):
                     values.extend((item.outcome_column, item.event_time_column))
+                    if item.observation_duration_column is not None:
+                        values.append(item.observation_duration_column)
                 else:
                     values.append(item.column)
+            if variant.exposure_column is not None:
+                values.append(variant.exposure_column)
             values.extend(item.source_column for item in variant.nonlinear_terms)
         return tuple(dict.fromkeys(str(value) for value in values if value))
+
+    def _nonlinear_sources(self) -> Tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                item.source_column
+                for variant in self.variants
+                for item in variant.nonlinear_terms
+            )
+        )
 
     def required_columns(self, plan: AnalysisPlan) -> Tuple[str, ...]:
         parent = self._parent(plan)
@@ -316,10 +438,16 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         """Compile host-owned products and exact inputs into the draft plan."""
 
         parent = self._parent(plan)
-        candidate = self._candidate(plan)
         parent_index = next(
             index for index, step in enumerate(plan.steps) if step is parent
         )
+        candidate = self._candidate_or_none(plan)
+        if candidate is None:
+            plan, candidate = self._insert_candidate(
+                plan=plan,
+                parent=parent,
+                parent_index=parent_index,
+            )
         candidate_index = next(
             index for index, step in enumerate(plan.steps) if step is candidate
         )
@@ -327,6 +455,48 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             raise CurrentCaseScientificAuthorityError(
                 "association model-grid parent must precede its sensitivity child"
             )
+        requirement = sole_primary_model_requirement(parent)
+        assert requirement is not None
+        missing_linear_parents = [
+            name
+            for name in self._nonlinear_sources()
+            if name not in set(requirement.covariates or ())
+        ]
+        if missing_linear_parents:
+            # A functional-form sensitivity is defined only relative to a
+            # linear parent term.  The signed runtime authority already names
+            # the exact source columns; compile that prerequisite once rather
+            # than letting the executor discover the contradiction downstream.
+            requirement = requirement.model_copy(
+                update={
+                    "covariates": [
+                        *(requirement.covariates or ()),
+                        *missing_linear_parents,
+                    ],
+                    "model_terms": [
+                        *(requirement.model_terms or ()),
+                        *[
+                            ModelTermSpec(
+                                name=name,
+                                role="covariate",
+                                coding="continuous",
+                                transform="identity",
+                            )
+                            for name in missing_linear_parents
+                        ],
+                    ],
+                }
+            )
+            parent = parent.model_copy(update={"model_requirements": [requirement]})
+            plan = plan.model_copy(
+                update={
+                    "steps": [
+                        parent if index == parent_index else step
+                        for index, step in enumerate(plan.steps)
+                    ]
+                }
+            )
+            candidate = plan.steps[candidate_index]
         inputs = [
             *self.required_columns(plan),
             self.cohort_product,
@@ -354,15 +524,28 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
                 ],
             }
         )
-        steps = [bound if step is candidate else step for step in plan.steps]
+        steps = [
+            bound if index == candidate_index else step
+            for index, step in enumerate(plan.steps)
+        ]
         return plan.model_copy(update={"steps": steps})
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         parent = self._parent(plan)
         step = self._candidate(plan)
-        parent_index = next(index for index, item in enumerate(plan.steps) if item is parent)
-        step_index = next(index for index, item in enumerate(plan.steps) if item is step)
+        parent_index = next(
+            index for index, item in enumerate(plan.steps) if item is parent
+        )
+        step_index = next(
+            index for index, item in enumerate(plan.steps) if item is step
+        )
         issues: list[str] = []
+        requirement = sole_primary_model_requirement(parent)
+        assert requirement is not None
+        if not set(self._nonlinear_sources()).issubset(
+            set(requirement.covariates or ())
+        ):
+            issues.append("nonlinear_parent_terms")
         if parent_index >= step_index:
             issues.append("parent_order")
         if step.planned_analysis_role != "sensitivity":
@@ -382,15 +565,16 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         )
         if set(step.inputs) != required_inputs:
             issues.append("inputs")
-        contracts = {
-            item.input_key: item for item in step.input_consumption_contracts
-        }
+        contracts = {item.input_key: item for item in step.input_consumption_contracts}
         if (
             set(contracts) != {self.parent_product}
             or contracts[self.parent_product].mode != "all_rows"
         ):
             issues.append("input_consumption_contracts")
-        if step.model_requirements or step.family_primary_result_requirement is not None:
+        if (
+            step.model_requirements
+            or step.family_primary_result_requirement is not None
+        ):
             issues.append("nested_model_contract")
         if issues:
             raise CurrentCaseScientificAuthorityError(
@@ -405,7 +589,11 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
 
 
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):
-    schema_version: Literal["easyicu.landmark_spline_runtime_authority/1"]
+    schema_version: Literal[
+        "easyicu.landmark_spline_runtime_authority/1",
+        "easyicu.landmark_spline_runtime_authority/2",
+        "easyicu.landmark_spline_runtime_authority/3",
+    ]
     authority_kind: Literal["landmark_spline_association"]
     plan_method: Literal["signed_landmark_restricted_cubic_spline"]
     plan_intent: str
@@ -414,10 +602,15 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     outcome_column: str
     outcome_time_column: str
     observation_duration_column: str
-    observation_duration_unit: Literal["days"]
+    observation_duration_unit: Literal["hours", "days"]
     landmark_hours: Literal[24]
     required_adjustment_columns: tuple[str, ...]
     categorical_adjustment_columns: tuple[str, ...]
+    alternative_exposure_columns: tuple[str, ...] = ()
+    dependence: PlannedDependenceRequirement | None = None
+    adjusted_absolute_risk_product: str | None = None
+    population_flow_product: str | None = None
+    variable_opportunity_sensitivity_product: str | None = None
     spline_knot_quantiles: tuple[float, float, float]
     spline_reference: Literal["median_in_primary_population"]
     curve_quantile_range: tuple[float, float]
@@ -425,12 +618,19 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     linear_sensitivity_per_unit: Literal[1.0]
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
 
+    @property
+    def observation_threshold(self) -> float:
+        """Landmark threshold in the explicitly bound follow-up column's unit."""
+        return float(self.landmark_hours) / (24.0 if self.observation_duration_unit == "days" else 1.0)
+
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkSplineRuntimeAuthority":
         if self.spline_knot_quantiles != (0.10, 0.50, 0.90):
             raise ValueError("landmark spline authority requires frozen 10/50/90 knots")
         if self.curve_quantile_range != (0.10, 0.90):
-            raise ValueError("landmark spline curve must span the frozen boundary knots")
+            raise ValueError(
+                "landmark spline curve must span the frozen boundary knots"
+            )
         if len(self.required_adjustment_columns) != len(
             set(self.required_adjustment_columns)
         ):
@@ -441,11 +641,16 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             raise ValueError(
                 "categorical adjustments must be members of the adjustment set"
             )
+        if (
+            len(self.alternative_exposure_columns)
+            != len(set(self.alternative_exposure_columns))
+            or self.exposure_column in self.alternative_exposure_columns
+        ):
+            raise ValueError("landmark alternative exposure columns must be unique")
         contrast_products = [
             value
             for value in self.plan_outputs
-            if value.startswith("table:")
-            and "contrast" in value.partition(":")[2]
+            if value.startswith("table:") and "contrast" in value.partition(":")[2]
         ]
         if len(contrast_products) != 1:
             raise ValueError(
@@ -456,6 +661,67 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         if len(self._table_products_containing("linear", "sensitivity")) != 1:
             raise ValueError(
                 "landmark spline authority requires one typed linear-sensitivity table"
+            )
+        receipt_products = [
+            value for value in self.plan_outputs if value.startswith("log:")
+        ]
+        if len(receipt_products) != 1:
+            raise ValueError("landmark spline authority requires one typed receipt log")
+        definition_products = self._table_products_containing(
+            "exposure", "definition", "sensitivity"
+        )
+        if bool(self.alternative_exposure_columns) != bool(definition_products):
+            raise ValueError(
+                "landmark alternative exposures require one definition-sensitivity table"
+            )
+        if len(definition_products) > 1:
+            raise ValueError(
+                "landmark spline authority permits one definition-sensitivity table"
+            )
+        reporting_products = (
+            self.adjusted_absolute_risk_product,
+            self.population_flow_product,
+            self.variable_opportunity_sensitivity_product,
+        )
+        if self.schema_version.endswith("/1"):
+            if any(value is not None for value in reporting_products):
+                raise ValueError(
+                    "landmark spline v1 authority cannot declare v2 reporting products"
+                )
+        else:
+            if (
+                self.adjusted_absolute_risk_product is None
+                or self.population_flow_product is None
+            ):
+                raise ValueError(
+                    "landmark spline v2 authority requires adjusted-risk and population-flow products"
+                )
+            declared = set(self.plan_outputs)
+            missing_reporting = sorted(
+                value for value in reporting_products if value is not None and value not in declared
+            )
+            if missing_reporting:
+                raise ValueError(
+                    "landmark spline reporting products must be declared in plan_outputs"
+                )
+            if any(
+                value is not None and not value.startswith("table:")
+                for value in reporting_products
+            ):
+                raise ValueError(
+                    "landmark spline reporting products must be typed tables"
+                )
+            values = [value for value in reporting_products if value is not None]
+            if len(values) != len(set(values)):
+                raise ValueError("landmark spline reporting products must be unique")
+        if self.schema_version.endswith(("/1", "/2")):
+            if self.dependence is not None:
+                raise ValueError(
+                    "landmark spline v1/v2 authority cannot declare repeated-unit dependence"
+                )
+        elif self.dependence is None:
+            raise ValueError(
+                "landmark spline v3 authority requires a cluster-robust dependence contract"
             )
         self._verify_digest()
         return self
@@ -478,6 +744,31 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     self.outcome_time_column,
                     self.observation_duration_column,
                     *self.required_adjustment_columns,
+                    *self.alternative_exposure_columns,
+                    *(
+                        (self.dependence.group_source,)
+                        if self.dependence is not None
+                        else ()
+                    ),
+                )
+            )
+        )
+
+    @property
+    def model_complete_case_columns(self) -> tuple[str, ...]:
+        """Source columns whose joint completeness defines the signed model fit."""
+
+        return tuple(
+            dict.fromkeys(
+                (
+                    self.exposure_column,
+                    self.outcome_column,
+                    *self.required_adjustment_columns,
+                    *(
+                        (self.dependence.group_source,)
+                        if self.dependence is not None
+                        else ()
+                    ),
                 )
             )
         )
@@ -487,8 +778,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         return next(
             value
             for value in self.plan_outputs
-            if value.startswith("table:")
-            and "contrast" in value.partition(":")[2]
+            if value.startswith("table:") and "contrast" in value.partition(":")[2]
         )
 
     @property
@@ -498,6 +788,17 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     @property
     def linear_sensitivity_product(self) -> str:
         return self._table_products_containing("linear", "sensitivity")[0]
+
+    @property
+    def receipt_product(self) -> str:
+        return next(value for value in self.plan_outputs if value.startswith("log:"))
+
+    @property
+    def exposure_definition_sensitivity_product(self) -> str | None:
+        products = self._table_products_containing(
+            "exposure", "definition", "sensitivity"
+        )
+        return products[0] if products else None
 
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the signed deterministic primary into one draft plan.
@@ -525,7 +826,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             update={
                 "method": self.plan_method,
                 "intent": self.plan_intent,
-                "scientific_capability": "association_freeform_v1",
+                "scientific_capability": LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
                 "expected_outputs": list(self.plan_outputs),
                 "inputs": [cohort_input, *self.required_columns],
                 "model_requirements": [],
@@ -537,15 +838,219 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
         generic_parent = "table:adjusted_association_estimates"
         replacement = self.downstream_parent_product
+        declared_products = {
+            product for step in plan.steps for product in step.expected_outputs
+        } | set(self.plan_outputs)
+        measurement_products = [
+            product
+            for product in declared_products
+            if product.partition(":")[0] == "table"
+            and product.partition(":")[2]
+            in {"measurement_process", "measurement_process_audit"}
+        ]
+        composite_inputs: tuple[str, ...] | None = None
+        if (
+            self.adjusted_absolute_risk_product is not None
+            and self.adjusted_absolute_risk_product in declared_products
+            and "table:robustness_summary" in declared_products
+            and len(measurement_products) == 1
+        ):
+            composite_inputs = (
+                self.curve_product,
+                self.adjusted_absolute_risk_product,
+                "table:robustness_summary",
+                measurement_products[0],
+            )
+        broad_composite_candidates = [
+            step
+            for step in plan.steps
+            if composite_inputs is not None
+            and step.planned_analysis_role == "auxiliary"
+            and str(step.method or "").strip().lower() == "visualization"
+            and "table:robustness_summary" in step.inputs
+            and len(step.expected_outputs) == 1
+            and step.expected_outputs[0].startswith("figure:")
+        ]
+        exact_composite_candidates = [
+            step
+            for step in broad_composite_candidates
+            if {
+                generic_parent,
+                "table:absolute_risk_context",
+                "table:robustness_summary",
+                measurement_products[0],
+            }
+            <= set(step.inputs)
+        ]
+        article_composite_candidates = [
+            step
+            for step in broad_composite_candidates
+            if {
+                generic_parent,
+                "table:absolute_risk_context",
+                "table:robustness_summary",
+            }
+            <= set(step.inputs)
+        ]
+        # Prefer the broad article display over a dedicated robustness figure.
+        # Both consume ``table:robustness_summary`` and therefore used to make
+        # the candidate set ambiguous.  The article display is the unique
+        # figure that also consumes the generic primary result and descriptive
+        # context; after authority binding it can be mechanically upgraded to
+        # the exact signed renderer with the model-standardised risk curve.
+        # Preserve the historical
+        # single-figure fallback when no article display exists.
+        composite_candidates = (
+            exact_composite_candidates
+            if len(exact_composite_candidates) == 1
+            else (
+                article_composite_candidates
+                if len(article_composite_candidates) == 1
+                else broad_composite_candidates
+            )
+        )
+        composite_step_id = (
+            composite_candidates[0].step_id if len(composite_candidates) == 1 else None
+        )
+        robustness_steps = [
+            step
+            for step in plan.steps
+            if step.planned_analysis_role == "sensitivity"
+            and step.robustness_replay_spec is not None
+        ]
+        signed_robustness_spec_ids = {
+            spec_id
+            for step in robustness_steps
+            for spec_id in step.sensitivity_spec_ids
+        }
+        robustness_specs = list(plan.robustness_specs)
+        all_complete_case_specs = [
+            spec
+            for spec in robustness_specs
+            if spec.axis == "missing"
+            and str((spec.missing_override or {}).get("strategy") or "").strip().lower()
+            == "complete_case"
+        ]
+        referenced_complete_case_specs = [
+            spec
+            for spec in all_complete_case_specs
+            if spec.spec_id in signed_robustness_spec_ids
+        ]
+        if not referenced_complete_case_specs:
+            legacy_missingness_steps = [
+                step
+                for step in robustness_steps
+                if any(
+                    token in _normalise(spec_id)
+                    for spec_id in step.sensitivity_spec_ids
+                    for token in ("missing", "complete_case")
+                )
+            ]
+            if (
+                len(all_complete_case_specs) == 1
+                and len(robustness_steps) == 1
+                and legacy_missingness_steps == robustness_steps
+            ):
+                exact_spec_id = all_complete_case_specs[0].spec_id
+                migrated = robustness_steps[0].model_copy(
+                    update={
+                        "sensitivity_spec_ids": list(
+                            dict.fromkeys(
+                                [
+                                    *robustness_steps[0].sensitivity_spec_ids,
+                                    exact_spec_id,
+                                ]
+                            )
+                        )
+                    }
+                )
+                plan = plan.model_copy(
+                    update={
+                        "steps": [
+                            migrated if step is robustness_steps[0] else step
+                            for step in plan.steps
+                        ]
+                    }
+                )
+                robustness_steps = [migrated]
+                signed_robustness_spec_ids.add(exact_spec_id)
+        if signed_robustness_spec_ids:
+            complete_case_specs = [
+                spec
+                for spec in robustness_specs
+                if spec.spec_id in signed_robustness_spec_ids
+                and spec.axis == "missing"
+                and str((spec.missing_override or {}).get("strategy") or "")
+                .strip()
+                .lower()
+                == "complete_case"
+            ]
+            if len(complete_case_specs) != 1:
+                raise CurrentCaseScientificAuthorityError(
+                    "landmark spline robustness projection requires exactly one "
+                    "referenced complete-case specification"
+                )
+            complete_case_spec = complete_case_specs[0]
+            override = dict(complete_case_spec.missing_override or {})
+            override["variables"] = list(self.model_complete_case_columns)
+            robustness_specs = [
+                (
+                    replace(spec, missing_override=override)
+                    if spec is complete_case_spec
+                    else spec
+                )
+                for spec in robustness_specs
+            ]
         steps: list[AnalysisStep] = []
         for step in plan.steps:
             if step is candidate:
                 steps.append(bound)
                 continue
+            if composite_step_id is not None and step.step_id == composite_step_id:
+                assert composite_inputs is not None
+                figure_output = step.expected_outputs[0]
+                steps.append(
+                    step.model_copy(
+                        update={
+                            "inputs": list(composite_inputs),
+                            "input_consumption_contracts": [
+                                ArtifactConsumptionContract(
+                                    input_key=input_key, mode="all_rows"
+                                )
+                                for input_key in composite_inputs
+                            ],
+                            "figure_panels": [
+                                panel.bind(figure_output=figure_output)
+                                for panel in landmark_association_composite_panels(
+                                    composite_inputs
+                                )
+                            ],
+                        }
+                    )
+                )
+                continue
+            inherited_binary_sensitivity = (
+                step.scientific_capability
+                == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and generic_parent in step.inputs
+            )
+            signed_robustness_projection = (
+                step.planned_analysis_role == "sensitivity"
+                and step.robustness_replay_spec is not None
+            )
+            signed_result_projection = (
+                inherited_binary_sensitivity or signed_robustness_projection
+            )
             inputs = [
                 replacement if value == generic_parent else value
                 for value in step.inputs
             ]
+            if signed_result_projection:
+                # The signed primary already performed the nested spline and
+                # linear fits. These children project its functional-form or
+                # robustness results, so raw cohort columns would falsely
+                # imply a second model fit and trigger unrelated obligations.
+                inputs = [replacement, self.linear_sensitivity_product]
             if (
                 step.planned_analysis_role == "sensitivity"
                 and replacement in inputs
@@ -553,11 +1058,15 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             ):
                 inputs.append(self.linear_sensitivity_product)
             contracts = [
-                item.model_copy(update={"input_key": replacement})
-                if item.input_key == generic_parent
-                else item
+                (
+                    item.model_copy(update={"input_key": replacement})
+                    if item.input_key == generic_parent
+                    else item
+                )
                 for item in step.input_consumption_contracts
             ]
+            if signed_result_projection:
+                contracts = []
             if step.planned_analysis_role == "sensitivity" and replacement in inputs:
                 contracted = {item.input_key for item in contracts}
                 contracts.extend(
@@ -573,10 +1082,22 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     update={
                         "inputs": list(dict.fromkeys(inputs)),
                         "input_consumption_contracts": contracts,
+                        # The binary-sensitivity capability is closed over the
+                        # generic adjusted-association parent.  Rebinding that
+                        # edge to the signed landmark products invalidates the
+                        # inherited declaration; execution authority now comes
+                        # from this signed runtime owner instead.
+                        "scientific_capability": (
+                            None
+                            if signed_result_projection
+                            else step.scientific_capability
+                        ),
                     }
                 )
             )
-        return plan.model_copy(update={"steps": steps})
+        return plan.model_copy(
+            update={"steps": steps, "robustness_specs": robustness_specs}
+        )
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [
@@ -592,7 +1113,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             issues.append("method")
         if step.intent != self.plan_intent:
             issues.append("intent")
-        if step.scientific_capability != "association_freeform_v1":
+        if step.scientific_capability != LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
             issues.append("scientific_capability")
         if tuple(step.expected_outputs) != self.plan_outputs:
             issues.append("expected_outputs")
@@ -655,26 +1176,31 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
     uncertainty_method: Literal["wald_95_ci"]
     proportional_hazards_diagnostic: Literal["schoenfeld_residual_test"]
     proportional_hazards_alpha: float = Field(gt=0, lt=1)
-    proportional_hazards_policy: Literal[
-        "report_only", "block_paper_authorization"
-    ]
+    proportional_hazards_policy: Literal["report_only", "block_paper_authorization"]
+    non_ph_alternative: Literal["unadjusted_rmst_difference"] | None = None
+    time_varying_effect_method: Literal["piecewise_time_varying_cox"] | None = None
+    time_varying_interval_cutpoints_days: tuple[float, ...] = ()
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
     table_one_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     risk_set_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     km_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     cox_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     ph_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    rmst_product: str | None = Field(
+        default=None,
+        pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
+    )
+    time_varying_cox_product: str | None = Field(
+        default=None,
+        pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
+    )
     receipt_product: str = Field(pattern=r"^log:[a-z][a-z0-9_]{0,79}$")
     figure_product: str = Field(pattern=r"^figure:[a-z][a-z0-9_]{0,79}$")
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkSurvivalRuntimeAuthority":
         window_start, window_end = self.exposure_window_hours
-        if not (
-            window_start
-            <= self.prevalent_exposure_cutoff_hours
-            < window_end
-        ):
+        if not (window_start <= self.prevalent_exposure_cutoff_hours < window_end):
             raise ValueError(
                 "landmark survival prevalent cutoff must fall inside the exposure window"
             )
@@ -685,6 +1211,23 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
         if self.landmark_hours / 24.0 >= self.endpoint_horizon_days:
             raise ValueError(
                 "landmark survival landmark must precede the endpoint horizon"
+            )
+        tau = self.endpoint_horizon_days - self.landmark_hours / 24.0
+        cutpoints = self.time_varying_interval_cutpoints_days
+        if self.time_varying_effect_method is None:
+            if cutpoints or self.time_varying_cox_product is not None:
+                raise ValueError(
+                    "landmark survival time-varying fields require a declared method"
+                )
+        elif (
+            not cutpoints
+            or tuple(sorted(set(cutpoints))) != cutpoints
+            or cutpoints[0] <= 0
+            or cutpoints[-1] >= tau
+            or self.time_varying_cox_product is None
+        ):
+            raise ValueError(
+                "landmark survival time-varying intervals must be increasing inside follow-up"
             )
         source_columns = (
             self.exposure_status_column,
@@ -722,6 +1265,12 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             self.km_product,
             self.cox_product,
             self.ph_product,
+            *((self.rmst_product,) if self.rmst_product is not None else ()),
+            *(
+                (self.time_varying_cox_product,)
+                if self.time_varying_cox_product is not None
+                else ()
+            ),
             self.receipt_product,
             self.figure_product,
         )
@@ -729,7 +1278,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             raise ValueError("landmark survival output products must be unique")
         if self.plan_outputs != products:
             raise ValueError(
-                "landmark survival plan outputs must equal the seven owned products"
+                "landmark survival plan outputs must equal the owned products"
             )
         self._verify_digest()
         return self
@@ -817,7 +1366,18 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
 
     @property
     def figure_input_products(self) -> tuple[str, ...]:
-        return (self.km_product, self.cox_product, self.risk_set_product)
+        return (
+            self.km_product,
+            self.cox_product,
+            self.risk_set_product,
+            self.ph_product,
+            *((self.rmst_product,) if self.rmst_product is not None else ()),
+            *(
+                (self.time_varying_cox_product,)
+                if self.time_varying_cox_product is not None
+                else ()
+            ),
+        )
 
     def development_execution_only_plan(
         self,
@@ -887,9 +1447,8 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 "landmark survival plan lacks a unique cohort, analysis or figure owner"
             )
         cohort_owner = cohort_owners[0]
-        if (
-            cohort_owner.inputs
-            or tuple(cohort_owner.expected_outputs) != ("table:analysis_cohort",)
+        if cohort_owner.inputs or tuple(cohort_owner.expected_outputs) != (
+            "table:analysis_cohort",
         ):
             raise CurrentCaseScientificAuthorityError(
                 "landmark survival cohort owner drifted from host materialization"
@@ -908,7 +1467,10 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             issues.append("required_inputs")
         if not sole_typed_cohort_input(step):
             issues.append("typed_cohort_input")
-        if step.model_requirements or step.family_primary_result_requirement is not None:
+        if (
+            step.model_requirements
+            or step.family_primary_result_requirement is not None
+        ):
             issues.append("nested_model_contract")
         if step.table_one_spec is not None:
             issues.append("nested_table_one_contract")
@@ -993,7 +1555,10 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
             issues.append("intent")
         if tuple(step.expected_outputs) != self.plan_outputs:
             issues.append("expected_outputs")
-        if step.model_requirements or step.family_primary_result_requirement is not None:
+        if (
+            step.model_requirements
+            or step.family_primary_result_requirement is not None
+        ):
             issues.append("effect_model_contract")
         if issues:
             raise CurrentCaseScientificAuthorityError(
@@ -1065,6 +1630,7 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
         LandmarkSplineRuntimeAuthority,
         LandmarkSurvivalRuntimeAuthority,
         SourceFeasibilityRuntimeAuthority,
+        TimeVaryingRuntimeAuthority,
     ],
     Field(discriminator="authority_kind"),
 ]
@@ -1081,6 +1647,7 @@ def load_current_case_scientific_runtime_authority(
             LandmarkSplineRuntimeAuthority,
             LandmarkSurvivalRuntimeAuthority,
             SourceFeasibilityRuntimeAuthority,
+            TimeVaryingRuntimeAuthority,
         ),
     ):
         return value
@@ -1095,6 +1662,16 @@ def build_current_case_scientific_runtime_authority(
     body = dict(value)
     if "execution_contract_sha256" in body:
         raise ValueError("execution contract digest is host-generated")
+    if body.get("authority_kind") == "association_model_grid":
+        variants = body.get("variants")
+        if not isinstance(variants, (list, tuple)):
+            raise ValueError("association model-grid variants must be a sequence")
+        body["variants"] = [
+            AssociationModelGridVariant.model_validate_json(
+                json.dumps(_plain(item), sort_keys=True), strict=True
+            ).model_dump(mode="json")
+            for item in variants
+        ]
     body["execution_contract_sha256"] = hashlib.sha256(
         _canonical_bytes(body)
     ).hexdigest()

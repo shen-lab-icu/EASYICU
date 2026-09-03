@@ -9,7 +9,7 @@ from fastapi.responses import Response
 
 from easyicu.webserver import capabilities
 from easyicu.webserver import settings as settings_store
-from easyicu.webserver.catalog import build_catalog
+from easyicu.webserver.catalog import build_catalog, build_concept_lineage
 from easyicu.webserver.routes.request_parsing import body_int
 
 router = APIRouter()
@@ -30,6 +30,15 @@ def favicon() -> Response:
 def catalog() -> dict:
     """The concept catalog the Data Dictionary screen renders."""
     return build_catalog()
+
+
+@router.get("/api/catalog/lineage/{concept_id}")
+def catalog_lineage(concept_id: str) -> dict:
+    """Declared table/field/transformation lineage for one concept."""
+    lineage = build_concept_lineage(concept_id)
+    if lineage is None:
+        raise HTTPException(status_code=404, detail="concept_not_found")
+    return lineage
 
 
 @router.get("/api/settings")

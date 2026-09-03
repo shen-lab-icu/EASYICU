@@ -32,6 +32,6 @@ Larger runs measured but not recorded as JSON: MIMIC-IV 10,000 stays
 (2,351,306 rows) across chunk 500/2000/4000, all matching. **Full-database
 scale (~94k stays) is not measured.**
 
-The pytest harness is `tests/test_sofa_partition_invariance.py` (13 cases,
+The pytest harness is `tests/core/test_sofa_partition_invariance.py` (13 cases,
 `needs_real_data`); it is skipped without `--run-real` and a real
 `EASYICU_DATA_PATH`, so ordinary CI does not execute it.

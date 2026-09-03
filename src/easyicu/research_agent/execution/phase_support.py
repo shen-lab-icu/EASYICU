@@ -104,6 +104,7 @@ from ..authority.evidence_store import (
     sha256_of_file,
 )
 from ..authority.registration import (
+    registered_artifact_evidence_kind,
     step_owned_artifact_evidence_id,
 )
 from ..authority.typed_binding import (
@@ -170,18 +171,15 @@ from ..repairs.reasons import (
     repair_prompt_binding_sha256,
     typed_repair_ticket,
 )
-from ..plan_utils import (
-    _clustering_contract_applies,
-    _cohort_definition_prose,
-    _cohort_definition_contract_findings,
-    _cohort_definition_is_empty,
-    _plan_expects_analysis_cohort,
-    _normalised_expected_output_names,
-    _normalised_structured_output_names,
-    _output_declares_figure,
-    _parent_step_id_for_figure_step,
-    _step_expects_figure,
+from ..contracts.product_identity import normalised_expected_output_names as _normalised_expected_output_names
+from ..contracts.product_identity import normalised_structured_output_names as _normalised_structured_output_names
+from ..contracts.step_families import _clustering_contract_applies, _cohort_definition_contract_findings, _step_expects_figure
+from ..planning.cohort_contract import (
+    cohort_definition_is_empty as _cohort_definition_is_empty,
+    cohort_definition_prose as _cohort_definition_prose,
+    plan_expects_analysis_cohort as _plan_expects_analysis_cohort,
 )
+from ..planning.figure_step_contract import _output_declares_figure, _parent_step_id_for_figure_step
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from ..contracts.robustness_execution import (
     ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
@@ -1921,22 +1919,10 @@ def _step_register_run_artifacts(
             continue
         step_aliases = services.semantic_aliases_for(step, art)
         generation_mode = worker_progress.generation_mode()
-        registered_kinds = declared_output_kinds.get(art.name, set())
-        if len(registered_kinds) == 1:
-            artifact_kind = next(iter(registered_kinds))
-        elif art.suffix.lower() in {".csv", ".tsv", ".parquet", ".feather"}:
-            artifact_kind = "table"
-        elif art.suffix.lower() in {
-            ".png",
-            ".svg",
-            ".pdf",
-            ".tiff",
-            ".tif",
-            ".pptx",
-        }:
-            artifact_kind = "figure"
-        else:
-            artifact_kind = "log"
+        artifact_kind = registered_artifact_evidence_kind(
+            source_name=art.name,
+            declared_kinds=declared_output_kinds.get(art.name, set()),
+        )
         artifact_evidence_id = step_owned_artifact_evidence_id(
             kind=artifact_kind,
             step_id=step.step_id,
@@ -2064,6 +2050,51 @@ def _step_register_run_artifacts(
     return step_summary_record_id, pending_success_aliases, evidence_ids_for_step
 
 
+def _root_generation_mode_for_resumed_code(
+    *,
+    code: str,
+    prior_step_record: Mapping[str, Any] | None,
+    prior_attempt_records: Sequence[Mapping[str, Any]],
+) -> str:
+    """Recover the original producer class for digest-identical resumed code.
+
+    A second resume sees the immediately previous attempt's
+    ``generation_mode=resumed_code_reuse``.  Copying that value again loses the
+    producer that actually authored the code, so host-owned fallback code no
+    longer receives host-owned input-binding receipts.  The durable attempt
+    history is digest-bound; use it to unwrap only records for the exact code
+    selected by the signed resume capsule.
+
+    Returning an agent mode such as ``llm`` or ``repaired`` is intentional: it
+    preserves the boundary that generated code must attest to its own inputs.
+    """
+
+    code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    for record in reversed(tuple(prior_attempt_records)):
+        if not isinstance(record, Mapping):
+            continue
+        recorded_digests = {
+            str(record.get(field) or "")
+            for field in (
+                "executed_code_sha256",
+                "concept_approved_code_sha256",
+            )
+        }
+        if code_sha256 not in recorded_digests:
+            continue
+        for field in ("resumed_from_generation_mode", "generation_mode"):
+            mode = str(record.get(field) or "").strip()
+            if mode and mode != "resumed_code_reuse":
+                return mode
+
+    prior = prior_step_record if isinstance(prior_step_record, Mapping) else {}
+    for field in ("resumed_from_generation_mode", "generation_mode"):
+        mode = str(prior.get(field) or "").strip()
+        if mode and mode != "resumed_code_reuse":
+            return mode
+    return "capsule"
+
+
 def _step_resolve_initial_code(
     *,
     preflight_standard_code: Optional[str],
@@ -2108,6 +2139,7 @@ def _step_resolve_initial_code(
     _sync_provider_budget: Any,
     resume_controller: Any,
     prior_step_record: Any,
+    prior_attempt_records: Sequence[Mapping[str, Any]],
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """Resolve the code the step executes; returns ``(code, terminal_record)``.
 
@@ -2154,8 +2186,12 @@ def _step_resolve_initial_code(
         worker_progress.resumed_code_reuse_used = True
         step_record["generation_mode"] = "resumed_code_reuse"
         step_record["step_authority_capsule_reused"] = True
-        step_record["resumed_from_generation_mode"] = str(
-            (prior_step_record or {}).get("generation_mode") or "capsule"
+        step_record["resumed_from_generation_mode"] = (
+            _root_generation_mode_for_resumed_code(
+                code=code,
+                prior_step_record=prior_step_record,
+                prior_attempt_records=prior_attempt_records,
+            )
         )
     elif quarantined_resume_draft is not None:
         code = _use_quarantined_draft(quarantined_resume_draft)
@@ -3296,6 +3332,7 @@ _PRIMARY_COHORT_FLOW_OUTPUTS = frozenset(
 )
 _EFFECT_ASSOCIATION_METHOD_TOKENS = frozenset(
     {
+        "adjusted",
         "association",
         "causal",
         "cox",

@@ -206,7 +206,7 @@ def _task_success(run_dir: Path) -> tuple[bool, Dict[str, Any]]:
 
 
 def _default_tasks() -> List[ValidationTask]:
-    from tests.bench.analysis_items import (  # type: ignore
+    from tests.support.benchmark_cases.analysis_items import (  # type: ignore
         _hepatorenal_missingness_cohort,
         _rich_multisystem_cohort,
         _shock_discordance_cohort,

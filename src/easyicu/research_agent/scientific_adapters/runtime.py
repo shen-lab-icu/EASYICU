@@ -90,7 +90,7 @@ EXTERNAL_ADAPTER_SPECS: Tuple[ExternalAdapterSpec, ...] = (
         license_spdx="MIT",
         upstream_source="https://pandera.readthedocs.io/en/stable/",
         validation_test_refs=(
-            "tests/research_agent/test_scientific_adapters.py::test_pandera_adapter_builds_a_strict_non_coercing_schema",
+            "tests/research_agent/core/test_scientific_adapters.py::test_pandera_adapter_builds_a_strict_non_coercing_schema",
         ),
     ),
     ExternalAdapterSpec(
@@ -114,7 +114,7 @@ EXTERNAL_ADAPTER_SPECS: Tuple[ExternalAdapterSpec, ...] = (
         license_spdx="MIT",
         upstream_source="https://www.pywhy.org/dowhy/v0.13/",
         validation_test_refs=(
-            "tests/research_agent/test_scientific_adapters.py::test_dowhy_adapter_only_records_identification",
+            "tests/research_agent/core/test_scientific_adapters.py::test_dowhy_adapter_only_records_identification",
         ),
     ),
     ExternalAdapterSpec(
@@ -133,7 +133,7 @@ EXTERNAL_ADAPTER_SPECS: Tuple[ExternalAdapterSpec, ...] = (
         license_spdx="GPL-3.0-only",
         upstream_source="https://scikit-survival.readthedocs.io/en/stable/",
         validation_test_refs=(
-            "tests/research_agent/test_scientific_adapters.py::test_sksurv_adapter_preserves_declared_event_codes",
+            "tests/research_agent/core/test_scientific_adapters.py::test_sksurv_adapter_preserves_declared_event_codes",
         ),
     ),
 )
