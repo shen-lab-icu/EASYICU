@@ -634,6 +634,32 @@ def align_resume_scientific_identity_layout(
     return sealed_payload
 
 
+def align_resume_scientific_identity_from_capsule(
+    generated: Mapping[str, Any],
+    run_dir: Optional[Path],
+) -> Dict[str, Any]:
+    """Align staged trajectory layout using one readable resume capsule.
+
+    Missing or malformed capsules remain ordinary identity mismatches at the
+    later verified-resume gate; this projection never grants resume authority.
+    """
+
+    if run_dir is None:
+        return _jsonable(dict(generated))
+    try:
+        capsule = json.loads(
+            (Path(run_dir) / RUN_INPUT_CAPSULE_FILENAME).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, TypeError):
+        return _jsonable(dict(generated))
+    sealed = capsule.get("scientific_identity") if isinstance(capsule, Mapping) else None
+    return (
+        align_resume_scientific_identity_layout(generated=generated, sealed=sealed)
+        if isinstance(sealed, Mapping)
+        else _jsonable(dict(generated))
+    )
+
+
 def _tree_sha256(root: Path, *, relative_paths: Optional[Sequence[Path]] = None) -> str:
     digest = hashlib.sha256()
     paths = (
@@ -3060,6 +3086,8 @@ __all__ = [
     "ResumeInputAuthority",
     "PreparedResumeInput",
     "adopt_verified_legacy_run_input_capsule",
+    "align_resume_scientific_identity_from_capsule",
+    "align_resume_scientific_identity_layout",
     "build_concept_audit_environment_identity",
     "build_environment_identity",
     "build_scientific_identity",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from functools import lru_cache
 from typing import Any, Mapping, Sequence, get_args
@@ -30,6 +31,100 @@ from ..providers.strict_json_schema import (
 
 class ProgressiveTransportSchemaError(ValueError):
     """The run-bound progressive schema drifted from its contract model."""
+
+
+_TYPED_PRODUCT_TOKEN = re.compile(
+    r"\b(?:artifact|dataset|model|statistic|table):[a-z][a-z0-9_]*\b"
+)
+
+
+def parse_progressive_step_materialization(
+    raw: str,
+    *,
+    outline_step: ProgressiveOutlineStep | None = None,
+    outline_step_sha256: str | None = None,
+) -> ProgressiveStepMaterialization:
+    """Parse and normalize authority-free current-step transport fields."""
+
+    payload = json.loads(str(raw or "").strip())
+    if not isinstance(payload, dict):
+        raise ValueError("progressive Planner response root must be an object")
+    if outline_step is not None and not outline_step_sha256:
+        raise ValueError("host outline step digest is required")
+    if outline_step_sha256 is not None:
+        # This digest is host-computed transport authority, not a scientific
+        # choice for the model to reproduce.
+        payload = dict(payload)
+        payload["outline_step_sha256"] = outline_step_sha256
+
+    step = payload.get("step")
+    raw_inputs = step.get("raw_inputs") if isinstance(step, dict) else None
+    if isinstance(raw_inputs, list) and all(
+        isinstance(raw_input, str) for raw_input in raw_inputs
+    ):
+        normalized = [raw_input.strip() for raw_input in raw_inputs]
+        if all(normalized):
+            canonical_step = dict(step)
+            product_inputs = canonical_step.get("product_inputs")
+            bound_products = (
+                {
+                    str(item.get("product_id") or "").strip()
+                    for item in product_inputs
+                    if isinstance(item, Mapping)
+                }
+                if isinstance(product_inputs, list)
+                else set()
+            )
+            # Remove only a typed product already bound through its governed
+            # producer edge. Unknown products still fail in the compiler.
+            canonical_step["raw_inputs"] = list(
+                dict.fromkeys(
+                    value
+                    for value in normalized
+                    if not (
+                        _TYPED_PRODUCT_TOKEN.fullmatch(value)
+                        and value in bound_products
+                    )
+                )
+            )
+            payload = {**payload, "step": canonical_step}
+
+    step = payload.get("step")
+    if (
+        isinstance(step, dict)
+        and step.get("module_id") != "custom_analysis"
+        and step.get("custom_method") is not None
+    ):
+        # A registered module already owns its executor; custom_method has no
+        # authority there and provider decoration is normalized to null.
+        payload = {**payload, "step": {**step, "custom_method": None}}
+
+    step = payload.get("step")
+    policy_fields = (
+        "denominator_policy",
+        "missing_exposure_policy",
+        "missing_outcome_policy",
+    )
+    if (
+        isinstance(step, dict)
+        and step.get("module_id") != "exposure_outcome_distribution"
+        and any(step.get(field) is not None for field in policy_fields)
+    ):
+        canonical_step = dict(step)
+        canonical_step.update(dict.fromkeys(policy_fields))
+        payload = {**payload, "step": canonical_step}
+
+    step = payload.get("step")
+    if (
+        isinstance(step, dict)
+        and isinstance(step.get("outputs"), list)
+        and str(step.get("module_id") or "") in PROGRESSIVE_HOST_COMPILED_OUTPUTS
+        and step["outputs"]
+    ):
+        # Host-compiled modules advertise outputs.maxItems=0. Provider output
+        # aliases cannot extend that exact owner roster.
+        payload = {**payload, "step": {**step, "outputs": []}}
+    return ProgressiveStepMaterialization.model_validate(payload)
 
 
 def _closed_object(properties: Mapping[str, Any]) -> dict[str, Any]:
@@ -1181,6 +1276,7 @@ def progressive_structured_output_request(
 
 __all__ = [
     "ProgressiveTransportSchemaError",
+    "parse_progressive_step_materialization",
     "product_refs_for_materialization_coordinate",
     "progressive_foundation_structured_output_request",
     "progressive_outline_structured_output_request",

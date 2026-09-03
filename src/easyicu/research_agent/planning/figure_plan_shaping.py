@@ -1246,6 +1246,22 @@ def apply_deterministic_figure_panels(
     return shaped
 
 
+def apply_runtime_bound_figure_contracts(
+    plan: AnalysisPlan,
+    findings: list[ValidationFinding],
+) -> AnalysisPlan:
+    """Close renderer contracts after a runtime owner replaces its products.
+
+    Runtime binding can replace one generic primary output with a richer exact
+    family. Re-running these idempotent selectors makes that late owner visible
+    in the human-reviewed plan without duplicating pipeline policy.
+    """
+
+    revised, renderer_findings = select_deterministic_result_renderers(plan=plan)
+    findings.extend(renderer_findings)
+    return apply_deterministic_figure_panels(revised, findings)
+
+
 def apply_article_figure_strategy_placements(
     *, plan: AnalysisPlan, strategy: Any
 ) -> AnalysisPlan:
@@ -1441,6 +1457,7 @@ def close_empty_deterministic_figure_contracts(
 __all__ = [
     "apply_article_figure_strategy_placements",
     "apply_deterministic_figure_panels",
+    "apply_runtime_bound_figure_contracts",
     "apply_required_plan_obligations",
     "bind_deterministic_figure_panels",
     "close_empty_deterministic_figure_contracts",
