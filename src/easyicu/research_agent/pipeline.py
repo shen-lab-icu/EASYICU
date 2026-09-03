@@ -480,7 +480,6 @@ from .authority.runtime_artifacts import (
 from .authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RunInputIdentityError,
-    align_resume_scientific_identity_from_capsule,
     build_environment_identity,
     build_scientific_identity,
     load_verified_run_input_capsule,
@@ -488,6 +487,7 @@ from .authority.run_input import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
+from .orchestration.resume import align_resume_scientific_identity_from_capsule
 from .authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from .canonical_json import canonical_sha256
 from .authority.run_lock import (

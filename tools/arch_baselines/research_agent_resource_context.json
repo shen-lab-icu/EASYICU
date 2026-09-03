@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/agents/core.py"
+      "src/easyicu/data/concept-dict.json"
     ],
     "summary_changes": {}
   },
@@ -423,9 +423,16 @@
         "src/easyicu/research_agent/agents/core.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Re-adjudicate the provider-free and patient-data-free resource envelope after E1/E2 integration, Guided Copilot session ownership, and typed planning/execution owner refactors.",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Refresh deterministic prompt-resource hashes after extracting planner and manuscript prompt owners; provider and patient-data counts remain zero.",
+  "baseline_reason": "Re-adjudicate the provider-free and patient-data-free resource envelope after E1/E2 integration, Guided Copilot session ownership, and typed planning/execution owner refactors.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -435,7 +442,7 @@
   "schema_version": "easyicu.research_agent_resource_baseline/2",
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
-    "src/easyicu/data/concept-dict.json": "e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00",
+    "src/easyicu/data/concept-dict.json": "a5a5185408bd365de959963f5a894d43b325b3c01664c322a1bcb6c8696e3041",
     "src/easyicu/data/sofa2-dict.json": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
     "src/easyicu/research_agent/agents/core.py": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
     "src/easyicu/research_agent/agents/planner.py": "eaf03b422afabec41388e0400aae7566e9b407d883a3d0551c3c54736aa7bbb7",
@@ -1033,15 +1040,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15007,
+        "approx_input_tokens": 15012,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47911,
+            "bytes": 47931,
             "included": true,
             "required": true,
-            "sha256": "fb11d878f062dda6ea2bf874cd0663f0c436049455ffa7bc9a63bde3c1e4dc8e"
+            "sha256": "10c95ec6bf63e79fa6a51820a77efb99319670b2ce2828f50b2d0a5244e220c6"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1052,27 +1059,27 @@
           }
         },
         "system_bytes": 7616,
-        "total_bytes": 60027,
+        "total_bytes": 60047,
         "truncated_strings": false,
-        "user_bytes": 52411
+        "user_bytes": 52431
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13882,
+        "approx_input_tokens": 13887,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47911,
+            "bytes": 47931,
             "included": true,
             "required": true,
-            "sha256": "fb11d878f062dda6ea2bf874cd0663f0c436049455ffa7bc9a63bde3c1e4dc8e"
+            "sha256": "10c95ec6bf63e79fa6a51820a77efb99319670b2ce2828f50b2d0a5244e220c6"
           }
         },
         "system_bytes": 7616,
-        "total_bytes": 55527,
+        "total_bytes": 55547,
         "truncated_strings": false,
-        "user_bytes": 47911
+        "user_bytes": 47931
       },
       "planning_contract_bytes": 5132,
       "planning_contract_sha256": "eddfd9900aeaa002ae98fe93b4d0f7cb95989f9c66379b81ab4f813638ef12f9",

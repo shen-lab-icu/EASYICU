@@ -207,7 +207,7 @@ def exclusive_run_execution(function: Callable[P, R]) -> Callable[P, R]:
         finally:
             _ACTIVE_RUN_ID.reset(token)
 
-    wrapped.__easyicu_run_execution_locked__ = True
+    setattr(wrapped, "__easyicu_run_execution_locked__", True)
     return wrapped
 
 

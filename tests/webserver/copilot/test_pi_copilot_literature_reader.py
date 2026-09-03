@@ -9,6 +9,9 @@ from .test_pi_copilot_static import _ESCAPE_OWNER, _read
 from easyicu.webserver.pi_copilot import projections
 
 
+_MODULE_OWNER = _read("js/screens-guided-pi-modules.js")
+
+
 def test_literature_reader_separates_direct_evidence_from_system_references() -> None:
     node = shutil.which("node")
     if node is None:
@@ -17,8 +20,9 @@ def test_literature_reader_separates_direct_evidence_from_system_references() ->
     script = f"""
       global.window = {{ EU_LANG: 'zh' }};
       eval({_ESCAPE_OWNER!r});
+      eval({_MODULE_OWNER!r});
       eval({source!r});
-      const html = window.EU_GUIDED_PI_LITERATURE.renderArtifact({{
+      const html = window.EasyICU.guidedPi.require('literature').renderArtifact({{
         direct_comparator_count: 0,
         direct_comparator_keys: [],
         search: {{
@@ -80,8 +84,9 @@ def test_literature_source_preview_preserves_retrieval_fit_without_claiming_acce
     script = f"""
       global.window = {{ EU_LANG: 'zh' }};
       eval({_ESCAPE_OWNER!r});
+      eval({_MODULE_OWNER!r});
       eval({source!r});
-      console.log(window.EU_GUIDED_PI_LITERATURE.renderSource({{
+      console.log(window.EasyICU.guidedPi.require('literature').renderSource({{
         title: 'ICU hypotension treatment by staffing level',
         url: 'https://pubmed.ncbi.nlm.nih.gov/26975737/',
         pmid: '26975737',
@@ -106,8 +111,9 @@ def test_literature_source_preview_explains_article_type_and_full_text_boundary(
     script = f"""
       global.window = {{ EU_LANG: 'zh' }};
       eval({_ESCAPE_OWNER!r});
+      eval({_MODULE_OWNER!r});
       eval({source!r});
-      console.log(window.EU_GUIDED_PI_LITERATURE.renderSource({{
+      console.log(window.EasyICU.guidedPi.require('literature').renderSource({{
         title: 'Delayed awakening after sedation interruption',
         url: 'https://pubmed.ncbi.nlm.nih.gov/12345/',
         pmid: '12345',

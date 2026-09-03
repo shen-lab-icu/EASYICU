@@ -89,22 +89,26 @@ class _BoundedDispatcher:
         # slot and wait for the actual operation to converge before propagating
         # cancellation.
         try:
-            return await asyncio.shield(task)
+            # ``asyncio.wait`` does not cancel the worker when this request is
+            # cancelled and, unlike a cancelled shield future, cannot retain a
+            # later worker error as an unobserved outer-future exception.
+            await asyncio.wait({task})
+            return task.result()
         except asyncio.CancelledError as cancelled:
-            while True:
-                if task.done():
-                    break
+            while not task.done():
                 try:
-                    await asyncio.shield(task)
-                    break
+                    # ``asyncio.wait`` observes completion without re-raising
+                    # the worker's exception into this cancellation handler.
+                    await asyncio.wait({task})
                 except asyncio.CancelledError:
                     # Repeated protocol cancellation still cannot detach the
                     # synchronous worker from this request lifecycle.
                     continue
-                except BaseException:
-                    # The caller cancelled first. Converge the worker and keep
-                    # that cancellation authoritative over a later worker error.
-                    break
+            if not task.cancelled():
+                # Retrieve a late worker failure before the caller's
+                # cancellation is propagated. The done callback also covers
+                # cases without an active waiter.
+                task.exception()
             raise cancelled
 
     def _worker_finished(self, task: asyncio.Task[dict[str, Any]]) -> None:

@@ -526,7 +526,7 @@ E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03 = replace(
     # Additive re-lock after publishing the explicit binary domain for sep3.
     # Keep 20260819 immutable so its historical runs remain reproducible.
     expected_concept_dict_sha=(
-        "1f3c5b1b7057cf18590f4629476820dc95f1ffc6a0cf45f7dae59636abaab015"
+        "a5a5185408bd365de959963f5a894d43b325b3c01664c322a1bcb6c8696e3041"
     ),
 )
 
