@@ -347,7 +347,7 @@ def acquire_universe_for_question(
     database: str = "miiv",
     require_outcome: bool = True,
     emit_trajectory: bool = True,
-    trajectory_window: Optional[tuple] = (-24.0, 168.0),
+    trajectory_window: Optional[tuple] = None,
     patient_grouping: Optional[PatientGroupingBinding] = None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
@@ -535,6 +535,12 @@ def acquire_universe_for_question(
         if patient_grouping is not None
         else {}
     )
+    # A longitudinal artifact must not silently widen the user-reviewed
+    # materialization window.  Callers that need a different trajectory span
+    # must declare it explicitly.
+    effective_trajectory_window = (
+        cohort_window if trajectory_window is None else trajectory_window
+    )
     paths = materialize_to_parquet(
         output_dir=output_dir,
         stem=stem,
@@ -553,7 +559,7 @@ def acquire_universe_for_question(
         # auto-discovers it and exposes TRAJECTORY_PARQUET.
         emit_trajectory=emit_trajectory,
         trajectory_concepts=[*feature_concepts, *outcome_concepts],
-        trajectory_window=trajectory_window,
+        trajectory_window=effective_trajectory_window,
         # Fresh concept extraction applies dictionary bounds before
         # aggregation. Legacy export packages predate typed sidecars, so the
         # formal pipeline applies the same canonical bounds here and records

@@ -141,6 +141,43 @@ def test_repeated_stay_decision_requires_matching_typed_design() -> None:
     assert clustered.decision_is_resolved("REPEATED_STAY_IDENTITY_UNAVAILABLE")
 
 
+def test_timing_decision_requires_one_matching_typed_route() -> None:
+    time_varying = ScientificConfiguration.inspect(
+        {
+            "confirmations": {"plan_timing_time_varying": True},
+            "sensitivity_specs": [
+                {
+                    "spec_id": "time_varying_exposure",
+                    "axis": "timing",
+                    "strategy": "time_varying",
+                }
+            ],
+        }
+    )
+    conflicting = ScientificConfiguration.inspect(
+        {
+            "confirmations": {
+                "plan_timing_landmark_24h": True,
+                "plan_timing_time_varying": True,
+            },
+            "sensitivity_specs": [
+                {
+                    "spec_id": "landmark_24h",
+                    "axis": "timing",
+                    "strategy": "landmark",
+                }
+            ],
+        }
+    )
+
+    assert time_varying.decision_is_resolved(
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
+    )
+    assert not conflicting.decision_is_resolved(
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
+    )
+
+
 def test_owner_has_no_adapter_or_runtime_dependency() -> None:
     source = Path("src/easyicu/webserver/study_scientific_configuration.py").read_text(
         encoding="utf-8"

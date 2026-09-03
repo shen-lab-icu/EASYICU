@@ -58,6 +58,8 @@ from ..contracts.phenotyping_validation import (
 from ..contracts.source_feasibility_validation import (
     source_feasibility_runtime_bundle_errors,
 )
+from ..contracts.time_varying_exposure import TIME_VARYING_EXPOSURE_CAPABILITY
+from ..contracts.time_varying_validation import time_varying_runtime_bundle_errors
 from ..trajectory.runtime_validation import signed_trajectory_runtime_bundle_errors
 
 from .article_contract import (
@@ -1446,6 +1448,7 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
         PREDICTION_MODEL_ANALYSIS_KIND,
         LANDMARK_SPLINE_ANALYSIS_KIND,
+        "signed_time_varying_exposure_cox",
         PHENOTYPING_ANALYSIS_KIND,
         SURVIVAL_PRIMARY_ANALYSIS_KIND,
     }
@@ -1954,7 +1957,7 @@ def _compute_readiness_gates(
     )
     scientific_capability_errors = (
         []
-        if plan is None or capability_assessment.claim_ceiling_allows_reportable
+        if plan is None or capability_assessment.scientific_validator_available
         else [
             f"{capability_assessment.issue_code or 'scientific_capability_unavailable'}: "
             f"{capability_assessment.reason}"
@@ -1988,6 +1991,17 @@ def _compute_readiness_gates(
         == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID
         else []
     )
+    time_varying_validation_errors = (
+        time_varying_runtime_bundle_errors(
+            plan=plan,
+            records=per_step_records or [],
+            run_dir=run_dir,
+        )
+        if plan is not None
+        and capability_assessment.capability_id
+        == TIME_VARYING_EXPOSURE_CAPABILITY
+        else []
+    )
     base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
@@ -1997,6 +2011,7 @@ def _compute_readiness_gates(
         + phenotyping_validation_errors
         + source_feasibility_validation_errors
         + signed_trajectory_validation_errors
+        + time_varying_validation_errors
     )
     selected_capability = get_capability_by_id(capability_assessment.capability_id)
     _no_det_primary_expected = bool(

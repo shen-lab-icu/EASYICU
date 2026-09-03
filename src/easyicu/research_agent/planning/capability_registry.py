@@ -59,6 +59,9 @@ from ..contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
 )
+from ..contracts.time_varying_exposure import (
+    TIME_VARYING_EXPOSURE_CAPABILITY, TIME_VARYING_EXPOSURE_METHOD, TIME_VARYING_ANALYSIS_KIND,
+)
 from ..contracts.prediction_execution import static_prediction_execution_verdict
 from .study_design_playbook import StudyDesignFamily
 
@@ -210,6 +213,24 @@ class AuxiliaryRunner:
 # ---------------------------------------------------------------------------
 
 CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
+    ScientificCapability(
+        family="association", label="Association — source-bound time-updated Cox",
+        primary_analysis="deterministic",
+        primary_estimand="Descriptive counting-process Cox association under an explicit early running-maximum and unmeasured-state specification",
+        primary_runner=TIME_VARYING_ANALYSIS_KIND,
+        primary_runner_module="execution.runners.time_varying_executor",
+        figure="llm_coded", figure_renderer=None,
+        data_contract=("one-stay cohort", "source-bound hospital event/censor follow-up",
+                       "opaque patient-clustered counting-process input", "explicit baseline coding and missingness policy"),
+        fail_closed="Reject source/specification/population drift, missing R survival, invalid intervals, separation or fit warnings.",
+        capability_id=TIME_VARYING_EXPOSURE_CAPABILITY,
+        result_contract="TimeVaryingRuntimeAuthority + easyicu.time_varying_runtime_receipt/1",
+        required_diagnostics=("retained early events and unmeasured states", "patient-cluster count", "convergence and finite clustered covariance"),
+        scientific_validation="analysis_only",
+        scientific_validator_owner="contracts.time_varying_validation",
+        scientific_validator_contract="easyicu.time_varying_runtime_receipt/1",
+        notes="A development execution contract, not proportional-hazards validation, causal identification or publication authority.",
+    ),
     ScientificCapability(
         family="time_to_event",
         label="Survival / time-to-event",
@@ -1194,6 +1215,16 @@ def resolve_primary_capability(
             ),
         )
 
+    if declared == TIME_VARYING_EXPOSURE_CAPABILITY:
+        time_varying = get_capability_by_id(declared)
+        claimed = (getattr(primary, "method", None) == TIME_VARYING_EXPOSURE_METHOD
+                   and any(str(ref).startswith("scientific_runtime_contract:") for ref in primary.icu_rule_refs)
+                   and not primary.model_requirements)
+        return _verdict_for(time_varying, analysis_family=canonical,
+            owner_claimed=claimed, owner_reason="runtime authority verifies the exact input and counting-process contract",
+            **({} if claimed else {"failure_reason": "scientific_capability_step_incompatible",
+                                   "detail": "Time-varying execution requires its signed owner contract."}))
+
     if declared == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
         landmark_capability = get_capability_by_id(declared)
         if str(getattr(primary, "method", "") or "").strip() != (
@@ -1542,8 +1573,7 @@ def assess_scientific_capability(
             ),
         )
     validator_registered = bool(
-        capability.scientific_validation == "reportable"
-        and capability.scientific_validator_owner
+        capability.scientific_validator_owner
         and capability.scientific_validator_contract
     )
     if not validator_registered:
@@ -1561,6 +1591,22 @@ def assess_scientific_capability(
             reason=(
                 "The analysis can execute, but no registered deterministic "
                 "validator establishes its identification claim."
+            ),
+        )
+    if capability.scientific_validation == "analysis_only":
+        return ScientificCapabilityAssessment(
+            capability_id=capability.capability_id,
+            analysis_type=canonical,
+            question_present=True,
+            question_coordinates_resolved=True,
+            input_contract_resolved=True,
+            runtime_data_available=None,
+            execution_backend_available=None,
+            scientific_validator_available=True,
+            claim_ceiling="analysis_only",
+            reason=(
+                "A deterministic validator can establish the declared analysis-only "
+                "result; it does not authorize a reportable identification claim."
             ),
         )
     return ScientificCapabilityAssessment(

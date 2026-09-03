@@ -510,6 +510,39 @@ def test_outcome_free_acquisition_materialises_required_trajectory_concept(
     assert captured["trajectory_concepts"] == ["sofa2"]
 
 
+def test_trajectory_window_defaults_to_the_declared_cohort_window(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("sofa2", "death"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="Are first-day trajectories associated with death?",
+        llm=_stub('{"selected_concepts": ["sofa2", "death"]}'),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=("death",),
+        required_feature_concepts=("sofa2",),
+        cohort_window=(0.0, 24.0),
+    )
+
+    assert result.blocked is False
+    assert captured["cohort_window"] == (0.0, 24.0)
+    assert captured["trajectory_window"] == (0.0, 24.0)
+
+
 def test_required_trajectory_concept_missing_blocks_before_materialisation(
     monkeypatch,
 ):

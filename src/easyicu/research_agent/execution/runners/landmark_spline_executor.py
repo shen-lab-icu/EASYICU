@@ -228,7 +228,7 @@ def run_landmark_spline_association(
             "signed landmark population cannot verify event timing for every death"
         )
 
-    observation_threshold = sealed.landmark_hours / 24.0
+    observation_threshold = sealed.observation_threshold
     alive_at_landmark = working[sealed.outcome_column].eq(0) | working[
         sealed.outcome_time_column
     ].gt(sealed.landmark_hours)

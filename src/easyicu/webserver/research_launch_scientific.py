@@ -352,7 +352,7 @@ def _analysis_requires_longitudinal_trajectory(
     """Return whether the approved estimand needs row-level time trajectories."""
 
     for spec in _configured_sensitivity_specs(study):
-        if spec.strategy == "landmark":
+        if spec.strategy in {"landmark", "time_varying"}:
             return True
     return validated_design.get("variance_estimator") != "none_counts_only"
 
@@ -405,6 +405,21 @@ def _source_concept_for_operational_column(
 
     if column in by_id:
         return column
+    # Some user-facing clinical concepts are published by a versioned
+    # composite output whose loader/source name is intentionally different.
+    # Materialization must follow that declarative owner mapping just as the
+    # post-materialization resolver does; otherwise a reviewed ``sep3`` plan
+    # silently omits its exposure because the package stores
+    # ``sep3_sofa1``.  Ambiguous composite families remain fail-closed.
+    from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+
+    composite_sources = {
+        output_concept
+        for output_concept, public_source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
+        if public_source == column and output_concept in by_id
+    }
+    if len(composite_sources) == 1:
+        return next(iter(composite_sources))
     for suffix in _MATERIALIZED_FEATURE_SUFFIXES:
         if column.endswith(suffix):
             source_concept = column[: -len(suffix)]

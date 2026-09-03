@@ -43,6 +43,7 @@ from easyicu.research_agent.authority.run_input import (
     RunInputCapsuleV3,
     RunInputIdentityError,
     _scientific_trajectory_envelope,
+    align_resume_scientific_identity_layout,
     build_environment_identity,
     build_scientific_identity,
     canonical_sha256,
@@ -1020,6 +1021,43 @@ def test_explicit_non_sibling_trajectory_replaces_ambient_sibling_identity(tmp_p
             disable_icu_context=False,
         )["cohort"]["trajectory"]["sha256"]
     )
+
+
+def test_resume_preserves_non_sibling_trajectory_identity_after_staging(tmp_path):
+    source_cohort = tmp_path / "source.parquet"
+    source_trajectory = tmp_path / "intervals.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(source_cohort, index=False)
+    source_trajectory.write_bytes(b"trajectory")
+    sealed = _identity(
+        cohort_path=source_cohort,
+        trajectory_path=source_trajectory,
+    )
+    assert "trajectory" in sealed
+    assert "trajectory" not in sealed["cohort"]
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    staged_cohort = run_dir / "cohort.parquet"
+    staged_trajectory = run_dir / "cohort_trajectory.parquet"
+    staged_cohort.write_bytes(source_cohort.read_bytes())
+    staged_trajectory.write_bytes(source_trajectory.read_bytes())
+    generated = _identity(
+        cohort_path=staged_cohort,
+        trajectory_path=staged_trajectory,
+    )
+    assert "trajectory" in generated["cohort"]
+    assert "trajectory" not in generated
+
+    assert align_resume_scientific_identity_layout(
+        generated=generated,
+        sealed=sealed,
+    ) == sealed
+
+    changed = {**generated, "question": "A different study question"}
+    assert align_resume_scientific_identity_layout(
+        generated=changed,
+        sealed=sealed,
+    ) == changed
 
 
 def test_scientific_trajectory_identity_rejects_leaf_symlink(tmp_path):

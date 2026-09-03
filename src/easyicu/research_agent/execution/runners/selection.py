@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ...authority.time_varying_runtime import TimeVaryingRuntimeAuthority
+from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
+from .time_varying_executor import time_varying_executor_code
+
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -473,6 +477,17 @@ def select_standard_executor(
                     )
                 )
             _missed(LANDMARK_SURVIVAL_FIGURE_ANALYSIS_KIND)
+        elif isinstance(sealed_current, TimeVaryingRuntimeAuthority):
+            if sealed_current.governed_step(plan) == step:
+                return _selected(StandardExecutorSelection(
+                    analysis_kind=TIME_VARYING_ANALYSIS_KIND,
+                    selection_reason="signed_time_varying_contract_preflight",
+                    progress_message="Using source-bound time-varying Cox executor",
+                    code=time_varying_executor_code(step, authority=sealed_current,
+                        runtime_projection_sha256=projection_digest, plausibility_scope=plausibility_scope),
+                    consumed_input_keys=_consumed_typed_cohort_inputs(step),
+                ))
+            _missed(TIME_VARYING_ANALYSIS_KIND)
         elif isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
             if landmark_spline_executor_owns_step(
                 step,
