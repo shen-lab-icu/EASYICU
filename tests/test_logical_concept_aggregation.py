@@ -187,7 +187,10 @@ def test_miiv_rrt_keeps_charted_points_and_expands_procedure_windows() -> None:
 
 
 def test_wintbl_merge_uses_declared_duration_not_absolute_endtime() -> None:
-    """A WinTbl's duration must override redundant source end timestamps."""
+    """MIMIC-III IMV duration must override redundant source end timestamps."""
+
+    class DataSource:
+        config = load_data_sources().get("mimic")
 
     ventilation = WinTbl(
         data=pd.DataFrame(
@@ -219,11 +222,49 @@ def test_wintbl_merge_uses_declared_duration_not_absolute_endtime() -> None:
         {"mech_vent": ventilation, "marker": marker},
         ["mech_vent", "marker"],
         pd.Timedelta(hours=1),
-        data_source=None,
+        data_source=DataSource(),
     )
 
     observed = result.loc[result["mech_vent"].notna(), "charttime"].tolist()
     assert observed == [2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_existing_miiv_mech_vent_keeps_historical_merge_contract() -> None:
+    """The MIMIC-III repair must not change already-sealed MIIV intervals."""
+
+    class DataSource:
+        config = load_data_sources().get("miiv")
+
+    ventilation = WinTbl(
+        data=pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [2.0, 5.0],
+                "dur_var": [2.0, 1.0],
+                "mech_vent": ["invasive", "noninvasive"],
+            }
+        ),
+        id_vars=["stay_id"],
+        index_var="charttime",
+        dur_var="dur_var",
+        dur_unit="hours",
+    )
+    marker = ICUTable(
+        data=pd.DataFrame({"stay_id": [1], "charttime": [0.0], "marker": [1.0]}),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="marker",
+    )
+
+    result = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
+        {"mech_vent": ventilation, "marker": marker},
+        ["mech_vent", "marker"],
+        pd.Timedelta(hours=1),
+        data_source=DataSource(),
+    )
+
+    observed = result.loc[result["mech_vent"].notna(), "charttime"].tolist()
+    assert observed == [2.0, 5.0]
 
 
 def test_unrelated_wintbl_keeps_historical_sparse_merge_contract() -> None:
