@@ -1925,8 +1925,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderSessions();
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
       const continuity = window.EU_GUIDED_PROJECT_CONTINUITY;
-      const piProjectOwner = window.EU_GUIDED_PI_PROJECT;
-      const requestedId = !selectedGuidedDraft && piProjectOwner
+      const piProjectOwner = window.EasyICU.guidedPi.require('project');
+      const requestedId = !selectedGuidedDraft
         && typeof piProjectOwner.requestedProjectId === 'function'
         ? piProjectOwner.requestedProjectId()
         : '';

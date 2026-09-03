@@ -94,7 +94,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi.js?v=20260903-agent-owned-plan1" in index
-    assert "js/screens-guided.js?v=20260901-session-deeplink1" in index
+    assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -4568,7 +4568,7 @@ def test_pi_project_and_session_are_addressable_in_the_browser_url() -> None:
         }} }},
       }};
       eval({project_owner!r});
-      const owner = window.EU_GUIDED_PI_PROJECT;
+      const owner = window.EasyICU.guidedPi.require('project');
       owner.syncLocation('project-a', 'session-a');
       console.log(owner.requestedProjectId());
       console.log(owner.requestedSessionId('project-a'));
@@ -4588,6 +4588,9 @@ def test_pi_project_and_session_are_addressable_in_the_browser_url() -> None:
     assert "pi_session=session-a" in rows[3]
     assert "requestedSessionId(expectedProjectId)" in shell
     assert "requestedProjectId()" in guided
+    assert "window.EasyICU.guidedPi.require('project')" in guided
+    assert "window.EU_GUIDED_PI_PROJECT" not in guided
+    assert "js/screens-guided.js?v=20260903-session-deeplink2" in _read("index.html")
 
 
 def test_pi_conversation_language_is_bound_to_the_active_ui_locale() -> None:
