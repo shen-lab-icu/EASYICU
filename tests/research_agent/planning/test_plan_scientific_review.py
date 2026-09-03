@@ -32,6 +32,7 @@ from easyicu.research_agent.planning.scientific_review import (
     _endpoint_resolved,
     _sensitivity_facts,
     build_plan_scientific_review,
+    post_baseline_exposure,
     remediation_route_for_finding,
     repeat_units_possible,
     repeated_unit_design_closed,
@@ -694,6 +695,89 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     assert (
         "not assessed until execution"
         in (review.facts["score_interpretation"]["figures"])
+    )
+
+
+def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None:
+    """Metadata-only candidate planning must not lose exposure opportunity.
+
+    The outer feature window is not a clinical-definition anchor, but it does
+    prove that a primary feature can be collected after ICU admission.  A
+    logistic association plan must therefore be held for a landmark or other
+    executable temporal design even before the final wide descriptor exists.
+    """
+
+    context = _context().model_copy(
+        update={
+            "variables": [
+                ConceptDescriptor(
+                    name="exposure", role=VariableRole.OTHER, dtype="int64"
+                ),
+                *[item for item in _context().variables if item.name != "exposure"],
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "confirmations": {"feature_time_window": True},
+                        "materialization_window": {
+                            "role": "outer_observation_window",
+                            "anchor": "ICU admission",
+                            "hours": 24,
+                        },
+                    }
+                ),
+            ),
+        }
+    )
+
+    assert post_baseline_exposure(context) == (
+        True,
+        "outer_materialization:icu_admission[0,24]h",
+    )
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in {
+        item.code for item in review.findings
+    }
+
+
+def test_time_varying_intent_is_a_runtime_blocker_not_a_new_user_decision() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                sensitivity_specs=[
+                    {
+                        "spec_id": "time_varying_exposure",
+                        "axis": "timing",
+                        "strategy": "time_varying",
+                        "execution_variables": ["exposure"],
+                    }
+                ],
+            )
+        }
+    )
+
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "TIME_VARYING_RUNTIME_UNAVAILABLE"
+    )
+
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.requires_user_authorization is False
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in {
+        item.code for item in review.findings
+    }
+    assert "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY" not in {
+        item.code for item in review.findings
+    }
+    assert review.facts["sensitivity"]["unsupported_spec_ids"] == [
+        "time_varying_exposure"
+    ]
+    assert "TIME_VARYING_RUNTIME_UNAVAILABLE" not in render_agent_plan_revision_contract(
+        review
     )
 
 

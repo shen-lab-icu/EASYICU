@@ -666,16 +666,6 @@ def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> No
         E1_REVIEWED_DEMO_2026_08_17 as prior_reviewed_profile,
         E1_REVIEWED_DEMO_2026_08_19 as reviewed_profile,
     )
-    from easyicu.research_agent.concept_dict_audit import (
-        compute_concept_dict_fingerprint,
-    )
-    from easyicu.research_agent.orchestration.profiles import (
-        CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
-        CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
-    )
-
-    fingerprint = compute_concept_dict_fingerprint()
-
     assert prior_public_profile.ref == "npj_dm_e1_canary_dev/20260817"
     assert prior_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260817"
     assert prior_public_profile.expected_concept_dict_sha == (
@@ -690,9 +680,54 @@ def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> No
     assert reviewed_profile.pipeline_options()["planner_strategy"] == (
         "progressive_v2"
     )
+    for profile in (public_profile, reviewed_profile):
+        assert profile.expected_concept_dict_sha == (
+            "e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00"
+        )
+        assert profile.expected_sofa2_dict_sha == (
+            "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3"
+        )
+
+
+def test_e1_20260903_profiles_additively_bind_sep3_binary_domain() -> None:
+    from easyicu.research_agent import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19 as prior_public_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03 as public_profile,
+        E1_REVIEWED_DEMO_2026_08_19 as prior_reviewed_profile,
+        E1_REVIEWED_DEMO_2026_09_03 as reviewed_profile,
+    )
+    from easyicu.research_agent.concept_dict_audit import (
+        compute_concept_dict_fingerprint,
+    )
+    from easyicu.research_agent.orchestration.profiles import (
+        CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
+        CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
+        CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
+        CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03,
+    )
+
+    fingerprint = compute_concept_dict_fingerprint()
+
+    assert prior_public_profile.ref == "npj_dm_e1_canary_dev/20260819"
+    assert prior_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260819"
+    assert public_profile.ref == "npj_dm_e1_canary_dev/20260903"
+    assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260903"
     assert CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF == public_profile.ref
     assert CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF == reviewed_profile.ref
-    for profile in (public_profile, reviewed_profile):
+    assert CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF == (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03.ref
+    )
+    assert CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF == (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03.ref
+    )
+    for profile in (
+        public_profile,
+        reviewed_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03,
+    ):
         assert profile.expected_concept_dict_sha == fingerprint.concept_dict_sha
         assert profile.expected_sofa2_dict_sha == fingerprint.sofa2_dict_sha
 

@@ -34,6 +34,7 @@ def test_result_table_projection_keeps_primary_population_and_effect_tables(
 
     primary_tables = {
         "landmark_population_flow": "stage,n,excluded_from_previous,population_rule\nsource_cohort,100,0,source\ncomplete_case_model_population,60,40,complete\n",
+        "time_varying_cox_estimates": "term,hazard_ratio,ci_low,ci_high\nlactate,1.2,1.1,1.3\n",
         "landmark_rcs_contrasts": "contrast_id,estimate,ci_low,ci_high,effect_scale\nq3_vs_q1,1.3,1.1,1.6,odds_ratio\n",
         "robustness_matrix": "specification_id,estimate,ci_low,ci_high,effect_scale\nprimary,1.3,1.1,1.6,odds_ratio\n",
     }
@@ -49,5 +50,6 @@ def test_result_table_projection_keeps_primary_population_and_effect_tables(
     names = {table["name"] for table in projection["tables"]}
     assert len(names) == 12
     assert "landmark_population_flow.csv" in names
+    assert "time_varying_cox_estimates.csv" in names
     assert "landmark_rcs_contrasts.csv" in names
     assert "robustness_matrix.csv" in names

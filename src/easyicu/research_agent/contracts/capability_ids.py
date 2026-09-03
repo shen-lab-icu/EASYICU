@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from .time_varying_exposure import TIME_VARYING_EXPOSURE_CAPABILITY
+
 LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: Final = "association_landmark_spline_v1"
 LANDMARK_SPLINE_ANALYSIS_KIND: Final = "signed_landmark_spline_association"
 PHENOTYPING_CLUSTER_CAPABILITY_ID: Final = "phenotyping_cluster_v1"
@@ -23,6 +25,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "association_ordinal_trend_v1": "association",
     "association_adjusted_v1": "association",
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: "association",
+    TIME_VARYING_EXPOSURE_CAPABILITY: "association",
     "association_freeform_v1": "association",
     "prediction_risk_model_v1": "prediction",
     "dynamic_prediction_landmark_v1": "prediction",

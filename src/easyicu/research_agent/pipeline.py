@@ -477,6 +477,7 @@ from .authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
+    align_resume_scientific_identity_layout,
     build_environment_identity,
     build_scientific_identity,
     load_verified_run_input_capsule,
@@ -4389,6 +4390,7 @@ class ResearchAgentPipeline:
         llm = self._llm
         if llm is None:
             raise RuntimeError("LLM client is unexpectedly missing after validation.")
+        run_id = current_locked_run_id()
         run_scientific_identity = build_scientific_identity(
             cohort=cohort,
             question=question,
@@ -4441,6 +4443,27 @@ class ResearchAgentPipeline:
             ),
             capability_workflow=self._capability_runtime.scientific_coordinate(),
         )
+        if resume_run_id:
+            # A non-sibling source trajectory is staged under the canonical
+            # ``cohort_trajectory.parquet`` name.  That filename change must
+            # not move an otherwise identical trajectory coordinate and turn
+            # a safe retry into false scientific-identity drift.  The capsule
+            # itself is still verified below before any resume write.
+            capsule_path = self.workdir / run_id / RUN_INPUT_CAPSULE_FILENAME
+            try:
+                raw_capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                raw_capsule = None
+            sealed_identity = (
+                raw_capsule.get("scientific_identity")
+                if isinstance(raw_capsule, Mapping)
+                else None
+            )
+            if isinstance(sealed_identity, Mapping):
+                run_scientific_identity = align_resume_scientific_identity_layout(
+                    generated=run_scientific_identity,
+                    sealed=sealed_identity,
+                )
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
         )
@@ -4450,7 +4473,6 @@ class ResearchAgentPipeline:
         resume_input_verified = False
         resume_trajectory_binding: Optional[StagedTrajectoryBinding] = None
         experiment_spec_path: Optional[Path] = None
-        run_id = current_locked_run_id()
         if resume_run_id:
             run_dir = self.workdir / run_id
             if run_dir.exists():

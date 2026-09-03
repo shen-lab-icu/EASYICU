@@ -246,12 +246,40 @@ class ScientificConfiguration:
                 and cohort.get("exclude_readmissions") is True
             )
             return clustered or first_stay
+        if code == "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED":
+            # A completion flag alone is not authority for a temporal design:
+            # the persisted, executable sensitivity must agree with exactly
+            # one selected route.  This also reopens a review when a stale
+            # action has left mutually incompatible timing confirmations.
+            selected_routes = tuple(
+                key
+                for key in (
+                    "plan_timing_landmark_24h",
+                    "plan_timing_descriptive_only",
+                    "plan_timing_time_varying",
+                )
+                if confirmations.get(key) is True
+            )
+            if len(selected_routes) != 1:
+                return False
+            specs = self.study.get("sensitivity_specs")
+            timing_strategies = {
+                str(spec.get("strategy") or "").strip()
+                for spec in specs
+                if isinstance(spec, Mapping)
+                and str(spec.get("axis") or "").strip() == "timing"
+            } if isinstance(specs, Sequence) and not isinstance(specs, (str, bytes)) else set()
+            route = selected_routes[0]
+            if route == "plan_timing_landmark_24h":
+                return timing_strategies == {"landmark"}
+            if route == "plan_timing_time_varying":
+                return timing_strategies == {"time_varying"}
+            return (
+                not timing_strategies
+                and _mapping(self.study.get("analysis_design")).get("analysis_family")
+                == "descriptive_epidemiology"
+            )
         keys = {
-            "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED": (
-                "plan_timing_landmark_24h",
-                "plan_timing_descriptive_only",
-                "plan_timing_time_varying",
-            ),
             "ADJUSTMENT_SET_NOT_USER_CONFIRMED": ("plan_adjustment_set_confirmed",),
             "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY": (
                 "plan_required_sensitivities_executable",

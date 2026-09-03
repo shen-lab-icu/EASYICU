@@ -1249,6 +1249,34 @@ def _parse_step_materialization(
     step = payload.get("step")
     if (
         isinstance(step, dict)
+        and step.get("module_id") != "exposure_outcome_distribution"
+        and any(
+            step.get(field) is not None
+            for field in (
+                "denominator_policy",
+                "missing_exposure_policy",
+                "missing_outcome_policy",
+            )
+        )
+    ):
+        # These policy fields are executable only for the host-owned
+        # exposure/outcome distribution product.  They have no semantic or
+        # execution authority on other modules, but structured providers
+        # occasionally fill their optional schema nodes with arbitrary text.
+        # Canonicalize that irrelevant decoration before Pydantic's literal
+        # validation; the distribution module retains its fail-closed literals.
+        canonical_step = dict(step)
+        for field in (
+            "denominator_policy",
+            "missing_exposure_policy",
+            "missing_outcome_policy",
+        ):
+            canonical_step[field] = None
+        payload = dict(payload)
+        payload["step"] = canonical_step
+    step = payload.get("step")
+    if (
+        isinstance(step, dict)
         and isinstance(step.get("outputs"), list)
         and str(step.get("module_id") or "") in PROGRESSIVE_HOST_COMPILED_OUTPUTS
         and step["outputs"]

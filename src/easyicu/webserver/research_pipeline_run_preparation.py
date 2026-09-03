@@ -446,6 +446,19 @@ def _prepare_launch_execution(
         budget_mode=budget_mode,
         runner_image=selected_runner_image,
     )
+    if not scientific.metadata_only_planning and any(
+        spec.strategy == "time_varying" for spec in scientific.sensitivity_specs
+    ):
+        from easyicu.research_agent.execution.native_method_runtime import probe_time_varying_native_runtime
+        from easyicu.research_agent.execution.runner import DockerRunner
+
+        native = probe_time_varying_native_runtime(selected_runner_image or DockerRunner.DEFAULT_IMAGE)
+        if not native.available:
+            raise ResearchPipelineRunError(
+                native.reason_code, "The selected sandbox image lacks the verified R survival runtime; no provider or extraction work was started.",
+                details={"owner": "native_method_runtime", "runner_image": selected_runner_image,
+                         "reason_code": native.reason_code},
+            )
 
     return (
         PreparedLaunchAuthority(

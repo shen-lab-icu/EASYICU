@@ -12,6 +12,8 @@ from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..contracts.time_varying_exposure import TimeVaryingExposureSpecification
+
 
 SensitivityAxis = Literal[
     "timing",
@@ -69,7 +71,9 @@ EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
     "landmark": frozenset(
         {"signed_landmark_restricted_cubic_spline", "landmark_analysis"}
     ),
-    "time_varying": frozenset({"time_varying_exposure_model", "clone_censor_weight"}),
+    # Method availability is not specification readiness. A time-varying row
+    # also requires its closed time_varying_execution contract at projection.
+    "time_varying": frozenset({"time_varying_exposure_model"}),
     "alternate_window": frozenset({"alternate_window_analysis"}),
     "first_stay": frozenset({"one_stay_per_patient_association", "first_stay_association"}),
     "non_readmission_restriction": frozenset({"non_readmission_restriction"}),
@@ -128,9 +132,15 @@ class PrespecifiedSensitivitySpec(BaseModel):
         default=None, min_length=1, max_length=80
     )
     observation_duration_unit: Literal["hours", "days"] | None = None
+    time_varying_execution: TimeVaryingExposureSpecification | None = None
 
     @model_validator(mode="after")
     def _closed_strategy(self) -> "PrespecifiedSensitivitySpec":
+        if self.time_varying_execution is not None:
+            if self.strategy != "time_varying":
+                raise ValueError("time-varying execution requires the time_varying strategy")
+            if self.execution_variables != (self.time_varying_execution.exposure_concept,):
+                raise ValueError("time-varying execution must bind the exact exposure source")
         if self.strategy not in _STRATEGIES_BY_AXIS[self.axis]:
             raise ValueError(
                 f"strategy {self.strategy!r} is not valid for axis {self.axis!r}"
@@ -227,6 +237,7 @@ class PrespecifiedSensitivitySpec(BaseModel):
                     ),
                 )
                 if value != self.event_time_variable
+                and value != "hospital_followup_time_hours"
             )
         )
 

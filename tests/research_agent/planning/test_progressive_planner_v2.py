@@ -1550,6 +1550,32 @@ def test_step_parser_rejects_non_string_custom_analysis_method() -> None:
         _parse_step_materialization(json.dumps(payload))
 
 
+def test_step_parser_clears_irrelevant_distribution_policies() -> None:
+    payload = _materialization_payloads()[3]
+    payload["step"].update(
+        {
+            "denominator_policy": "other",
+            "missing_exposure_policy": "other",
+            "missing_outcome_policy": "other",
+        }
+    )
+
+    parsed = _parse_step_materialization(json.dumps(payload))
+
+    assert parsed.step.module_id != "exposure_outcome_distribution"
+    assert parsed.step.denominator_policy is None
+    assert parsed.step.missing_exposure_policy is None
+    assert parsed.step.missing_outcome_policy is None
+
+
+def test_step_parser_keeps_distribution_policy_literals_fail_closed() -> None:
+    payload = _materialization_payloads()[2]
+    payload["step"]["denominator_policy"] = "other"
+
+    with pytest.raises(ValueError):
+        _parse_step_materialization(json.dumps(payload))
+
+
 def test_step_parser_clears_all_model_outputs_for_host_compiled_module() -> None:
     payload = _materialization_payloads()[5]
     payload["step"]["module_id"] = "robustness_replay"

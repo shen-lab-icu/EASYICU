@@ -173,7 +173,7 @@ def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
         run_dir=run_dir,
         evidence=evidence,
         research_question="Does lactate predict mortality?",
-        primary_exposure="lact",
+        primary_exposure="lact_max",
         target_outcome="death",
     )
 
@@ -191,6 +191,17 @@ def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
         run_dir / capsule.materialized_cohort_authority_ref["file"]
     )
     assert inputs.trajectory_path is None
+    assert inputs.scientific_identity["primary_exposure"] == "lact_max"
+
+    acquisition = agent_pipeline_runs._execution_resume_acquisition_projection(inputs)
+    assert acquisition.universe_path == inputs.cohort_path
+    assert acquisition.selection.selection_authority == "host_exact"
+    assert acquisition.coverage.sufficient is True
+    assert acquisition.analysis_columns == {
+        "lact_max": "lact_max",
+        "death": "death",
+    }
+    assert acquisition.note.startswith("Digest-verified execution retry projection")
 
 
 def test_execution_retry_accepts_missing_seed_only_for_exact_checkpoint_digest(

@@ -14,6 +14,7 @@ from ..authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from ..schema import AnalysisPlan, ValidationFinding
+from ..authority.time_varying_runtime import TimeVaryingRuntimeAuthority
 from ..trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
     load_trajectory_scientific_runtime_authority,
@@ -96,6 +97,14 @@ class ScientificRuntimeAuthorities:
             ]
 
         authority = self.current_case
+        if isinstance(authority, TimeVaryingRuntimeAuthority):
+            bound = authority.bind_plan(plan)
+            return bound, [ValidationFinding(
+                validator="scientific_runtime_plan_compiler", severity="warning",
+                message="Compiled the explicit time-updated analysis-only plan; incompatible static-model analyses are not inherited.",
+                detail={"reason_code": "time_varying_exposure_host_compiled", "analysis_only": True,
+                        "execution_contract_sha256": authority.execution_contract_sha256},
+            )]
         if isinstance(authority, SourceFeasibilityRuntimeAuthority):
             bound = authority.development_execution_only_plan(
                 research_question=plan.research_question
@@ -219,7 +228,7 @@ class ScientificRuntimeAuthorities:
         if isinstance(authority, LandmarkSurvivalRuntimeAuthority):
             if not authority.development_execution_only_allowed:
                 return None
-        elif not isinstance(authority, SourceFeasibilityRuntimeAuthority):
+        elif not isinstance(authority, (SourceFeasibilityRuntimeAuthority, TimeVaryingRuntimeAuthority)):
             return None
         plan = authority.development_execution_only_plan(
             research_question=research_question
