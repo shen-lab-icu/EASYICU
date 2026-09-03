@@ -178,9 +178,6 @@ def fit_cluster_robust_time_varying_cox(
     state should become a model term.
     """
 
-    rscript = shutil.which("Rscript")
-    if rscript is None:
-        raise TimeVaryingExposureCoxError("local Rscript runtime is unavailable")
     ordered, columns, event_count, cluster_count = _validate_panel(
         frame,
         id_col=id_col,
@@ -190,6 +187,12 @@ def fit_cluster_robust_time_varying_cox(
         group_col=group_col,
         covariates=covariates,
     )
+    rscript = shutil.which("Rscript")
+    if rscript is None:
+        raise TimeVaryingExposureCoxError(
+            "local Rscript runtime is unavailable",
+            code="time_varying_cox_runtime_unavailable",
+        )
     r_columns = {column: f"easyicu_cov_{index}" for index, column in enumerate(columns)}
     local = pd.DataFrame(
         {
