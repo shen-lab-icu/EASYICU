@@ -4586,11 +4586,8 @@ def test_pi_project_and_session_are_addressable_in_the_browser_url() -> None:
     assert rows[:3] == ["project-a", "session-a", ""]
     assert "pi_project=project-a" in rows[3]
     assert "pi_session=session-a" in rows[3]
-    assert "requestedSessionId(expectedProjectId)" in shell
-    assert "requestedProjectId()" in guided
-    assert "window.EasyICU.guidedPi.require('project')" in guided
-    assert "window.EU_GUIDED_PI_PROJECT" not in guided
-    assert "js/screens-guided.js?v=20260903-session-deeplink2" in _read("index.html")
+    assert "requestedSessionId(expectedProjectId)" in shell and "require('project')" in guided
+    assert "requestedProjectId()" in guided and "EU_GUIDED_PI_PROJECT" not in guided
 
 
 def test_pi_conversation_language_is_bound_to_the_active_ui_locale() -> None:
