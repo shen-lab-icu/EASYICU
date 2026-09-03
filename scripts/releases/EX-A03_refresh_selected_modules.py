@@ -213,6 +213,53 @@ def _module_is_canonical_refresh(database_root: Path, modules: Sequence[str]) ->
     return True
 
 
+def _validate_refreshed_score_content(
+    database_root: Path, modules: Sequence[str]
+) -> None:
+    """Refuse a structurally valid refresh whose primary score is all null.
+
+    Schema checks alone did not catch the 2026-09 IMV regression: both SOFA
+    files had the expected columns and millions of rows, but interval handling
+    had displaced their components so every total score was missing. Scan only
+    the primary score column in bounded Arrow batches before any candidate file
+    is promoted.
+    """
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - package is release-required
+        raise ModuleRefreshError(
+            "pyarrow is required to validate refreshed score content"
+        ) from exc
+
+    for module, score_column in (
+        ("sofa1_score", "sofa"),
+        ("sofa2_score", "sofa2"),
+    ):
+        if module not in modules:
+            continue
+        path = database_root / f"{module}.parquet"
+        _require_regular_file(path, label=f"{module} staged Parquet")
+        parquet = pq.ParquetFile(path)
+        if score_column not in parquet.schema_arrow.names:
+            raise ModuleRefreshError(
+                f"{module} staged Parquet lacks primary score {score_column!r}"
+            )
+        rows = 0
+        non_null = 0
+        for batch in parquet.iter_batches(
+            batch_size=262_144, columns=[score_column], use_threads=False
+        ):
+            column = batch.column(0)
+            rows += len(column)
+            non_null += len(column) - column.null_count
+        if rows == 0 or non_null == 0:
+            raise ModuleRefreshError(
+                f"{module} refresh is unusable: {score_column} has "
+                f"{non_null} non-null values across {rows} rows"
+            )
+
+
 def _module_files_are_detached_from_source(
     source_database_root: Path,
     candidate_database_root: Path,
@@ -313,6 +360,7 @@ def _refresh_one_database(
             source_database_root, destination_database_root, modules
         )
     ):
+        _validate_refreshed_score_content(destination_database_root, modules)
         return {
             "database": database,
             "data_path": data_path,
@@ -328,6 +376,7 @@ def _refresh_one_database(
         }
     if staging_root.exists() or staging_root.is_symlink():
         if _module_is_canonical_refresh(staging_root, modules):
+            _validate_refreshed_score_content(staging_root, modules)
             _replace_selected_module_files(
                 staging_root=staging_root,
                 destination_database_root=destination_database_root,
@@ -360,6 +409,7 @@ def _refresh_one_database(
         verbose=True,
     )
     metrics = _module_runtime_metrics(extraction, modules)
+    _validate_refreshed_score_content(staging_root, modules)
     _replace_selected_module_files(
         staging_root=staging_root,
         destination_database_root=destination_database_root,

@@ -225,6 +225,227 @@ def _preserve_callback_dur_var_unit(
     return after
 
 
+_MIMICIII_INVASIVE_VENT_SETTING_ITEMIDS = frozenset(
+    {
+        1,
+        60,
+        218,
+        221,
+        223,
+        437,
+        436,
+        444,
+        445,
+        448,
+        449,
+        450,
+        459,
+        501,
+        502,
+        503,
+        505,
+        506,
+        535,
+        543,
+        639,
+        654,
+        667,
+        668,
+        669,
+        670,
+        671,
+        672,
+        681,
+        682,
+        683,
+        684,
+        686,
+        720,
+        1211,
+        1340,
+        1486,
+        1600,
+        1655,
+        2000,
+        3459,
+        5865,
+        5866,
+        220339,
+        223848,
+        223849,
+        224419,
+        224684,
+        224685,
+        224686,
+        224687,
+        224695,
+        224696,
+        224697,
+        224700,
+        224701,
+        224702,
+        224705,
+        224706,
+        224707,
+        224709,
+        224738,
+        224746,
+        224747,
+        224750,
+        226873,
+        227187,
+    }
+)
+_MIMICIII_VENT_CLASSIFICATION_ITEMIDS = frozenset(
+    {
+        *_MIMICIII_INVASIVE_VENT_SETTING_ITEMIDS,
+        467,
+        640,
+        226732,
+    }
+)
+_MIMICIII_METAVISION_OXYGEN_VALUES = frozenset(
+    {
+        "Nasal cannula",
+        "Face tent",
+        "Aerosol-cool",
+        "Trach mask ",
+        "High flow neb",
+        "Non-rebreather",
+        "Venti mask ",
+        "Medium conc mask ",
+        "T-piece",
+        "High flow nasal cannula",
+        "Ultrasonic neb",
+        "Vapomist",
+    }
+)
+_MIMICIII_CAREVUE_OXYGEN_VALUES = frozenset(
+    {
+        "Cannula",
+        "Nasal Cannula",
+        "Face Tent",
+        "Aerosol-Cool",
+        "Trach Mask",
+        "Hi Flow Neb",
+        "Non-Rebreather",
+        "Venti Mask",
+        "Medium Conc Mask",
+        "Vapotherm",
+        "T-Piece",
+        "Hood",
+        "Hut",
+        "TranstrachealCat",
+        "Heated Neb",
+        "Ultrasonic Neb",
+    }
+)
+
+
+def _mimiciii_ventilation_interval_rows(
+    events: pd.DataFrame,
+    *,
+    id_column: str,
+    time_column: str,
+    concept_name: str,
+) -> pd.DataFrame:
+    """Collapse official MIMIC-III ventilation flags into IMV episodes.
+
+    This is the pandas equivalent of the MIT-LCP MIMIC-III
+    ``ventilation_durations.sql`` state machine: an invasive ventilator
+    setting starts support, settings no more than eight hours apart continue
+    it, and oxygen therapy or extubation closes it. A single isolated setting
+    is not promoted to a duration because the reference query also requires
+    distinct start and end times.
+    """
+
+    output_columns = [id_column, time_column, concept_name, "dur_var"]
+    if events.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    ordered = events.sort_values(
+        [id_column, time_column, "extubated"], kind="mergesort"
+    )
+    episodes: list[dict[str, object]] = []
+
+    def append_episode(stay_id, start, end) -> None:
+        if pd.isna(start) or pd.isna(end) or end <= start:
+            return
+        if isinstance(start, (pd.Timestamp, np.datetime64)):
+            duration_minutes = (
+                pd.Timestamp(end) - pd.Timestamp(start)
+            ).total_seconds() / 60.0
+        else:
+            # Numeric chart times at this callback boundary are ICU-relative
+            # hours (used by synthetic/custom data sources).
+            duration_minutes = (float(end) - float(start)) * 60.0
+        if not np.isfinite(duration_minutes) or duration_minutes <= 0:
+            return
+        episodes.append(
+            {
+                id_column: stay_id,
+                time_column: start,
+                concept_name: "invasive",
+                "dur_var": duration_minutes,
+            }
+        )
+
+    for stay_id, group in ordered.groupby(id_column, sort=False, dropna=False):
+        start = None
+        end = None
+        last_setting = None
+        require_new_episode = False
+
+        for row in group.itertuples(index=False):
+            values = row._asdict()
+            time = values[time_column]
+            mech_vent = bool(values["mech_vent"])
+            oxygen = bool(values["oxygen_therapy"])
+            extubated = bool(values["extubated"])
+
+            if mech_vent:
+                if last_setting is None:
+                    gap_hours = np.inf
+                elif isinstance(time, (pd.Timestamp, np.datetime64)):
+                    gap_hours = (
+                        pd.Timestamp(time) - pd.Timestamp(last_setting)
+                    ).total_seconds() / 3600.0
+                else:
+                    gap_hours = float(time) - float(last_setting)
+
+                if start is None or require_new_episode or gap_hours > 8.0:
+                    append_episode(stay_id, start, end)
+                    start = time
+                end = time
+                last_setting = time
+                require_new_episode = False
+
+                if extubated:
+                    append_episode(stay_id, start, time)
+                    start = end = last_setting = None
+                    require_new_episode = True
+                continue
+
+            if oxygen:
+                append_episode(stay_id, start, end)
+                start = end = last_setting = None
+                require_new_episode = True
+
+            if extubated:
+                append_episode(stay_id, start, time)
+                start = end = last_setting = None
+                require_new_episode = True
+
+        append_episode(stay_id, start, end)
+
+    result = pd.DataFrame.from_records(episodes, columns=output_columns)
+    if not result.empty:
+        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+        set_dur_var_unit(result, UNIT_MINUTES)
+    return result
+
+
 def _load_mimic_icu_outtimes(
     data_source: Optional["ICUDataSource"],
     frame: pd.DataFrame,
@@ -497,6 +718,136 @@ def _apply_callback(
     if expr == "identity_callback":
         return frame
 
+    if expr == "mimiciii_chart_ventilation_intervals":
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else None
+        )
+        id_column = next(
+            (
+                candidate
+                for candidate in ("icustay_id", "stay_id")
+                if candidate in frame.columns
+            ),
+            None,
+        )
+        time_column = source.index_var or "charttime"
+        item_column = source.sub_var or "itemid"
+        required = {
+            value_column,
+            id_column,
+            time_column,
+            item_column,
+        }
+        if None in required or not required.issubset(frame.columns):
+            raise KeyError(
+                "mimiciii_chart_ventilation_intervals requires ICU stay, "
+                "chart time, ITEMID and VALUE columns"
+            )
+
+        itemids = pd.to_numeric(frame[item_column], errors="coerce")
+        values = frame[value_column].astype("string")
+        valid = itemids.isin(_MIMICIII_VENT_CLASSIFICATION_ITEMIDS)
+        valid &= values.notna() & frame[time_column].notna()
+        if "error" in frame.columns:
+            valid &= pd.to_numeric(frame["error"], errors="coerce").ne(1)
+
+        itemids = itemids.loc[valid]
+        values = values.loc[valid]
+        classified = frame.loc[valid, [id_column, time_column]].copy()
+        classified["mech_vent"] = itemids.isin(
+            _MIMICIII_INVASIVE_VENT_SETTING_ITEMIDS
+        )
+        classified.loc[
+            itemids.eq(720) & values.eq("Other/Remarks"), "mech_vent"
+        ] = False
+        classified.loc[
+            itemids.eq(223848) & values.eq("Other"), "mech_vent"
+        ] = False
+        classified.loc[itemids.eq(467), "mech_vent"] = values.eq("Ventilator")
+        classified["oxygen_therapy"] = (
+            itemids.eq(226732) & values.isin(_MIMICIII_METAVISION_OXYGEN_VALUES)
+        ) | (
+            itemids.eq(467) & values.isin(_MIMICIII_CAREVUE_OXYGEN_VALUES)
+        )
+        classified["extubated"] = itemids.eq(640) & values.isin(
+            {"Extubated", "Self Extubation"}
+        )
+
+        # The MIT-LCP reference classification unions explicit MetaVision
+        # extubation procedures before constructing episodes. Restrict this
+        # small auxiliary read to stays that already have relevant chart
+        # evidence so a cohort extraction cannot widen into a whole-table read.
+        if data_source is not None and not classified.empty:
+            from ..datasource import FilterOp, FilterSpec
+
+            stay_ids = classified[id_column].dropna().unique().tolist()
+            try:
+                extubation_table = data_source.load_table(
+                    "procedureevents_mv",
+                    columns=[id_column, "starttime", "itemid"],
+                    filters=[
+                        FilterSpec(
+                            column="itemid",
+                            op=FilterOp.IN,
+                            value=[227194, 225468, 225477],
+                        ),
+                        FilterSpec(
+                            column=id_column,
+                            op=FilterOp.IN,
+                            value=stay_ids,
+                        ),
+                    ],
+                    verbose=False,
+                )
+                extubation = (
+                    extubation_table.data
+                    if hasattr(extubation_table, "data")
+                    else extubation_table
+                )
+            except Exception as exc:
+                database = getattr(
+                    getattr(data_source, "config", None), "name", "mimic"
+                )
+                raise ConceptExtractionUnavailable(
+                    concept_id=concept_name,
+                    database=str(database),
+                    stage="load_procedure_extubation",
+                    detail=(
+                        "MIMIC-III reference ventilation episodes require "
+                        f"procedure extubation markers ({exc})"
+                    ),
+                    cause=exc,
+                ) from exc
+
+            if not extubation.empty:
+                extubation = extubation.loc[
+                    extubation[id_column].isin(stay_ids)
+                    & extubation["starttime"].notna(),
+                    [id_column, "starttime"],
+                ].rename(columns={"starttime": time_column})
+                extubation["mech_vent"] = False
+                extubation["oxygen_therapy"] = False
+                extubation["extubated"] = True
+                classified = pd.concat(
+                    [classified, extubation], ignore_index=True, sort=False
+                )
+
+        classified = (
+            classified.groupby([id_column, time_column], as_index=False)
+            [["mech_vent", "oxygen_therapy", "extubated"]]
+            .max()
+        )
+        return _mimiciii_ventilation_interval_rows(
+            classified,
+            id_column=id_column,
+            time_column=time_column,
+            concept_name=concept_name,
+        )
+
     if expr == "mimiciii_explicit_ventilation_interval":
         # MIMIC-III MetaVision records delivered invasive/non-invasive
         # ventilation as explicit procedure intervals (ITEMID 225792/225794).
@@ -525,6 +876,11 @@ def _apply_callback(
                 .ne(0)
             )
             valid &= ~cancelled
+        status_var = str(source.params.get("status_var", "statusdescription"))
+        if status_var in frame.columns:
+            valid &= ~frame[status_var].astype("string").str.strip().str.lower().eq(
+                "rewritten"
+            )
         if "dur_var" in frame.columns:
             valid &= pd.to_numeric(
                 frame["dur_var"], errors="coerce"
@@ -540,13 +896,11 @@ def _apply_callback(
             set_dur_var_unit(out, UNIT_MINUTES)
         return out
 
-    if expr == "eicu_confirmed_invasive_airway_interval":
-        # eICU ventendoffset is commonly the zero sentinel, so it cannot be
-        # treated as extubation.  An explicit invasive airway nevertheless
-        # confirms IMV from the recorded start through the status timestamp.
-        # Starts before ICU admission are left-censored at hour zero; a zero
-        # start is valid ICU-entry support according to the source data
-        # dictionary and must not be discarded as a false-y sentinel.
+    if expr == "eicu_invasive_airway_evidence":
+        # respiratoryCare is a history table. ventstartoffset is evidence of
+        # initiation, while respCareStatusOffset is only the time at which the
+        # history row was entered. Emit a left-censored start point and never
+        # manufacture a continuous interval from those two different claims.
         value_column = (
             concept_name
             if concept_name in frame.columns
@@ -558,18 +912,13 @@ def _apply_callback(
         )
         if value_column is None:
             raise KeyError(
-                "eicu_confirmed_invasive_airway_interval requires an airway value column"
+                "eicu_invasive_airway_evidence requires an airway value column"
             )
         start_column = source.index_var or "ventstartoffset"
-        if start_column not in frame.columns or "dur_var" not in frame.columns:
+        if start_column not in frame.columns:
             raise KeyError(
-                "eicu_confirmed_invasive_airway_interval requires vent start and duration"
+                "eicu_invasive_airway_evidence requires ventstartoffset"
             )
-
-        start = pd.to_numeric(frame[start_column], errors="coerce")
-        duration = pd.to_numeric(frame["dur_var"], errors="coerce")
-        confirmed_end = start + duration
-
         id_column = next(
             (
                 candidate
@@ -578,57 +927,79 @@ def _apply_callback(
             ),
             None,
         )
-        if id_column and data_source is not None:
-            try:
-                patient = data_source.load_table(
-                    "patient",
-                    columns=[id_column, "unitdischargeoffset"],
-                    verbose=False,
-                )
-                patient_frame = (
-                    patient.data if hasattr(patient, "data") else patient
-                )
-                discharge = (
-                    patient_frame[[id_column, "unitdischargeoffset"]]
-                    .drop_duplicates(subset=[id_column], keep="last")
-                    .set_index(id_column)["unitdischargeoffset"]
-                )
-                discharge_for_row = pd.to_numeric(
-                    frame[id_column].map(discharge), errors="coerce"
-                )
-                confirmed_end = confirmed_end.where(
-                    discharge_for_row.isna(),
-                    confirmed_end.clip(upper=discharge_for_row),
-                )
-            except Exception:
-                # Custom/demo data sources may not expose patient discharge.
-                # The respiratory status timestamp remains a valid confirmed
-                # right edge; the generic expansion cap still applies.
-                pass
 
+        start = pd.to_numeric(frame[start_column], errors="coerce")
         effective_start = start.clip(lower=0)
-        effective_duration = confirmed_end - effective_start
-        valid = start.notna() & effective_duration.gt(0)
+        invasive_airways = {
+            "Oral ETT",
+            "Nasal ETT",
+            "Double-Lumen Tube",
+            "Cricothyrotomy",
+        }
+        valid = start.notna() & frame[value_column].isin(invasive_airways)
         out = frame.loc[valid].copy()
         out[start_column] = effective_start.loc[valid]
-        out["dur_var"] = effective_duration.loc[valid]
         out[value_column] = "invasive"
 
-        # respiratoryCare is a history table and repeats the same start in
-        # successive status records.  Retain the longest confirmed interval
-        # for each ICU stay/start rather than expanding every historical copy.
+        # Successive respiratoryCare history rows repeat the same start.
         if id_column and id_column in out.columns:
             out = (
-                out.sort_values("dur_var", ascending=False, kind="mergesort")
-                .drop_duplicates(
-                    subset=[id_column, start_column, value_column],
-                    keep="first",
+                out.drop_duplicates(
+                    subset=[id_column, start_column, value_column], keep="first"
                 )
                 .sort_index()
             )
-        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+        return out
 
-        set_dur_var_unit(out, UNIT_MINUTES)
+    if expr == "eicu_respiratory_device_ventilation_evidence":
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else None
+        )
+        if value_column is None:
+            raise KeyError(
+                "eicu_respiratory_device_ventilation_evidence requires a value column"
+            )
+        normalized = frame[value_column].astype("string").str.strip().str.lower()
+        mapped = normalized.map(
+            {
+                "ventilator": "invasive",
+                "mechanical ventilator": "invasive",
+                "ett": "invasive",
+                "bi-pap": "noninvasive",
+                "bipap": "noninvasive",
+                "cpap": "noninvasive",
+            }
+        )
+        out = frame.loc[mapped.notna()].copy()
+        out[value_column] = mapped.loc[mapped.notna()]
+        return out
+
+    if expr == "eicu_treatment_ventilation_evidence":
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else None
+        )
+        if value_column is None:
+            raise KeyError(
+                "eicu_treatment_ventilation_evidence requires treatmentstring"
+            )
+        normalized = frame[value_column].astype("string").str.strip().str.lower()
+        noninvasive = normalized.str.contains(
+            r"non[- ]?invasive ventilation", regex=True, na=False
+        )
+        invasive = normalized.str.contains(
+            "mechanical ventilation", regex=False, na=False
+        ) & ~noninvasive
+        out = frame.loc[invasive | noninvasive].copy()
+        out.loc[invasive, value_column] = "invasive"
+        out.loc[noninvasive, value_column] = "noninvasive"
         return out
 
     if expr in {

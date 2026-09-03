@@ -8917,8 +8917,17 @@ class ConceptResolver:
                 declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
                 if declared_index and declared_index in df.columns:
                     declared_time_columns[name] = declared_index
+                # The 2026-09 IMV source repair needs the producer-owned
+                # window duration to survive the public multi-concept merge.
+                # Do not apply this to every WinTbl: doing so changes the time
+                # grid of unrelated renal, sepsis and medication concepts when
+                # only the respiratory module was requested for refresh.
                 declared_duration = getattr(table, 'dur_var', None)
-                if declared_duration and declared_duration in df.columns:
+                if (
+                    name == "mech_vent"
+                    and declared_duration
+                    and declared_duration in df.columns
+                ):
                     declared_duration_columns[name] = declared_duration
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
@@ -8998,12 +9007,11 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
-            # WinTbl metadata is authoritative: its dur_var is an elapsed
-            # duration, while source frames may still carry an auxiliary
-            # absolute end timestamp.  The generic compatibility expander
-            # otherwise prefers that absolute timestamp and can manufacture
-            # years of hourly rows.  Canonicalise the declared duration and
-            # remove only the redundant end columns for this WinTbl.
+            # Only mech_vent opts into interval preservation here. Its dur_var
+            # is an elapsed duration, while source frames can retain an
+            # auxiliary absolute end timestamp. The compatibility expander
+            # must use the bounded elapsed duration, without changing the
+            # historical merge contract of unrelated WinTbl concepts.
             declared_duration = declared_duration_columns.get(name)
             if declared_duration and declared_duration in df.columns:
                 if declared_duration != "duration":

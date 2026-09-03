@@ -226,6 +226,42 @@ def test_wintbl_merge_uses_declared_duration_not_absolute_endtime() -> None:
     assert observed == [2.0, 3.0, 4.0, 5.0, 6.0]
 
 
+def test_unrelated_wintbl_keeps_historical_sparse_merge_contract() -> None:
+    """An IMV repair must not expand unrelated window concepts."""
+
+    treatment = WinTbl(
+        data=pd.DataFrame(
+            {
+                "stay_id": [1],
+                "charttime": [2.0],
+                "dur_var": [2.0],
+                "endtime": [pd.Timestamp("2180-01-01 04:00:00")],
+                "rrt": [True],
+            }
+        ),
+        id_vars=["stay_id"],
+        index_var="charttime",
+        dur_var="dur_var",
+        dur_unit="hours",
+    )
+    marker = ICUTable(
+        data=pd.DataFrame({"stay_id": [1], "charttime": [0.0], "marker": [1.0]}),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="marker",
+    )
+
+    result = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
+        {"rrt": treatment, "marker": marker},
+        ["rrt", "marker"],
+        pd.Timedelta(hours=1),
+        data_source=None,
+    )
+
+    observed = result.loc[result["rrt"].notna(), "charttime"].tolist()
+    assert observed == [2.0]
+
+
 def test_true_window_concept_preserves_duration_unit_during_alignment() -> None:
     class DataSource:
         config = load_data_sources().get("mimic")
