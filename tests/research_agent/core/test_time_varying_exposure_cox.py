@@ -95,7 +95,10 @@ def test_adapter_fits_cluster_robust_counting_process_model() -> None:
     assert result.receipt["engine_versions"]["R"]
 
 
-def test_adapter_refuses_to_choose_missingness_handling() -> None:
+def test_adapter_refuses_to_choose_missingness_handling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _: None)
     panel = _panel()
     panel.loc[0, "lactate"] = np.nan
 
@@ -134,7 +137,10 @@ def test_adapter_rejects_finite_output_from_a_separated_model() -> None:
     assert raised.value.code == "time_varying_cox_fit_warning"
 
 
-def test_adapter_rejects_changing_patient_group_within_one_stay() -> None:
+def test_adapter_rejects_changing_patient_group_within_one_stay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _: None)
     panel = _panel()
     panel.loc[1, "patient"] = "different-patient"
     with pytest.raises(TimeVaryingExposureCoxError, match="one patient cluster"):
@@ -143,3 +149,22 @@ def test_adapter_rejects_changing_patient_group_within_one_stay() -> None:
             id_col="stay_id", start_col="start", stop_col="stop",
             event_col="death", group_col="patient", covariates=("lactate", "age"),
         )
+
+
+def test_adapter_reports_missing_runtime_after_validating_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+
+    with pytest.raises(TimeVaryingExposureCoxError) as raised:
+        fit_cluster_robust_time_varying_cox(
+            _panel(),
+            id_col="stay_id",
+            start_col="start",
+            stop_col="stop",
+            event_col="death",
+            group_col="patient",
+            covariates=("lactate", "age"),
+        )
+
+    assert raised.value.code == "time_varying_cox_runtime_unavailable"
