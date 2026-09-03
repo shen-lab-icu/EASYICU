@@ -10,11 +10,15 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 from ..repairs.patch import looks_like_executable_python
 from ..contracts.runtime import ValidationFinding
 from ..authority.evidence_snapshot import load_current_evidence_snapshot
+from ..authority.run_input import (
+    RUN_INPUT_CAPSULE_FILENAME,
+    align_resume_scientific_identity_layout,
+)
 from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
@@ -62,6 +66,32 @@ _NON_CODE_QUARANTINE_VALIDATORS = frozenset(
 _NON_CODE_QUARANTINE_ISSUE_CODES = frozenset(
     {"llm_concept_audit_provider_failure"}
 )
+
+
+def align_resume_scientific_identity_from_capsule(
+    generated: Mapping[str, Any],
+    run_dir: Optional[Path],
+) -> Dict[str, Any]:
+    """Align staged trajectory layout using one readable resume capsule.
+
+    Missing or malformed capsules remain ordinary identity mismatches at the
+    later verified-resume gate; this projection never grants resume authority.
+    """
+
+    if run_dir is None:
+        return dict(generated)
+    try:
+        capsule = json.loads(
+            (Path(run_dir) / RUN_INPUT_CAPSULE_FILENAME).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, TypeError):
+        return dict(generated)
+    sealed = capsule.get("scientific_identity") if isinstance(capsule, Mapping) else None
+    return (
+        align_resume_scientific_identity_layout(generated=generated, sealed=sealed)
+        if isinstance(sealed, Mapping)
+        else dict(generated)
+    )
 
 
 def quarantine_findings_require_code_repair(

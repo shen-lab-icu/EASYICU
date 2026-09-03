@@ -1527,7 +1527,8 @@ def _resolve_predicate_column(
 
     The universe wide table names id-level concepts bare (``age``, ``los_icu``,
     ``death``) and time-series concepts as ``<output>_<aggregation>``
-    (``aki_stage_max`` …). A predicate carries the *dictionary* ``concept_id``
+    (``aki_stage_reference_max`` …). A predicate carries the *dictionary*
+    ``concept_id``
     plus the requested ``aggregation``; resolve against the columns present,
     trying in order: an explicit Planner/context binding, the bare id, the wide
     ``<concept_id>_<aggregation>`` form, and unambiguous catalog-owned composite

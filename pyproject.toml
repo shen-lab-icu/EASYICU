@@ -244,6 +244,7 @@ ignore = [
 "src/easyicu/research_agent/audits/patterns.py" = ["F401"]
 "src/easyicu/research_agent/audits/validators.py" = ["F401", "F841"]
 "src/easyicu/research_agent/authority/provenance.py" = ["F401"]
+"src/easyicu/research_agent/authority/run_lock.py" = ["B010"]
 "src/easyicu/research_agent/authority/step_runtime.py" = ["F401"]
 "src/easyicu/research_agent/authority/typed_input_receipt.py" = ["F401"]
 "src/easyicu/research_agent/case_plugins/builder.py" = ["F401"]

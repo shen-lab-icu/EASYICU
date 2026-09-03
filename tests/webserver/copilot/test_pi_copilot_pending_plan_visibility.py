@@ -55,8 +55,10 @@ def test_candidate_review_has_no_duplicate_preplan_cohort_card(action, expected)
     if not node:
         pytest.skip("Node.js unavailable")
     owner = (STATIC / "js/screens-guided-pi-cohort-eligibility.js").read_text()
+    modules = (STATIC / "js/screens-guided-pi-modules.js").read_text()
     script = f"""
       global.window = {{ EU_LANG: 'zh' }};
+      eval({json.dumps(modules)});
       eval({json.dumps(owner)});
       const host = {{
         tr: (en, zh) => zh || en, esc: x => String(x),
@@ -67,7 +69,8 @@ def test_candidate_review_has_no_duplicate_preplan_cohort_card(action, expected)
         workflow: () => ({{ next_action_code: {json.dumps(action)} }}),
         busy: () => false, sessionIsStale: () => false,
       }};
-      process.stdout.write(window.EU_GUIDED_PI_COHORT_ELIGIBILITY.create(host).render());
+      const cohort = window.EasyICU.guidedPi.require('cohortEligibility');
+      process.stdout.write(cohort.create(host).render());
     """
     result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True, timeout=15)
     assert bool(result.stdout) is expected
