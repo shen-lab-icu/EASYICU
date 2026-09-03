@@ -29,6 +29,12 @@ from easyicu.webserver import dataio
 from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
+from easyicu.webserver import run_artifact_disclosure
+from easyicu.webserver.research_evidence_preview import (
+    EvidencePreviewError,
+    build_evidence_preview,
+)
+from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver import study_contexts as context_store
 
 
@@ -53,6 +59,7 @@ _RUN_ARTIFACT_NAMES = [
     "scientific_plan_review.json",
     "scientific_readiness.json",
     "manuscript_draft.json",
+    "manuscript_provenance.json",
     "manuscript_pdf_receipt.json",
     "benchmark_scorecard.json",
     "workflow_graph.json",
@@ -368,9 +375,9 @@ def make_agent_run_runner(
             numeric_audit=numeric_audit,
         )
 
-        persisted_artifacts, privacy_scan = _privacy_safe_artifacts(
-            artifacts, privacy_scan
-        )
+        persisted_artifacts, privacy_scan = (
+            run_artifact_disclosure.safe_artifacts_after_privacy_scan
+        )(artifacts, privacy_scan)
         if not privacy_scan.get("passed"):
             # Audits are derived from the original artifacts and can copy a
             # patient identifier into an otherwise metadata-only ledger. A
@@ -423,13 +430,13 @@ def make_agent_run_runner(
             strict_audit,
             numeric_audit,
         )
-        final_scan = _scan_artifact_payloads(
+        final_scan = run_artifact_disclosure.scan_artifact_payloads(
             {**persisted_artifacts, "evidence_ledger.json": ledger}
         )
         if not final_scan.get("passed"):
-            persisted_artifacts, privacy_scan = _privacy_safe_artifacts(
-                {**artifacts, "evidence_ledger.json": ledger}, final_scan
-            )
+            persisted_artifacts, privacy_scan = (
+                run_artifact_disclosure.safe_artifacts_after_privacy_scan
+            )({**artifacts, "evidence_ledger.json": ledger}, final_scan)
             gate = persisted_artifacts["quality_gate.json"]["gate"]
             strict_audit = None
             numeric_audit = None
@@ -447,7 +454,7 @@ def make_agent_run_runner(
                 None,
                 None,
             )
-            if not _scan_artifact_payloads(
+            if not run_artifact_disclosure.scan_artifact_payloads(
                 {**persisted_artifacts, "evidence_ledger.json": ledger}
             ).get("passed"):
                 raise RuntimeError("privacy failure package did not pass final scan")
@@ -507,79 +514,7 @@ def make_agent_run_runner(
     return runner
 
 
-def project_artifact_governance(
-    review: Mapping[str, Any],
-    *,
-    artifact: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Project one run review into the browser-safe artifact authority contract."""
-
-    readiness = review.get("readiness")
-    if not isinstance(readiness, Mapping):
-        return {
-            "ok": False,
-            "error": "run_artifact_governance_readiness_invalid",
-        }
-    gate = review.get("gate")
-    gate = gate if isinstance(gate, Mapping) else {}
-    readiness_status = str(readiness.get("status") or "unknown")
-    signed = bool(readiness.get("signed"))
-    signoff_stale = bool(readiness.get("signoff_stale"))
-    artifact_integrity = None
-    if artifact is not None:
-        artifact_integrity = _signed_artifact_integrity(review.get("signoff"), artifact)
-        if signed and artifact_integrity != "verified":
-            signoff_stale = True
-    artifact_name = str((artifact or {}).get("name") or "")
-    if artifact_name in {
-        "system_validation_report.json",
-        "system_validation_report_receipt.json",
-        "system_validation_report.html",
-        "system_validation_report.pdf",
-    }:
-        return {
-            "ok": True,
-            "authority_class": "easyicu_system_validation_report",
-            "gate_status": gate.get("status"),
-            "readiness_status": readiness_status,
-            "human_signoff": "not_signable",
-            "reportable": False,
-            "claim_ceiling": "engineering_validation_only",
-            **(
-                {"artifact_integrity": artifact_integrity}
-                if artifact_integrity is not None
-                else {}
-            ),
-        }
-    reportable = bool(readiness.get("reportable"))
-    if signoff_stale:
-        human_signoff = "stale"
-    elif signed:
-        human_signoff = "signed"
-    elif readiness_status == "awaiting_human_signoff":
-        human_signoff = "required"
-    else:
-        human_signoff = "not_signable"
-    claim_ceiling = "reportable" if reportable else "unsupported"
-    if (
-        not reportable
-        and not signoff_stale
-        and gate.get("status") == "analysis_only"
-        and readiness_status in {"awaiting_human_signoff", "signed_analysis_only"}
-    ):
-        claim_ceiling = "analysis_only"
-    projection = {
-        "ok": True,
-        "authority_class": "easyicu_run_artifact",
-        "gate_status": gate.get("status"),
-        "readiness_status": readiness_status,
-        "human_signoff": human_signoff,
-        "reportable": reportable,
-        "claim_ceiling": claim_ceiling,
-    }
-    if artifact_integrity is not None:
-        projection["artifact_integrity"] = artifact_integrity
-    return projection
+project_artifact_governance = run_artifact_disclosure.project_artifact_governance
 
 
 def read_run_review(project_dir: str) -> Dict[str, Any]:
@@ -603,7 +538,7 @@ def read_run_review(project_dir: str) -> Dict[str, Any]:
     signoff = payloads.get("human_signoff.json")
 
     artifacts = _run_artifacts(run_dir)
-    signoff_integrity = _signoff_integrity(signoff, artifacts)
+    signoff_integrity = run_artifact_disclosure.signoff_integrity(signoff, artifacts)
     readiness = _readiness_from_gate(
         gate,
         signed=bool(signoff),
@@ -706,7 +641,9 @@ def create_human_signoff(
             if item.get("name") != "human_signoff.json"
         ],
     }
-    signoff["privacy_scan"] = _scan_artifact_payloads({"human_signoff.json": signoff})
+    signoff["privacy_scan"] = run_artifact_disclosure.scan_artifact_payloads(
+        {"human_signoff.json": signoff}
+    )
     if not signoff["privacy_scan"].get("passed"):
         return {
             "ok": False,
@@ -725,9 +662,7 @@ def list_run_history(
 ) -> Dict[str, Any]:
     """List local agent run directories by reading whitelisted artifacts only."""
     root = (
-        Path(project_root).expanduser()
-        if project_root
-        else state_paths.projects_root()
+        Path(project_root).expanduser() if project_root else state_paths.projects_root()
     )
     root = root.resolve()
     if not root.exists() or not root.is_dir():
@@ -765,6 +700,43 @@ def list_run_history(
     }
 
 
+def _scanned_json_artifact(artifact_path: Path, raw: bytes) -> Dict[str, Any]:
+    """Decode one JSON artifact and withhold it when row-level data are present."""
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "error": "artifact_json_invalid_encoding",
+            "artifact": artifact_path.name,
+        }
+    except json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "error": "artifact_json_invalid",
+            "artifact": artifact_path.name,
+            "message": str(exc),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "error": "artifact_json_not_object",
+            "artifact": artifact_path.name,
+        }
+    privacy_scan = run_artifact_disclosure.scan_artifact_payloads(
+        {artifact_path.name: payload}
+    )
+    if not privacy_scan.get("passed"):
+        return {
+            "ok": False,
+            "error": "artifact_privacy_scan_failed",
+            "artifact": artifact_path.name,
+            "privacy_scan": privacy_scan,
+        }
+    return {"ok": True, "payload": payload, "privacy_scan": privacy_scan}
+
+
 def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     """Return one whitelisted artifact as a bounded JSON viewer payload."""
     if str(artifact_name or "").strip() not in _RUN_ARTIFACT_NAMES:
@@ -776,37 +748,36 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path, raw, path_error = _read_safe_artifact_bytes(
-        run_dir, artifact_name
-    )
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(run_dir, artifact_name)
     if artifact_path is None or raw is None:
         return {
             "ok": False,
             "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except UnicodeDecodeError:
+    decoded = _scanned_json_artifact(artifact_path, raw)
+    if not decoded.get("ok"):
+        return decoded
+    payload = decoded["payload"]
+    if artifact_name == "figure_gallery.json":
+        payload = (
+            verified_presentation_gallery(
+                run_dir,
+                payload,
+                embed_pngs=True,
+            )
+            or payload
+        )
+    privacy_scan = run_artifact_disclosure.scan_artifact_payloads(
+        {artifact_path.name: payload}
+    )
+    if not privacy_scan.get("passed"):
         return {
             "ok": False,
-            "error": "artifact_json_invalid_encoding",
-            "artifact": artifact_name,
+            "error": "artifact_privacy_scan_failed",
+            "artifact": artifact_path.name,
+            "privacy_scan": privacy_scan,
         }
-    except json.JSONDecodeError as exc:
-        return {
-            "ok": False,
-            "error": "artifact_json_invalid",
-            "artifact": artifact_name,
-            "message": str(exc),
-        }
-    if not isinstance(payload, dict):
-        return {
-            "ok": False,
-            "error": "artifact_json_not_object",
-            "artifact": artifact_name,
-        }
-    privacy_scan = _scan_artifact_payloads({artifact_path.name: payload})
     return {
         "ok": True,
         "project_dir": str(run_dir),
@@ -816,19 +787,55 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     }
 
 
+def read_run_evidence_preview(
+    project_dir: str, evidence_id: str, expected_sha256: str
+) -> Dict[str, Any]:
+    """Return one registry-resolved, digest-pinned evidence preview."""
+
+    run_dir = _resolve_run_dir(project_dir)
+    if run_dir is None:
+        return {"ok": False, "error": "project_dir_required"}
+    try:
+        payload = build_evidence_preview(run_dir, evidence_id, expected_sha256)
+    except EvidencePreviewError as exc:
+        return {
+            "ok": False,
+            "error": exc.code,
+            "message": exc.message,
+            "evidence_id": str(evidence_id or ""),
+        }
+    privacy_scan = run_artifact_disclosure.scan_artifact_payloads(
+        {"evidence_preview": payload}
+    )
+    if not privacy_scan.get("passed"):
+        return {
+            "ok": False,
+            "error": "evidence_preview_privacy_scan_failed",
+            "evidence_id": str(evidence_id or ""),
+            "privacy_scan": privacy_scan,
+        }
+    return {
+        "ok": True,
+        "payload": payload,
+        "privacy_scan": privacy_scan,
+    }
+
+
 def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path, raw, path_error = _read_safe_artifact_bytes(
-        run_dir, artifact_name
-    )
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(run_dir, artifact_name)
     if artifact_path is None or raw is None:
         return {
             "ok": False,
             "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
+    if artifact_path.name in _RUN_ARTIFACT_NAMES:
+        decoded = _scanned_json_artifact(artifact_path, raw)
+        if not decoded.get("ok"):
+            return decoded
     return {
         "ok": True,
         "name": artifact_path.name,
@@ -851,9 +858,10 @@ def build_run_bundle(project_dir: str) -> Dict[str, Any]:
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for artifact in artifacts:
             name = str(artifact.get("name") or "")
-            _path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
-            if raw is not None:
-                zf.writestr(name, raw)
+            loaded = read_run_artifact_bytes(str(run_dir), name)
+            if not loaded.get("ok"):
+                return loaded
+            zf.writestr(name, loaded["content"])
     filename = f"{run_dir.name}_artifacts.zip"
     return {
         "ok": True,
@@ -1411,102 +1419,6 @@ def _readiness_from_gate(
     }
 
 
-def _signoff_integrity(
-    signoff: Optional[Dict[str, Any]],
-    artifacts: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    if not signoff:
-        return {
-            "status": "unsigned",
-            "signoff_stale": False,
-            "checked_artifacts": 0,
-            "tampered_artifacts": [],
-            "missing_artifacts": [],
-            "unexpected_artifacts": [],
-        }
-    signed = signoff.get("signed_artifacts")
-    if not isinstance(signed, list) or not signed:
-        return {
-            "status": "unverifiable",
-            "signoff_stale": True,
-            "reason": "missing_signed_artifact_hashes",
-            "checked_artifacts": 0,
-            "tampered_artifacts": [],
-            "missing_artifacts": [],
-            "unexpected_artifacts": [],
-        }
-    current = {
-        str(item.get("name")): item
-        for item in artifacts
-        if item.get("name") != "human_signoff.json"
-    }
-    tampered = []
-    missing = []
-    checked = 0
-    for item in signed:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "")
-        current_item = current.get(name)
-        if current_item is None:
-            missing.append(name)
-            continue
-        checked += 1
-        if str(item.get("sha256") or "") != str(
-            current_item.get("sha256") or ""
-        ) or int(item.get("bytes") or -1) != int(current_item.get("bytes") or -2):
-            tampered.append(
-                {
-                    "name": name,
-                    "signed_sha256": item.get("sha256"),
-                    "current_sha256": current_item.get("sha256"),
-                    "signed_bytes": item.get("bytes"),
-                    "current_bytes": current_item.get("bytes"),
-                }
-            )
-    signed_names = {
-        str(item.get("name") or "") for item in signed if isinstance(item, dict)
-    }
-    unexpected = sorted(name for name in current if name not in signed_names)
-    stale = bool(tampered or missing or unexpected)
-    return {
-        "status": "stale" if stale else "verified",
-        "signoff_stale": stale,
-        "checked_artifacts": checked,
-        "tampered_artifacts": tampered,
-        "missing_artifacts": missing,
-        "unexpected_artifacts": unexpected,
-    }
-
-
-def _signed_artifact_integrity(
-    signoff: Any,
-    artifact: Mapping[str, Any],
-) -> str:
-    if not isinstance(signoff, Mapping):
-        return "unsigned"
-    signed = signoff.get("signed_artifacts")
-    if not isinstance(signed, list):
-        return "unsigned"
-    name = str(artifact.get("name") or "")
-    signed_item = next(
-        (
-            item
-            for item in signed
-            if isinstance(item, Mapping) and str(item.get("name") or "") == name
-        ),
-        None,
-    )
-    if signed_item is None:
-        return "unsigned"
-    if (
-        str(signed_item.get("sha256") or "") == str(artifact.get("sha256") or "")
-        and int(signed_item.get("bytes") or -1) == int(artifact.get("bytes") or -2)
-    ):
-        return "verified"
-    return "mismatch"
-
-
 def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
     readiness = review.get("readiness") or {}
     gate = review.get("gate") or {}
@@ -1522,6 +1434,11 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         }
     )
     updated = max((run_dir / str(a.get("name"))).stat().st_mtime for a in artifacts)
+    gate_checks = {
+        str(item.get("id") or "").strip(): bool(item.get("passed"))
+        for item in (gate.get("checks") or [])
+        if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+    }
     return {
         "run_id": review.get("run_id") or run_dir.name,
         "run_label": str(review.get("run_id") or run_dir.name).replace("_", " "),
@@ -1534,6 +1451,8 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "run_type": review.get("run_type"),
         "project_dir": review.get("project_dir"),
         "gate_status": gate.get("status"),
+        "gate_reason": gate.get("reason"),
+        "gate_checks": gate_checks,
         "run_status": source_manifest.get("status"),
         "pending_review_reason_codes": pending_reason_codes,
         "plan_approval_allowed": source_manifest.get("plan_approval_allowed"),
@@ -1598,13 +1517,9 @@ def _public_review_payloads(
     if "literature_evidence.json" in payloads:
         public["literature_evidence.json"] = payloads["literature_evidence.json"]
     if "scientific_plan_review.json" in payloads:
-        public["scientific_plan_review.json"] = payloads[
-            "scientific_plan_review.json"
-        ]
+        public["scientific_plan_review.json"] = payloads["scientific_plan_review.json"]
     if "scientific_readiness.json" in payloads:
-        public["scientific_readiness.json"] = payloads[
-            "scientific_readiness.json"
-        ]
+        public["scientific_readiness.json"] = payloads["scientific_readiness.json"]
     if "manuscript_draft.json" in payloads:
         row = payloads["manuscript_draft.json"]
         public["manuscript_draft.json"] = {
@@ -1616,6 +1531,11 @@ def _public_review_payloads(
             "markdown_preview": row.get("markdown_preview"),
             "source": row.get("source"),
         }
+    if "manuscript_provenance.json" in payloads:
+        # This artifact is already a path-free host projection.  Preserve its
+        # typed reader structure; the normal payload privacy scan still runs
+        # before it crosses the Web boundary.
+        public["manuscript_provenance.json"] = payloads["manuscript_provenance.json"]
     for name in (
         "benchmark_scorecard.json",
         "workflow_graph.json",
@@ -1711,7 +1631,7 @@ def _evaluate_gate_with_ledger(
     if normalize_run_type(run_type) == "full":
         strict_audit = _strict_evidence_audit(artifacts)
         numeric_audit = numeric_evidence_audit.audit_numeric_evidence(artifacts)
-    privacy_scan = _scan_artifact_payloads(artifacts)
+    privacy_scan = run_artifact_disclosure.scan_artifact_payloads(artifacts)
     gate = _gate(
         source,
         summary,
@@ -1740,7 +1660,7 @@ def _evaluate_gate_with_ledger(
             strict_audit,
             numeric_audit,
         )
-        privacy_scan = _scan_artifact_payloads(
+        privacy_scan = run_artifact_disclosure.scan_artifact_payloads(
             {**artifacts, "evidence_ledger.json": ledger}
         )
         gate = _gate(
@@ -1889,125 +1809,6 @@ def _strict_evidence_audit(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, An
         "unbound_sentences": unbound_sentences,
         "missing_evidence": missing_evidence,
     }
-
-
-_ROW_LEVEL_KEYS = {
-    "tablerows",
-    "series",
-    "patient",
-    "patients",
-    "patientid",
-    "patientids",
-    "stayid",
-    "stayids",
-    "subjectid",
-    "subjectids",
-    "hadmid",
-    "hadmids",
-    "entityid",
-    "entityids",
-}
-
-
-def _scan_artifact_payloads(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    hits = []
-    for name, payload in artifacts.items():
-        try:
-            # Scan the same JSON-shaped tree that will be written. Python
-            # tuples, non-string dict keys, and other json.dumps coercions must
-            # not create a scanner/writer type gap.
-            canonical = json.loads(_json_bytes(payload).decode("utf-8"))
-        except (TypeError, ValueError, UnicodeDecodeError):
-            hits.append({"path": name, "marker": "non_json_serializable"})
-            continue
-        hits.extend(_row_level_markers(canonical, name))
-    return {
-        "passed": not hits,
-        "scanned_artifacts": len(artifacts),
-        "row_level_markers": hits[:50],
-    }
-
-
-def _privacy_safe_artifacts(
-    artifacts: Dict[str, Dict[str, Any]],
-    privacy_scan: Dict[str, Any],
-) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
-    """Return the minimal failure package allowed after a privacy violation."""
-    if privacy_scan.get("passed"):
-        return artifacts, privacy_scan
-    # Never reuse quality_gate.json from the unsafe bundle: strict/numeric
-    # audit failures and even nested object paths can contain values copied
-    # from row-level inputs. Build a fixed-schema failure package instead.
-    hits = privacy_scan.get("row_level_markers")
-    hits = hits if isinstance(hits, list) else []
-    marker_types = sorted(
-        {
-            normalized
-            for hit in hits
-            if isinstance(hit, dict)
-            for normalized in [
-                re.sub(r"[^a-z0-9]+", "", str(hit.get("marker") or "").lower())
-            ]
-            if normalized in _ROW_LEVEL_KEYS
-        }
-    )
-    safe_scan = {
-        "passed": False,
-        "scanned_artifacts": int(privacy_scan.get("scanned_artifacts") or 0),
-        "row_level_marker_count": len(hits),
-        "marker_types": marker_types,
-        "payloads_withheld": sorted(str(name) for name in artifacts),
-    }
-    gate = {
-        "status": "blocked",
-        "reportable": False,
-        "draft_unlocked": False,
-        "reason": "privacy_gate_failed",
-        "checks": [
-            {
-                "id": "no_patient_rows_persisted",
-                "label": "No patient rows persisted in agent artifacts",
-                "passed": False,
-                "evidence": "artifact_json_scan",
-                "scanned_artifacts": safe_scan["scanned_artifacts"],
-                "row_level_marker_count": safe_scan["row_level_marker_count"],
-                "marker_types": marker_types,
-            },
-            {
-                "id": "human_signoff",
-                "label": "Human sign-off before manuscript claims",
-                "passed": False,
-            },
-        ],
-    }
-    safe = {
-        "quality_gate.json": {
-            "gate": gate,
-            "privacy_failure": {
-                "row_level_marker_count": safe_scan["row_level_marker_count"],
-                "marker_types": marker_types,
-                "payloads_withheld": safe_scan["payloads_withheld"],
-            },
-        }
-    }
-    if not _scan_artifact_payloads(safe).get("passed"):
-        raise RuntimeError("minimal privacy failure gate is not metadata-only")
-    return safe, safe_scan
-
-
-def _row_level_markers(value: Any, path: str) -> List[Dict[str, str]]:
-    hits: List[Dict[str, str]] = []
-    if isinstance(value, dict):
-        for key, child in value.items():
-            child_path = f"{path}.{key}"
-            normalized_key = re.sub(r"[^a-z0-9]+", "", str(key).lower())
-            if normalized_key in _ROW_LEVEL_KEYS:
-                hits.append({"path": child_path, "marker": key})
-            hits.extend(_row_level_markers(child, child_path))
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            hits.extend(_row_level_markers(child, f"{path}[{index}]"))
-    return hits
 
 
 def _artifact_payload(

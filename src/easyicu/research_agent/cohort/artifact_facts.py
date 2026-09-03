@@ -12,6 +12,24 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 
+def logical_dtype_for_series(series: pd.Series) -> str:
+    """Return the stable logical dtype used by ``ResearchContext``.
+
+    Parquet-backed text commonly arrives in pandas as physical ``object``
+    while pandas' string-inference modes may instead expose ``str`` or a
+    string extension dtype.  Those representations carry the same logical
+    fact.  Mixed object columns remain ``object`` so this normalization cannot
+    launder heterogeneous values into a categorical-text contract.
+    """
+
+    observed = series.dropna()
+    if not observed.empty and pd.api.types.infer_dtype(
+        observed, skipna=True
+    ) == "string":
+        return "str"
+    return str(series.dtype)
+
+
 def observed_domain_for_series(series: pd.Series) -> Optional[Dict[str, Any]]:
     """Return the canonical domain actually observed in one physical column.
 
@@ -103,4 +121,4 @@ def observed_domain_for_series(series: pd.Series) -> Optional[Dict[str, Any]]:
     return domain
 
 
-__all__ = ["observed_domain_for_series"]
+__all__ = ["logical_dtype_for_series", "observed_domain_for_series"]

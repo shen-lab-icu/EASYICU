@@ -1,0 +1,42 @@
+/* Owner: durable validated-analysis outcome card in Guided Copilot. */
+.gpi-run-outcome {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  margin: 14px 24px 20px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent, #187d78) 34%, #d8e3e1);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent, #187d78) 5%, #fff);
+}
+.gpi-run-outcome-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #176d58;
+  background: #e1f3eb;
+}
+.gpi-run-outcome-copy { min-width: 0; }
+.gpi-run-outcome-copy > strong { display: block; font-size: 15px; }
+.gpi-run-outcome-copy p { margin: 5px 0 11px; color: var(--muted, #66716f); }
+.gpi-run-outcome-copy small { display: block; margin-top: 10px; color: var(--muted, #66716f); }
+.gpi-run-outcome-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.gpi-run-outcome-actions .gpi-resource-link { margin: 0; }
+.gpi-run-outcome-more { margin-top: 10px; }
+.gpi-run-outcome-more > summary {
+  width: max-content;
+  max-width: 100%;
+  cursor: pointer;
+  color: var(--muted, #66716f);
+  font-size: 12px;
+  font-weight: 650;
+}
+.gpi-run-outcome-more > .gpi-run-outcome-actions {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line, #d8e3e1);
+  border-radius: 8px;
+  background: var(--paper, #fff);
+}

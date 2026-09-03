@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from ..research_context.typed import parse_research_context
-from ..plan_utils import (
+from ..gates.step_result_evidence import (
     _finite_float,
-    _infer_primary_predictor_from_context,
-    _predictor_tokens,
     _primary_effect_from_summary,
 )
 from ..authority.runtime_artifacts import (
@@ -30,16 +29,79 @@ from ..authority.runtime_artifacts import (
 )
 from ..authority.planned_role import unique_verified_primary_record
 from ..scalar_utils import _first_present_scalar
-from ..schema import PipelineResult
+from ..schema import PipelineResult, ResearchContext, VariableRole
 
 __all__ = [
     "_extract_primary_effect_row",
     "_extract_primary_effect_payload_from_records",
     "_extract_primary_effect_payload_from_summary",
     "_infer_primary_predictor_from_run_dir",
+    "_infer_primary_predictor_from_context",
+    "_predictor_tokens",
     "_primary_effect_payload_is_complete",
     "_primary_effect_candidate_score",
 ]
+
+
+def _predictor_tokens(name: Optional[str]) -> set[str]:
+    if not name:
+        return set()
+    stop = {
+        "",
+        "24h",
+        "48h",
+        "72h",
+        "max",
+        "min",
+        "mean",
+        "median",
+        "first",
+        "last",
+        "any",
+        "flag",
+        "binary",
+        "value",
+        "score",
+    }
+    tokens = {
+        token
+        for token in re.split(r"[^a-zA-Z0-9]+", str(name).lower())
+        if token not in stop
+    }
+    if "vaso" in tokens:
+        tokens.add("vasopressor")
+    if "norepi" in tokens:
+        tokens.add("norepinephrine")
+    return tokens
+
+
+def _infer_primary_predictor_from_context(
+    context: ResearchContext,
+) -> Optional[str]:
+    """Infer the named exposure from pre-adjustment question coordinates."""
+
+    question = (context.research_question or "").lower()
+    if not question:
+        return None
+    primary_span = re.split(
+        r"\b(?:after adjustment for|adjusted for|controlling for|with adjustment for|including covariates|covariates?)\b",
+        question,
+        maxsplit=1,
+    )[0]
+    best_name: Optional[str] = None
+    best_score = 0
+    for variable in context.variables:
+        if variable.role in {VariableRole.ID, VariableRole.TIME, VariableRole.OUTCOME}:
+            continue
+        tokens = _predictor_tokens(variable.name)
+        score = sum(
+            20 if token in primary_span else 5 if token in question else 0
+            for token in tokens
+        )
+        if score > best_score:
+            best_score = score
+            best_name = variable.name
+    return best_name if best_score > 0 else None
 
 
 def _extract_primary_effect_row(

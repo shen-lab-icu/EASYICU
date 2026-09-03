@@ -37,11 +37,10 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
-from ..plan_utils import (
+from ..contracts.step_families import _step_expects_figure, effect_output_authorized
+from ..gates.step_repair import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
-    _step_expects_figure,
-    effect_output_authorized,
 )
 from ..authority.provider_budget import (
     StepProviderCallBudget,

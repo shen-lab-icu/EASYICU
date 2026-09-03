@@ -5,8 +5,9 @@
   'use strict';
 
   const VISIBLE_KINDS = new Set([
-    'submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction',
+    'submitted', 'agent', 'assistant', 'tool', 'pipeline', 'retry', 'compaction',
   ]);
+  const DURATION_KINDS = new Set(['assistant', 'tool', 'pipeline', 'retry', 'compaction']);
 
   function create(host) {
     const tr = host.tr;
@@ -15,6 +16,8 @@
     const resourceName = host.resourceName;
     const resourceKey = host.resourceKey;
     const resourceButton = host.resourceButton;
+    let liveClock = 0;
+    let liveClockRoot = null;
 
     function timeMs(value) {
       const parsed = Date.parse(String(value || ''));
@@ -22,10 +25,10 @@
     }
     function durationText(startedAt, endedAt) {
       const elapsed = Math.max(0, Number(endedAt || Date.now()) - Number(startedAt || Date.now()));
-      if (elapsed < 1000) return `${elapsed} ms`;
+      if (elapsed < 100) return tr('<0.1s', '<0.1 秒');
       const seconds = elapsed / 1000;
       if (seconds < 60) {
-        const value = seconds < 10 ? seconds.toFixed(1) : Math.round(seconds);
+        const value = seconds.toFixed(1);
         return tr(`${value}s`, `${value} 秒`);
       }
       const minutes = Math.floor(seconds / 60);
@@ -35,7 +38,48 @@
         remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分`,
       );
     }
+    function updateLiveClock() {
+      if (!liveClockRoot || !liveClockRoot.isConnected) {
+        if (liveClock) clearInterval(liveClock);
+        liveClock = 0;
+        liveClockRoot = null;
+        return;
+      }
+      liveClockRoot.querySelectorAll('[data-gpi-live-elapsed]').forEach(node => {
+        node.textContent = durationText(Number(node.dataset.gpiLiveElapsed), Date.now());
+      });
+    }
+    function syncLiveClock(root, running) {
+      liveClockRoot = root || null;
+      updateLiveClock();
+      if (running && !liveClock) liveClock = setInterval(updateLiveClock, 250);
+      if (!running && liveClock) {
+        clearInterval(liveClock);
+        liveClock = 0;
+      }
+    }
+    function appendPublicDelta(activity, delta) {
+      if (!activity || !delta) return;
+      const step = activity.steps.slice().reverse()
+        .find(item => item.kind === 'assistant' && item.status === 'running');
+      if (!step) return;
+      const addition = String(delta);
+      step.publicChars = Number(step.publicChars || 0) + addition.length;
+      step.publicText = (String(step.publicText || '') + addition).slice(-320);
+    }
+    function startTurn(activity, at) {
+      if (!activity) return;
+      const turn = activity.steps.filter(item => item.kind === 'turn').length;
+      activity.steps.push({ id: `turn-${turn}`, kind: 'turn', turn, status: 'running', at, startedAt: at });
+    }
+    function finishTurn(activity, at) {
+      if (!activity) return;
+      const turn = activity.steps.slice().reverse()
+        .find(item => item.kind === 'turn' && item.status === 'running');
+      if (turn) { turn.status = 'complete'; turn.endedAt = at; }
+    }
     function stepDuration(step) {
+      if (!DURATION_KINDS.has(String(step && step.kind || ''))) return '';
       const started = Number(step && step.startedAt);
       const ended = Number(step && step.endedAt);
       return Number.isFinite(started) && Number.isFinite(ended) && ended >= started
@@ -80,7 +124,7 @@
     function toolLabel(name, resource) {
       const labels = {
         easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
-        easyicu_list_data_sources: tr('List registered data sources', '列出已登记数据源'),
+        easyicu_list_data_sources: tr('Check the EasyICU data-source catalog', '检查 EasyICU 数据源目录'),
         easyicu_inspect_data_package: tr('Review data package', '审阅数据包'),
         easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
         easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
@@ -100,6 +144,7 @@
         easyicu_search_literature: tr('Search PubMed literature', '检索 PubMed 文献'),
         easyicu_prepare_idea_handoff: tr('Prepare idea plan', '准备想法计划'),
         easyicu_accept_idea_handoff: tr('Accept selected idea', '接受所选想法'),
+        easyicu_prepare_demo_source: tr('Download and prepare official demo data', '下载并准备官方 Demo 数据'),
         easyicu_start_extraction: tr('Start feature extraction', '启动特征提取'),
         easyicu_run: tr('Start EasyICU run', '启动 EasyICU 运行'),
         easyicu_resume: tr('Resume EasyICU work', '恢复 EasyICU 任务'),
@@ -122,7 +167,7 @@
     function completedToolLabel(name, resource) {
       const labels = {
         easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
-        easyicu_list_data_sources: tr('Listed registered data sources', '已列出已登记数据源'),
+        easyicu_list_data_sources: tr('Checked the EasyICU data-source catalog', '已检查 EasyICU 数据源目录'),
         easyicu_inspect_data_package: tr('Reviewed data package', '已审阅数据包'),
         easyicu_inspect_workflow: tr('Read research workflow', '已读取科研流程'),
         easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
@@ -142,6 +187,7 @@
         easyicu_search_literature: tr('Searched PubMed literature', '已检索 PubMed 文献'),
         easyicu_prepare_idea_handoff: tr('Prepared idea plan', '已准备想法计划'),
         easyicu_accept_idea_handoff: tr('Accepted selected idea', '已接受所选想法'),
+        easyicu_prepare_demo_source: tr('Started official demo preparation', '已启动官方 Demo 准备'),
         easyicu_start_extraction: tr('Started feature extraction', '已启动特征提取'),
         easyicu_run: tr('Started EasyICU run', '已启动 EasyICU 运行'),
         easyicu_resume: tr('Resumed EasyICU work', '已恢复 EasyICU 任务'),
@@ -161,6 +207,148 @@
       const file = resourceName(resource);
       return file ? `${label} · ${file}` : label;
     }
+    /* Research Agent emits diagnostic owner steps such as provider, runtime,
+       context, and audit. They remain available in the persisted job receipt,
+       but the conversation projects them into researcher-facing stages. */
+    function pipelineStage(value) {
+      const step = String(value || '').toLowerCase();
+      if (step === 'submitted') return 'submitted';
+      if (['provider', 'research_pipeline', 'run', 'runtime'].includes(step)) return 'setup';
+      if (['data_foundation', 'cohort', 'context', 'audit', 'extraction', 'data'].includes(step)) return 'inputs';
+      if (['hypothesis', 'literature', 'evidence'].includes(step)) return 'evidence';
+      if (['planning', 'plan', 'scientific_review'].includes(step)) return 'plan';
+      if (['step', 'coder', 'runner', 'analysis'].includes(step)) return 'analysis';
+      if (['figure', 'visual_qa'].includes(step)) return 'figure';
+      if (['writer', 'latex', 'manuscript', 'report'].includes(step)) return 'report';
+      if (step === 'terminal') return 'terminal';
+      if (['event_stream', 'cancel_requested'].includes(step)) return 'attention';
+      return 'progress';
+    }
+
+    function pipelineStageLabel(stage, status, fallback) {
+      const done = status === 'complete';
+      if (stage === 'setup') return done
+        ? tr('Research-task setup is ready', '研究计划生成环境已准备')
+        : tr('Preparing the research-task setup', '正在准备研究计划生成环境');
+      if (stage === 'inputs') return done
+        ? tr('Research question, data scope, and study context checked', '已核对研究问题、数据范围与研究上下文')
+        : tr('Checking the research question, data scope, and study context', '正在核对研究问题、数据范围与研究上下文');
+      if (stage === 'evidence') return done
+        ? tr('Planning evidence and hypotheses organized', '已整理计划所需的研究依据与假设')
+        : tr('Organizing planning evidence and hypotheses', '正在整理计划所需的研究依据与假设');
+      if (stage === 'plan') return done
+        ? tr('Candidate research plan generated and contract-checked', '候选研究计划已生成并完成结构校验')
+        : tr('Generating and checking the candidate research plan', '正在生成并校验候选研究计划');
+      if (stage === 'analysis') return done
+        ? tr('Approved analysis steps completed', '已完成批准的分析步骤')
+        : tr('Running the approved analysis steps', '正在执行批准的分析步骤');
+      if (stage === 'figure') return done
+        ? tr('Figures regenerated from registered result tables and visually checked', '已从登记结果表重新生成图件并完成视觉核查')
+        : tr('Regenerating and checking the analysis figures', '正在重新生成并核查分析图件');
+      if (stage === 'report') return done
+        ? tr('Evidence-bound article and manuscript exports regenerated', '已重新生成证据绑定文章与稿件导出')
+        : tr('Regenerating the evidence-bound article and manuscript exports', '正在重新生成证据绑定文章与稿件导出');
+      if (stage === 'progress') return done
+        ? tr('Research-task progress updated', '研究任务进度已更新')
+        : tr('Research task is progressing', '研究任务正在推进');
+      return String(fallback || tr('Research-task status updated', '研究任务状态已更新'));
+    }
+
+    function pipelineEventLabel(event) {
+      const type = String((event && event.type) || '');
+      if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
+      if (type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');
+      const stage = pipelineStage(event && event.step);
+      if (stage === 'plan') {
+        const current = Number(event && event.current);
+        const total = Number(event && event.total);
+        const count = Number.isFinite(current) && Number.isFinite(total)
+          ? `${current}/${total}` : '';
+        const planningUnit = String(event && event.planning_unit || 'plan');
+        const retryPhase = String(event && event.retry_phase || '');
+        const unit = {
+          structure: tr('study structure', '研究结构'),
+          rules: tr('cohort and analysis rules', '队列与分析规则'),
+          step: tr('current executable step', '当前可执行步骤'),
+          plan: tr('candidate plan', '候选计划'),
+        }[planningUnit] || tr('candidate plan', '候选计划');
+        if (retryPhase === 'rejected') {
+          return tr(
+            `${unit} ${count || 'attempt'} did not pass validation; EasyICU is correcting it automatically`,
+            `${unit} ${count || '本次'} 未通过校验；EasyICU 正在自动修正`,
+          );
+        }
+        if (retryPhase === 'accepted') {
+          return tr(
+            `${unit} ${count || ''} passed validation`.trim(),
+            `${unit} ${count || ''} 已通过校验`.trim(),
+          );
+        }
+        if (retryPhase === 'started') {
+          return tr(
+            `Validating ${unit} ${count || ''}`.trim(),
+            `正在校验${unit} ${count || ''}`.trim(),
+          );
+        }
+        const message = String(event && (event.message || event.label) || '').toLowerCase();
+        if (message.includes('did not satisfy the scientific contract')) {
+          return tr(
+            `Candidate plan ${count || 'draft'} did not pass the scientific contract; EasyICU is revising it`,
+            `候选计划 ${count || '草案'} 未通过科学合同；EasyICU 正在自动修订`,
+          );
+        }
+        if (message.includes('passed contract validation')) {
+          return tr(
+            `Candidate plan ${count || 'draft'} passed contract validation`,
+            `候选计划 ${count || '草案'} 已通过科学合同校验`,
+          );
+        }
+        if (message.includes('generating plan draft')) {
+          return tr(
+            `Generating candidate plan ${count || 'draft'}`,
+            `正在生成候选计划 ${count || '草案'}`,
+          );
+        }
+      }
+      return pipelineStageLabel(stage, String(event && event.status || 'running'));
+    }
+
+    function projectPipelineSteps(steps) {
+      const source = Array.isArray(steps) ? steps : [];
+      const hasPlanStage = source.some(step => step.kind === 'pipeline'
+        && ['planning', 'plan', 'scientific_review'].includes(String(step.step || '').toLowerCase()));
+      const projected = [];
+      const stageIndexes = new Map();
+      source.forEach(step => {
+        if (step.kind !== 'pipeline') { projected.push(step); return; }
+        const sourceStage = pipelineStage(step.step);
+        let stage = sourceStage;
+        if (stage === 'terminal' && hasPlanStage) stage = 'plan';
+        const fallbackAllowed = ['submitted', 'terminal', 'attention'].includes(sourceStage);
+        const next = {
+          ...step,
+          id: `pipeline-stage-${stage}`,
+          step: stage,
+          label: pipelineStageLabel(
+            fallbackAllowed ? sourceStage : stage,
+            String(step.status || ''),
+            fallbackAllowed ? step.label : '',
+          ),
+          // Artifact navigation belongs to the result/confirmation card. The
+          // activity list is lifecycle progress, not a second artifact menu.
+          resource: null,
+          resources: [],
+        };
+        if (stageIndexes.has(stage)) {
+          projected[stageIndexes.get(stage)] = next;
+        } else {
+          stageIndexes.set(stage, projected.length);
+          projected.push(next);
+        }
+      });
+      return projected;
+    }
+
     function stepLabel(step) {
       const done = step.status === 'complete';
       const failed = step.status === 'error';
@@ -169,9 +357,14 @@
       if (step.kind === 'turn') return done
         ? tr(`Model turn ${step.turn + 1} finished`, `模型回合 ${step.turn + 1} 已结束`)
         : tr(`Model turn ${step.turn + 1} is running`, `模型回合 ${step.turn + 1} 进行中`);
-      if (step.kind === 'assistant') return done
-        ? tr(`Model analysis and response phase ${step.phase} finished`, `模型分析与回复阶段 ${step.phase} 已完成`)
-        : tr(`Model is analyzing and composing response phase ${step.phase}`, `模型正在分析并组织回复阶段 ${step.phase}`);
+      if (step.kind === 'assistant') {
+        if (failed) return tr('The model response phase did not complete', '模型回复阶段未完成');
+        if (done && step.publicChars) return tr(`Public response phase ${step.phase} finished`, `公开回复阶段 ${step.phase} 已输出`);
+        if (done && step.stopReason === 'toolUse') return tr(`Model processing phase ${step.phase} finished`, `模型处理阶段 ${step.phase} 已完成`);
+        if (done) return tr(`Model response phase ${step.phase} finished`, `模型回复阶段 ${step.phase} 已完成`);
+        if (step.publicChars) return tr(`Streaming public response phase ${step.phase}`, `正在流式输出公开回复阶段 ${step.phase}`);
+        return tr(`Preparing the next visible action ${step.phase}`, `正在准备下一步可见操作 ${step.phase}`);
+      }
       if (step.kind === 'tool') return failed
         ? tr(`${toolLabel(step.toolName, step.resource)} returned an error`, `${toolLabel(step.toolName, step.resource)} 返回错误`)
         : done ? completedToolLabel(step.toolName, step.resource)
@@ -201,31 +394,50 @@
       if (!resources.length) return '';
       return `<div class="gpi-resource-list" aria-label="${tr('Run artifacts', '运行产物')}">${resources.map(resource => resourceButton(resource)).join('')}</div>`;
     }
+    function localizedStepText(step) {
+      const value = String(step && step.text || '').trim();
+      if (!value) return '';
+      const containsChinese = /[\u3400-\u9fff]/.test(value);
+      return window.EU_LANG === 'zh'
+        ? (containsChinese ? value : '')
+        : (containsChinese ? '' : value);
+    }
     function stepRow(step) {
-      const meta = [stepDuration(step), step.code, step.owner].filter(Boolean).join(' · ');
+      // Raw validator codes and Python/Node owner paths are diagnostics, not
+      // user-facing research progress. Keep them in persisted receipts while
+      // projecting only elapsed time in the ordinary activity timeline.
+      const meta = stepDuration(step);
+      const detail = localizedStepText(step);
+      const publicStream = step.kind === 'assistant' && step.status === 'running' && step.publicText
+        ? `<span class="gpi-activity-public-stream"><em>${tr('Public output', '公开输出')}</em>${esc(step.publicText)}<i aria-hidden="true"></i></span>`
+        : '';
       return `<li class="${esc(step.status || 'complete')}">
         <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
-        <span class="gpi-activity-step-copy">${stepPrimary(step)}${step.text ? `<span>${esc(step.text)}</span>` : ''}${stepResources(step)}${meta ? `<small>${esc(meta)}</small>` : ''}</span>
+        <span class="gpi-activity-step-copy">${stepPrimary(step)}${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}${stepResources(step)}${meta ? `<small>${esc(meta)}</small>` : ''}</span>
         <span class="gpi-status-pip" aria-hidden="true"></span>
       </li>`;
     }
     function render(row) {
       const allSteps = Array.isArray(row && row.steps) ? row.steps : [];
-      const visibleSteps = allSteps.filter(step => VISIBLE_KINDS.has(step.kind));
+      const visibleSteps = projectPipelineSteps(allSteps.filter(step => VISIBLE_KINDS.has(step.kind)));
       const latest = visibleSteps[visibleSteps.length - 1] || allSteps[allSteps.length - 1];
       const running = row && row.status === 'running';
       const failed = row && (row.status === 'error' || row.status === 'cancelled');
       const kicker = tr('Activity', '执行明细');
       if (running) {
-        const title = latest && latest.kind !== 'submitted'
-          ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步');
+        const title = row.runningTitle || (latest && latest.kind !== 'submitted'
+          ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
+        const note = tr(
+          'Still running. You can wait here; EasyICU will ask when review or confirmation is needed.',
+          '任务仍在进行。请在这里等待；需要审阅或确认时 EasyICU 会明确提示。',
+        );
         const liveSteps = visibleSteps.slice(-20);
-        return `<div class="gpi-activity-running" role="status">
+        return `<div class="gpi-activity-running" role="status" aria-live="polite" aria-busy="true">
           <div class="gpi-activity-live">
-            <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
-            <span class="gpi-activity-kicker">${esc(kicker)}</span>
-            <span class="gpi-activity-title">${esc(title)}</span>
-            <span class="gpi-status-pip" aria-hidden="true"></span>
+            <span class="gpi-running-spinner" aria-hidden="true"></span>
+            <span class="gpi-activity-kicker">${esc(tr('In progress', '正在进行'))}</span>
+            <span class="gpi-activity-title"><strong>${esc(title)}</strong><small>${esc(note)}</small></span>
+            <span class="gpi-activity-elapsed" data-gpi-live-elapsed="${Number(row.startedAt || Date.now())}">${esc(durationText(row.startedAt))}</span>
           </div>
           ${liveSteps.length ? `<ol>${liveSteps.map(stepRow).join('')}</ol>` : ''}
         </div>`;
@@ -241,14 +453,16 @@
               ? tr(`Used ${toolSteps.length} EasyICU tools`, `已使用 ${toolSteps.length} 个 EasyICU 工具`)
               : tr('Answered without using tools', '仅回答，未执行操作'));
       const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
-      const open = failed || row.expanded === true ? 'open' : '';
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${open}>
+      // Finished failures expose their status in the summary but keep verbose
+      // diagnostic receipts collapsed. Persisted rows from older builds may
+      // still carry expanded=true, so terminal rendering must not trust it.
+      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}">
         <summary>
           <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || pipelineSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-kicker">${esc(kicker)}</span>
           <span class="gpi-activity-title">${esc(title)}</span>
-          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))}${row.durationKnown === false ? '' : ` · ${esc(durationText(row.startedAt, row.endedAt))}`}</span>
+          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))}${row.durationKnown === false ? '' : ` · ${esc(tr(`total ${durationText(row.startedAt, row.endedAt)}`, `总耗时 ${durationText(row.startedAt, row.endedAt)}`))}`}</span>
         </summary>
         <div class="gpi-activity-body">
           ${visibleSteps.length ? `<ol>${visibleSteps.map(stepRow).join('')}</ol>` : ''}
@@ -256,15 +470,23 @@
         </div>
       </details>`;
     }
+    /* A finished turn collapses. Its summary line already carries what a
+       researcher needs -- which tools ran and how long the turn took -- while
+       the expanded body is sub-second lifecycle detail written for debugging.
+       Leaving the newest turn open put two screens of "已读取科研流程 0.6 秒"
+       between the question and the answer. A running turn still expands, so
+       progress stays visible; a failed summary remains clickable when someone
+       needs its diagnostic receipts. */
     function focusLatest(rows) {
-      const activities = rows.filter(row => row && row.role === 'activity');
-      activities.forEach(row => { if (row.status !== 'running') row.expanded = false; });
-      const latest = activities[activities.length - 1];
-      if (latest && latest.status !== 'running') latest.expanded = true;
+      rows.forEach(row => {
+        if (row && row.role === 'activity' && row.status !== 'running') {
+          row.expanded = false;
+        }
+      });
       return rows;
     }
 
-    return Object.freeze({ focusLatest, render, stepLabel, timeMs });
+    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EU_GUIDED_PI_ACTIVITY = Object.freeze({ create });

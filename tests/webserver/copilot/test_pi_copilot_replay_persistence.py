@@ -1,0 +1,729 @@
+"""Focused persistence and pagination tests for long-lived Pi demonstrations."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from easyicu.webserver import study_contexts
+from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
+from easyicu.webserver.pi_copilot.contracts import PiCopilotError, PiSessionRecord
+from easyicu.webserver.pi_copilot.projections import project_job, project_pi_replay_event
+from easyicu.webserver.pi_copilot.replay_store import PiConversationReplayStore
+from easyicu.webserver.pi_copilot.service import PiCopilotService
+
+
+class _Gateway:
+    environ = {
+        "EASYICU_PI_PROVIDER": "easyicu-local",
+        "EASYICU_PI_API_KEY": "test-only",
+    }
+    declared_cwd: Path
+
+    def __init__(self, root: Path) -> None:
+        self.declared_cwd = root / "workspace"
+        self.declared_cwd.mkdir()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def request(self, method: str, params: dict[str, Any], **_kwargs: Any) -> dict:
+        self.calls.append((method, dict(params)))
+        return {
+            "session_id": params.get("session_id"),
+            "transcript": [],
+            "transcript_page": {
+                "items": [],
+                "start": 0,
+                "end": 0,
+                "total": 0,
+                "has_more": False,
+                "next_cursor": None,
+            },
+        }
+
+    def close(self) -> None:
+        return None
+
+
+def _turn(store: PiConversationReplayStore, index: int) -> None:
+    job_id = f"message-{index:03d}"
+    store.start_turn(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job_id=job_id,
+        allowed_actions=["run"] if index % 2 else ["configure"],
+    )
+    store.append_event(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job_id=job_id,
+        event={
+            "type": "tool_end",
+            "at": f"2026-08-13T00:{index % 60:02d}:00Z",
+            "tool_call_id": f"call-{index}",
+            "tool_name": "easyicu_inspect_plan",
+            "status": "ok",
+            "code": "easyicu_plan_projected",
+        },
+    )
+    store.finish_turn(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job_id=job_id,
+        status="done",
+    )
+
+
+def _review_snapshot(*, study_id: str, revision: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "easyicu.data-package-review/1",
+        "study_context_id": study_id,
+        "study_context_revision": revision,
+        "status": "ready_for_plan",
+        "privacy": {"patient_rows_returned": False, "path_values_returned": False},
+    }
+    payload["review_sha256"] = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return payload
+
+
+def test_replay_store_pages_from_latest_without_dropping_earlier_turns(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    for index in range(120):
+        _turn(store, index)
+
+    latest = store.snapshot(
+        session_id="pi-demo",
+        project_id="project-demo",
+        limit=10,
+    )
+    assert [row["job_id"] for row in latest["turns"]] == [
+        f"message-{index:03d}" for index in range(110, 120)
+    ]
+    assert latest["turn_page"]["total"] == 120
+    assert latest["turn_page"]["next_cursor"] == "110"
+
+    previous = store.snapshot(
+        session_id="pi-demo",
+        project_id="project-demo",
+        cursor=latest["turn_page"]["next_cursor"],
+        limit=10,
+    )
+    assert [row["job_id"] for row in previous["turns"]] == [
+        f"message-{index:03d}" for index in range(100, 110)
+    ]
+
+
+def test_host_action_persists_with_its_child_job_and_terminal_status(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    turn = store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-plan-1",
+        action_code="generate_plan",
+        action_key="study-demo:7",
+        child_job_id="child-plan-1",
+    )
+    assert turn["kind"] == "host_action"
+    store.finish_host_actions_for_child_job(
+        session_id="pi-demo",
+        project_id="project-demo",
+        child_job_id="child-plan-1",
+        status="done",
+    )
+    store.archive_child_job(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job={"job_id": "child-plan-1", "kind": "agent-run", "status": "done"},
+    )
+
+    public = store.snapshot(
+        session_id="pi-demo",
+        project_id="project-demo",
+    )
+    assert public["turns"][0]["status"] == "done"
+    assert public["turns"][0]["action_code"] == "generate_plan"
+    assert public["turns"][0]["action_key"] == "study-demo:7"
+    assert public["child_jobs"] == [
+        {"job_id": "child-plan-1", "kind": "agent-run", "status": "done"}
+    ]
+
+
+def test_running_host_action_can_be_terminalized_as_interrupted(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-plan-1",
+        action_code="generate_plan",
+        action_key="study-demo:7",
+        child_job_id="child-plan-1",
+    )
+
+    assert store.running_host_action_child_job_ids(
+        session_id="pi-demo",
+        project_id="project-demo",
+    ) == ["child-plan-1"]
+    store.finish_host_actions_for_child_job(
+        session_id="pi-demo",
+        project_id="project-demo",
+        child_job_id="child-plan-1",
+        status="interrupted",
+    )
+
+    public = store.snapshot(session_id="pi-demo", project_id="project-demo")
+    assert public["turns"][0]["status"] == "interrupted"
+    assert store.running_host_action_child_job_ids(
+        session_id="pi-demo",
+        project_id="project-demo",
+    ) == []
+
+
+def test_existing_host_action_backfills_its_stable_action_key(tmp_path: Path) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-review-1",
+        action_code="review_figures",
+        status="done",
+    )
+
+    updated = store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-review-1",
+        action_code="review_figures",
+        action_key="run_20260901T143019_25f13c:figure_gallery.json",
+        status="done",
+    )
+
+    assert updated["action_key"] == (
+        "run_20260901T143019_25f13c:figure_gallery.json"
+    )
+    assert store.snapshot(session_id="pi-demo", project_id="project-demo")[
+        "turns"
+    ][0]["action_key"] == updated["action_key"]
+
+
+def test_replay_store_hides_superseded_branch_without_deleting_audit_rows(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    for index in range(4):
+        _turn(store, index)
+    for index in (0, 1):
+        store.append_event(
+            session_id="pi-demo",
+            project_id="project-demo",
+            job_id=f"message-{index:03d}",
+            event={
+                "type": "tool_end",
+                "tool_call_id": f"call-child-{index}",
+                "tool_name": "easyicu_run",
+                "status": "ok",
+                "code": "easyicu_full_run_submitted",
+                "job_id": f"child-{index:03d}",
+            },
+        )
+        store.archive_child_job(
+            session_id="pi-demo",
+            project_id="project-demo",
+            job={
+                "job_id": f"child-{index:03d}",
+                "kind": "agent-run",
+                "status": "done",
+            },
+        )
+
+    store.supersede_from_turn_index(
+        session_id="pi-demo",
+        project_id="project-demo",
+        turn_index=1,
+    )
+    _turn(store, 9)
+
+    current = store.snapshot(
+        session_id="pi-demo",
+        project_id="project-demo",
+        limit=10,
+    )
+    assert [row["job_id"] for row in current["turns"]] == [
+        "message-000",
+        "message-009",
+    ]
+    assert [row["job_id"] for row in current["child_jobs"]] == ["child-000"]
+    persisted = json.loads(store._path("pi-demo").read_text(encoding="utf-8"))
+    assert [row["job_id"] for row in persisted["turns"]] == [
+        "message-000",
+        "message-001",
+        "message-002",
+        "message-003",
+        "message-009",
+    ]
+    assert all(row.get("superseded") for row in persisted["turns"][1:4])
+    assert [row["job_id"] for row in persisted["child_jobs"]] == [
+        "child-000",
+        "child-001",
+    ]
+    with pytest.raises(PiCopilotError, match="cursor") as invalid:
+        store.snapshot(
+            session_id="pi-demo",
+            project_id="project-demo",
+            cursor="121",
+        )
+    assert invalid.value.code == "pi_replay_cursor_invalid"
+
+
+def test_replay_event_keeps_only_reopenable_resource_identity_and_digest() -> None:
+    digest = "a" * 64
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-13T00:00:00Z",
+            "tool_call_id": "call-1",
+            "tool_name": "easyicu_inspect_plan",
+            "status": "ok",
+            "code": "easyicu_plan_projected",
+            "resource": {
+                "kind": "research_artifact",
+                "run_id": "run_demo",
+                "artifact": "agent_plan.json",
+                "label": "Plan",
+                "media_type": "application/json",
+                "sha256": digest,
+                "path": "/private/must-not-persist",
+            },
+        }
+    )
+    assert projected is not None
+    assert projected["resource"] == {
+        "kind": "research_artifact",
+        "run_id": "run_demo",
+        "artifact": "agent_plan.json",
+        "label": "Plan",
+        "media_type": "application/json",
+        "sha256": digest,
+    }
+    assert "/private" not in json.dumps(projected)
+
+
+def test_replay_event_keeps_bounded_idea_mining_preview() -> None:
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-31T00:00:00Z",
+            "tool_call_id": "idea-1",
+            "tool_name": "easyicu_mine_ideas",
+            "status": "ok",
+            "code": "easyicu_idea_mined",
+            "idea_mining": {
+                "run_id": "idea_123",
+                "selected_idea_id": "idea_candidate",
+                "idea": {
+                    "idea_title": "Fluid balance and ventilator liberation",
+                    "population": "Adult ventilated ICU patients",
+                    "outcome": None,
+                    "go_no_go": "hold",
+                    "mapped_concepts": [
+                        {"concept_id": "fluid_balance_cumulative", "module": "renal"}
+                    ],
+                },
+                "feasibility": {"status": "design_incomplete", "reportable": False},
+                "private_path": "/must/not/leak",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert projected["idea_mining"]["idea"]["go_no_go"] == "hold"
+    assert projected["idea_mining"]["idea"]["mapped_concepts"] == [
+        {"concept_id": "fluid_balance_cumulative", "module": "renal"}
+    ]
+    assert "private_path" not in json.dumps(projected)
+
+
+def test_replay_keeps_system_validation_document_as_a_distinct_authority_kind() -> None:
+    digest = "c" * 64
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-system-validation",
+            "tool_name": "easyicu_inspect_run",
+            "status": "ok",
+            "code": "easyicu_run_projected",
+            "resource": {
+                "kind": "system_validation_document",
+                "run_id": "run_demo",
+                "artifact": "system_validation_report.html",
+                "label": "System validation dossier",
+                "media_type": "text/html",
+                "sha256": digest,
+                "path": "/private/must-not-persist",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert projected["resource"] == {
+        "kind": "system_validation_document",
+        "run_id": "run_demo",
+        "artifact": "system_validation_report.html",
+        "label": "System validation dossier",
+        "media_type": "text/html",
+        "sha256": digest,
+    }
+
+
+def test_replay_drops_research_documents_without_a_digest() -> None:
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-unbound-document",
+            "tool_name": "easyicu_inspect_run",
+            "status": "ok",
+            "code": "easyicu_run_projected",
+            "resource": {
+                "kind": "system_validation_document",
+                "run_id": "run_demo",
+                "artifact": "system_validation_report.html",
+                "label": "Unbound dossier",
+                "media_type": "text/html",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert "resource" not in projected
+
+
+def test_replay_webpage_resource_keeps_checked_digest() -> None:
+    digest = "b" * 64
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-preview",
+            "tool_name": "easyicu_preview_project_file",
+            "status": "ok",
+            "code": "pi_workspace_preview_ready",
+            "resource": {
+                "kind": "webpage",
+                "file": "prototype/index.html",
+                "label": "Prototype",
+                "media_type": "text/html",
+                "checked_sha256": digest,
+                "path": "/private/must-not-persist",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert projected["resource"] == {
+        "kind": "webpage",
+        "file": "prototype/index.html",
+        "label": "Prototype",
+        "media_type": "text/html",
+        "checked_sha256": digest,
+    }
+    assert "/private" not in json.dumps(projected)
+
+
+@pytest.mark.parametrize("checked_sha256", [None, "", "not-a-digest"])
+def test_replay_webpage_resource_without_checked_digest_is_not_reopenable(
+    checked_sha256: str | None,
+) -> None:
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-15T00:00:00Z",
+            "tool_call_id": "call-preview",
+            "tool_name": "easyicu_preview_project_file",
+            "status": "ok",
+            "code": "pi_workspace_preview_ready",
+            "resource": {
+                "kind": "webpage",
+                "file": "prototype/index.html",
+                "label": "Prototype",
+                "media_type": "text/html",
+                "checked_sha256": checked_sha256,
+            },
+        }
+    )
+
+    assert projected is not None
+    assert "resource" not in projected
+
+
+def test_replay_store_itself_drops_text_deltas_and_private_event_fields(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    store.start_turn(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job_id="message-safe",
+        allowed_actions=["run"],
+    )
+    store.append_event(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job_id="message-safe",
+        event={
+            "type": "text_delta",
+            "at": "2026-08-13T00:00:00Z",
+            "delta": "private chain-of-thought",
+        },
+    )
+    store.append_event(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job_id="message-safe",
+        event={
+            "type": "tool_end",
+            "at": "2026-08-13T00:00:01Z",
+            "tool_call_id": "call-safe",
+            "tool_name": "easyicu_inspect_plan",
+            "status": "ok",
+            "code": "easyicu_plan_projected",
+            "summary": "must not persist free-form output",
+            "path": "/private/must-not-persist",
+        },
+    )
+
+    replay = store.snapshot(session_id="pi-demo", project_id="project-demo")
+
+    assert replay["turns"][0]["events"] == [
+        {
+            "type": "tool_end",
+            "at": "2026-08-13T00:00:01Z",
+            "tool_call_id": "call-safe",
+            "tool_name": "easyicu_inspect_plan",
+            "status": "ok",
+            "code": "easyicu_plan_projected",
+        }
+    ]
+    assert "private" not in json.dumps(replay)
+
+
+def test_archived_child_job_carries_artifact_refs_not_private_result(tmp_path: Path) -> None:
+    digest = "b" * 64
+    projected = project_job(
+        {
+            "id": "child-job",
+            "kind": "research-agent-pipeline",
+            "status": "done",
+            "events": [],
+            "result": {
+                "run_id": "run_demo",
+                "project_dir": "/private/run",
+                "artifacts": [
+                    {
+                        "name": "quality_gate.json",
+                        "sha256": digest,
+                        "size": 42,
+                        "path": "/private/run/quality_gate.json",
+                    }
+                ],
+                "gate": {"status": "analysis_only", "reportable": False},
+            },
+        }
+    )
+    assert projected["run_id"] == "run_demo"
+    assert projected["artifact_refs"][0]["sha256"] == digest
+    assert "result" not in projected
+    assert "/private" not in json.dumps(projected)
+
+
+def test_blocked_job_projects_diagnostics_not_empty_analysis_artifacts() -> None:
+    digest = "c" * 64
+    projected = project_job(
+        {
+            "id": "child-blocked",
+            "kind": "agent-run",
+            "status": "done",
+            "events": [
+                {"seq": 1, "type": "progress", "step": "data_foundation"},
+                {"seq": 2, "type": "end", "status": "done"},
+            ],
+            "result": {
+                "run_id": "run_blocked",
+                "human_review_pending": False,
+                "gate": {
+                    "status": "blocked",
+                    "reason": "data_foundation_blocked",
+                    "reportable": False,
+                },
+                "artifacts": [
+                    {"name": name, "sha256": digest, "size": 2}
+                    for name in (
+                        "run_context.json",
+                        "quality_gate.json",
+                        "agent_plan.json",
+                        "literature_evidence.json",
+                        "figure_gallery.json",
+                        "source_run_manifest.json",
+                        "evidence_ledger.json",
+                    )
+                ],
+            },
+        }
+    )
+
+    assert [row["step"] for row in projected["progress"]] == ["data_foundation"]
+    assert projected["gate_reason_code"] == "data_foundation_blocked"
+    assert {row["artifact"] for row in projected["artifact_refs"]} == {
+        "run_context.json",
+        "quality_gate.json",
+        "source_run_manifest.json",
+        "evidence_ledger.json",
+    }
+
+
+def test_service_forwards_transcript_cursor_and_pages_replay(tmp_path: Path) -> None:
+    gateway = _Gateway(tmp_path)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    )
+    record = PiSessionRecord(
+        session_id="pi-demo",
+        project_id="project-demo",
+    )
+    for index in range(3):
+        _turn(service.replay_store, index)
+
+    state = service._ensure_open(
+        record,
+        transcript_cursor="40",
+        transcript_limit=25,
+    )
+    assert state["transcript_page"]["total"] == 0
+    assert gateway.calls[-1] == (
+        "session.state",
+        {
+            "session_id": "pi-demo",
+            "transcript_limit": 25,
+            "transcript_cursor": "40",
+        },
+    )
+    public = service._public_session(
+        record,
+        gateway_state=state,
+        replay_cursor="2",
+        replay_limit=1,
+    )
+    assert [row["job_id"] for row in public["conversation_replay"]["turns"]] == [
+        "message-001"
+    ]
+    assert public["conversation_replay"]["turn_page"]["next_cursor"] == "1"
+
+
+def test_historical_data_package_link_reads_exact_snapshot_after_study_advances(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshots = DataPackageReviewSnapshotStore(tmp_path / "reviews")
+    historical = _review_snapshot(study_id="study-demo", revision=5)
+    snapshots.persist(historical)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=_Gateway(tmp_path),
+        review_snapshot_store=snapshots,
+    )
+    monkeypatch.setattr(
+        service,
+        "_assert_project_initialized",
+        lambda project_id: str(project_id),
+    )
+    monkeypatch.setattr(service.project_store, "resolve", lambda _project_id: "study-demo")
+    monkeypatch.setattr(
+        study_contexts,
+        "get_context",
+        lambda _study_id: {"id": "study-demo", "revision": 9},
+    )
+
+    opened = service.get_data_package_review(
+        project_id="project-demo",
+        study_revision=5,
+        review_sha256=historical["review_sha256"],
+    )
+
+    assert opened["payload"]["study_context_revision"] == 5
+    assert opened["payload"]["review_sha256"] == historical["review_sha256"]
+
+
+def test_historical_data_package_link_never_rebuilds_against_new_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=_Gateway(tmp_path),
+        review_snapshot_store=DataPackageReviewSnapshotStore(tmp_path / "reviews"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_assert_project_initialized",
+        lambda project_id: str(project_id),
+    )
+    monkeypatch.setattr(service.project_store, "resolve", lambda _project_id: "study-demo")
+    monkeypatch.setattr(
+        study_contexts,
+        "get_context",
+        lambda _study_id: {"id": "study-demo", "revision": 9},
+    )
+
+    with pytest.raises(PiCopilotError) as missing:
+        service.get_data_package_review(
+            project_id="project-demo",
+            study_revision=5,
+            review_sha256="c" * 64,
+        )
+
+    assert missing.value.code == "pi_data_package_review_snapshot_missing"
+    assert missing.value.status_code == 404
+
+
+def test_node_and_browser_owners_use_cursor_pages_without_a_last_100_slice() -> None:
+    root = Path(__file__).resolve().parents[3]
+    node = (
+        root
+        / "src/easyicu/webserver/pi_copilot/node_app/src/main.mjs"
+    ).read_text(encoding="utf-8")
+    replay = (
+        root / "src/easyicu/webserver/static/js/screens-guided-pi-replay.js"
+    ).read_text(encoding="utf-8")
+    index = (root / "src/easyicu/webserver/static/index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "function transcriptPage(messages, cursor, limit = 100, manager)" in node
+    assert "session.messages.slice(-100)" not in node
+    assert 'new Set(["session_id", "transcript_cursor", "transcript_limit"])' in node
+    assert "next_cursor" in replay
+    assert "loadPiCopilotSession(sessionId, project" in replay
+    assert "screens-guided-pi-replay.js" in index
+    # The background-job watch moved to its own owner when the Copilot shell
+    # was split; the projection this test locks travels with it.
+    childjob = (
+        root / "src/easyicu/webserver/static/js/screens-guided-pi-childjob.js"
+    ).read_text(encoding="utf-8")
+    assert "resources: Array.isArray(job.artifact_refs) ? job.artifact_refs : []" in childjob
+    assert "screens-guided-pi-childjob.js" in index

@@ -23,6 +23,7 @@ from ..figures.contracts import (
 from ..authority.runtime_artifacts import current_evidence_records
 from ..schema import AnalysisPlan, ResearchContext
 from ..planning.study_design import infer_study_design_family
+from .figure_claim_boundaries import build_figure_claim_boundary_audit
 
 # A "result-bearing" figure contract is one whose text carries the study's
 # actual findings (as opposed to audit/provenance displays). The base tokens
@@ -77,7 +78,7 @@ _AUDIT_DISPLAY_CATEGORIES = {
     "robustness",
 }
 
-DISPLAY_SUITE_AUDIT_SCHEMA_VERSION = "easyicu.display_suite_audit/2"
+DISPLAY_SUITE_AUDIT_SCHEMA_VERSION = "easyicu.display_suite_audit/3"
 DISPLAY_SUITE_AUDIT_REGISTRATION = (
     "display_suite_audit",
     "statistic",
@@ -146,6 +147,16 @@ def display_suite_audit_payload(gates: Mapping[str, Any]) -> Dict[str, Any]:
         "table_one_expected": gates["display_table_one_expected"],
         "table_one_present": gates["display_table_one_present"],
         "audit_context_present": gates["display_audit_context_present"],
+        "figure_claim_boundary_status": gates[
+            "display_figure_claim_boundary_status"
+        ],
+        "figure_claim_boundary_ready": gates[
+            "display_figure_claim_boundary_ready"
+        ],
+        "figure_claim_boundaries": gates["display_figure_claim_boundaries"],
+        "figure_claim_boundary_errors": gates[
+            "display_figure_claim_boundary_errors"
+        ],
         "errors": gates["display_suite_errors"],
     }
 
@@ -222,7 +233,15 @@ def _display_categories_for_text(text: str) -> set[str]:
     return categories
 
 
-def _panel_has_absolute_risk_context(panel: Dict[str, Any]) -> bool:
+def panel_has_absolute_risk_context(panel: Mapping[str, Any]) -> bool:
+    """Return whether a panel visibly provides absolute-risk context.
+
+    This semantic belongs to the display-suite owner and is shared by the
+    article-maturity projection. A panel can simultaneously audit a
+    measurement process and show observed outcome risk, so a single role enum
+    is not sufficient authority on its own.
+    """
+
     role = str(panel.get("role") or "").strip().lower()
     if role in {"descriptive_result", "absolute_risk", "prevalence", "event_rate"}:
         return True
@@ -237,6 +256,11 @@ def _panel_has_absolute_risk_context(panel: Dict[str, Any]) -> bool:
         "prevalence",
     )
     return any(token in text for token in absolute_terms)
+
+
+# Compatibility for downstream callers that imported the historical private
+# helper before the semantic became a shared owner contract.
+_panel_has_absolute_risk_context = panel_has_absolute_risk_context
 
 
 def summarize_display_suite_status(
@@ -352,7 +376,7 @@ def summarize_display_suite_status(
                     primary_chart_types.add(chart_type)
                 elif tier == "supporting_step":
                     supporting_chart_types.add(chart_type)
-            if _panel_has_absolute_risk_context(panel):
+            if panel_has_absolute_risk_context(panel):
                 has_absolute_risk_visual = True
                 if tier == "primary_publication":
                     primary_has_absolute_risk_visual = True
@@ -415,6 +439,21 @@ def summarize_display_suite_status(
             "article-level association displays need at least one complementary visual form "
             "such as flow, dot-interval absolute-risk, distribution, curve, or specification display."
         )
+    claim_boundaries = build_figure_claim_boundary_audit(
+        plan=plan,
+        run_dir=run_dir,
+        per_step_records=per_step_records,
+    )
+    if (
+        plan is not None
+        and plan.design_selection is not None
+        and primary_result_like_contracts > 0
+        and not claim_boundaries.boundary_ready
+    ):
+        errors.append(
+            "Primary result figures do not have complete selected-design "
+            "supports/cannot-prove boundaries."
+        )
 
     return {
         "display_suite_complete": not errors,
@@ -461,5 +500,11 @@ def summarize_display_suite_status(
         "display_table_one_expected": table_one_expected,
         "display_table_one_present": has_table_one,
         "display_audit_context_present": has_audit_context,
+        "display_figure_claim_boundary_status": claim_boundaries.status,
+        "display_figure_claim_boundary_ready": claim_boundaries.boundary_ready,
+        "display_figure_claim_boundaries": [
+            item.model_dump(mode="json") for item in claim_boundaries.figures
+        ],
+        "display_figure_claim_boundary_errors": list(claim_boundaries.errors),
         "display_suite_errors": errors,
     }

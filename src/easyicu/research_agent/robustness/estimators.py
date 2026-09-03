@@ -916,7 +916,7 @@ def _recover_primary_covariates(
     per_step_records = _successful_step_records(per_step_records)
     if run_dir is None:
         return []
-    from ..plan_utils import _covariate_names_from_code
+    from ..contracts.model_covariates import _covariate_names_from_code
 
     base = Path(run_dir)
     payload = _extract_primary_effect_payload_from_records(per_step_records)

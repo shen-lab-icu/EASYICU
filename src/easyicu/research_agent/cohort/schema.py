@@ -315,6 +315,13 @@ def _column_aggregation_matches(name: str, aggregation: str) -> bool:
 
     normalized_name = str(name or "").strip().casefold()
     normalized_aggregation = str(aggregation or "").strip().casefold()
+    if normalized_aggregation == "count":
+        # EasyICU's materialized concept contract names the observation-count
+        # companion ``<concept>_n``.  It is the exact executable form of a
+        # cohort predicate with ``aggregation='count'``; requiring only the
+        # literal ``_count`` suffix makes valid exported count authority
+        # impossible to bind.
+        return normalized_name.endswith(("_count", "_n"))
     return bool(
         normalized_aggregation in ALLOWED_CTAS_AGGREGATIONS
         and normalized_name.endswith(f"_{normalized_aggregation}")
@@ -475,16 +482,28 @@ def _planner_declared_context_column_bindings(
         return {}
 
     descriptors_by_source: Dict[str, list[Any]] = {}
+    predicate_aggregations_by_concept: Dict[str, set[str]] = {}
+    for predicate in (*definition.inclusion, *definition.exclusion):
+        predicate_aggregations_by_concept.setdefault(
+            predicate.concept_id,
+            set(),
+        ).add(str(predicate.aggregation or "").strip().casefold())
     for descriptor in getattr(context, "variables", ()) or ():
         name = str(getattr(descriptor, "name", "") or "").strip()
         source_concept = str(getattr(descriptor, "source_concept", "") or "").strip()
         role = getattr(descriptor, "role", "")
         role_value = str(getattr(role, "value", role) or "").strip().casefold()
+        count_companion = bool(
+            source_concept
+            and predicate_aggregations_by_concept.get(source_concept) == {"count"}
+            and _column_aggregation_matches(name, "count")
+        )
         if (
             not name
             or not source_concept
             or name not in declared_inputs
-            or role_value in {"id", "meta", "time"}
+            or role_value in {"id", "time"}
+            or (role_value == "meta" and not count_companion)
         ):
             continue
         descriptors_by_source.setdefault(source_concept, []).append(descriptor)
@@ -1031,9 +1050,7 @@ def validate_plan_cohort_predicates_against_context(
 
 
 def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
-    """Downcast pandas nullable-extension and boolean-object columns to numpy
-    ``float64`` so downstream ``np.isfinite`` / ``to_numpy()`` in generated
-    analysis code never receives an object or extension array.
+    """Downcast pandas extension/object scalars to numpy ``isfinite``-safe dtypes.
 
     The universe builder emits per-concept aggregates as pandas *nullable*
     extension dtypes (``Int64`` / ``Float64`` / ``boolean``), or as object
@@ -1041,11 +1058,12 @@ def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
     Generated causal / prediction code does ``design_df[col].to_numpy()`` and
     feeds the result to ``np.isfinite``; on a nullable or object array numpy
     raises ``ufunc 'isfinite' not supported for the input types`` and a primary
-    estimate can be silently lost. Coercing these to ``float64`` (NA -> NaN) at
-    cohort-materialisation time leaves every column as either a numpy numeric or
-    a genuine string categorical -- the two shapes generated code already
-    handles. True string/categorical object columns (for example a demographic
-    category or admission type) are left untouched for dummy-encoding.
+    estimate can be silently lost. Nullable numeric columns therefore become
+    ``float64`` (NA -> NaN). Complete logical columns become numpy ``bool`` so
+    their sealed boolean domain is not silently rewritten as numeric 0/1;
+    logical columns with missing values still use ``float64`` because numpy has
+    no non-object boolean representation with NA. Genuine string categoricals
+    remain untouched for dummy-encoding.
     """
     import numpy as np
     import pandas as pd
@@ -1074,7 +1092,15 @@ def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
 
     out = frame.copy()
     for col in to_coerce:
-        out[col] = pd.to_numeric(out[col], errors="coerce").astype("float64")
+        series = out[col]
+        is_logical = pd.api.types.is_bool_dtype(series.dtype) or bool(
+            len(series.dropna())
+            and series.dropna().map(lambda v: isinstance(v, (bool, np.bool_))).all()
+        )
+        if is_logical and not bool(series.isna().any()):
+            out[col] = series.astype("bool")
+        else:
+            out[col] = pd.to_numeric(series, errors="coerce").astype("float64")
     return out
 
 

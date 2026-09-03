@@ -70,11 +70,11 @@ def _guided_draft_remove_response(body: Dict[str, Any] | None) -> dict:
 
 @router.post("/api/guided/drafts/remove")
 def post_guided_draft_remove(body: Dict[str, Any] | None = None) -> dict:
-    """Remove a metadata-only guided draft from the local registry.
+    """Remove a Guided draft from the registry, optionally using system trash.
 
-    This deliberately does not delete the local project folder. Project folders
-    may contain Idea Mining or Agent artifacts and require separate explicit
-    file-system management.
+    The default remains metadata-only.  Moving the matching local project folder
+    to the system trash requires a separate explicit flag and exact draft-id
+    confirmation; permanent deletion is not exposed by this endpoint.
     """
     return _guided_draft_remove_response(body)
 

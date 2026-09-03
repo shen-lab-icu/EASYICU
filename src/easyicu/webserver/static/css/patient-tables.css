@@ -1,4 +1,20 @@
 /* Patient Review bounded module-table owner. */
+.pt-table-dashboard{display:grid;grid-template-columns:minmax(280px,.72fr) minmax(520px,1.28fr);gap:14px;margin-top:16px}
+.pt-table-search,.pt-pareto{border:1px solid var(--hair);border-radius:var(--r-2);background:var(--surface);padding:14px}
+.pt-table-search{display:flex;flex-direction:column;justify-content:space-between;gap:20px}
+.pt-table-search b,.pt-pareto-head b{display:block;font-size:15px;color:var(--ink)}
+.pt-table-search > div > span,.pt-pareto-head span{display:block;margin-top:5px;color:var(--ink-4);font-size:13px;line-height:1.45}
+.pt-table-search label{display:flex;align-items:center;gap:8px;border:1px solid var(--hair-2);border-radius:var(--r-1);padding:0 11px;background:var(--surface-2)}
+.pt-table-search input{width:100%;height:42px;border:0;outline:0;background:transparent;color:var(--ink);font:500 14px/1.2 var(--sans)}
+.pt-pareto-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.pt-pareto-head strong{font-size:13px;color:var(--ink-3);white-space:nowrap}
+.pt-pareto-rows{display:grid;gap:6px;margin-top:12px}
+.pt-pareto-rows button{display:grid;grid-template-columns:112px minmax(110px,1fr) 76px 58px;align-items:center;gap:9px;width:100%;border:0;background:none;color:var(--ink-3);font:500 12.5px/1.2 var(--sans);text-align:left;cursor:pointer;padding:3px 0}
+.pt-pareto-rows button:hover .pt-pareto-name{color:var(--accent)}
+.pt-pareto-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}
+.pt-pareto-track{height:10px;border-radius:99px;background:var(--surface-3);overflow:hidden}
+.pt-pareto-track i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--accent-2))}
+.pt-pareto-rows b,.pt-pareto-rows em{font-family:var(--mono);font-size:12px;text-align:right;font-style:normal}
 .patient-table-frame{
   border:1px solid var(--hair);
   border-radius:var(--r-3);
@@ -9,7 +25,7 @@
   padding:10px 12px;
   border-bottom:1px solid var(--hair);
   color:var(--ink-4);
-  font-size:11.5px;
+  font-size:13px;
   line-height:1.45;
   background:color-mix(in srgb, var(--accent-soft) 34%, var(--surface));
 }
@@ -44,8 +60,10 @@
   gap:10px;
   flex-wrap:wrap;
   color:var(--ink-4);
-  font-size:11.5px;
+  font-size:13px;
 }
+.eu-table.patient-preview-table th,.eu-table.patient-preview-table td{font-size:13px;line-height:1.45;padding-top:11px;padding-bottom:11px}
+@media(max-width:1100px){.pt-table-dashboard{grid-template-columns:1fr}.pt-pareto-rows button{grid-template-columns:100px minmax(110px,1fr) 72px 54px}}
 .patient-page-readout{
   display:flex;
   align-items:center;

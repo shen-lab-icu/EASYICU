@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from easyicu.webserver import dataio
+from easyicu.webserver import export_download
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.routes.request_parsing import body_bool
 
@@ -77,6 +79,38 @@ def post_workspaces_remove(body: Dict[str, Any]) -> dict:
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
     return result
+
+
+@router.post("/api/workspaces/download")
+def post_workspaces_download(body: Dict[str, Any]) -> StreamingResponse:
+    """Download one manifest-bound registered export without accepting a path."""
+
+    unexpected = sorted(set(body) - {"source_id"})
+    if unexpected:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "registered_export_download_arguments_invalid",
+                "reason": "Only an exact registered source id is accepted.",
+            },
+        )
+    try:
+        bundle = export_download.prepare_registered_export_bundle(
+            str(body.get("source_id") or "")
+        )
+    except export_download.ExportDownloadError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error": exc.code, "reason": exc.message},
+        ) from exc
+    return StreamingResponse(
+        export_download.iter_bundle_and_cleanup(bundle),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{bundle.filename}"',
+            "X-EasyICU-Source-ID": bundle.source_id,
+        },
+    )
 
 
 __all__ = ["router"]

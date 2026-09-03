@@ -111,6 +111,22 @@
   }
 
   function store() { return window.EU_STUDY_CONTEXT || null; }
+  function projectTitle(value, fallback) {
+    return window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
+  }
+  function legacyProjectFallback(context) {
+    const id = String((context && context.id) || '').trim();
+    const compactId = id.replace(/^study[-_]?/i, '').replace(/[^a-z0-9]/gi, '').slice(0, 6);
+    const rawTime = context && (context.updated_at || context.created_at);
+    const date = rawTime ? new Date(String(rawTime)) : null;
+    const time = date && !Number.isNaN(date.getTime())
+      ? date.toLocaleString(window.EU_LANG === 'zh' ? 'zh-CN' : 'en', {
+          month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+        })
+      : '';
+    const label = window.EU_LANG === 'zh' ? '研究项目' : 'Research project';
+    return [label, time, compactId].filter(Boolean).join(' · ');
+  }
 
   function matchingLastRun(context) {
     const last = context && context.id ? (contextRuns.get(context.id) || window.EU_AGENT_LAST_RUN) : window.EU_AGENT_LAST_RUN;
@@ -145,7 +161,10 @@
     const failed = currentStage === 'agent_failed' || currentStage === 'agent_cancelled';
     const status = running ? 'running' : (reviewBlocked ? 'review_blocked' : (review ? 'gate' : (failed ? 'idle' : 'idle')));
     const stage = running ? 2 : (review || reviewBlocked ? 3 : 0);
-    const title = context.title || context.question || 'StudyContext project';
+    const title = projectTitle(
+      context.title,
+      context.question || context.analysis_goal || legacyProjectFallback(context),
+    );
     const question = context.question || context.analysis_goal || title;
     const sourceLabel = selectedSources.length
       ? `${crossdbSelection.source_count || selectedSources.length} selected exports`
@@ -227,7 +246,7 @@
     if (!context || !context.id || !Number.isInteger(context.revision)) {
       throw new Error('The StudyContext handoff could not be persisted.');
     }
-    const title = String(context.title || study.name && study.name[0] || context.id).trim();
+    const title = projectTitle(context.title, study.name && study.name[0] || context.id);
     const bindingReceipt = Object.freeze({
       schema_version: 'easyicu.pi-project-binding-handoff/1',
       project_id: String(context.id),

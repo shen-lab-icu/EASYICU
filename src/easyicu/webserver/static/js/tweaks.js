@@ -35,7 +35,7 @@
   function apply() {
     const r = document.documentElement.style;
     const h = ACCENT_H[values.accent] ?? 205;
-    r.setProperty('--accent', `oklch(55% 0.075 ${h})`);
+    r.setProperty('--accent', `oklch(52% 0.07 ${h})`);
     r.setProperty('--accent-ink', `oklch(40% 0.07 ${h})`);
     r.setProperty('--accent-soft', `oklch(96% 0.02 ${h})`);
     r.setProperty('--accent-border', `oklch(86% 0.045 ${h})`);
@@ -89,10 +89,10 @@
         <div class="tw-sec">
           <div class="tw-lbl">Accent</div>
           <div class="tw-swatches">
-            ${swatch('accent', 'teal', 'oklch(55% 0.075 205)')}
-            ${swatch('accent', 'blue', 'oklch(55% 0.075 245)')}
-            ${swatch('accent', 'green', 'oklch(55% 0.075 150)')}
-            ${swatch('accent', 'violet', 'oklch(55% 0.075 290)')}
+            ${swatch('accent', 'teal', 'oklch(52% 0.07 205)')}
+            ${swatch('accent', 'blue', 'oklch(52% 0.07 245)')}
+            ${swatch('accent', 'green', 'oklch(52% 0.07 150)')}
+            ${swatch('accent', 'violet', 'oklch(52% 0.07 290)')}
           </div>
         </div>
         <div class="tw-sec">

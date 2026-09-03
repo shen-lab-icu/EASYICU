@@ -136,6 +136,35 @@ class ProviderHardStopLimits:
         return dict(asdict(self))
 
 
+def validate_provider_transport_reservation_capacity(
+    limits: ProviderHardStopLimits,
+) -> None:
+    """Reject ceilings that cannot fund even one minimum Provider attempt.
+
+    The ledger intentionally permits tiny ceilings so unit tests and direct
+    diagnostic callers can exercise denial paths.  Production launchers call
+    this preflight before starting a batch, preventing a configuration that is
+    guaranteed to fail only after planning and analysis have already run.
+    """
+
+    minimum_tokens = (
+        PROVIDER_PROMPT_OVERHEAD_TOKEN_RESERVATION
+        + PROVIDER_COMPLETION_TOKEN_RESERVATION_FLOOR
+    )
+    if limits.max_total_tokens_per_run < minimum_tokens:
+        raise ValueError(
+            "max_total_tokens_per_run cannot fund one minimum Provider "
+            f"transport reservation: require at least {minimum_tokens}, got "
+            f"{limits.max_total_tokens_per_run}"
+        )
+    if limits.max_total_tokens_per_batch < minimum_tokens:
+        raise ValueError(
+            "max_total_tokens_per_batch cannot fund one minimum Provider "
+            f"transport reservation: require at least {minimum_tokens}, got "
+            f"{limits.max_total_tokens_per_batch}"
+        )
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -1519,4 +1548,5 @@ __all__ = [
     "consume_active_provider_hard_stop_attempt",
     "load_provider_hard_stop_ledger",
     "provider_hard_stop_call_scope",
+    "validate_provider_transport_reservation_capacity",
 ]

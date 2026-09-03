@@ -5,7 +5,16 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Literal,
+    Mapping,
+    Optional,
+)
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -33,6 +42,71 @@ def utc_now() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+#: Planner failures that preserve a validated progressive prefix on disk.  A
+#: *new* planning run may be seeded from that prefix instead of re-spending the
+#: provider budget re-deriving steps that already passed.  Seeding is a
+#: development-efficiency decision, not scientific authority: the resulting plan
+#: is still compiled, reviewed, and approved from scratch.
+PLANNER_CHECKPOINT_GATE_REASONS: frozenset[str] = frozenset(
+    {
+        "research_pipeline_planner_efficiency_budget_exhausted",
+        "research_pipeline_plan_contract_exhausted",
+        "research_pipeline_progressive_compile_failed",
+        "research_pipeline_planner_provider_unavailable",
+    }
+)
+
+#: The single failure where the *plan itself* survived, so the researcher may be
+#: offered "resume this plan" rather than "generate a fresh plan": the plan was
+#: sound and only the bounded development budget ran out.  Contract exhaustion
+#: and compile-gate failure mean the planning state was rejected, so the
+#: governed next action stays ``failed_pipeline_requires_fresh_plan`` -- even
+#: though that fresh plan may still be seeded from the set above.
+#:
+#: Keep these two sets distinct and distinctly named.  They differ by design,
+#: and a reader who assumes one set has been copied into two places will "fix"
+#: the difference and break either budget-resume or checkpoint seeding.
+PLAN_RESUME_OFFER_GATE_REASONS: frozenset[str] = frozenset(
+    {
+        "research_pipeline_planner_efficiency_budget_exhausted",
+        "research_pipeline_planner_provider_unavailable",
+    }
+)
+
+#: A retry button remains valid only when the preserved inner pipeline still
+#: owns a failed, approved execution checkpoint.  The Web wrapper may record a
+#: transient retry-bridge failure after the original execution failure; that
+#: wrapper error must not erase the operator's route back to the same immutable
+#: plan. A missing legacy seed remains replayable because the retry owner now
+#: reconstructs only bounded historical profile variants and requires an exact
+#: checkpoint digest match before execution. Path, supersession, invalid-seed,
+#: and checkpoint errors remain deliberately absent.
+EXECUTION_RETRY_REPLAYABLE_GATE_REASONS: frozenset[str] = frozenset(
+    {
+        "research_agent_pipeline_failed_closed",
+        "research_pipeline_execution_failed",
+        "research_pipeline_execution_retry_recovery_seed_missing",
+        "research_pipeline_execution_retry_unexpected_plan_review",
+    }
+)
+
+def plan_approval_allowed(source: Optional[Mapping[str, Any]]) -> bool:
+    """Return the single fail-closed reading of a plan review's approval flag.
+
+    ``plan_approval_allowed`` is compiled by the pipeline run owner. Consumers
+    used to disagree about a missing value: the model-facing projection and the
+    resumability check read it permissively while the submit route and the
+    workflow read it as blocking. A manifest that predates the field could then
+    advertise an approvable plan that the route rejected with 409, leaving the
+    researcher no route forward. Approval is execution authority, so only an
+    explicit ``True`` grants it.
+    """
+
+    if not isinstance(source, Mapping):
+        return False
+    return source.get("plan_approval_allowed") is True
 
 
 class PiCopilotError(RuntimeError):
@@ -139,6 +213,50 @@ class PiProjectBindingHandoffReceipt(BaseModel):
     study_context_revision: int = Field(ge=0)
 
 
+class PiSessionDataSourceReference(BaseModel):
+    """Path-free data-source identity presented for one conversation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: Optional[str] = Field(default=None, max_length=160)
+    label: Optional[str] = Field(default=None, max_length=160)
+    database: Optional[str] = Field(default=None, max_length=80)
+    reference_release: Optional[str] = Field(default=None, max_length=80)
+    identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    study_revision: int = Field(ge=0)
+
+
+class PiSessionDataSourceAuthorization(BaseModel):
+    """Conversation-level consent; never a replacement for StudyContext."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.pi-session-data-source-authorization/1"] = (
+        "easyicu.pi-session-data-source-authorization/1"
+    )
+    status: Literal[
+        "pending",
+        "selection_in_progress",
+        "confirmed",
+        "not_required",
+        "legacy_confirmed",
+    ] = "legacy_confirmed"
+    reason: Optional[
+        Literal[
+            "project_source_confirmation_required",
+            "local_data_selection_required",
+        ]
+    ] = None
+    confirmation_mode: Optional[
+        Literal["reuse_project_source", "select_local_source", "legacy_session"]
+    ] = "legacy_session"
+    extraction_scope: Literal[
+        "study_required", "all_supported", "reuse_prepared_full"
+    ] = "reuse_prepared_full"
+    source: Optional[PiSessionDataSourceReference] = None
+    confirmed_at: Optional[str] = None
+
+
 class PiSessionRecord(BaseModel):
     """Bounded EasyICU metadata; Pi's JSONL remains separate UX state."""
 
@@ -176,6 +294,12 @@ class PiSessionRecord(BaseModel):
         frozen=True,
     )
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
+    # Historical sessions default to legacy_confirmed so this addition does not
+    # retroactively lock existing conversations. New research sessions always
+    # pass an explicit pending authorization from the service owner.
+    data_source_authorization: PiSessionDataSourceAuthorization = Field(
+        default_factory=PiSessionDataSourceAuthorization
+    )
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
     last_message_job_id: Optional[str] = Field(
@@ -319,6 +443,8 @@ class ToolExecutionContext:
         self,
         *,
         session: PiSessionRecord,
+        user_message: str = "",
+        idea_source: Optional[Mapping[str, Any]] = None,
         allowed_actions: Iterable[str] = (),
         grant: Optional[HostTurnGrant] = None,
         authority_validator: Optional[AuthorityValidator] = None,
@@ -327,6 +453,14 @@ class ToolExecutionContext:
         extension_registry: Optional["ExtensionRegistry"] = None,
     ) -> None:
         self.session = session
+        # Host-captured text from the current user turn.  Tools may use this
+        # bounded, PHI-screened value as user-intent authority; the model
+        # cannot supply or rewrite it through tool arguments.
+        self.user_message = str(user_message or "")
+        # Bounded metadata from the existing Idea source/PDF owner. The model
+        # may read this receipt, but tools use this host-held copy instead of
+        # trusting model-reconstructed provenance.
+        self.idea_source = dict(idea_source or {})
         self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
         self.authority_validator = authority_validator
         self.workspace_root = (
@@ -375,6 +509,8 @@ __all__ = [
     "MAX_MESSAGE_CHARS",
     "PROTOCOL_VERSION",
     "PiCopilotError",
+    "PiSessionDataSourceAuthorization",
+    "PiSessionDataSourceReference",
     "PiProjectBindingHandoffReceipt",
     "ResearchProviderBinding",
     "PiSessionRecord",

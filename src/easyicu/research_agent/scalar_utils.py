@@ -71,6 +71,9 @@ def _flatten_scalar_dict(
             flat.update(_flatten_scalar_dict(value, prefix=child_prefix))
         return flat
     if isinstance(payload, list):
+        for index, value in enumerate(payload):
+            child_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            flat.update(_flatten_scalar_dict(value, prefix=child_prefix))
         return flat
     scalar = _coerce_scalar(payload)
     if scalar is not None and prefix:
@@ -81,10 +84,34 @@ def _flatten_scalar_dict(
 def _first_present_scalar(
     payload: Dict[str, Any], keys: Sequence[str]
 ) -> Optional[Union[int, float, str, bool]]:
+    """Return the value the summary declares for the first matching field.
+
+    Two passes, because a value reached through a list index is not the same
+    kind of fact as a value the summary states directly.
+
+    1. Declared fields -- the key itself, or a key nested through mappings only.
+    2. Values inside a list. A metric recorded as one row of
+       ``prediction_robustness_results`` is still that step's metric, so these
+       do answer the lookup -- but only when every list occurrence agrees.
+
+    The ordering and the agreement rule both exist for one observed defect:
+    once ``_flatten_scalar_dict`` began recursing into lists,
+    ``cluster_selection.candidates[0].n_clusters`` -- the FIRST EVALUATED
+    candidate in a search grid -- started answering the lookup for
+    ``n_clusters`` ahead of the top-level ``cluster_count``. A two-cluster
+    solution reported one cluster, contradicted its own selection manifest, and
+    the clustering step contract failed closed on a valid result. A candidate
+    roster disagrees with itself by construction, so it now yields nothing and
+    the declared count is used instead.
+    """
+
     flat = _flatten_scalar_dict(payload)
+    declared = {key: value for key, value in flat.items() if "[" not in key}
+    enumerated = {key: value for key, value in flat.items() if "[" in key}
+
     for key in keys:
         if key not in payload:
-            for flat_key, flat_value in flat.items():
+            for flat_key, flat_value in declared.items():
                 if flat_key.endswith(f".{key}"):
                     value = _coerce_scalar(flat_value)
                     if value is not None:
@@ -93,6 +120,20 @@ def _first_present_scalar(
         value = _coerce_scalar(payload.get(key))
         if value is not None:
             return value
+
+    for key in keys:
+        if key in payload:
+            continue
+        occurrences = [
+            _coerce_scalar(flat_value)
+            for flat_key, flat_value in enumerated.items()
+            if flat_key.endswith(f".{key}")
+        ]
+        occurrences = [value for value in occurrences if value is not None]
+        if not occurrences:
+            continue
+        if len({repr(value) for value in occurrences}) == 1:
+            return occurrences[0]
     return None
 
 

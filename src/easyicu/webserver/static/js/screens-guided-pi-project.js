@@ -4,6 +4,42 @@
 (function () {
   'use strict';
 
+  const PROJECT_QUERY_KEY = 'pi_project';
+  const SESSION_QUERY_KEY = 'pi_session';
+
+  function queryValue(key) {
+    try {
+      return new URL(window.location.href).searchParams.get(key) || '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function requestedProjectId() {
+    return queryValue(PROJECT_QUERY_KEY);
+  }
+
+  function requestedSessionId(projectId) {
+    const requestedProject = requestedProjectId();
+    const currentProject = String(projectId || '').trim();
+    if (!requestedProject || requestedProject !== currentProject) return '';
+    return queryValue(SESSION_QUERY_KEY);
+  }
+
+  function syncLocation(projectId, sessionId) {
+    if (!window.location || !window.history || !window.history.replaceState) return;
+    try {
+      const next = new URL(window.location.href);
+      const project = String(projectId || '').trim();
+      const session = String(sessionId || '').trim();
+      if (project) next.searchParams.set(PROJECT_QUERY_KEY, project);
+      else next.searchParams.delete(PROJECT_QUERY_KEY);
+      if (project && session) next.searchParams.set(SESSION_QUERY_KEY, session);
+      else next.searchParams.delete(SESSION_QUERY_KEY);
+      window.history.replaceState(null, '', `${next.pathname}${next.search}${next.hash}`);
+    } catch (error) {}
+  }
+
   async function prepare(options) {
     const {
       state, api, projectId, connectionReady, loadWorkflow,
@@ -25,8 +61,12 @@
       if (bindingReceipt && initialized && initialized.binding_receipt) {
         state.project = { ...state.project, binding_receipt: null };
       }
-      await loadWorkflow();
-      if (connectionReady()) await loadProjectSessions();
+      const workflowReady = loadWorkflow().then(render);
+      if (connectionReady()) {
+        await loadProjectSessions(false);
+      } else {
+        await workflowReady;
+      }
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
       if (error && error.code === 'pi_project_initialization_required') {
@@ -49,5 +89,7 @@
     }
   }
 
-  window.EU_GUIDED_PI_PROJECT = Object.freeze({ prepare });
+  window.EU_GUIDED_PI_PROJECT = Object.freeze({
+    prepare, requestedProjectId, requestedSessionId, syncLocation,
+  });
 })();

@@ -13809,6 +13809,10 @@
   ],
   "description": "canonical Sepsis-3 criterion using the original SOFA score",
   "outcome_type": "binary",
+  "levels": [
+   0,
+   1
+  ],
   "clinical_status": "validated_definition",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,

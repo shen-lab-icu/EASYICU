@@ -29,7 +29,7 @@
         </div>
         <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Shortcuts', '快捷键')}</div>
         <div class="col" style="font-size:12px;">
-          <div class="shortcut-row"><span style="color:var(--ink-3);">${t('Open Page guide', '打开页面指南')}</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span></div>
+          <div class="shortcut-row"><span style="color:var(--ink-3);">${t('Open EasyICU Copilot', '打开 EasyICU 研究助手')}</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span></div>
           <div class="shortcut-row"><span style="color:var(--ink-3);">${t('Switch section', '切换区域')}</span><span class="keys"><span class="kbd">1</span>–<span class="kbd">5</span></span></div>
           <div class="shortcut-row"><span style="color:var(--ink-3);">${t('Toggle language', '切换语言')}</span><span class="keys"><span class="kbd">L</span></span></div>
         </div>

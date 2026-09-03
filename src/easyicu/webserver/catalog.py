@@ -14,6 +14,7 @@ those dicts; it does not recompute anything.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any, Dict
 
@@ -380,4 +381,91 @@ def build_catalog() -> Dict[str, Any]:
         "activeExportCoverage": active_export_coverage,
         "supportedDbs": list(cc.SUPPORTED_DB_KEYS),
         "totalConcepts": len(concept_dict),
+    }
+
+
+def build_concept_lineage(concept_id: str) -> Dict[str, Any] | None:
+    """Return declared cross-database lineage for one catalog concept.
+
+    This is dictionary provenance, not an observed-data claim. Missing fields
+    remain null so the UI never invents a source column or transformation.
+    """
+    from easyicu.concept.loader import _load_concept_dict_cached
+
+    raw = _load_concept_dict_cached().get(concept_id)
+    if not isinstance(raw, dict):
+        return None
+    data_sources_path = Path(__file__).resolve().parents[1] / "data" / "data-sources.json"
+    with data_sources_path.open(encoding="utf-8") as handle:
+        source_catalog = json.load(handle)
+    source_profiles = {
+        str(item.get("name")): item for item in source_catalog if isinstance(item, dict)
+    }
+    lanes = []
+    raw_sources = raw.get("sources") if isinstance(raw.get("sources"), dict) else {}
+    for database in cc.SUPPORTED_DB_KEYS:
+        mappings = raw_sources.get(database)
+        if not isinstance(mappings, list) or not mappings:
+            continue
+        profile = source_profiles.get(database, {})
+        table_catalog = profile.get("tables") if isinstance(profile.get("tables"), dict) else {}
+        serialized = []
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            table = mapping.get("table")
+            table_meta = table_catalog.get(table, {}) if table else {}
+            defaults = table_meta.get("defaults") if isinstance(table_meta, dict) else {}
+            defaults = defaults if isinstance(defaults, dict) else {}
+            ids = mapping.get("ids")
+            if ids is not None and not isinstance(ids, list):
+                ids = [ids]
+            serialized.append(
+                {
+                    "table": table,
+                    "selector_field": mapping.get("sub_var"),
+                    "selector_values": ids,
+                    "value_field": mapping.get("value_var")
+                    or mapping.get("val_var")
+                    or defaults.get("val_var"),
+                    "unit_field": mapping.get("unit_var") or defaults.get("unit_var"),
+                    "time_field": mapping.get("index_var")
+                    or mapping.get("time_var")
+                    or defaults.get("index_var"),
+                    "callback": mapping.get("callback") or raw.get("callback"),
+                    "class_name": mapping.get("class") or mapping.get("class_name"),
+                }
+            )
+        if serialized:
+            display_name = (
+                (profile.get("profile") or {}).get("display_name")
+                if isinstance(profile.get("profile"), dict)
+                else None
+            )
+            lanes.append(
+                {
+                    "database": database,
+                    "label": display_name or database.upper(),
+                    "mappings": serialized,
+                }
+            )
+    units = raw.get("unit")
+    if isinstance(units, list):
+        canonical_unit = str(units[0]) if units else None
+        unit_aliases = [str(value) for value in units[1:]]
+    else:
+        canonical_unit = units
+        unit_aliases = []
+    return {
+        "concept": concept_id,
+        "name": (cc.CONCEPT_DICTIONARY.get(concept_id) or [concept_id])[0],
+        "canonical": {
+            "unit": canonical_unit,
+            "unit_aliases": unit_aliases,
+            "minimum": raw.get("min"),
+            "maximum": raw.get("max"),
+            "aggregate": raw.get("aggregate"),
+        },
+        "lanes": lanes,
+        "scope": "declared_dictionary_lineage_not_observed_data",
     }

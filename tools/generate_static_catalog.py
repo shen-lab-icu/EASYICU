@@ -11,7 +11,7 @@ The frontend bootstraps ``window.EU_CATALOG`` from
 
 The surrounding hand-written parts of the file (the ``groups`` display list,
 ``auditModules``, the coverage-computation JS, the IIFE wrapper) are left
-untouched.  ``tests/test_concept_catalog_consistency.py`` locks the result:
+untouched.  ``tests/core/test_concept_catalog_consistency.py`` locks the result:
 if Python gains a concept and this script isn't re-run, the test fails.
 
 Usage:

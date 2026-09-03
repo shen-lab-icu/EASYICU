@@ -17,7 +17,7 @@ body{
   font-feature-settings: "ss01","cv11","tnum";
   background: var(--bg);
   color: var(--ink);
-  font-size: 13.5px;
+  font-size: 14.5px;
   line-height: 1.5;
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;

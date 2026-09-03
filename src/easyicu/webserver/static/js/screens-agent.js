@@ -10,6 +10,7 @@
 (function () {
   const { esc } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
+  const RUN_HISTORY_VIEW = window.EU_AGENT_RUN_HISTORY_VIEW;
 
   /* Fixture data + pure renderers live in screens-agent-render.js
      (owner-file carve-out; loads before this file). Rebind the names
@@ -42,7 +43,10 @@
   window.__euAgentPreset = function () { agSel = 'sepsis'; agTab = 'outputs'; };
 
   function seedStudy(row) {
-    const title = row.title || row.question || 'Idea-derived study';
+    const title = window.EU_PRODUCT_LABELS.projectTitle(
+      row.title,
+      row.question || t('Research idea', '研究想法'),
+    );
     const q = row.question || title;
     const pre = row.pre_experiment_summary || {};
     const source = row.source || {};
@@ -187,10 +191,7 @@
     return '…/' + tail;
   }
   function projectFolderLabel(s) {
-    if (s && s.empty) return t('No local project folder yet', '还没有本地项目文件夹');
-    return s && s.ideaSeed && s.ideaSeed.project_dir
-      ? displayPath(s.ideaSeed.project_dir)
-      : t('Created when this study is first run', '首次运行时创建');
+    return RUN_HISTORY_VIEW.projectFolder(agHistory, s, displayPath, { empty: t('No local project folder yet', '还没有本地项目文件夹'), pending: t('Created when this study is first run', '首次运行时创建') });
   }
   function studyBadgeLabel(s) {
     if (s && s.readOnlyImport) return t('Read-only result', '只读结果');
@@ -245,6 +246,7 @@
       if (preferred && studies.some(row => row.id === preferred)) agSel = preferred;
       else if (!studies.some(row => row.id === agSel) && studies.length) agSel = studies[0].id;
       maybeRestoreAgentJob();
+      requestRunHistory();
       if (window.__euRender) window.__euRender();
       else repaintBody();
     }).catch(err => {
@@ -278,6 +280,9 @@
     const s = study();
     return window.EU_AGENT_LAST_RUN && window.EU_AGENT_LAST_RUN.study_id === s.id ? window.EU_AGENT_LAST_RUN : null;
   }
+  const historyRowsForStudy = s => RUN_HISTORY_VIEW.rows(agHistory, s);
+  const monitorRunCount = s => RUN_HISTORY_VIEW.count(agHistory, s, realMode());
+  const historyRunForStudy = s => RUN_HISTORY_VIEW.run(agHistory, s);
   function importedRunForStudy(s) {
     if (!s || !s.reviewProjectDir || !s.readOnlyImport) return null;
     const row = Array.isArray(s.seedRuns) ? s.seedRuns.find(r => r && r.project_dir === s.reviewProjectDir) : null;
@@ -303,7 +308,8 @@
   }
   function reviewableRunForStudy() {
     const live = liveRunForStudy();
-    return live || importedRunForStudy(study());
+    const selected = study();
+    return live || historyRunForStudy(selected) || importedRunForStudy(selected);
   }
   function isImportedRun(live, s) {
     return !!(live && (live.imported || (s && s.readOnlyImport)));
@@ -556,15 +562,20 @@
     const s = study();
     if (s.empty) return;
     if (!force && agHistory.studyId === s.id && (agHistory.loading || agHistory.data || agHistory.error)) return;
-    agHistory = { studyId: s.id, loading: true, error: null, data: null };
+    const selectedId = s.id;
+    agHistory = { studyId: selectedId, loading: true, error: null, data: null };
     const seedDir = (s.ideaSeed && s.ideaSeed.project_dir) || undefined;
-    window.EU_API.loadAgentRunHistory({ study_id: s.id, limit: 50, project_seed_dir: seedDir }).then(data => {
-      agHistory = { studyId: s.id, loading: false, error: null, data: data };
+    window.EU_API.loadAgentRunHistory({ study_id: selectedId, limit: 50, project_seed_dir: seedDir }).then(data => {
+      if (study().id !== selectedId) return;
+      agHistory = { studyId: selectedId, loading: false, error: null, data: data };
       window.EU_AGENT_RUN_HISTORY = data;
-      repaintBody();
+      if (window.__euRender) window.__euRender();
+      else repaintBody();
     }).catch(err => {
-      agHistory = { studyId: s.id, loading: false, error: err.message || String(err), data: null };
-      repaintBody();
+      if (study().id !== selectedId) return;
+      agHistory = { studyId: selectedId, loading: false, error: err.message || String(err), data: null };
+      if (window.__euRender) window.__euRender();
+      else repaintBody();
     });
   }
   function liveRunFromReview(review) {
@@ -792,15 +803,28 @@
         ${studies.map(s => {
           const zh = window.EU_LANG === 'zh';
           const folder = projectFolderLabel(s);
+          const historyRows = historyRowsForStudy(s);
+          const historyCount = monitorRunCount(s);
+          const latest = historyRows[0];
+          const runMeta = latest
+            ? `${esc(latest.run_label || latest.run_id || t('local run', '本地运行'))}<span class="mid"></span>${esc((latest.updated_at || '').slice(0, 10) || t('local', '本地'))}`
+            : historyCount === 0
+              ? t('not run yet', '尚未运行')
+              : s.id === agSel && agHistory.loading
+                ? t('checking run history…', '正在检查运行历史…')
+                : t('select to check run history', '选择后检查运行历史');
+          const cardStatus = latest && (latest.gate_status === 'blocked' || latest.run_status === 'failed')
+            ? 'review_blocked'
+            : latest ? 'gate' : s.status;
           return `
           <button class="studycard ${s.id === agSel ? 'on' : ''}" data-ag-sel="${s.id}">
             <div class="sc-top">
-              <span class="sc-dot ${dotCls[s.status] || 'idle'}"></span>
+              <span class="sc-dot ${dotCls[cardStatus] || 'idle'}"></span>
               <span class="sc-name">${esc(t(s.name[0], s.name[1]))}</span>
               <span class="sc-mode analysis">${!s.ideaSeed && !s.studyContext && !s.empty && !realMode() ? `${t('Example', '示例')} · ` : ''}${studyBadgeLabel(s)}</span>
             </div>
             <div class="sc-meta"><span class="sc-folder" title="${esc(folder)}">${icon('folder', 11)} ${esc(compactMiddlePath(folder))}</span></div>
-            <div class="sc-meta" style="margin-top:3px;">${s.runs.length ? `${s.runs[0][0]}<span class="mid"></span>${s.runs[0][4][zh ? 1 : 0]}` : t('not run yet', '尚未运行')}</div>
+            <div class="sc-meta" style="margin-top:3px;">${realMode() ? runMeta : (s.runs.length ? `${s.runs[0][0]}<span class="mid"></span>${s.runs[0][4][zh ? 1 : 0]}` : t('not run yet', '尚未运行'))}</div>
           </button>`;
         }).join('')}
       </div>
@@ -821,7 +845,15 @@
     const liveSigned = !!(review && review.signed);
     const compactHeader = agTab !== 'overview';
     const listCollapsed = agentListCollapsed();
-    const statusKey = s.readOnlyImport ? 'imported' : (liveSigned ? 'reviewed' : (s.signed ? 'ready' : s.status));
+    const persistedRows = historyRowsForStudy(s);
+    const persistedCount = monitorRunCount(s);
+    const persistedLatest = persistedRows[0];
+    const statusKey = s.readOnlyImport ? 'imported'
+      : liveSigned ? 'reviewed'
+        : s.signed ? 'ready'
+          : realMode() && persistedCount == null ? (agHistory.error ? 'history_error' : 'history_loading')
+            : realMode() && persistedLatest ? ((persistedLatest.gate_status === 'blocked' || persistedLatest.run_status === 'failed') ? 'review_blocked' : 'gate')
+              : s.status;
     const statusPill = {
       imported: `<span class="pill info"><span class="dot"></span>${t('Read-only review', '只读审阅')}</span>`,
       ready: `<span class="pill ok"><span class="dot"></span>${t('Ready in Copilot', '可在 Copilot 中继续')}</span>`,
@@ -831,6 +863,8 @@
       running: `<span class="pill warn"><span class="dot"></span>${t('Running', '运行中')}</span>`,
       draft: `<span class="pill demo"><span class="dot"></span>${t('Exploring', '探索中')}</span>`,
       idle: `<span class="pill"><span class="dot"></span>${t('Not run yet', '尚未运行')}</span>`,
+      history_loading: `<span class="pill info"><span class="dot"></span>${t('Checking run history', '正在检查运行历史')}</span>`,
+      history_error: `<span class="pill bad"><span class="dot"></span>${t('Run history unavailable', '运行历史暂不可用')}</span>`,
     }[statusKey] || '';
     return `
     <div class="ag-dhead ${compactHeader ? 'compact' : ''}">
@@ -862,6 +896,7 @@
   /* ---------------- tabs ---------------- */
   function tabsFor(mode) {
     const s = study();
+    const runCount = monitorRunCount(s);
     if (s.empty) return [
       ['overview', t('Overview', '概览'), null],
     ];
@@ -871,13 +906,13 @@
     // of THIS study's run, not a separate app — see screens-agent-science.js.
     if (mode === 'idea') return [
       ['overview', t('Overview', '概览'), null],
-      ['runs', t('Dry-runs', '试运行'), s.runs.length],
+      ['runs', t('Dry-runs', '试运行'), runCount],
       ['notes', t('Notes', '笔记'), null],
       ['science', t('Evidence', '证据'), null],
     ];
     return [
       ['overview', t('Overview', '概览'), null],
-      ['runs', t('Runs', '运行历史'), s.runs.length],
+      ['runs', t('Runs', '运行历史'), runCount],
       ['outputs', t('Outputs', '产出'), outputCountForStudy()],
       ['draft', s.readOnlyImport ? t('Review', '审阅') : t('Draft', '草稿'), null],
       ['science', t('Evidence', '证据'), null],
@@ -890,7 +925,7 @@
     const s = study();
     const tabs = tabsFor(s.mode);
     if (!tabs.some(x => x[0] === agTab)) agTab = 'overview';
-    const noRun = !s.runs || s.runs.length === 0;
+    const noRun = monitorRunCount(s) === 0;
     return `<div class="ag-tabs" data-ag-tabs role="tablist" aria-label="${t('Project monitor views', '项目监控视图')}">
       ${tabs.map(([id, lab, cnt]) => {
         const gated = noRun && AG_RUN_GATED_TABS.has(id);
@@ -1685,8 +1720,11 @@
       agRun.result = result || null;
       agRun.reconnectable = false;
       s.status = 'idle';
+      if (study().id === runToken.study_id) window.EU_AGENT_LAST_RUN = null;
     }
     agRunChannel.clear(runToken);
+    agHistory = { studyId: null, loading: false, error: null, data: null };
+    requestRunHistory(true);
     repaintBody();
   }
 
@@ -1704,7 +1742,9 @@
       if (window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.has(agSel)) {
         window.EU_AGENT_STUDY_CONTEXT.activate(agSel).catch(error => console.warn('[EasyICU] StudyContext activation failed:', error));
       }
-      agTab = 'overview'; repaintBody(); maybeRestoreAgentJob(); focusAgentBody();
+      agTab = 'overview';
+      requestRunHistory();
+      repaintBody(); maybeRestoreAgentJob(); focusAgentBody();
     }));
     host.querySelectorAll('[data-ag-tab]').forEach(b => b.addEventListener('click', () => { agTab = b.dataset.agTab; repaintBody(); focusAgentBody(); }));
     const tabList = host.querySelector('[data-ag-tabs]');
@@ -1912,8 +1952,9 @@
       const studies = allStudies();
       const monitorState = monitorViewState(studies);
       const count = monitorState === 'loading' || monitorState === 'error' ? '—' : studies.length;
+      const selectedRunCount = monitorRunCount(s);
       const summary = monitorState === 'ready'
-        ? `<div class="col gap-6" style="font-size:12px;"><div class="setup-row"><span class="k">${t('Active', '当前')}</span><span class="vv" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t(s.name[0], s.name[1]))}</span></div><div class="setup-row"><span class="k">${t('Mode', '模式')}</span><span class="vv">${t('Analysis', '分析')}</span></div><div class="setup-row"><span class="k">${t('Evidence', '证据')}</span><span class="vv">${s.gate ? t('available', '可查看') : '—'}</span></div><div class="setup-row"><span class="k">${t('Runs', '运行')}</span><span class="vv">${s.runs.length}</span></div></div>`
+        ? `<div class="col gap-6" style="font-size:12px;"><div class="setup-row"><span class="k">${t('Active', '当前')}</span><span class="vv" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t(s.name[0], s.name[1]))}</span></div><div class="setup-row"><span class="k">${t('Mode', '模式')}</span><span class="vv">${t('Analysis', '分析')}</span></div><div class="setup-row"><span class="k">${t('Evidence', '证据')}</span><span class="vv">${s.gate ? t('available', '可查看') : '—'}</span></div><div class="setup-row"><span class="k">${t('Runs', '运行')}</span><span class="vv">${selectedRunCount == null ? '—' : selectedRunCount}</span></div></div>`
         : `<div class="note ${monitorState === 'error' ? 'warn' : 'info'}" style="padding:8px 10px;"><div class="body"><div class="t">${monitorState === 'loading' ? t('Checking project index', '正在检查项目索引') : monitorState === 'error' ? t('Project index unavailable', '项目索引暂不可用') : t('No monitored project yet', '还没有可监控项目')}</div></div></div>`;
       return `
       <div class="rail-sep"></div>
@@ -1949,6 +1990,7 @@
       wire(root);
       if (window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.hydrate) window.EU_AGENT_STUDY_CONTEXT.hydrate();
       requestIdeaAgentProjects();
+      requestRunHistory();
       maybeRestoreAgentJob();
     },
   };
@@ -1963,7 +2005,10 @@
         agResumeProbe = { loading: false, checkedJobId: null };
       }
       agSel = context.id;
-      if (location.hash === '#agent') repaintBody();
+      if (location.hash === '#agent') {
+        requestRunHistory();
+        repaintBody();
+      }
     });
   }
 })();

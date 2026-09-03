@@ -17,22 +17,21 @@ import math
 import os
 import re
 import stat
-import threading
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from easyicu.extensions import (
-    ExtensionActivationSnapshot,
-    ExtensionRegistry,
-    ExtensionRegistryError,
-)
-from easyicu.databases import normalize_database_key
+from pydantic import ValidationError
 
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
-from easyicu.research_agent.orchestration.progress import ProgressControlSignal
+from easyicu.research_agent.authority.run_input import (
+    RunInputCapsuleV2,
+    RunInputCapsuleV3,
+    RunInputIdentityError,
+    load_verified_run_input_capsule,
+)
 from easyicu.research_agent.providers.structured_retry import (
     safe_provider_error_category,
     safe_structured_attempt_metadata,
@@ -44,13 +43,7 @@ from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
     render_agent_plan_revision_contract,
 )
-from easyicu.research_agent.planning.progressive_artifacts import (
-    ProgressivePlanningArtifactError,
-    load_progressive_planner_checkpoint_chain,
-)
-from easyicu.research_agent.publication_skills import (
-    publication_skill_flags_from_settings,
-)
+from easyicu.research_agent.schema import TimeWindow
 from easyicu.research_agent.reporting.system_validation_report import (
     SystemValidationReport,
     build_system_validation_receipt,
@@ -63,11 +56,11 @@ from easyicu.research_agent.execution.runners.missingness_measurement_figure_exe
 )
 from easyicu.webserver import (
     agent_runs,
-    capabilities as capability_policy,
     dataio,
     literature_authority,
+    primary_cohort,
     provider_adapter,
-    source_identity_authority,
+    run_artifact_disclosure,
 )
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.ideas import mining as idea_mining
@@ -78,28 +71,58 @@ from easyicu.webserver.literature_projection import (
 from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
 )
+from easyicu.webserver.figure_presentation import verified_presentation_gallery
+from easyicu.webserver.research_evidence_preview import is_identifier_column
+from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_launch_resume import (
+    _DevelopmentResumeAcquisition,
+    _slug,
+)
+from easyicu.webserver.research_launch_runtime import _submission_profile_ref
+from easyicu.webserver.research_launch_scientific import (
+    _analysis_requires_longitudinal_trajectory,
+    _cohort_window,
+    _configured_covariate_selection,
+    _configured_covariates,
+    _configured_sensitivity_specs,
+    _data_foundation_profile,
+    _metadata_only_planning_coordinates,
+    _normalized_metadata_planning_operationalized_columns,
+    _primary_exposure_aggregation,
+    _runtime_projection_sensitivity_specs,
+    _target_outcome,
+    validate_analysis_design_for_execution,
+)
+from easyicu.webserver.research_pipeline_run_preparation import (
+    ResearchPipelineLaunchRequest,
+    prepare_research_pipeline_run,
+)
+from easyicu.webserver.pi_copilot.contracts import (
+    EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
+)
 from easyicu.webserver.agent_review_recovery import (
+    PendingReviewEntry as _PendingRun,
+    PendingReviewRegistry,
+    PendingReviewResumeFailure,
+    PendingReviewResumeInProgress,
     WebReviewRecoveryError,
-    WebReviewRecoveryRecord,
     WebReviewRecoverySeed,
     get_record as get_review_recovery_record,
+    load_recovery_seed,
+    pending_from_record,
     put_record as put_review_recovery_record,
     put_recovery_seed,
+    recover_pending_review,
     register_pipeline_work_root,
     remove_record as remove_review_recovery_record,
     remove_recovery_seed,
+    resume_pending_review,
     unregister_pipeline_work_root_if_unused,
 )
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
-_RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
-_DEVELOPMENT_RESUME_JOB_ENV = (
-    "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
-)
-_DEVELOPMENT_RESUME_SEQUENCE_ENV = (
-    "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_CHECKPOINT_SEQUENCE"
-)
-_DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 120.0
+_DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 240.0
+_DEVELOPMENT_PROVIDER_REQUEST_HARD_TIMEOUT_SECONDS = 480.0
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
@@ -114,6 +137,17 @@ _MAX_TABLE_COLUMNS = 12
 # Bound the STRUCTURE instead, so every top-level constraint key survives, the
 # value stays valid JSON, and anything actually dropped is dropped visibly.
 _MAX_DATA_CONSTRAINTS_CHARS = 2_400
+
+
+def _provider_request_timeouts_for_budget(
+    budget_mode: str,
+) -> tuple[Optional[float], Optional[float]]:
+    if budget_mode == "full_reviewed":
+        return None, None
+    return (
+        _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS,
+        _DEVELOPMENT_PROVIDER_REQUEST_HARD_TIMEOUT_SECONDS,
+    )
 _DATA_CONSTRAINT_LIST_HEADS = (16, 8, 4, 2, 1, 0)
 _MANUSCRIPT_DOCUMENT_SPECS = {
     "manuscript_scaffold.pdf": ("application/pdf", 16 * 1024 * 1024),
@@ -131,8 +165,6 @@ _RUN_DOCUMENT_SPECS = {
     **_MANUSCRIPT_DOCUMENT_SPECS,
     **_SYSTEM_VALIDATION_DOCUMENT_SPECS,
 }
-_MAX_PENDING = 16
-_PENDING_LOCK = threading.RLock()
 _MATERIALIZED_FEATURE_SUFFIXES = tuple(
     sorted(
         (
@@ -149,38 +181,17 @@ _MATERIALIZED_FEATURE_SUFFIXES = tuple(
         reverse=True,
     )
 )
-_UNSAFE_PROJECTION_PATTERNS = (
-    re.compile(
-        r"(?:file://|(?<![A-Za-z0-9])/(?:Users|home|private|tmp|var|etc|opt|Volumes)/|\b[A-Za-z]:\\)",
-        re.I,
-    ),
-    re.compile(
-        r"(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|\bsk-[A-Za-z0-9_-]{8,}|"
-        r"\b(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+|"
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
-        re.I,
-    ),
-    re.compile(
-        r"[\"']?(?:subject_id|stay_id|hadm_id|patient_id|mrn)[\"']?"
-        r"\s*[:,=]\s*[\"']?[A-Za-z0-9-]+",
-        re.I,
-    ),
+
+_SAFE_PIPELINE_EXCEPTION_TYPES = frozenset(
+    {
+        "CodexAppServerError",
+        "ExecutionRuntimeUnavailableError",
+        "PlannerEfficiencyBudgetExhausted",
+        "ProgressivePlanCompileError",
+        "ResearchPipelineRunError",
+        "StructuredResponseFailure",
+    }
 )
-
-
-class ResearchPipelineRunError(ProgressControlSignal):
-    """Stable Web-facing failure from the true Research Agent bridge."""
-
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        details: Optional[Mapping[str, Any]] = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = str(code)
-        self.details = dict(details or {})
 
 
 @dataclass(frozen=True)
@@ -197,207 +208,21 @@ def server_reviewer_identity() -> str:
     return "easyicu_local_web_operator"
 
 
-@dataclass
-class _PendingRun:
-    pipeline: Any
-    pending: Any
-    wrapper_dir: Path
-    study: Dict[str, Any]
-    provider: Dict[str, Any]
-    acquisition: Any
-    created_at: float
-    credential_source: str = "scientific_provider"
-    budget_mode: str = "full_reviewed"
-    prepared_package_binding: Optional[Dict[str, Any]] = None
-    provider_hard_stop: Optional[Any] = None
-
-
-_PENDING: Dict[str, _PendingRun] = {}
+_PENDING_REVIEWS = PendingReviewRegistry(max_entries=16)
 
 
 def _acquisition_recovery_projection(acquisition: Any) -> Dict[str, Any]:
     selection = getattr(acquisition, "selection", None)
     coverage = getattr(acquisition, "coverage", None)
     return {
-        "selected_concepts": list(
-            getattr(selection, "selected_concepts", ()) or ()
-        )[:64],
+        "selected_concepts": list(getattr(selection, "selected_concepts", ()) or ())[
+            :64
+        ],
         "materialized_concepts": list(
             getattr(acquisition, "materialized_concepts", ()) or ()
         )[:128],
         "coverage_sufficient": bool(getattr(coverage, "sufficient", False)),
     }
-
-
-def _rehydrate_acquisition_projection(payload: Mapping[str, Any]) -> Any:
-    return SimpleNamespace(
-        selection=SimpleNamespace(
-            selected_concepts=list(payload.get("selected_concepts") or ())
-        ),
-        materialized_concepts=list(payload.get("materialized_concepts") or ()),
-        coverage=SimpleNamespace(
-            sufficient=bool(payload.get("coverage_sufficient"))
-        ),
-    )
-
-
-def _checkpoint_pending_from_record(
-    record: WebReviewRecoveryRecord,
-    *,
-    recover_recorded_decisions: bool = False,
-) -> Any:
-    from easyicu.research_agent.orchestration.human_review_checkpoint import (
-        checkpoint_path,
-        load_checkpoint,
-    )
-    from easyicu.research_agent.orchestration.human_review_restore import (
-        recover_checkpoint_decisions_from_evidence,
-    )
-    from easyicu.research_agent.orchestration.workflow import HumanReviewPending
-
-    wrapper_dir = Path(record.wrapper_dir).resolve()
-    run_dir = (wrapper_dir / "pipeline" / record.run_id).resolve()
-    try:
-        run_dir.relative_to((wrapper_dir / "pipeline").resolve())
-    except ValueError as exc:
-        raise WebReviewRecoveryError("Web review run path escaped its wrapper") from exc
-    checkpoint_file = checkpoint_path(run_dir)
-    checkpoint = (
-        recover_checkpoint_decisions_from_evidence(
-            checkpoint_file,
-            run_dir=run_dir,
-        )
-        if recover_recorded_decisions
-        else load_checkpoint(checkpoint_file, require_pending=False)
-    )
-    if checkpoint.run_id != record.run_id:
-        raise WebReviewRecoveryError("Web review checkpoint belongs to another run")
-    if checkpoint.state not in {
-        "pending",
-        "approved_pending_execution",
-        "executing",
-    }:
-        raise WebReviewRecoveryError(
-            f"Web review checkpoint state {checkpoint.state!r} is not resumable"
-        )
-    return HumanReviewPending(
-        run_id=record.run_id,
-        thread_id=record.run_id,
-        run_dir=str(run_dir),
-        requests=checkpoint.requests,
-        resume_scope="durable_checkpoint",
-        resume_pid=None,
-    )
-
-
-def _slug(value: Any) -> str:
-    text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "study")).strip("-.")
-    return text[:96] or "study"
-
-
-def _development_progressive_resume_binding(
-    *,
-    project_root: str,
-    study_id: str,
-    source_job_id: str,
-    budget_mode: str,
-    checkpoint_sequence: str | int | None = None,
-) -> tuple[Path, str]:
-    """Resolve one server-owned Dev checkpoint without accepting client paths."""
-
-    selected_job = str(source_job_id or "").strip()
-    if budget_mode not in {"planner_canary", "full_reviewed"}:
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_budget_invalid",
-            "Development Planner resume requires a reviewed development budget.",
-        )
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", selected_job):
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_job_invalid",
-            "Choose one valid prior canary job from this study workspace.",
-        )
-    root = Path(project_root).expanduser().resolve()
-    study_root = root / _slug(study_id)
-    wrapper = study_root / f"run_{selected_job}"
-    pipeline_root = wrapper / "pipeline"
-    if wrapper.is_symlink() or pipeline_root.is_symlink():
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_source_invalid",
-            "The prior canary checkpoint source is not a regular owned workspace.",
-        )
-    try:
-        resolved_pipeline = pipeline_root.resolve(strict=True)
-        resolved_pipeline.relative_to(study_root.resolve())
-    except (FileNotFoundError, OSError, ValueError) as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_source_missing",
-            "The prior canary checkpoint is unavailable in this study workspace.",
-        ) from exc
-    run_dirs = sorted(
-        path
-        for path in resolved_pipeline.iterdir()
-        if path.is_dir() and not path.is_symlink() and path.name.startswith("run_")
-    )
-    if len(run_dirs) != 1:
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_source_ambiguous",
-            "The prior canary does not identify exactly one pipeline run.",
-        )
-    checkpoints: list[tuple[int, Path]] = []
-    for path in run_dirs[0].iterdir():
-        match = re.fullmatch(
-            r"progressive_planner_checkpoint_([0-9]{3})\.json",
-            path.name,
-        )
-        if match and path.is_file() and not path.is_symlink():
-            checkpoints.append((int(match.group(1)), path))
-    if not checkpoints:
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_checkpoint_missing",
-            "The prior canary has no validated Progressive Planner checkpoint.",
-        )
-    selected_sequence_text = (
-        "" if checkpoint_sequence is None else str(checkpoint_sequence).strip()
-    )
-    if selected_sequence_text:
-        if not re.fullmatch(r"(?:0|[1-9][0-9]{0,2})", selected_sequence_text):
-            raise ResearchPipelineRunError(
-                "research_pipeline_development_resume_sequence_invalid",
-                "The server-selected development checkpoint sequence is invalid.",
-            )
-        selected_sequence = int(selected_sequence_text)
-        selected = [
-            path for sequence, path in checkpoints if sequence == selected_sequence
-        ]
-        if len(selected) != 1:
-            raise ResearchPipelineRunError(
-                "research_pipeline_development_resume_sequence_missing",
-                "The selected development checkpoint is unavailable in the "
-                "prior canary.",
-            )
-        terminal = selected[0]
-    else:
-        terminal = max(checkpoints, key=lambda item: item[0])[1]
-    try:
-        raw = terminal.read_bytes()
-    except OSError as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_checkpoint_unreadable",
-            "The prior canary checkpoint cannot be read safely.",
-        ) from exc
-    artifact_sha256 = hashlib.sha256(raw).hexdigest()
-    try:
-        load_progressive_planner_checkpoint_chain(
-            last_checkpoint_path=terminal,
-            expected_artifact_sha256=artifact_sha256,
-        )
-    except ProgressivePlanningArtifactError as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_checkpoint_invalid",
-            "The prior canary checkpoint chain did not pass integrity validation.",
-            details={"reason_code": exc.reason_code},
-        ) from exc
-    return terminal, artifact_sha256
 
 
 def _clean_text(value: Any, limit: int = 1_200) -> str:
@@ -452,6 +277,34 @@ def _pending_plan_authority(pending: Optional[Any]) -> Dict[str, Any]:
     return dict(observed.plan_payload) if observed is not None else {}
 
 
+def _plan_has_complete_reviewable_recommendation(plan: Mapping[str, Any]) -> bool:
+    """Fail closed only for typed design selections that predate the proposal."""
+
+    selection = plan.get("design_selection")
+    if not isinstance(selection, Mapping):
+        return True
+    candidates = selection.get("candidates")
+    if not isinstance(candidates, list):
+        return False
+    selected = next(
+        (
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, Mapping)
+            and str(candidate.get("disposition") or "") == "selected"
+        ),
+        None,
+    )
+    if selected is None:
+        return False
+    recommendation = selected.get("reviewable_plan")
+    return bool(
+        isinstance(recommendation, list)
+        and len(recommendation) == 6
+        and all(len(_clean_text(value)) >= 8 for value in recommendation)
+    )
+
+
 def _pending_bound_evidence_sha256(
     pending: Optional[Any], evidence_id: str
 ) -> Optional[str]:
@@ -487,7 +340,10 @@ def _load_pending_scientific_review(
     path = run_dir / "scientific_plan_review.json"
     try:
         raw = path.read_bytes()
-        if len(raw) > _MAX_JSON_BYTES or hashlib.sha256(raw).hexdigest() != expected_sha:
+        if (
+            len(raw) > _MAX_JSON_BYTES
+            or hashlib.sha256(raw).hexdigest() != expected_sha
+        ):
             return {}
         review = PlanScientificReview.model_validate_json(raw)
     except (FileNotFoundError, OSError, ValueError):
@@ -495,29 +351,87 @@ def _load_pending_scientific_review(
     return review.model_dump(mode="json")
 
 
-def _pipeline_failure_code(exc: BaseException) -> str:
+def _pending_plan_approval_allowed(
+    *,
+    run_dir: Optional[Path],
+    pending: Optional[Any],
+    plan_recommendation_complete: bool,
+) -> bool:
+    """Fail closed unless the exact bound review satisfies current policy."""
+
+    # No pending entry is no approval authority. Owning the guard here keeps
+    # every call site from having to remember it before reading
+    # ``pending.requests``.
+    if pending is None or not plan_recommendation_complete:
+        return False
+    review = _load_pending_scientific_review(run_dir, pending)
+    if not review or review.get("approval_allowed") is not True:
+        return False
+    return all(
+        (
+            request.payload.get("approval_allowed", True)
+            if isinstance(request.payload, Mapping)
+            else True
+        )
+        for request in pending.requests
+    )
+
+
+def _pending_review_reason_code(
+    *,
+    request: Any,
+    plan_recommendation_complete: bool,
+    scientific_plan_review: Mapping[str, Any],
+) -> str:
+    """Project one precise current-policy reason for the paused plan."""
+
+    if not plan_recommendation_complete:
+        return "plan_scientific_changes_required"
+    if not scientific_plan_review:
+        return "scientific_plan_review_policy_stale"
+    if scientific_plan_review.get("approval_allowed") is not True:
+        return "plan_scientific_changes_required"
+    payload = request.payload if isinstance(request.payload, Mapping) else {}
+    return _clean_text(payload.get("reason"), 160)
+
+
+def _pipeline_failure_code(
+    exc: BaseException,
+    *,
+    budget_mode: str = "full_reviewed",
+) -> str:
     chain = _pipeline_exception_chain(exc)
     if any("timeout" in type(item).__name__.casefold() for item in chain):
         return "research_pipeline_provider_timeout"
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
         return "research_pipeline_plan_contract_exhausted"
     typed_failure = _safe_pipeline_typed_failure(exc)
-    if typed_failure.get("owner") == (
-        "easyicu.providers.planner_efficiency_budget_v1"
-    ):
+    if typed_failure.get("owner") == ("easyicu.providers.planner_efficiency_budget_v1"):
         return "research_pipeline_planner_efficiency_budget_exhausted"
-    if (
-        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
-        and typed_failure.get("reason_code")
-        in {
-            "codex_auth_app_server_timeout",
-            "codex_auth_notification_hard_timeout",
-            "codex_auth_notification_timeout",
-        }
-    ):
+    if typed_failure.get(
+        "owner"
+    ) == "easyicu.providers.codex_app_server_v1" and typed_failure.get(
+        "reason_code"
+    ) in {
+        "codex_auth_app_server_timeout",
+        "codex_auth_notification_hard_timeout",
+        "codex_auth_notification_timeout",
+    }:
         return "research_pipeline_provider_timeout"
     if typed_failure.get("owner") == "easyicu.planning.progressive_compiler_v1":
         return "research_pipeline_progressive_compile_failed"
+    if typed_failure.get("owner") == "easyicu.schema_validation_v1":
+        return "research_pipeline_schema_validation_failed"
+    if typed_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
+        # The same code the launch preflight uses, so a runtime that went down
+        # mid-run is attributed to the host environment rather than reported as
+        # a generic execution failure of the science.
+        return "research_pipeline_execution_runtime_unavailable"
+    if (
+        budget_mode != "full_reviewed"
+        and _pipeline_failure_category(exc) == "provider_http"
+    ):
+        return "research_pipeline_planner_provider_unavailable"
     return "research_pipeline_execution_failed"
 
 
@@ -548,6 +462,7 @@ def _safe_pipeline_attempt_metadata(exc: BaseException) -> List[Dict[str, Any]]:
 
 
 _SAFE_COMPILER_COORDINATE_RE = re.compile(r"^[A-Za-z0-9_.:\[\]-]{1,240}$")
+_SAFE_SCHEMA_ERROR_TYPE_RE = re.compile(r"^[a-z][a-z0-9_.]{0,79}$")
 _SAFE_PLANNER_BUDGET_REASONS = frozenset(
     {
         "call_limit",
@@ -565,12 +480,62 @@ _SAFE_CODEX_APP_SERVER_REASONS = frozenset(
         "codex_auth_notification_timeout",
     }
 )
+# Mirrors the execution-runtime owner's published contract; the pairing is
+# locked by test_web_execution_runtime_preflight.py so a new reason code cannot
+# silently reach this boundary unprojected.
+_EXECUTION_RUNTIME_DIAGNOSTIC_OWNER = "easyicu.execution.runtime_v1"
+_SAFE_RUNNER_UNAVAILABLE_REASONS = frozenset(
+    {
+        "docker_daemon_unreachable",
+        "docker_executable_missing",
+        "docker_image_missing",
+        "docker_probe_failed",
+        "host_sandbox_missing",
+    }
+)
 
 
 def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     """Project one allowlisted owner diagnostic without exception text."""
 
     for item in _pipeline_exception_chain(exc):
+        if isinstance(item, ValidationError):
+            coordinates: List[Dict[str, Any]] = []
+            for error in item.errors(
+                include_url=False,
+                include_context=False,
+                include_input=False,
+            )[:8]:
+                error_type = error.get("type")
+                location = error.get("loc")
+                if (
+                    not isinstance(error_type, str)
+                    or _SAFE_SCHEMA_ERROR_TYPE_RE.fullmatch(error_type) is None
+                    or not isinstance(location, tuple)
+                ):
+                    continue
+                safe_location: List[Any] = []
+                for part in location[:12]:
+                    if isinstance(part, int) and not isinstance(part, bool):
+                        if 0 <= part <= 10_000:
+                            safe_location.append(part)
+                        continue
+                    if isinstance(part, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(
+                        part
+                    ):
+                        safe_location.append(part)
+                coordinates.append(
+                    {
+                        "location": safe_location,
+                        "error_type": error_type,
+                    }
+                )
+            return {
+                "owner": "easyicu.schema_validation_v1",
+                "reason_code": "pydantic_contract_validation_failed",
+                "error_count": min(item.error_count(), 10_000),
+                "coordinates": coordinates,
+            }
         raw = getattr(item, "easyicu_safe_diagnostic", None)
         if not isinstance(raw, Mapping):
             continue
@@ -598,9 +563,7 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             ):
                 projected["step_index"] = step_index
             path = raw.get("path")
-            if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(
-                path
-            ):
+            if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(path):
                 projected["path"] = path
             return projected
         if owner == "easyicu.providers.planner_efficiency_budget_v1":
@@ -662,6 +625,23 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                     "owner": owner,
                     "reason_code": reason_code,
                 }
+        if owner == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
+            reason_code = raw.get("reason_code")
+            runner_kind = raw.get("runner_kind")
+            # The backend's own wording names a host socket path, so only the
+            # closed reason code and backend name cross this boundary. The
+            # image reference is already carried by the run's config receipt.
+            if (
+                reason_code not in _SAFE_RUNNER_UNAVAILABLE_REASONS
+                or not isinstance(runner_kind, str)
+                or re.fullmatch(r"[a-z][a-z0-9_]{0,31}", runner_kind) is None
+            ):
+                continue
+            return {
+                "owner": owner,
+                "reason_code": reason_code,
+                "runner_kind": runner_kind,
+            }
     return {}
 
 
@@ -669,9 +649,10 @@ def _pipeline_failure_category(exc: BaseException) -> str:
     """Return a closed diagnostic category for one bounded exception chain."""
 
     typed_failure = _safe_pipeline_typed_failure(exc)
-    if (
-        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
-        and "timeout" in str(typed_failure.get("reason_code") or "")
+    if typed_failure.get(
+        "owner"
+    ) == "easyicu.providers.codex_app_server_v1" and "timeout" in str(
+        typed_failure.get("reason_code") or ""
     ):
         return "timeout"
     categories = [
@@ -711,12 +692,37 @@ def _write_pipeline_failure_diagnostic(
     message_sha256 = hashlib.sha256(
         f"{type(exc).__name__}: {exc}".encode("utf-8")
     ).hexdigest()
+    traceback_frames = []
+    for item in _pipeline_exception_chain(exc):
+        for frame in traceback.extract_tb(item.__traceback__):
+            filename = Path(frame.filename).name
+            function = str(frame.name or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", filename):
+                continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_<>]{0,159}", function):
+                continue
+            traceback_frames.append(
+                {
+                    "file": filename,
+                    "function": function,
+                    "line": int(frame.lineno),
+                }
+            )
     payload = {
         "schema_version": "easyicu.web-research-pipeline-failure/4",
         "status": "failed",
         "code": code,
         "failure_type": _pipeline_failure_category(exc),
         "typed_failure": _safe_pipeline_typed_failure(exc),
+        "exception_types": [
+            type(item).__name__
+            for item in _pipeline_exception_chain(exc)
+            if type(item).__name__ in _SAFE_PIPELINE_EXCEPTION_TYPES
+        ],
+        # Bounded code coordinates make an otherwise generic RuntimeError
+        # attributable without persisting exception messages, prompts, paths,
+        # provider output, or patient data.
+        "traceback_frames": traceback_frames[-16:],
         "message": diagnostic_message,
         "message_sha256": message_sha256,
         "structured_retry_history": [],
@@ -727,6 +733,151 @@ def _write_pipeline_failure_diagnostic(
         "secrets_recorded": False,
     }
     relative = "diagnostics/research_pipeline_failure.json"
+    try:
+        target = wrapper_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(target, payload)
+    except OSError:
+        return None
+    return relative
+
+
+def _write_pipeline_failure_projection(
+    *,
+    wrapper_dir: Path,
+    study: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    code: str,
+    failure_type: str,
+    diagnostic: Optional[str],
+) -> bool:
+    """Write a fail-closed terminal receipt that Project Monitor can index."""
+
+    run_id = wrapper_dir.name
+    provider_public = {
+        key: provider.get(key)
+        for key in (
+            "provider",
+            "model",
+            "client",
+            "provider_gate",
+            "credential_fingerprint",
+        )
+        if provider.get(key) is not None
+    }
+    gate = {
+        "status": "blocked",
+        "reason": code,
+        "reportable": False,
+        "draft_unlocked": False,
+        "checks": [
+            {
+                "id": "research_pipeline_execution",
+                "label": "Research Agent pipeline reached a governed result",
+                "passed": False,
+                "reason_code": code,
+            }
+        ],
+    }
+    payloads: Dict[str, Dict[str, Any]] = {
+        "run_context.json": {
+            "run_id": run_id,
+            "study_id": _clean_text(study.get("id"), 160),
+            "scientific_configuration_sha256": (
+                study_context_owner.scientific_configuration_sha256(study)
+            ),
+            "mode": "research_agent_pipeline",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "summary": {
+                "execution_complete": False,
+                "analysis_started": False,
+            },
+            "local_first": {"uploads": 0},
+        },
+        "quality_gate.json": {"gate": gate, "quality": []},
+        "source_run_manifest.json": {
+            "schema_version": "easyicu.web-research-pipeline-projection/1",
+            "engine": "easyicu.research_agent.pipeline",
+            "run_id": run_id,
+            "status": "failed",
+            "failure_code": code,
+            "failure_type": failure_type,
+            "diagnostic_available": bool(diagnostic),
+            "provider": provider_public,
+            "path_values_returned": False,
+            "analysis_started": False,
+            "publication_authorized": False,
+        },
+    }
+    privacy_scan = run_artifact_disclosure.scan_browser_projection(payloads)
+    if not privacy_scan["passed"]:
+        provider_public = {}
+        payloads["source_run_manifest.json"]["provider"] = {}
+        privacy_scan = run_artifact_disclosure.scan_browser_projection(payloads)
+    if not privacy_scan["passed"]:
+        return False
+    try:
+        for name, payload in payloads.items():
+            _write_json(wrapper_dir / name, payload)
+        artifacts = [_artifact_record(wrapper_dir / name) for name in payloads]
+        _write_json(
+            wrapper_dir / "evidence_ledger.json",
+            {
+                "schema_version": "easyicu.web-research-pipeline-ledger/1",
+                "run_id": run_id,
+                "run_type": "full",
+                "engine": "easyicu.research_agent.pipeline",
+                "status": "blocked",
+                "artifacts": artifacts,
+                "provider": provider_public,
+                "pipeline_evidence_count": 0,
+                "privacy": {
+                    "patient_rows_in_projection": False,
+                    "path_values_returned": False,
+                    "projection_scan_passed": bool(privacy_scan["passed"]),
+                },
+            },
+        )
+    except OSError:
+        return False
+    return True
+
+
+def _write_review_resume_failure_diagnostic(
+    *,
+    wrapper_dir: Path,
+    exc: BaseException,
+    review_resumable: bool,
+) -> Optional[str]:
+    """Persist a private, bounded diagnostic for one failed review resume."""
+
+    module = type(exc).__module__
+    name = type(exc).__name__
+    exception_type = (
+        f"{module}.{name}"
+        if module == "builtins"
+        or module == "pydantic_core"
+        or module.startswith("easyicu.")
+        else "unclassified"
+    )
+    payload = {
+        "schema_version": "easyicu.web-research-review-resume-failure/1",
+        "status": "failed",
+        "code": "research_pipeline_review_resume_failed",
+        "failure_type": _pipeline_failure_category(exc),
+        "exception_type": exception_type,
+        "typed_failure": _safe_pipeline_typed_failure(exc),
+        "review_resumable": bool(review_resumable),
+        "message_sha256": hashlib.sha256(
+            f"{type(exc).__name__}: {exc}".encode("utf-8")
+        ).hexdigest(),
+        "raw_exception_recorded": False,
+        "provider_output_recorded": False,
+        "patient_rows_recorded": False,
+        "secrets_recorded": False,
+    }
+    relative = "diagnostics/research_pipeline_review_resume_failure.json"
     try:
         target = wrapper_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -755,547 +906,362 @@ def _safe_relative(root: Path, raw: Any) -> Optional[Path]:
     return resolved
 
 
-def _target_outcome(study: Mapping[str, Any]) -> Optional[str]:
-    execution = study.get("execution_concepts")
-    execution = execution if isinstance(execution, Mapping) else {}
-    value = _clean_text(execution.get("outcome") or study.get("outcome"), 160)
-    if value.lower() in {
-        "none",
-        "n/a",
-        "na",
-        "not applicable",
-        "descriptive only",
-        "无",
-        "不适用",
-        "仅描述",
-    }:
+def _metadata_only_patient_grouping_authority(
+    patient_grouping: Optional[PatientGroupingBinding],
+) -> Optional[Dict[str, Any]]:
+    if patient_grouping is None:
         return None
-    return value or None
-
-
-def _primary_exposure(study: Mapping[str, Any]) -> Optional[str]:
-    execution = study.get("execution_concepts")
-    execution = execution if isinstance(execution, Mapping) else {}
-    return _clean_text(
-        execution.get("primary_exposure") or study.get("primary_exposure"),
-        160,
-    ) or None
-
-
-def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
-    execution = study.get("execution_concepts")
-    execution = execution if isinstance(execution, Mapping) else {}
-    raw = (
-        execution.get("covariates")
-        if "covariates" in execution
-        else study.get("covariates")
-    )
-    if not isinstance(raw, (list, tuple)):
-        return ()
-    return tuple(
-        dict.fromkeys(
-            _clean_text(value, 160)
-            for value in raw
-            if isinstance(value, str) and _clean_text(value, 160)
-        )
-    )
-
-
-def _configured_covariate_selection(study: Mapping[str, Any]) -> str:
-    """Return the one validated owner coordinate for adjustment authority."""
-
-    selection = str(
-        study.get("covariate_selection") or "planner_selectable"
-    ).strip()
-    if selection not in {"planner_selectable", "exact"}:
+    coordinates = dict(patient_grouping.authority_coordinates)
+    if (
+        coordinates.get("schema_version")
+        != "easyicu.patient_grouping_runtime_authority/1"
+        or not isinstance(coordinates.get("authority_ref"), str)
+        or not coordinates.get("authority_ref")
+        or coordinates.get("mapping_sha256") != patient_grouping.mapping_sha256
+        or coordinates.get("grouping_derivation") != "prefix_before_:s"
+        or coordinates.get("provider_visible_values") is not False
+    ):
         raise ResearchPipelineRunError(
-            "research_pipeline_covariate_selection_invalid",
-            "StudyContext covariate_selection must be planner_selectable or exact.",
+            "research_pipeline_planning_patient_grouping_authority_invalid",
+            "The verified patient-grouping authority cannot be projected into "
+            "the metadata-only planning schema.",
         )
-    return selection
-
-
-def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
-    """Load only the typed sensitivity authority owned by StudyContext."""
-
-    from easyicu.research_agent.planning.sensitivity_authority import (
-        normalize_prespecified_sensitivities,
-    )
-
-    try:
-        return normalize_prespecified_sensitivities(study.get("sensitivity_specs"))
-    except (TypeError, ValueError) as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_sensitivity_specs_invalid",
-            "The configured prespecified sensitivity contract is invalid.",
-            details={"field": "sensitivity_specs", "reason": str(exc)[:500]},
-        ) from exc
-
-
-def _patient_grouping_for_analysis_design(
-    study: Mapping[str, Any],
-) -> Optional[PatientGroupingBinding]:
-    raw = study.get("analysis_design")
-    design = raw if isinstance(raw, Mapping) else {}
-    if _clean_text(design.get("variance_estimator"), 80) != "cluster_robust":
-        return None
-    cluster_unit = _clean_text(design.get("cluster_unit"), 80)
-    if cluster_unit != "patient":
-        raise ResearchPipelineRunError(
-            "research_pipeline_cluster_unit_unsupported",
-            "The current Web runner supports cluster-robust inference only for a verified patient grouping.",
-            details={
-                "cluster_unit": cluster_unit or None,
-                "supported_cluster_units": ["patient"],
-            },
+    safe_coordinates = {
+        key: coordinates[key]
+        for key in (
+            "schema_version",
+            "authority_ref",
+            "database",
+            "export_manifest_file",
+            "export_manifest_sha256",
+            "mapping_sha256",
+            "grouping_derivation",
+            "provider_visible_values",
         )
-    source = study.get("data_source")
-    source = source if isinstance(source, Mapping) else {}
-    export_path = _clean_text(source.get("path"), 2_000)
-    database = _clean_text(source.get("database"), 80)
-    if not export_path or not database:
-        return None
-    try:
-        return source_identity_authority.resolve_patient_grouping_authority(
-            export_path=export_path,
-            database=database,
-        )
-    except source_identity_authority.PatientGroupingAuthorityError as exc:
-        raise ResearchPipelineRunError(
-            exc.code,
-            str(exc),
-            details=exc.details,
-        ) from exc
-
-
-def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
-    """Fail closed on inference contracts the v1 Web runner cannot execute.
-
-    This bridge must not translate an accepted robust/clustered request into an
-    ordinary model-based fit.  StudyContext owns the semantic commitment; a
-    future data-source adapter and association executor can add a digest-bound
-    physical grouping coordinate without changing this case-neutral boundary.
-    """
-
-    raw = study.get("analysis_design")
-    if not raw:
-        if _primary_exposure(study) and _target_outcome(study):
-            raise ResearchPipelineRunError(
-                "research_pipeline_analysis_design_required",
-                (
-                    "An exposure-outcome analysis requires a typed analysis "
-                    "unit and variance estimator before pipeline launch."
-                ),
-                details={
-                    "field": "analysis_design",
-                    "required_fields": ["analysis_unit", "variance_estimator"],
-                },
-            )
-        return {}
-    if not isinstance(raw, Mapping):
-        raise ResearchPipelineRunError(
-            "research_pipeline_analysis_design_invalid",
-            "The typed analysis design is invalid.",
-            details={"field": "analysis_design"},
-        )
-    analysis_unit = _clean_text(raw.get("analysis_unit"), 80)
-    variance_estimator = _clean_text(raw.get("variance_estimator"), 80)
-    cluster_unit = _clean_text(raw.get("cluster_unit"), 80)
-    if not analysis_unit or not variance_estimator:
-        raise ResearchPipelineRunError(
-            "research_pipeline_analysis_design_incomplete",
-            "The typed analysis design is missing its analysis unit or variance estimator.",
-            details={"field": "analysis_design"},
-        )
-    raw_cohort = study.get("cohort")
-    cohort = raw_cohort if isinstance(raw_cohort, Mapping) else {}
-    if cohort.get("exclude_readmissions") is True:
-        raise ResearchPipelineRunError(
-            "research_pipeline_first_stay_restriction_unverified",
-            (
-                "The selected export has an ICU-readmission indicator but no "
-                "owner-verified first ICU stay per patient coordinate. The two "
-                "are not interchangeable."
-            ),
-            details={
-                "field": "cohort.exclude_readmissions",
-                "first_stay_restriction_status": "unverified_in_selected_export",
-                "icu_readmission_is_first_patient_stay_authority": False,
-                "safe_alternatives": [
-                    {
-                        "id": "patient_clustered_all_stays",
-                        "requires": "verified_patient_grouping",
-                        "changes_scientific_question": False,
-                    },
-                    {
-                        "id": "descriptive_only_without_independence_sensitive_inference",
-                        "changes_scientific_question": True,
-                    },
-                ],
-            },
-        )
-    dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
-    if dependence_finding is not None:
-        raise ResearchPipelineRunError(
-            "research_pipeline_repeated_stay_dependence_unaddressed",
-            (
-                "Repeat ICU stays are retained, but the typed inference "
-                "design does not address within-patient dependence."
-            ),
-            details={
-                key: value
-                for key, value in dependence_finding.items()
-                if key != "error"
-            },
-        )
-    if variance_estimator == "cluster_robust":
-        grouping = _patient_grouping_for_analysis_design(study)
-        if grouping is None:
-            raise ResearchPipelineRunError(
-                "research_pipeline_cluster_variance_unsupported",
-                (
-                    "This source and executor do not expose a verified grouping "
-                    "coordinate for the requested cluster-robust inference."
-                ),
-                details={
-                    "analysis_unit": analysis_unit,
-                    "variance_estimator": variance_estimator,
-                    "cluster_unit": cluster_unit or None,
-                    "grouping_coordinate_status": "unavailable_or_unverified",
-                    "first_stay_restriction_status": "unverified_in_selected_export",
-                    "safe_alternatives": [
-                        {
-                            "id": "provide_verified_patient_grouping",
-                            "executable_now": False,
-                            "changes_scientific_question": False,
-                        },
-                        {
-                            "id": "descriptive_only_without_independence_sensitive_inference",
-                            "executable_now": True,
-                            "changes_scientific_question": True,
-                        },
-                    ],
-                },
-            )
-        return {
-            "analysis_unit": analysis_unit,
-            "variance_estimator": variance_estimator,
-            "cluster_unit": "patient",
-            "grouping_coordinate": grouping.output_identity_column,
-        }
-    if variance_estimator == "none_counts_only":
-        return {
-            "analysis_unit": analysis_unit,
-            "variance_estimator": variance_estimator,
-        }
-    if variance_estimator != "model_based":
-        raise ResearchPipelineRunError(
-            "research_pipeline_variance_estimator_unsupported",
-            "The current deterministic association executor does not implement the requested variance estimator.",
-            details={
-                "analysis_unit": analysis_unit,
-                "variance_estimator": variance_estimator,
-                "supported_variance_estimators": [
-                    "model_based",
-                    "none_counts_only",
-                ],
-            },
-        )
+        if key in coordinates
+    }
     return {
-        "analysis_unit": analysis_unit,
-        "variance_estimator": variance_estimator,
+        "output_identity_column": patient_grouping.output_identity_column,
+        "mapping_file_sha256": patient_grouping.mapping_sha256,
+        "mapped_cohort_rows": 0,
+        "patient_group_derivation": {
+            "algorithm": "prefix_before_:s",
+            "delimiter": ":s",
+        },
+        "authority_coordinates": safe_coordinates,
     }
 
 
-def validate_analysis_design_for_execution(
-    study: Mapping[str, Any],
-) -> Dict[str, str]:
-    """Public, read-only capability gate for the current Web runner.
+def _metadata_only_planning_acquisition(
+    *,
+    database: str,
+    question: str,
+    llm: Any,
+    output_dir: Path,
+    target_outcome: Optional[str] = None,
+    endpoint: Any = None,
+    required_concepts: Sequence[str] = (),
+    patient_grouping: Optional[PatientGroupingBinding] = None,
+    operationalized_columns: Sequence[str] = (),
+) -> Any:
+    """Select a planning catalog without reading patient data.
 
-    Copilot uses this before spending a one-turn configuration grant so it can
-    tell the user that a scientifically requested design is not executable by
-    the selected source/runner.  The launch path calls the same owner logic
-    again; this preview never weakens the authoritative launch gate.
+    This is the Planner-only counterpart of ``acquire_universe_for_question``:
+    the same data-foundation model chooses a parsimonious concept set, but its
+    menu comes from EasyICU's database capability registry rather than files in
+    an export package. The resulting parquet has schema only and zero rows. It
+    can inform a reviewable plan, but it cannot authorize execution or support
+    denominator, missingness, event-rate, or effect claims.
     """
 
-    return _validate_analysis_design(study)
+    import pandas as pd
 
+    from easyicu.research_agent.acquisition.catalog import (
+        assess_coverage,
+        build_database_capability_catalog,
+    )
+    from easyicu.research_agent.acquisition.foundation import (
+        AcquisitionResult,
+        DataFoundationAgent,
+    )
+    from easyicu.database_config import ID_COLUMNS
+    from easyicu.research_agent.concept_availability import normalize_database_name
 
-def _validate_primary_concept_selection(
-    study: Mapping[str, Any],
-    primary_exposure: Optional[str],
-) -> None:
-    """Enforce the concept owner's user-intent selection policy at launch."""
+    catalog = build_database_capability_catalog(database)
+    if not catalog.concepts:
+        raise ResearchPipelineRunError(
+            "research_pipeline_planning_catalog_unavailable",
+            "EasyICU has no metadata-only concept catalog for this database.",
+            details={"database": database},
+        )
+    selection = DataFoundationAgent(llm).select_concepts(
+        question=question,
+        catalog=catalog,
+        target_outcome=target_outcome,
+    )
+    resolvable_required = [
+        value.strip()
+        for value in required_concepts
+        if isinstance(value, str)
+        and value.strip()
+        and assess_coverage([value.strip()], catalog).sufficient
+    ]
+    selection.selected_concepts = list(
+        dict.fromkeys(
+            [
+                *selection.selected_concepts,
+                *resolvable_required,
+            ]
+        )
+    )
+    selection.coverage = assess_coverage(selection.selected_concepts, catalog)
+    coverage = selection.coverage or assess_coverage(
+        selection.selected_concepts,
+        catalog,
+    )
+    selected = list(dict.fromkeys(coverage.available))
+    blocked = bool(
+        not selection.selection_succeeded or not selected or not coverage.sufficient
+    )
+    if blocked:
+        return AcquisitionResult(
+            universe_path=None,
+            provenance_path=None,
+            selection=selection,
+            materialized_concepts=[],
+            coverage=coverage,
+            blocked=True,
+            note=(
+                "Metadata-only concept selection failed before Planner launch; "
+                "no patient data were read."
+            ),
+        )
 
-    if not primary_exposure:
-        return
-    from easyicu.concept.selection_policy import evaluate_concept_selection
-
-    # Only the persisted scientific question can authorize an explicit-only
-    # variant. Exposure labels and analysis prose are model-produced fields;
-    # accepting them here would let a plan authorize its own semantic drift.
-    intent = str(study.get("question") or "")
-    decision = evaluate_concept_selection(primary_exposure, user_intent=intent)
-    if decision.allowed:
-        return
-    raise ResearchPipelineRunError(
-        decision.reason_code,
-        (
-            "The configured primary exposure is an explicit-only concept "
-            "variant that the user did not request."
+    output_dir.mkdir(parents=True, exist_ok=True)
+    universe_path = output_dir / "planner_catalog.parquet"
+    normalized_database = normalize_database_name(database)
+    database_id_columns = ID_COLUMNS.get(normalized_database, [])
+    if not database_id_columns:
+        raise ResearchPipelineRunError(
+            "research_pipeline_planning_identity_unavailable",
+            "EasyICU has no canonical ICU-stay identity for metadata-only "
+            "planning on this database.",
+            details={"database": normalized_database},
+        )
+    row_identity_column = database_id_columns[0]
+    normalized_operationalized = _normalized_metadata_planning_operationalized_columns(
+        operationalized_columns
+    )
+    replacement_row_identity = _metadata_only_patient_grouping_authority(
+        patient_grouping
+    )
+    projected_patient_identity = (
+        patient_grouping.output_identity_column
+        if patient_grouping is not None
+        and patient_grouping.output_identity_column != row_identity_column
+        else None
+    )
+    planning_columns: Dict[str, Any] = {row_identity_column: pd.Series(dtype="int64")}
+    if projected_patient_identity:
+        # This is schema authority only. The private stay-to-patient mapping is
+        # applied later by the governed materializer and no identifier values
+        # cross the Planner boundary.
+        planning_columns[projected_patient_identity] = pd.Series(dtype="string")
+    planning_columns.update(
+        {
+            column: pd.Series(dtype="float64")
+            for column in normalized_operationalized
+            if column not in planning_columns
+        }
+    )
+    planning_columns.update(
+        {
+            concept: pd.Series(dtype="float64")
+            for concept in selected
+            if concept not in planning_columns
+        }
+    )
+    planning_catalog = pd.DataFrame(planning_columns)
+    planning_catalog.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog",
+        "patient_rows_read": False,
+        **(
+            {"replacement_row_identity": replacement_row_identity}
+            if replacement_row_identity is not None
+            else {}
         ),
-        details=decision.to_dict(),
+    }
+    planning_catalog.to_parquet(universe_path, index=False)
+    provenance_path = output_dir / "planner_catalog_receipt.json"
+    _write_json(
+        provenance_path,
+        {
+            "schema_version": "easyicu.metadata-only-planning-catalog/1",
+            "database": database,
+            "catalog_source": catalog.source,
+            "row_identity_column": row_identity_column,
+            "patient_identity_column": projected_patient_identity,
+            "operationalized_columns": list(normalized_operationalized),
+            "replacement_row_identity": replacement_row_identity,
+            "selected_concepts": selected,
+            "selected_concepts_sha256": hashlib.sha256(
+                json.dumps(
+                    selected,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "patient_rows_read": False,
+            "patient_rows_written": False,
+            "observed_feasibility_claims": False,
+            "execution_authorized": False,
+            "planning_target_outcome": target_outcome,
+            "planning_endpoint": (
+                endpoint.model_dump(mode="json")
+                if endpoint is not None and hasattr(endpoint, "model_dump")
+                else None
+            ),
+        },
+    )
+    return AcquisitionResult(
+        universe_path=universe_path,
+        provenance_path=provenance_path,
+        selection=selection,
+        materialized_concepts=[],
+        coverage=coverage,
+        blocked=False,
+        endpoint=endpoint,
+        note=(
+            "Metadata-only planning catalog; no patient rows were read and "
+            "execution requires a separately prepared package."
+        ),
     )
 
 
-def _source_concept_for_operational_column(
-    column: str,
+def _restore_metadata_only_planning_acquisition(
     *,
-    by_id: Mapping[str, Any],
-) -> Optional[str]:
-    """Resolve a wide materialized column back to its exported source concept."""
+    database: str,
+    profile: _DevelopmentResumeAcquisition,
+    output_dir: Path,
+    endpoint: Any = None,
+    patient_grouping: Optional[PatientGroupingBinding] = None,
+    operationalized_columns: Sequence[str] = (),
+) -> Any:
+    """Replay and restage one verified zero-row catalog without an LLM call.
 
-    if column in by_id:
-        return column
-    for suffix in _MATERIALIZED_FEATURE_SUFFIXES:
-        if column.endswith(suffix):
-            source_concept = column[: -len(suffix)]
-            if source_concept in by_id:
-                return source_concept
-    return None
+    Each continuation owns a fresh immutable wrapper. Restaging the verified
+    catalog and receipt into that wrapper lets a later budget-bounded
+    continuation resume from this run as well, instead of losing acquisition
+    authority after exactly one hop.
+    """
 
+    from easyicu.research_agent.acquisition.catalog import (
+        assess_coverage,
+        build_database_capability_catalog,
+    )
+    from easyicu.research_agent.acquisition.foundation import (
+        AcquisitionResult,
+        ConceptSelection,
+    )
 
-def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
-    raw = study.get("time_window")
-    window = raw if isinstance(raw, Mapping) else {}
-    if not window:
+    if (
+        profile.kind != "metadata_only_planning_catalog"
+        or profile.universe_path is None
+        or profile.provenance_path is None
+        or not profile.selected_concepts
+        or not profile.universe_sha256
+        or not profile.provenance_sha256
+    ):
         raise ResearchPipelineRunError(
-            "research_pipeline_time_window_required",
-            "A typed study time window is required before pipeline launch.",
-            details={"field": "time_window"},
+            "research_pipeline_development_resume_acquisition_invalid",
+            "The Planner checkpoint has no restorable metadata-only catalog.",
         )
-    value = window.get("hours")
-    if value is None:
-        value = window.get("observation_hours")
-    if value is None:
+    catalog = build_database_capability_catalog(database)
+    coverage = assess_coverage(profile.selected_concepts, catalog)
+    if not coverage.sufficient:
         raise ResearchPipelineRunError(
-            "research_pipeline_time_window_hours_required",
-            (
-                "The time-window label or preset has no executable duration; "
-                "hours or observation_hours must be explicitly bound."
-            ),
-            details={"field": "time_window.hours"},
-        )
-    if not _clean_text(window.get("anchor"), 160):
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_anchor_required",
-            "The typed study time window requires an explicit scientific anchor.",
-            details={"field": "time_window.anchor"},
-        )
-    window_finding = study_context_owner.materialization_window_finding(dict(study))
-    if window_finding is not None:
-        raise ResearchPipelineRunError(
-            "research_pipeline_materialization_window_anchor_unsupported",
-            (
-                "The configured time-window anchor is not an executable "
-                "outer materialization coordinate for this pipeline."
-            ),
-            details={
-                key: value
-                for key, value in window_finding.items()
-                if key != "error"
-            },
-        )
-    if isinstance(value, bool):
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_invalid",
-            "The configured study time window must be a finite number of hours.",
+            "research_pipeline_development_resume_acquisition_authority_mismatch",
+            "The prior Planner catalog is no longer executable in the current "
+            "database capability registry.",
         )
     try:
-        hours = float(value)
-    except (TypeError, ValueError) as exc:
+        universe_raw = profile.universe_path.read_bytes()
+        provenance_raw = profile.provenance_path.read_bytes()
+    except OSError as exc:
         raise ResearchPipelineRunError(
-            "research_pipeline_time_window_invalid",
-            "The configured study time window must be a finite number of hours.",
+            "research_pipeline_development_resume_acquisition_unreadable",
+            "The verified Planner catalog could not be restaged.",
         ) from exc
-    if not math.isfinite(hours) or not 0 < hours <= 24 * 365:
+    if (
+        hashlib.sha256(universe_raw).hexdigest() != profile.universe_sha256
+        or hashlib.sha256(provenance_raw).hexdigest() != profile.provenance_sha256
+    ):
         raise ResearchPipelineRunError(
-            "research_pipeline_time_window_invalid",
-            "The configured study time window is outside the supported range.",
+            "research_pipeline_development_resume_acquisition_digest_mismatch",
+            "The verified Planner catalog changed before it could be restaged.",
         )
-    return (0.0, hours)
+    import pyarrow.parquet as pq
 
-
-def _configured_modules(study: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = study.get("modules")
-    if not isinstance(raw, (list, tuple)):
-        return ()
-    return tuple(
-        dict.fromkeys(
-            str(module).strip().lower()
-            for module in raw
-            if isinstance(module, str) and str(module).strip()
-        )
+    receipt = _read_json(profile.provenance_path, {})
+    schema_columns = set(pq.read_schema(profile.universe_path).names)
+    expected_patient_identity = (
+        patient_grouping.output_identity_column
+        if patient_grouping is not None
+        else None
     )
-
-
-def _data_foundation_profile(
-    *,
-    export_path: str,
-    study: Mapping[str, Any],
-    target: Optional[str],
-    primary_exposure: Optional[str] = None,
-    covariates: tuple[str, ...] = (),
-    sensitivity_specs: tuple[Any, ...] = (),
-) -> Dict[str, Any]:
-    """Compile StudyContext modules into one typed materialization request."""
-
-    from easyicu.research_agent.acquisition.catalog import build_available_catalog
-
-    modules = _configured_modules(study)
-    if not modules:
+    expected_replacement = _metadata_only_patient_grouping_authority(patient_grouping)
+    expected_operationalized = _normalized_metadata_planning_operationalized_columns(
+        operationalized_columns
+    )
+    if (
+        receipt.get("patient_identity_column") != expected_patient_identity
+        or receipt.get("replacement_row_identity") != expected_replacement
+        or tuple(receipt.get("operationalized_columns") or ())
+        != expected_operationalized
+        or (
+            expected_patient_identity is not None
+            and expected_patient_identity not in schema_columns
+        )
+        or any(column not in schema_columns for column in expected_operationalized)
+    ):
         raise ResearchPipelineRunError(
-            "research_pipeline_modules_required",
-            "A full Research Agent run requires configured feature modules.",
+            "research_pipeline_development_resume_identity_authority_mismatch",
+            "The prior Planner catalog does not match the current patient "
+            "grouping and operationalized planning schema.",
         )
-    allowed = set(modules)
-    catalog = build_available_catalog(Path(export_path).expanduser())
-    concepts = [
-        concept
-        for concept in catalog.concepts
-        if Path(concept.file_name).stem.lower() in allowed
-    ]
-    by_id = {concept.concept_id: concept for concept in concepts}
-    demographic_values = [
-        concept.concept_id
-        for concept in concepts
-        if Path(concept.file_name).stem.lower() == "demographics"
-        and (not concept.typed_metadata or concept.column_role == "value")
-    ]
-    preferred_base = [
-        concept for concept in ("age", "sex") if concept in demographic_values
-    ]
-    static_concepts = preferred_base or demographic_values[:1]
-    if not static_concepts:
-        raise ResearchPipelineRunError(
-            "research_pipeline_stay_denominator_unavailable",
-            "The configured modules do not provide a stay-level denominator concept.",
-        )
-
-    outcome_concepts: List[str] = []
-    required_feature_concepts: List[str] = []
-    require_outcome = False
-    raw_cohort = study.get("cohort")
-    cohort = raw_cohort if isinstance(raw_cohort, Mapping) else {}
-    if cohort.get("exclude_readmissions") is True:
-        readmission_meta = by_id.get("icu_readmission")
-        if readmission_meta is None:
-            raise ResearchPipelineRunError(
-                "research_pipeline_readmission_indicator_unavailable",
-                (
-                    "The user-authorized first-stay restriction cannot run "
-                    "because the selected modules expose no owner-issued "
-                    "ICU-readmission indicator."
-                ),
-                details={
-                    "field": "cohort.exclude_readmissions",
-                    "required_concept": "icu_readmission",
-                },
-            )
-        readmission_module = Path(readmission_meta.file_name).stem.lower()
-        if readmission_module in {"demographics", "outcome"} and (
-            not readmission_meta.typed_metadata
-            or readmission_meta.column_role == "value"
-        ):
-            static_concepts.append("icu_readmission")
-        else:
-            required_feature_concepts.append("icu_readmission")
-    if target:
-        target_meta = by_id.get(target)
-        if target_meta is None:
-            raise ResearchPipelineRunError(
-                "research_pipeline_target_outside_configured_modules",
-                "The configured outcome is not available in the selected feature modules.",
-                details={"field": "execution_concepts.outcome", "concept_id": target},
-            )
-        target_module = Path(target_meta.file_name).stem.lower()
-        if target_meta.column_role == "event_status":
-            outcome_concepts.append(target)
-            require_outcome = True
-        elif target_module in {"demographics", "outcome"}:
-            static_concepts.append(target)
-        else:
-            required_feature_concepts.append(target)
-
-    sensitivity_variables = tuple(
-        dict.fromkeys(
-            variable
-            for spec in sensitivity_specs
-            for variable in spec.execution_variables
-        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    universe_path = output_dir / "planner_catalog.parquet"
+    provenance_path = output_dir / "planner_catalog_receipt.json"
+    universe_path.write_bytes(universe_raw)
+    provenance_path.write_bytes(provenance_raw)
+    selection = ConceptSelection(
+        selected_concepts=list(profile.selected_concepts),
+        rationale=(
+            "Restored from the verified metadata-only Planner checkpoint catalog."
+        ),
+        coverage=coverage,
+        selection_authority="host_exact",
     )
-    scientific_inputs = tuple(
-        dict.fromkeys(
-            value
-            for value in (primary_exposure, *covariates, *sensitivity_variables)
-            if value and value != target
-        )
+    return AcquisitionResult(
+        universe_path=universe_path,
+        provenance_path=provenance_path,
+        selection=selection,
+        materialized_concepts=[],
+        coverage=coverage,
+        blocked=False,
+        endpoint=endpoint,
+        note=(
+            "Verified metadata-only Planner replay; no patient rows were read "
+            "and execution remains unauthorized."
+        ),
     )
-    primary_exposure_source_concept: Optional[str] = None
-    for concept_id in scientific_inputs:
-        source_concept = _source_concept_for_operational_column(
-            concept_id,
-            by_id=by_id,
-        )
-        if source_concept is None:
-            role = (
-                "primary_exposure"
-                if concept_id == primary_exposure
-                else (
-                    "covariate"
-                    if concept_id in covariates
-                    else "sensitivity_variable"
-                )
-            )
-            raise ResearchPipelineRunError(
-                f"research_pipeline_{role}_outside_configured_modules",
-                f"The configured {role.replace('_', ' ')} is not available in the selected feature modules.",
-                details={
-                    "field": f"execution_concepts.{role}",
-                    "concept_id": concept_id,
-                },
-            )
-        if concept_id == primary_exposure:
-            primary_exposure_source_concept = source_concept
-        concept_meta = by_id[source_concept]
-        concept_module = Path(concept_meta.file_name).stem.lower()
-        if (
-            concept_id == source_concept
-            and concept_module
-            in {
-                "demographics",
-                "outcome",
-            }
-            and (not concept_meta.typed_metadata or concept_meta.column_role == "value")
-        ):
-            static_concepts.append(concept_id)
-        else:
-            required_feature_concepts.append(source_concept)
-
-    return {
-        "allowed_modules": modules,
-        "static_concepts": tuple(dict.fromkeys(static_concepts)),
-        "outcome_concepts": tuple(outcome_concepts),
-        "required_feature_concepts": tuple(required_feature_concepts),
-        "require_outcome": require_outcome,
-        "primary_exposure_source_concept": primary_exposure_source_concept,
-    }
 
 
 def _resolve_materialized_primary_exposure(
     *,
     configured: Optional[str],
     source_concept: Optional[str],
+    aggregation: Optional[str] = None,
     acquisition: Any,
 ) -> Optional[str]:
     """Resolve only an owner-issued materialized exposure coordinate."""
@@ -1303,10 +1269,110 @@ def _resolve_materialized_primary_exposure(
     if not configured:
         return None
     source = source_concept or configured
+    if aggregation:
+        operational = f"{source}_{aggregation}"
+        materialized = set(getattr(acquisition, "materialized_columns", ()) or ())
+        return operational if operational in materialized else None
     if configured == source:
         return (getattr(acquisition, "analysis_columns", {}) or {}).get(source)
     materialized = set(getattr(acquisition, "materialized_columns", ()) or ())
     return configured if configured in materialized else None
+
+
+def _resolve_planner_proposed_primary_exposure(
+    *, source_concept: str, acquisition: Any
+) -> Optional[str]:
+    """Choose one reviewable, executable representation for a Planner proposal.
+
+    This is deliberately separate from ``_resolve_materialized_primary_exposure``:
+    that function enforces an already user-approved aggregation. Here the user
+    named the scientific concept in the question but asked EasyICU to propose
+    the study design first. We therefore consult the case-neutral ICU
+    aggregation policy, select the first representation the sealed materialized
+    universe actually provides, and leave the choice inside the candidate Plan
+    for human review. The StudyContext is not mutated.
+    """
+
+    from easyicu.research_agent.icu_rules import (
+        aggregation_rule_for,
+        classify_variable,
+    )
+    from easyicu.research_agent.schema import AggregationRule
+    from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+
+    analysis_columns = dict(getattr(acquisition, "analysis_columns", {}) or {})
+    materialized = set(getattr(acquisition, "materialized_columns", ()) or ())
+
+    suffixes = {
+        AggregationRule.MEAN_MEDIAN: ("mean", "median"),
+        AggregationRule.MEDIAN_ONLY: ("median",),
+        AggregationRule.MAX_LAST: ("max", "last"),
+        AggregationRule.FIRST_VALUE: ("first",),
+        AggregationRule.SUM: ("sum",),
+        AggregationRule.NONE: ("",),
+        AggregationRule.ANY: ("mean", "median", "max", "last", "first"),
+    }
+
+    def resolve_output(output_concept: str) -> Optional[str]:
+        direct = str(analysis_columns.get(output_concept) or "").strip()
+        if direct:
+            return direct if direct in materialized else None
+        hint = classify_variable(output_concept, "float64")
+        ordered_rules = list(
+            dict.fromkeys(
+                [
+                    hint.aggregation_default,
+                    *aggregation_rule_for(hint.role, hint.kind),
+                ]
+            )
+        )
+        for rule in ordered_rules:
+            for suffix in suffixes.get(rule, ()):
+                candidate = (
+                    output_concept
+                    if not suffix
+                    else f"{output_concept}_{suffix}"
+                )
+                if candidate in materialized:
+                    return candidate
+        return None
+
+    direct = resolve_output(source_concept)
+    if direct:
+        return direct
+
+    # Composite loaders can expose a public output whose name differs from
+    # the user-facing source concept (for example, one source can publish a
+    # versioned clinical definition).  Bind only through the declarative
+    # concept owner and only when the materialized universe proves exactly one
+    # executable candidate; ambiguous multi-output loaders remain fail-closed.
+    composite_candidates = {
+        resolved
+        for output_concept, declared_source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
+        if declared_source == source_concept
+        if (resolved := resolve_output(output_concept))
+    }
+    return next(iter(composite_candidates)) if len(composite_candidates) == 1 else None
+
+
+def _resolve_materialized_target_outcome(
+    *, source_concept: str, acquisition: Any
+) -> Optional[str]:
+    """Resolve a concept-level outcome to its owner-issued cohort column.
+
+    Event-status concepts such as ``death`` are normalized by the data
+    foundation to a stable stay-level coordinate such as ``death_max``.  The
+    Research Agent must receive that materialized coordinate rather than the
+    pre-materialization concept id; otherwise cohort validation incorrectly
+    reports that a present outcome is missing.
+    """
+
+    analysis_columns = dict(getattr(acquisition, "analysis_columns", {}) or {})
+    materialized = set(getattr(acquisition, "materialized_columns", ()) or ())
+    resolved = str(analysis_columns.get(source_concept) or "").strip()
+    if resolved:
+        return resolved if resolved in materialized else None
+    return source_concept if source_concept in materialized else None
 
 
 def _elide_constraint_lists(
@@ -1362,9 +1428,7 @@ def _compile_data_constraints(constraints: Mapping[str, Any]) -> str:
             "limit_chars": _MAX_DATA_CONSTRAINTS_CHARS,
             "serialized_chars": len(payload),
             "section_chars": {
-                str(key): len(
-                    json.dumps(value, ensure_ascii=False, sort_keys=True)
-                )
+                str(key): len(json.dumps(value, ensure_ascii=False, sort_keys=True))
                 for key, value in constraints.items()
             },
         },
@@ -1387,11 +1451,56 @@ def _research_user_preferences(
     if analysis_goal:
         preferences["must_have_outputs"] = analysis_goal
     if comparator:
-        preferences["subgroup_sensitivity"] = comparator
+        # A comparator is the estimand's contrast, not a request for subgroup
+        # analyses. Filed as `subgroup_sensitivity` it reached the Planner as
+        # "Include subgroup/sensitivity requests: <comparator>"
+        # (`skills.py::_preference_rationale_note`), turning a stated reference
+        # group into extra analyses nobody asked for. The inbound contract has
+        # no comparator field -- the contrast belongs to the Planner's own
+        # `PlannedModelRequirement.exposure_reference_level` -- so it travels as
+        # a declared statement the Planner may honour, not as an instruction.
+        preferences["extra_notes"] = "\n".join(
+            part
+            for part in (
+                preferences.get("extra_notes"),
+                f"Comparator stated by the researcher: {comparator}",
+            )
+            if part
+        )
     raw_analysis_design = study.get("analysis_design")
     analysis_design = (
-        raw_analysis_design if isinstance(raw_analysis_design, Mapping) else {}
+        dict(raw_analysis_design) if isinstance(raw_analysis_design, Mapping) else {}
     )
+    confirmations = study.get("confirmations")
+    if (
+        isinstance(confirmations, Mapping)
+        and confirmations.get("plan_timing_descriptive_only") is True
+    ):
+        # The researcher explicitly requested, or the host conservatively
+        # derived, a descriptive scientific ceiling. Transport that decision
+        # as the typed family authority the Planner already treats as closed; prose in
+        # ``must_have_outputs`` is only an output request and cannot safely own
+        # analysis-family routing.  This also repairs projects saved before the
+        # descriptive choice wrote an explicit ``analysis_family`` field.
+        analysis_design = {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        }
+        # This choice also declines a time-aligned association estimand.  Make
+        # that boundary explicit in the existing timing/design authority so a
+        # Planner cannot describe a landmark population while compiling only
+        # an unconditional descriptive distribution.
+        preferences["timing_and_design"] = json.dumps(
+            {
+                "analysis_scope": "descriptive_distribution_only",
+                "association_timing": "not_authorized",
+                "landmark": "not_authorized",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     analysis_family = _clean_text(analysis_design.get("analysis_family"), 80)
     if analysis_family:
         from easyicu.research_agent.planning.analysis_types import (
@@ -1405,7 +1514,7 @@ def _research_user_preferences(
                 details={"field": "analysis_design.analysis_family"},
             )
         # ResearchContext already owns a typed family coordinate. Populate it
-        # from the user-approved StudyContext instead of asking free-text
+        # from the typed StudyContext instead of asking free-text
         # keyword inference to reinterpret a descriptive risk contrast.
         preferences["inferred_analysis_family"] = analysis_family
     covariates = _configured_covariates(study)
@@ -1421,12 +1530,14 @@ def _research_user_preferences(
         preferences["covariate_temporal_roles"] = dict(
             study.get("covariate_temporal_roles") or {}
         )
+        preferences["covariate_operationalizations"] = dict(
+            study.get("covariate_operationalizations") or {}
+        )
     elif covariates:
         preferences["covariates"] = list(covariates)
 
     constraints: Dict[str, Any] = {}
     cohort = study.get("cohort")
-    confirmations = study.get("confirmations")
     if isinstance(cohort, Mapping) and cohort:
         constraints["cohort"] = dict(cohort)
     if isinstance(confirmations, Mapping) and confirmations:
@@ -1470,14 +1581,131 @@ def _research_user_preferences(
             raise ResearchPipelineRunError(
                 "research_pipeline_landmark_authority_ambiguous",
                 "The configured sensitivities declare more than one landmark origin.",
-                details={"field": "sensitivity_specs", "landmark_hours": sorted(landmarks)},
+                details={
+                    "field": "sensitivity_specs",
+                    "landmark_hours": sorted(landmarks),
+                },
             )
         if landmarks:
             preferences["landmark_hours"] = next(iter(landmarks))
     return preferences
 
 
+def _declared_time_windows(
+    window: tuple[float, float], study: Mapping[str, Any]
+) -> List[TimeWindow]:
+    """Declare the materialized window as the study's analysis window.
+
+    ``pipeline.run`` accepts ``time_windows`` and the outbound Planner contract
+    publishes it as a first-class list, but the Web caller never sent one. With
+    none supplied the context builder falls back to
+    ``inferred_windows or default_time_windows()`` -- a generic roster whose
+    third entry is ``full_stay`` 0-720h. So a study materialized to the opening
+    24 hours offered the Planner a whole-stay window the data cannot support,
+    while the researcher's own confirmed window was dropped.
+
+    The tuple passed here is the same one that bounded materialization, so the
+    plan cannot name a window the cohort does not carry. ``_cohort_window`` has
+    already fail-closed on a missing duration and on any anchor the materializer
+    cannot honour, which is what lets the anchor be stated as ICU admission.
+    """
+
+    start, end = float(window[0]), float(window[1])
+    raw = study.get("time_window")
+    stated = raw if isinstance(raw, Mapping) else {}
+    label = _clean_text(stated.get("label"), 120)
+    return [
+        TimeWindow(
+            name=label or f"icu_admission_0_{end:g}h",
+            anchor="icu_admission",
+            start_hours=start,
+            end_hours=end,
+            rationale=(
+                "Outer feature-materialization window bound by the host before "
+                "this run; the cohort carries no observation outside it."
+            ),
+        )
+    ]
+
+
+def _diagnosis_filter_applies(cohort: Mapping[str, Any]) -> bool:
+    """Will the export actually run a diagnosis filter for this cohort?
+
+    Ask the primary-cohort owner instead of restating what the conversation
+    happened to type. ``primary_cohort.normalize_execution_cohort`` decides what
+    counts as an executable diagnosis predicate -- it treats a structured
+    include/exclude list as one in its own right, and it refuses a cohort it
+    cannot execute at all (an ``icd`` preset carrying no tokens, an unsupported
+    preset). Reading the owner keeps this declaration true whichever way that
+    rule moves.
+
+    What it prevents: declaring a criterion no row was ever measured against.
+    The cohort ledger draws its exclusion stage from this declaration, so an
+    unexecutable filter would surface in the write-up as a stage that ran --
+    the same unearned claim the idea handoff used to make about an adult cohort
+    nobody had chosen.
+    """
+
+    try:
+        contract = dataio.normalize_export_cohort_contract(cohort)
+    except Exception:  # noqa: BLE001 - an unverifiable filter is declared as none
+        return False
+    return bool(contract.get("icd_enabled"))
+
+
+def _diagnosis_criteria(
+    cohort: Mapping[str, Any], keys: tuple[str, ...], prefix: str
+) -> List[str]:
+    """Declare one diagnosis criterion, in the same precedence the export uses.
+
+    ``dataio`` reads ``icd_include or include_diagnoses`` (and the exclusion
+    mirror); the researcher's own wording is kept rather than the expanded token
+    roster, because a stated range is what they would recognise in the write-up.
+
+    The declaration is bounded by the same roster the export executes rather
+    than by a separate literal. A private cap of 20 declared 20 of 35 stated
+    criteria while 39 codes actually ran, and the cohort ledger and the
+    manuscript's inclusion criteria both read this declaration -- so the
+    write-up stated a narrower cohort than the one that was analysed. If a
+    roster is ever still trimmed here, the declaration says so instead of
+    ending silently.
+    """
+
+    if not _diagnosis_filter_applies(cohort):
+        return []
+    for key in keys:
+        values = cohort.get(key)
+        if isinstance(values, str):
+            values = [part for part in values.replace(";", ",").split(",")]
+        if not isinstance(values, list):
+            continue
+        clean = [_clean_text(item, 120) for item in values]
+        clean = [item for item in clean if item]
+        if not clean:
+            continue
+        shown = clean[: primary_cohort.MAX_DIAGNOSIS_TOKENS]
+        undeclared = len(clean) - len(shown)
+        stated = ", ".join(shown)
+        if undeclared:
+            stated += f" (+{undeclared} further stated criteria not declared)"
+        return [f"{prefix}: {stated}"]
+    return []
+
+
 def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
+    """Compile only the criteria that say who ENTERS the cohort.
+
+    Everything the researcher set used to arrive here, exclusions included:
+    ``exclude_diagnoses`` was sent as "exclude diagnoses: ..." inside the
+    inclusion list, and a readmission exclusion as "first eligible ICU stay per
+    patient". The ResearchContext has carried an ``exclusion_criteria`` field
+    the whole time -- the CLI fills it from ``--exclusion`` and the outbound
+    Planner context publishes it as ``exclusion_contract`` -- so the Web caller
+    was the only consumer that had no exclusion channel. Across 52 recorded
+    plans not one carried a single exclusion predicate, and a cohort-flow
+    figure cannot draw an exclusion stage that was never declared as one.
+    """
+
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
     rows: List[str] = []
@@ -1493,18 +1721,39 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     minimum_los = cohort.get("min_icu_los_hours")
     if minimum_los is not None:
         rows.append(f"minimum ICU length of stay: {minimum_los} hours")
+    rows.extend(
+        _diagnosis_criteria(
+            cohort, ("icd_include", "include_diagnoses"), "include diagnoses"
+        )
+    )
+    return rows[:32]
+
+
+def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
+    """Compile the criteria that say who is REMOVED from the cohort.
+
+    ``exclusion_statement`` is the prose half. Splitting the structured filter
+    fields was not enough: in practice the conversation writes the cohort as one
+    free-text ``review`` blob, and a removal stated there ("excluding stays that
+    ended before the landmark") arrived as an inclusion criterion because
+    ``review`` is the inclusion channel. Parsing that prose back apart would
+    just be another renderer guessing at study semantics, so the removal half
+    gets its own slot and the Copilot entrypoint is told to use it.
+    """
+
+    raw = study.get("cohort")
+    cohort = raw if isinstance(raw, Mapping) else {}
+    rows: List[str] = []
+    stated = _clean_text(cohort.get("exclusion_statement"), 500)
+    if stated:
+        rows.append(stated)
     if cohort.get("exclude_readmissions") is True:
-        rows.append("first eligible ICU stay per patient")
-    for key, prefix in (
-        ("include_diagnoses", "include diagnoses"),
-        ("exclude_diagnoses", "exclude diagnoses"),
-    ):
-        values = cohort.get(key)
-        if isinstance(values, list):
-            clean = [_clean_text(item, 120) for item in values[:20]]
-            clean = [item for item in clean if item]
-            if clean:
-                rows.append(f"{prefix}: {', '.join(clean)}")
+        rows.append("readmissions after the first eligible ICU stay per patient")
+    rows.extend(
+        _diagnosis_criteria(
+            cohort, ("icd_exclude", "exclude_diagnoses"), "exclude diagnoses"
+        )
+    )
     return rows[:32]
 
 
@@ -1519,20 +1768,13 @@ def _primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
     row is the prespecified denominator.
     """
 
-    raw = study.get("cohort")
-    cohort = raw if isinstance(raw, Mapping) else {}
-    explicit_filter_fields = (
-        "age_min",
-        "age_max",
-        "min_icu_los_hours",
-        "include_diagnoses",
-        "exclude_diagnoses",
-    )
-    if cohort.get("exclude_readmissions") is True:
-        return "predicate_filtered"
-    if any(cohort.get(field) not in (None, "", []) for field in explicit_filter_fields):
-        return "predicate_filtered"
-    return "all_input_rows"
+    return study_context_owner.primary_cohort_selection_mode(study)
+
+
+#: Public name for the same policy. Copilot's eligibility question has to say
+#: what the study would run as, and re-deriving that from the cohort fields is
+#: how two layers drift apart; it reads this instead.
+primary_cohort_selection_mode = _primary_cohort_selection_mode
 
 
 def _progress(job: Any, *, step: str, label: str, **extra: Any) -> None:
@@ -1602,8 +1844,47 @@ def _safe_claims(run_dir: Path) -> List[Dict[str, Any]]:
     return claims
 
 
+def _manuscript_provenance_projection(run_dir: Path) -> Dict[str, Any]:
+    """Load only the host-generated, digest-bound reader projection."""
+
+    path = run_dir / "manuscript_provenance.json"
+    manuscript_path = run_dir / "manuscript_scaffold_bound.md"
+    try:
+        raw = path.read_bytes()
+        manuscript_raw = manuscript_path.read_bytes()
+        if len(raw) > _MAX_JSON_BYTES or len(manuscript_raw) > _MAX_JSON_BYTES:
+            return {}
+        payload = json.loads(raw.decode("utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema_version") != "easyicu.manuscript-provenance/1":
+        return {}
+    if payload.get("manuscript_sha256") != hashlib.sha256(manuscript_raw).hexdigest():
+        return {}
+    integrity = payload.get("integrity")
+    if not isinstance(integrity, Mapping):
+        return {}
+    if any(
+        integrity.get(key) is not False
+        for key in (
+            "path_values_returned",
+            "patient_rows_returned",
+            "raw_data_returned",
+        )
+    ):
+        return {}
+    return payload
+
+
 def _figure_projection(run_dir: Path) -> Dict[str, Any]:
-    source = _read_json(run_dir / "figure_gallery.json", {})
+    canonical_source = _read_json(run_dir / "figure_gallery.json", {})
+    source = (
+        verified_presentation_gallery(run_dir, canonical_source)
+        if isinstance(canonical_source, Mapping)
+        else None
+    ) or canonical_source
     figures = source.get("figures") if isinstance(source, Mapping) else []
     public: List[Dict[str, Any]] = []
     embedded_total = 0
@@ -1643,6 +1924,10 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
             except OSError:
                 pass
         public.append(item)
+    presentation_variant = (
+        isinstance(source, Mapping)
+        and source.get("schema_version") == "easyicu.presentation-figure-gallery/1"
+    )
     return {
         "kind": "figure_gallery",
         "schema_version": "easyicu.web-pipeline-figure-gallery/1",
@@ -1658,19 +1943,9 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
         if isinstance(source, Mapping)
         else len(public),
         "embedded_count": sum(1 for row in public if row.get("data_url")),
-    }
-
-
-def _identifier_column(name: Any) -> bool:
-    token = re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
-    return token in {
-        "stayid",
-        "subjectid",
-        "patientid",
-        "hadmid",
-        "icustayid",
-        "patientunitstayid",
-        "recordid",
+        "presentation_variant": presentation_variant,
+        "authority_ceiling": "analysis_only" if presentation_variant else "",
+        "original_run_figures_preserved": presentation_variant,
     }
 
 
@@ -1722,9 +1997,49 @@ def _table_projection(run_dir: Path) -> Dict[str, Any]:
     evidence = _read_json(run_dir / "evidence" / "evidence_index.json", [])
     tables: List[Dict[str, Any]] = []
     skipped_sensitive = 0
-    for record in evidence if isinstance(evidence, list) else []:
-        if not isinstance(record, Mapping) or str(record.get("kind")) != "table":
+
+    def review_priority(record: Mapping[str, Any]) -> tuple[int, int]:
+        """Rank semantic result tables before bounded support/audit previews."""
+
+        name = Path(str(record.get("relative_path") or "")).stem.casefold()
+        description = str(record.get("description") or "").casefold()
+        step = str(record.get("produced_by_step") or "").casefold()
+        haystack = " ".join((name, description, step))
+        if "population_flow" in haystack:
+            rank = 0
+        elif any(
+            token in haystack
+            for token in (
+                "primary_association",
+                "adjusted_association",
+                "time_varying_cox_estimates",
+                "rcs_contrast",
+                "rcs_curve",
+                "absolute_risk",
+            )
+        ):
+            rank = 1
+        elif "robustness_matrix" in haystack or "robustness_summary" in haystack:
+            rank = 2
+        elif any(
+            token in haystack
+            for token in ("table_one", "exposure_outcome_distribution", "cohort_flow")
+        ):
+            rank = 3
+        elif "probe" in haystack or "source_data" in haystack:
+            rank = 9
+        else:
+            rank = 5
+        return rank, int(record.get("_projection_order") or 0)
+
+    candidates = []
+    for index, raw_record in enumerate(evidence if isinstance(evidence, list) else []):
+        if not isinstance(raw_record, Mapping) or str(raw_record.get("kind")) != "table":
             continue
+        candidates.append({**dict(raw_record), "_projection_order": index})
+    candidates.sort(key=review_priority)
+
+    for record in candidates:
         path = _safe_relative(run_dir, record.get("relative_path"))
         if path is None or path.suffix.lower() != ".csv":
             continue
@@ -1736,7 +2051,7 @@ def _table_projection(run_dir: Path) -> Dict[str, Any]:
                 source_headers = next(reader, [])
                 # Scan the complete header before bounding the preview. An
                 # identifier beyond the visible column cap is still sensitive.
-                if any(_identifier_column(value) for value in source_headers):
+                if any(is_identifier_column(value) for value in source_headers):
                     skipped_sensitive += 1
                     continue
                 column_indices = _table_preview_indices(source_headers)
@@ -2017,9 +2332,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
     limits = {
         "report": _MAX_JSON_BYTES,
         "receipt": _MAX_JSON_BYTES,
-        "html": _SYSTEM_VALIDATION_DOCUMENT_SPECS[
-            "system_validation_report.html"
-        ][1],
+        "html": _SYSTEM_VALIDATION_DOCUMENT_SPECS["system_validation_report.html"][1],
         "pdf": _SYSTEM_VALIDATION_DOCUMENT_SPECS["system_validation_report.pdf"][1],
     }
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -2032,9 +2345,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         ) from exc
     try:
         file_flags = (
-            os.O_RDONLY
-            | getattr(os, "O_BINARY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
         for key, path in paths.items():
             descriptor = -1
@@ -2111,8 +2422,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         )
     report_payload_digest = projection_payload_sha256(report_payload)
     html_binding = (
-        f'<meta name="easyicu-report-payload-sha256" '
-        f'content="{report_payload_digest}">'
+        f'<meta name="easyicu-report-payload-sha256" content="{report_payload_digest}">'
     )
     compact_pdf_text = re.sub(r"\s+", "", pdf_privacy_text)
     normalized_pdf_text = re.sub(r"\s+", " ", pdf_privacy_text).strip()
@@ -2213,7 +2523,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
                 "system_validation_ledger_digest_mismatch",
                 f"The existing {name} bytes do not match the run evidence ledger.",
             )
-    privacy = _projection_privacy_scan(
+    privacy = run_artifact_disclosure.scan_browser_projection(
         {
             "system_validation_report.json": report_payload,
             "system_validation_report.html": html_text,
@@ -2261,41 +2571,6 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         "claim_ceiling": report.claim_ceiling,
         "publication_authorized": False,
         "artifacts": registered,
-    }
-
-
-def _projection_privacy_scan(payloads: Mapping[str, Any]) -> Dict[str, Any]:
-    """Reject host paths, credentials, and row identifiers in Web artefacts.
-
-    Aggregate result-table rows are intentionally permitted.  The scientific
-    pipeline owns their disclosure checks, while this boundary independently
-    rejects the three classes that must never cross into the browser.
-    """
-
-    hits: List[Dict[str, str]] = []
-
-    def visit(value: Any, path: str) -> None:
-        if isinstance(value, Mapping):
-            for key, child in value.items():
-                visit(child, f"{path}.{key}")
-        elif isinstance(value, (list, tuple)):
-            for index, child in enumerate(value):
-                visit(child, f"{path}[{index}]")
-        elif isinstance(value, Path):
-            hits.append({"path": path, "reason": "path_object"})
-        elif isinstance(value, str):
-            for index, pattern in enumerate(_UNSAFE_PROJECTION_PATTERNS):
-                if pattern.search(value):
-                    hits.append({"path": path, "reason": f"pattern_{index + 1}"})
-                    break
-
-    for name, payload in payloads.items():
-        visit(payload, str(name))
-    return {
-        "passed": not hits,
-        "scanned_artifacts": len(payloads),
-        "unsafe_value_count": len(hits),
-        "hits": hits[:40],
     }
 
 
@@ -2410,47 +2685,14 @@ def _system_validation_figure_gallery(
     }
 
 
-def _privacy_blocked_payloads(
-    *,
-    run_context: Mapping[str, Any],
-    scan: Mapping[str, Any],
-) -> Dict[str, Dict[str, Any]]:
-    """Return a fixed-schema package without echoing unsafe source values."""
+def _projection_time_window_hours(study: Mapping[str, Any]) -> Optional[float]:
+    """Project an explicit study window without inventing Planner authority."""
 
-    gate = {
-        "status": "blocked",
-        "reason": "research_pipeline_projection_privacy_blocked",
-        "reportable": False,
-        "draft_unlocked": False,
-        "checks": [
-            {
-                "id": "browser_projection_privacy",
-                "label": "Browser projection contains no host path, credential, or row identifier",
-                "passed": False,
-                "unsafe_value_count": int(scan.get("unsafe_value_count") or 0),
-            }
-        ],
-    }
-    return {
-        "run_context.json": {
-            "run_id": _clean_text(run_context.get("run_id"), 160),
-            "study_id": _clean_text(run_context.get("study_id"), 160),
-            "mode": "research_agent_pipeline",
-            "run_type": "full",
-            "engine": "easyicu.research_agent.pipeline",
-            "summary": {"projection_withheld": True},
-            "local_first": {"uploads": 0},
-        },
-        "quality_gate.json": {
-            "gate": gate,
-            "quality": [],
-            "privacy": {
-                "passed": False,
-                "unsafe_value_count": int(scan.get("unsafe_value_count") or 0),
-                "payloads_withheld": True,
-            },
-        },
-    }
+    if not isinstance(study.get("time_window"), Mapping) or not study.get(
+        "time_window"
+    ):
+        return None
+    return _cohort_window(study)[1]
 
 
 def _write_projection(
@@ -2509,8 +2751,9 @@ def _write_projection(
         "summary": run_context["summary"],
         "cohort": {
             "criteria": _inclusion_criteria(study),
+            "exclusion_criteria": _exclusion_criteria(study),
             "target_outcome": _target_outcome(study),
-            "time_window_hours": _cohort_window(study)[1],
+            "time_window_hours": _projection_time_window_hours(study),
         },
     }
     # At a plan-review pause the final manifest does not exist yet.  Recover
@@ -2521,6 +2764,7 @@ def _write_projection(
         if pending is not None
         else (load_current_plan_authority(run_dir) if run_dir else {})
     )
+    plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(plan)
     literature_evidence = (
         load_run_literature_projection(
             run_dir=run_dir,
@@ -2543,6 +2787,11 @@ def _write_projection(
         }
     )
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
+    current_review_approval_allowed = _pending_plan_approval_allowed(
+        run_dir=run_dir,
+        pending=pending,
+        plan_recommendation_complete=plan_recommendation_complete,
+    )
     scientific_readiness = build_scientific_readiness_projection(
         run_id=run_id,
         run_dir=run_dir,
@@ -2560,6 +2809,9 @@ def _write_projection(
         except (FileNotFoundError, OSError, UnicodeDecodeError):
             manuscript_text = ""
     claims = _safe_claims(run_dir) if run_dir else []
+    manuscript_provenance = (
+        _manuscript_provenance_projection(run_dir) if run_dir else {}
+    )
     figure_gallery = (
         _figure_projection(run_dir)
         if run_dir
@@ -2596,17 +2848,22 @@ def _write_projection(
                 "review_id": request.review_id,
                 "kind": request.kind,
                 "reason_code": _clean_text(
-                    request.payload.get("reason")
-                    if isinstance(request.payload, Mapping)
-                    else None,
+                    _pending_review_reason_code(
+                        request=request,
+                        plan_recommendation_complete=plan_recommendation_complete,
+                        scientific_plan_review=scientific_plan_review,
+                    ),
                     160,
                 ),
                 "summary": request.summary,
                 "authority_sha256": request.authority_sha256,
                 "approval_allowed": (
                     request.payload.get("approval_allowed", True)
+                    and plan_recommendation_complete
+                    and current_review_approval_allowed
                     if isinstance(request.payload, Mapping)
-                    else True
+                    else plan_recommendation_complete
+                    and current_review_approval_allowed
                 ),
                 "review_score": (
                     request.payload.get("review_score")
@@ -2614,13 +2871,30 @@ def _write_projection(
                     else None
                 ),
                 "finding_codes": (
-                    list(request.payload.get("finding_codes") or ())[:40]
+                    list(
+                        dict.fromkeys(
+                            [
+                                *list(request.payload.get("finding_codes") or ()),
+                                *(
+                                    ["REVIEWABLE_PLAN_SPECIFICATION_MISSING"]
+                                    if not plan_recommendation_complete
+                                    else []
+                                ),
+                            ]
+                        )
+                    )[:40]
                     if isinstance(request.payload, Mapping)
                     else []
                 ),
             }
             for request in pending.requests
         ]
+    system_validation_applicable = bool(
+        run_dir is not None
+        and axes.get("execution_complete")
+        and not axes.get("manuscript_ready")
+        and not axes.get("paper_authorized")
+    )
     source_manifest = {
         "schema_version": "easyicu.web-research-pipeline-projection/1",
         "engine": "easyicu.research_agent.pipeline",
@@ -2631,8 +2905,14 @@ def _write_projection(
         "plan_approval_allowed": bool(
             pending_requests
             and all(item.get("approval_allowed", True) for item in pending_requests)
+            and plan_recommendation_complete
+            and current_review_approval_allowed
         ),
-        "scientific_plan_review_status": scientific_plan_review.get("status"),
+        "scientific_plan_review_status": (
+            scientific_plan_review.get("status")
+            if plan_recommendation_complete
+            else "changes_required"
+        ),
         "scientific_plan_review_score": scientific_plan_review.get("score"),
         "readiness": axes,
         "scientific_readiness_status": scientific_readiness["status"],
@@ -2641,15 +2921,10 @@ def _write_projection(
         "figure_count": len(figure_gallery.get("figures") or []),
         "manuscript_document_count": len(manuscript_documents),
         "draft_pdf_available": any(
-            row.get("name") == "manuscript_scaffold.pdf"
-            for row in manuscript_documents
+            row.get("name") == "manuscript_scaffold.pdf" for row in manuscript_documents
         ),
-        "system_validation_report_available": bool(
-            run_dir is not None and axes.get("execution_complete")
-        ),
-        "system_validation_document_count": (
-            1 if run_dir is not None and axes.get("execution_complete") else 0
-        ),
+        "system_validation_report_available": system_validation_applicable,
+        "system_validation_document_count": (1 if system_validation_applicable else 0),
         "provider": {
             key: provider.get(key)
             for key in (
@@ -2684,6 +2959,11 @@ def _write_projection(
             "markdown_preview": manuscript_text,
             "source": "research_agent_manuscript_scaffold_bound",
         },
+        **(
+            {"manuscript_provenance.json": manuscript_provenance}
+            if manuscript_provenance
+            else {}
+        ),
         "figure_gallery.json": figure_gallery,
         "result_tables.json": result_tables,
         "source_run_manifest.json": source_manifest,
@@ -2701,8 +2981,8 @@ def _write_projection(
     if pdf_receipt is not None:
         payloads["manuscript_pdf_receipt.json"] = pdf_receipt
     system_validation_html: Optional[str] = None
-    privacy_scan = _projection_privacy_scan(payloads)
-    if privacy_scan["passed"] and run_dir is not None and axes.get("execution_complete"):
+    privacy_scan = run_artifact_disclosure.scan_browser_projection(payloads)
+    if privacy_scan["passed"] and system_validation_applicable:
         system_report = build_system_validation_report(
             run_id=run_id,
             projections=payloads,
@@ -2723,17 +3003,15 @@ def _write_projection(
             html_bytes=system_validation_html.encode("utf-8"),
         )
         payloads["system_validation_report.json"] = system_report_payload
-        payloads["system_validation_report_receipt.json"] = (
-            system_validation_receipt
-        )
-        privacy_scan = _projection_privacy_scan(
+        payloads["system_validation_report_receipt.json"] = system_validation_receipt
+        privacy_scan = run_artifact_disclosure.scan_browser_projection(
             {
                 **payloads,
                 "system_validation_report.html": system_validation_html,
             }
         )
     if not privacy_scan["passed"]:
-        payloads = _privacy_blocked_payloads(
+        payloads = run_artifact_disclosure.privacy_blocked_projection(
             run_context=run_context,
             scan=privacy_scan,
         )
@@ -2810,16 +3088,6 @@ def _write_projection(
     }
 
 
-def _register_pending(entry: _PendingRun) -> None:
-    with _PENDING_LOCK:
-        _PENDING[str(entry.pending.run_id)] = entry
-        while len(_PENDING) > _MAX_PENDING:
-            oldest = min(_PENDING.items(), key=lambda item: item[1].created_at)[0]
-            # Only evict the live object. Its signed recovery record and paused
-            # cumulative Provider ledger remain available after restart/pressure.
-            _PENDING.pop(oldest, None)
-
-
 def _remove_local_recovery(wrapper_dir: Path) -> None:
     remove_recovery_seed(wrapper_dir)
     unregister_pipeline_work_root_if_unused(Path(wrapper_dir).parent.parent)
@@ -2831,6 +3099,7 @@ def _start_web_provider_hard_stop(
     job_id: str,
     declaration_sha256: str,
     budget_mode: str = "full_reviewed",
+    ledger_name: str = "provider_hard_stop_ledger.json",
 ) -> Any:
     """Start the one durable Provider task shared by acquisition and Pipeline."""
 
@@ -2845,8 +3114,14 @@ def _start_web_provider_hard_stop(
     except OSError:
         pass
     task_id = f"web-{_slug(job_id)}"
+    safe_ledger_name = Path(str(ledger_name or "")).name
+    if not safe_ledger_name.endswith(".json"):
+        raise ResearchPipelineRunError(
+            "research_pipeline_provider_ledger_name_invalid",
+            "The server-owned Provider ledger name is invalid.",
+        )
     ledger = ProviderHardStopLedger(
-        path=(runtime_dir / "provider_hard_stop_ledger.json").resolve(),
+        path=(runtime_dir / safe_ledger_name).resolve(),
         task_ids=(task_id,),
         limits=provider_adapter.web_research_agent_hard_stop_limits(budget_mode),
         batch_id=task_id,
@@ -2886,14 +3161,13 @@ def _finish_web_provider_hard_stop(
 
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     key = _clean_text(run_id, 160)
-    with _PENDING_LOCK:
-        entry = _PENDING.get(key)
+    entry = _PENDING_REVIEWS.get(key)
     if entry is None:
         try:
             record = get_review_recovery_record(key)
             if record is None:
                 return None
-            pending = _checkpoint_pending_from_record(record)
+            pending = pending_from_record(record)
             study = record.study
             credential_source = record.credential_source
             budget_mode = record.budget_mode
@@ -2906,176 +3180,85 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         credential_source = entry.credential_source
         budget_mode = entry.budget_mode
         provider_name = _clean_text(entry.provider.get("provider"), 64)
-    return {
-            "run_id": pending.run_id,
-            "study_id": _clean_text(study.get("id"), 160),
-            "scientific_configuration_sha256": (
-                study_context_owner.scientific_configuration_sha256(study)
-            ),
-            "resume_scope": pending.resume_scope,
-            "credential_source": credential_source,
-            "provider": provider_name,
-            "budget_mode": budget_mode,
-            "resumable_here": bool(pending.resumable_here),
-            "requests": [
-                {
-                    "review_id": request.review_id,
-                    "kind": request.kind,
-                    "summary": request.summary,
-                    "authority_sha256": request.authority_sha256,
-                    "reason_code": _clean_text(
-                        request.payload.get("reason")
-                        if isinstance(request.payload, Mapping)
-                        else None,
-                        160,
-                    ),
-                    "approval_allowed": (
-                        request.payload.get("approval_allowed", True)
-                        if isinstance(request.payload, Mapping)
-                        else True
-                    ),
-                    "review_score": (
-                        request.payload.get("review_score")
-                        if isinstance(request.payload, Mapping)
-                        else None
-                    ),
-                    "finding_codes": (
-                        list(request.payload.get("finding_codes") or ())[:40]
-                        if isinstance(request.payload, Mapping)
-                        else []
-                    ),
-                }
-                for request in pending.requests
-            ],
-            "plan_approval_allowed": all(
-                (
-                    request.payload.get("approval_allowed", True)
-                    if isinstance(request.payload, Mapping)
-                    else True
-                )
-                for request in pending.requests
-            ),
-            "scientific_plan_review": _load_pending_scientific_review(
-                Path(pending.run_dir), pending
-            ),
-        }
-
-
-def _recover_pending_run(
-    run_id: str,
-    *,
-    provider_environment: Optional[Mapping[str, str]],
-    rejection_only: bool = False,
-) -> Optional[_PendingRun]:
-    """Reconstruct one paused Web run from private, digest-bound coordinates."""
-
-    record = get_review_recovery_record(run_id)
-    if record is None:
-        return None
-    from easyicu.research_agent import ResearchAgentPipeline
-    from easyicu.research_agent.authority.provider_hard_stop import (
-        ProviderHardStopLedger,
+    plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(
+        _pending_plan_authority(pending)
     )
-    from easyicu.research_agent.orchestration.config import PipelineConfig
-    from easyicu.research_agent.orchestration.services import PipelineServices
-
-    pending = _checkpoint_pending_from_record(
-        record,
-        recover_recorded_decisions=True,
-    )
-    wrapper_dir = Path(record.wrapper_dir).resolve()
-    if record.pipeline_config_sha256 is None:
-        # Historical /1 records predate the exact recovery digest.  They remain
-        # readable, but cannot be promoted to durable resume authority: the
-        # Pipeline checkpoint only proves a mismatch after reconstruction.
-        raise WebReviewRecoveryError(
-            "Web review recovery record predates the exact pipeline config digest"
-        )
-    try:
-        config = PipelineConfig.from_recovery_payload(
-            record.pipeline_config,
-            expected_digest=record.pipeline_config_sha256,
-        )
-    except ValueError as exc:
-        raise WebReviewRecoveryError(
-            "Web review pipeline config is inconsistent"
-        ) from exc
-    if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
-        raise WebReviewRecoveryError("Web review pipeline workdir drifted")
-    if not record.prepared_package_binding:
-        raise WebReviewRecoveryError("Web review recovery lacks a package binding")
-    if not rejection_only:
-        source = record.study.get("data_source")
-        source = source if isinstance(source, Mapping) else {}
-        try:
-            dataio.validate_research_pipeline_source(
-                str(source.get("path") or ""),
-                database=source.get("database"),
-                expected_binding=record.prepared_package_binding,
-            )
-        except dataio.ExportCohortError as exc:
-            raise WebReviewRecoveryError(
-                "Web review prepared package changed after the pause"
-            ) from exc
-    client = None
-    provider_public = dict(record.provider_public)
-    if not rejection_only:
-        client, provider_public = provider_adapter.build_research_agent_provider_client(
-            dict(record.provider_meta),
-            environ=provider_environment,
-        )
-        for key in (
-            "provider",
-            "model",
-            "credential_fingerprint",
-            "endpoint_fingerprint",
-            "credential_header",
-            "base_url_endpoint",
-            "session_binding_sha256",
-        ):
-            if provider_public.get(key) != record.provider_public.get(key):
-                raise WebReviewRecoveryError(
-                    "Web review provider identity changed after the pause"
-                )
-    task = None
-    if not rejection_only:
-        task_id = record.hard_stop_task_id
-        ledger = ProviderHardStopLedger(
-            path=Path(record.hard_stop_ledger_path).resolve(),
-            task_ids=(task_id,),
-            limits=provider_adapter.web_research_agent_hard_stop_limits(
-                record.budget_mode
-            ),
-            batch_id=task_id,
-            declaration_sha256=record.hard_stop_declaration_sha256,
-            resume_existing=True,
-        )
-        # Provider pause/reconcile state belongs to Pipeline.resume_human_review,
-        # which performs it while holding the cross-process run execution lock.
-        task = ledger.start_task(task_id)
-    pipeline = ResearchAgentPipeline.from_config(
-        config,
-        services=PipelineServices(
-            llm=client,
-            human_review_gate=_WebHumanReviewGate(),
-            provider_hard_stop=task,
-        ),
-    )
-    return _PendingRun(
-        pipeline=pipeline,
+    run_dir = Path(pending.run_dir)
+    scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
+    current_review_approval_allowed = _pending_plan_approval_allowed(
+        run_dir=run_dir,
         pending=pending,
-        wrapper_dir=wrapper_dir,
-        study=dict(record.study),
-        provider=dict(provider_public),
-        acquisition=_rehydrate_acquisition_projection(
-            record.acquisition_projection
-        ),
-        created_at=record.created_at,
-        credential_source=record.credential_source,
-        budget_mode=record.budget_mode,
-        prepared_package_binding=dict(record.prepared_package_binding),
-        provider_hard_stop=task,
+        plan_recommendation_complete=plan_recommendation_complete,
     )
+    return {
+        "run_id": pending.run_id,
+        "study_id": _clean_text(study.get("id"), 160),
+        "scientific_configuration_sha256": (
+            study_context_owner.scientific_configuration_sha256(study)
+        ),
+        "resume_scope": pending.resume_scope,
+        "credential_source": credential_source,
+        "provider": provider_name,
+        "budget_mode": budget_mode,
+        "resumable_here": bool(pending.resumable_here),
+        "requests": [
+            {
+                "review_id": request.review_id,
+                "kind": request.kind,
+                "summary": request.summary,
+                "authority_sha256": request.authority_sha256,
+                "reason_code": _clean_text(
+                    _pending_review_reason_code(
+                        request=request,
+                        plan_recommendation_complete=plan_recommendation_complete,
+                        scientific_plan_review=scientific_plan_review,
+                    ),
+                    160,
+                ),
+                "approval_allowed": (
+                    request.payload.get("approval_allowed", True)
+                    and plan_recommendation_complete
+                    and current_review_approval_allowed
+                    if isinstance(request.payload, Mapping)
+                    else plan_recommendation_complete
+                    and current_review_approval_allowed
+                ),
+                "review_score": (
+                    request.payload.get("review_score")
+                    if isinstance(request.payload, Mapping)
+                    else None
+                ),
+                "finding_codes": (
+                    list(
+                        dict.fromkeys(
+                            [
+                                *list(request.payload.get("finding_codes") or ()),
+                                *(
+                                    ["REVIEWABLE_PLAN_SPECIFICATION_MISSING"]
+                                    if not plan_recommendation_complete
+                                    else []
+                                ),
+                            ]
+                        )
+                    )[:40]
+                    if isinstance(request.payload, Mapping)
+                    else []
+                ),
+            }
+            for request in pending.requests
+        ],
+        "plan_approval_allowed": all(
+            (
+                request.payload.get("approval_allowed", True)
+                if isinstance(request.payload, Mapping)
+                else True
+            )
+            for request in pending.requests
+        )
+        and plan_recommendation_complete
+        and current_review_approval_allowed,
+        "scientific_plan_review": scientific_plan_review,
+    }
 
 
 def _compile_plan_revision_contract(
@@ -3118,9 +3301,7 @@ def _compile_plan_revision_contract(
             "plan_revision_source_configuration_superseded",
             "The scientific setup changed after the reviewed plan; its repair contract cannot be reused.",
         )
-    source_review = agent_runs.read_run_review(
-        str(source_row.get("project_dir") or "")
-    )
+    source_review = agent_runs.read_run_review(str(source_row.get("project_dir") or ""))
     review_payload = (
         (source_review.get("artifact_payloads") or {}).get(
             "scientific_plan_review.json"
@@ -3142,32 +3323,661 @@ def _compile_plan_revision_contract(
     return render_agent_plan_revision_contract(parsed_review)
 
 
-def _validated_pipeline_credential_source(
-    credential_source: str,
-    *,
-    provider: Mapping[str, Any],
-) -> str:
-    """Bind one Web credential source to the matching provider family."""
+@dataclass(frozen=True)
+class _CandidatePlanMaterializationAuthority:
+    """Exact metadata-only Plan coordinates accepted for data preparation."""
 
-    selected = str(credential_source or "").strip().lower()
-    if selected not in {"pi_verified", "codex_user_auth"}:
-        raise ResearchPipelineRunError(
-            "research_pipeline_credential_source_invalid",
-            "Choose one server-verified Research Agent credential source.",
+    primary_exposure: str
+    target_outcome: str
+    contract: str
+
+
+def _candidate_plan_contract(
+    *,
+    review: PlanScientificReview,
+    plan: Mapping[str, Any],
+) -> str:
+    """Render a bounded seed for the package-bound Planner pass.
+
+    The candidate Plan itself cannot execute because it was produced against a
+    zero-row capability catalog.  This compact projection preserves its exact
+    analysis and step roster while allowing the next Planner pass to replace
+    catalog coordinates with owner-issued columns from the sealed package.
+    """
+
+    steps = []
+    for raw in list(plan.get("steps") or ())[:32]:
+        if not isinstance(raw, Mapping):
+            continue
+        steps.append(
+            {
+                "step_id": _clean_text(raw.get("step_id"), 160),
+                "method": _clean_text(raw.get("method"), 160),
+                "role": _clean_text(raw.get("planned_analysis_role"), 80),
+                "inputs": [
+                    _clean_text(value, 160)
+                    for value in list(raw.get("inputs") or ())[:32]
+                    if _clean_text(value, 160)
+                ],
+                "outputs": [
+                    _clean_text(value, 160)
+                    for value in list(raw.get("expected_outputs") or ())[:32]
+                    if _clean_text(value, 160)
+                ],
+            }
         )
-    provider_name = _clean_text(provider.get("provider"), 64).lower()
-    account_provider = provider_adapter.is_user_account_provider(provider_name)
-    if selected == "codex_user_auth" and not account_provider:
-        raise ResearchPipelineRunError(
-            "research_pipeline_codex_user_auth_provider_required",
-            "Codex user authentication requires the reviewed Codex account provider.",
+    seed = {
+        "analysis_type": _clean_text(plan.get("analysis_type"), 160),
+        "cohort": plan.get("cohort") if isinstance(plan.get("cohort"), Mapping) else {},
+        "steps": steps,
+    }
+    return "\n".join(
+        (
+            "DIGEST-BOUND CANDIDATE PLAN DATA-BINDING CONTRACT (host-derived):",
+            f"- source_plan_sha256: {review.plan_sha256}",
+            f"- source_context_sha256: {review.context_sha256}",
+            "- scope: generate a package-bound version of this accepted "
+            "metadata-only candidate; do not execute the old zero-row plan.",
+            "- preserve the research question, cohort mode, analysis type, "
+            "scientific roles, and step roster unless the sealed package proves "
+            "one item non-executable; disclose any required divergence.",
+            "- replace proposal names only through owner-issued materialized "
+            "coordinates; do not invent variables, definitions, or patient rows.",
+            "- candidate_plan_seed_json: "
+            + json.dumps(seed, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         )
-    if selected == "pi_verified" and account_provider:
+    )
+
+
+def _load_candidate_plan_materialization_authority(
+    *,
+    study: Mapping[str, Any],
+    project_root: Optional[str],
+    source_run_id: str,
+    database: str,
+    covariates: Sequence[str],
+) -> Optional[_CandidatePlanMaterializationAuthority]:
+    """Validate an approvable metadata-only Plan before reading patient rows.
+
+    ``None`` means the source is a non-approvable plan-revision request and is
+    intentionally left to ``_compile_plan_revision_contract``.  An approvable
+    source either yields an exact materialization grant or raises fail-closed.
+    """
+
+    history = agent_runs.list_run_history(
+        study_id=_clean_text(study.get("id"), 160),
+        project_root=project_root,
+        limit=100,
+    )
+    source_row = next(
+        (
+            row
+            for row in history.get("runs", [])
+            if _clean_text(row.get("run_id"), 160) == source_run_id
+        ),
+        None,
+    )
+    if not isinstance(source_row, Mapping):
         raise ResearchPipelineRunError(
-            "research_pipeline_codex_user_auth_required",
-            "The Codex account provider requires this browser user's ChatGPT login.",
+            "plan_revision_source_not_found",
+            "The exact reviewed candidate plan could not be found.",
         )
-    return selected
+    current_digest = study_context_owner.scientific_configuration_sha256(study)
+    if _clean_text(source_row.get("scientific_configuration_sha256"), 80) != (
+        current_digest
+    ):
+        raise ResearchPipelineRunError(
+            "plan_revision_source_configuration_superseded",
+            "The scientific setup changed after the candidate plan; its data-preparation authority cannot be reused.",
+        )
+    project_dir = Path(str(source_row.get("project_dir") or "")).expanduser().resolve()
+    source_review = agent_runs.read_run_review(str(project_dir))
+    payloads = source_review.get("artifact_payloads") if source_review.get("ok") else None
+    review_payload = (
+        payloads.get("scientific_plan_review.json")
+        if isinstance(payloads, Mapping)
+        else None
+    )
+    if not isinstance(review_payload, Mapping):
+        raise ResearchPipelineRunError(
+            "plan_revision_scientific_review_missing",
+            "The candidate plan has no digest-verified scientific review.",
+        )
+    parsed_review = PlanScientificReview.model_validate(review_payload)
+    if not parsed_review.approval_allowed:
+        return None
+    plan = payloads.get("agent_plan.json") if isinstance(payloads, Mapping) else None
+    if not isinstance(plan, Mapping):
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The reviewed candidate plan payload is unavailable.",
+        )
+
+    inner_run = project_dir / "pipeline" / source_run_id
+    checkpoint = _read_json(inner_run / "human_review_checkpoint.json", {}) or {}
+    capsule_path = inner_run / "run_input_capsule.json"
+    try:
+        capsule_raw = capsule_path.read_bytes()
+    except OSError as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan input authority is unavailable.",
+        ) from exc
+    expected_capsule_sha = _clean_text(
+        checkpoint.get("run_input_capsule_sha256"), 80
+    )
+    if (
+        checkpoint.get("state") != "pending"
+        or expected_capsule_sha != hashlib.sha256(capsule_raw).hexdigest()
+        or len(capsule_raw) > _MAX_JSON_BYTES
+    ):
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan input authority failed its digest check.",
+        )
+    try:
+        capsule = json.loads(capsule_raw)
+    except (TypeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan input authority is not valid JSON.",
+        ) from exc
+    identity = capsule.get("scientific_identity")
+    identity = identity if isinstance(identity, Mapping) else {}
+    preferences = identity.get("user_preferences")
+    preferences = preferences if isinstance(preferences, Mapping) else {}
+    proposed = _metadata_only_planning_coordinates(
+        question=_clean_text(study.get("question"), 1_200),
+        database=database,
+    )
+    primary_exposure = _clean_text(identity.get("primary_exposure"), 160)
+    target_outcome = _clean_text(identity.get("target_outcome"), 160)
+    candidate_covariates = tuple(
+        _clean_text(value, 160)
+        for value in list(preferences.get("covariates") or ())
+        if _clean_text(value, 160)
+    )
+    required_concepts = tuple(
+        dict.fromkeys((primary_exposure, target_outcome, *candidate_covariates))
+    )
+    receipt = _read_json(
+        project_dir / "pipeline_input" / "planner_catalog_receipt.json", {}
+    ) or {}
+    selected_concepts = {
+        _clean_text(value, 160)
+        for value in list(receipt.get("selected_concepts") or ())
+        if _clean_text(value, 160)
+    }
+    catalog_path = project_dir / "pipeline_input" / "planner_catalog.parquet"
+    try:
+        import pyarrow.parquet as pq
+
+        catalog_rows = pq.ParquetFile(catalog_path).metadata.num_rows
+    except (OSError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan catalog could not be verified.",
+        ) from exc
+    if (
+        _clean_text(identity.get("question"), 1_200)
+        != _clean_text(study.get("question"), 1_200)
+        or _clean_text(identity.get("database"), 64) != database
+        or primary_exposure != proposed.get("primary_exposure")
+        or target_outcome != proposed.get("target_outcome")
+        or candidate_covariates != tuple(covariates)
+        or not all(required_concepts)
+        or not set(required_concepts).issubset(selected_concepts)
+        or catalog_rows != 0
+    ):
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan does not match the current question, covariates, or zero-row planning catalog.",
+        )
+    return _CandidatePlanMaterializationAuthority(
+        primary_exposure=primary_exposure,
+        target_outcome=target_outcome,
+        contract=_candidate_plan_contract(review=parsed_review, plan=plan),
+    )
+
+
+@dataclass(frozen=True)
+class _ExecutionResumeTarget:
+    """Exact Web wrapper and inner pipeline checkpoint selected for retry."""
+
+    wrapper_dir: Path
+    pipeline_run_id: str
+    pipeline_config_sha256: str
+
+
+@dataclass(frozen=True)
+class _ExecutionResumeInputs:
+    """Verified sealed inputs selected by an exact execution retry.
+
+    A retry must enter the pipeline with the cohort bytes that were sealed when
+    the plan was approved.  Re-materializing the same logical cohort can change
+    Parquet bytes after a dtype or writer upgrade and would then contradict the
+    run-input capsule's immutable identity.
+    """
+
+    cohort_path: Path
+    cohort_authority_path: Optional[Path]
+    cohort_authority_ref: Optional[Dict[str, Any]]
+    trajectory_path: Optional[Path]
+    trajectory_authority_path: Optional[Path]
+    trajectory_authority_ref: Optional[Dict[str, Any]]
+    scientific_identity: Dict[str, Any]
+
+
+def _verified_execution_resume_inputs(
+    target: _ExecutionResumeTarget,
+) -> _ExecutionResumeInputs:
+    """Load one retry's sealed input paths without mutating its run."""
+
+    run_dir = (
+        target.wrapper_dir / "pipeline" / target.pipeline_run_id
+    ).resolve()
+    capsule_path = run_dir / "run_input_capsule.json"
+    try:
+        raw = _read_json(capsule_path, {}) or {}
+        scientific_identity = raw.get("scientific_identity")
+        if not isinstance(scientific_identity, Mapping):
+            raise RunInputIdentityError(
+                "Cannot resume safely: capsule scientific identity is absent."
+            )
+        verified = load_verified_run_input_capsule(
+            run_dir=run_dir,
+            scientific_identity=dict(scientific_identity),
+        )
+    except (OSError, ValueError, TypeError, RunInputIdentityError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The failed run's sealed input could not be verified; start a new run.",
+        ) from exc
+
+    capsule = verified.capsule
+    cohort_authority_path: Optional[Path] = None
+    cohort_authority_ref: Optional[Dict[str, Any]] = None
+    if isinstance(capsule, RunInputCapsuleV2):
+        cohort_authority_ref = dict(capsule.materialized_cohort_authority_ref)
+        authority_file = Path(str(cohort_authority_ref.get("file") or ""))
+        if not authority_file.name or authority_file.name != str(authority_file):
+            raise ResearchPipelineRunError(
+                "research_pipeline_execution_retry_input_invalid",
+                "The failed run's sealed cohort authority path is invalid.",
+            )
+        cohort_authority_path = run_dir / authority_file
+
+    trajectory_path = (
+        run_dir / capsule.trajectory_relative_path
+        if capsule.trajectory_relative_path is not None
+        else None
+    )
+    trajectory_authority_path: Optional[Path] = None
+    trajectory_authority_ref: Optional[Dict[str, Any]] = None
+    if isinstance(capsule, RunInputCapsuleV3):
+        trajectory_authority_ref = dict(
+            capsule.materialized_trajectory_authority_ref
+        )
+        trajectory_authority_file = Path(
+            str(trajectory_authority_ref.get("file") or "")
+        )
+        if (
+            not trajectory_authority_file.name
+            or trajectory_authority_file.name != str(trajectory_authority_file)
+        ):
+            raise ResearchPipelineRunError(
+                "research_pipeline_execution_retry_input_invalid",
+                "The failed run's sealed trajectory authority path is invalid.",
+            )
+        trajectory_authority_path = run_dir / trajectory_authority_file
+
+    return _ExecutionResumeInputs(
+        cohort_path=run_dir / capsule.cohort_relative_path,
+        cohort_authority_path=cohort_authority_path,
+        cohort_authority_ref=cohort_authority_ref,
+        trajectory_path=trajectory_path,
+        trajectory_authority_path=trajectory_authority_path,
+        trajectory_authority_ref=trajectory_authority_ref,
+        scientific_identity=dict(scientific_identity),
+    )
+
+
+def _execution_resume_acquisition_projection(
+    inputs: _ExecutionResumeInputs,
+) -> Any:
+    """Project already-verified sealed inputs without materializing them again."""
+
+    import pyarrow.parquet as pq
+
+    from easyicu.research_agent.acquisition.catalog import CoverageReport
+    from easyicu.research_agent.acquisition.foundation import (
+        AcquisitionResult,
+        ConceptSelection,
+    )
+    from easyicu.research_agent.contracts.endpoint import EndpointSpec
+
+    identity = inputs.scientific_identity
+    try:
+        materialized_columns = tuple(pq.read_schema(inputs.cohort_path).names)
+    except (OSError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The failed run's sealed cohort schema could not be read.",
+        ) from exc
+    preferences = identity.get("user_preferences")
+    preferences = preferences if isinstance(preferences, Mapping) else {}
+    requested = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (
+                identity.get("primary_exposure"),
+                identity.get("target_outcome"),
+                *(preferences.get("covariates") or ()),
+            )
+            if str(value or "").strip()
+        )
+    )
+    missing = [value for value in requested if value not in materialized_columns]
+    if missing:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The failed run's sealed cohort no longer exposes its analysis columns.",
+            details={"missing_column_count": len(missing)},
+        )
+    coverage = CoverageReport(
+        requested=requested,
+        resolved={value: value for value in requested},
+        available=requested,
+        missing=[],
+    )
+    endpoint_payload = identity.get("endpoint")
+    try:
+        endpoint = (
+            EndpointSpec.model_validate(endpoint_payload)
+            if isinstance(endpoint_payload, Mapping)
+            else None
+        )
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The failed run's sealed endpoint contract is invalid.",
+        ) from exc
+    return AcquisitionResult(
+        universe_path=inputs.cohort_path,
+        provenance_path=None,
+        selection=ConceptSelection(
+            selected_concepts=requested,
+            rationale="Reused from the digest-verified execution checkpoint.",
+            coverage=coverage,
+            selection_authority="host_exact",
+        ),
+        materialized_concepts=requested,
+        coverage=coverage,
+        blocked=False,
+        endpoint=endpoint,
+        analysis_columns={value: value for value in requested},
+        materialized_columns=materialized_columns,
+        note=(
+            "Digest-verified execution retry projection; sealed cohort and "
+            "trajectory bytes were not materialized again."
+        ),
+    )
+
+
+def _resolve_execution_resume_wrapper(
+    *,
+    study: Mapping[str, Any],
+    project_root: Optional[str],
+    source_run_id: str,
+) -> _ExecutionResumeTarget:
+    """Resolve one failed, approved execution checkpoint for exact-plan retry."""
+
+    root = Path(str(project_root or "")).expanduser().resolve()
+    history = agent_runs.list_run_history(
+        study_id=_clean_text(study.get("id"), 160),
+        project_root=str(root),
+        limit=100,
+    )
+    source_row = next(
+        (
+            row
+            for row in history.get("runs", [])
+            if _clean_text(row.get("run_id"), 160) == source_run_id
+        ),
+        None,
+    )
+    if not isinstance(source_row, Mapping):
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_source_not_found",
+            "The failed approved run could not be found.",
+        )
+    current_digest = study_context_owner.scientific_configuration_sha256(study)
+    if _clean_text(source_row.get("scientific_configuration_sha256"), 80) != (
+        current_digest
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_configuration_superseded",
+            "The study configuration changed after approval; generate a new plan.",
+        )
+    if _clean_text(
+        source_row.get("gate_reason"), 160
+    ) not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS or _clean_text(
+        source_row.get("run_status"), 80
+    ) not in {"blocked", "failed"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_source_not_failed_execution",
+            "Only a failed-closed approved execution can resume without replanning.",
+        )
+    wrapper_dir = Path(str(source_row.get("project_dir") or "")).resolve()
+    try:
+        wrapper_dir.relative_to(root)
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_path_invalid",
+            "The failed run is outside the governed project workspace.",
+        ) from exc
+    pipeline_root = (wrapper_dir / "pipeline").resolve()
+    candidate_dirs = []
+    direct = pipeline_root / source_run_id
+    if direct.is_dir():
+        candidate_dirs.append(direct)
+    candidate_dirs.extend(
+        path
+        for path in sorted(pipeline_root.glob("run_*"), reverse=True)
+        if path.is_dir() and path not in candidate_dirs
+    )
+    resumable: List[tuple[Path, Any, Mapping[str, Any]]] = []
+    from easyicu.research_agent.orchestration.human_review_checkpoint import (
+        load_checkpoint,
+    )
+
+    for run_dir in candidate_dirs:
+        checkpoint_path = run_dir / "human_review_checkpoint.json"
+        status_path = run_dir / "run_status.json"
+        if not checkpoint_path.is_file() or not status_path.is_file():
+            continue
+        try:
+            checkpoint = load_checkpoint(checkpoint_path, require_pending=False)
+        except Exception:
+            continue
+        approved = list(checkpoint.approved_decisions or ())
+        status = _read_json(status_path, {}) or {}
+        gates = status.get("gates") if isinstance(status, Mapping) else {}
+        execution_failed = bool(
+            isinstance(gates, Mapping) and list(gates.get("failed_steps") or ())
+        )
+        completed_execution_repair = bool(
+            isinstance(gates, Mapping)
+            and gates.get("execution_complete") is True
+            and not list(gates.get("failed_steps") or ())
+            and any(
+                gates.get(gate_name) is False
+                for gate_name in (
+                    "artifact_valid",
+                    "evidence_complete",
+                    "numeric_verified",
+                    "analysis_validated",
+                    "manuscript_ready",
+                )
+            )
+        )
+        if (
+            checkpoint.state == "completed"
+            and approved
+            and all(str(item.get("decision") or "") == "approved" for item in approved)
+            and (execution_failed or completed_execution_repair)
+        ):
+            resumable.append((run_dir, checkpoint, status))
+    if not resumable:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_checkpoint_missing",
+            "The failed run has no complete approved execution checkpoint.",
+        )
+    if len(resumable) != 1:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_checkpoint_ambiguous",
+            "The failed run contains more than one resumable execution checkpoint.",
+        )
+    run_dir, checkpoint, _ = resumable[0]
+    return _ExecutionResumeTarget(
+        wrapper_dir=wrapper_dir,
+        pipeline_run_id=run_dir.name,
+        pipeline_config_sha256=str(checkpoint.pipeline_config_sha256),
+    )
+
+
+def _validated_execution_retry_config(
+    *,
+    current_config: Any,
+    target: _ExecutionResumeTarget,
+    recovery_seed: Optional[WebReviewRecoverySeed],
+    current_scientific_digest: str,
+    prepared_package_binding: Optional[Mapping[str, Any]],
+) -> Any:
+    """Restore the approved config, or prove the rebuilt config is identical."""
+
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    if recovery_seed is None:
+        candidates = [current_config]
+        # A live-search plan may bind its retrieved literature into StudyContext
+        # after approval. Rebuilding from that updated context selects the
+        # no-search profile, even though the approved config used the live-search
+        # profile. Reconstruct that one known pre-approval variant and let the
+        # checkpoint digest decide; the resumed pipeline reuses the registered
+        # exact literature and performs no second retrieval.
+        from easyicu.research_agent.orchestration.profiles import (
+            get_submission_profile,
+        )
+
+        live_profile = get_submission_profile(
+            _submission_profile_ref(
+                budget_mode="full_reviewed",
+                live_pubmed=True,
+            )
+        )
+        live_payload = current_config.recovery_payload()
+        live_payload.update(live_profile.pipeline_options())
+        live_payload["bound_preplan_literature"] = None
+        try:
+            candidates.append(PipelineConfig(**live_payload))
+        except (TypeError, ValueError):
+            pass
+        for candidate in candidates:
+            if candidate.canonical_digest() == target.pipeline_config_sha256:
+                return candidate
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_missing",
+            "The approved run's exact recovery configuration is missing and "
+            "the bounded reconstructed variants do not match its checkpoint; "
+            "generate a new plan.",
+        )
+    if (
+        recovery_seed.scientific_configuration_sha256
+        != current_scientific_digest
+        or recovery_seed.prepared_package_binding
+        != prepared_package_binding
+        or recovery_seed.pipeline_config_sha256
+        != target.pipeline_config_sha256
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_superseded",
+            "The approved run's recovery configuration no longer binds the "
+            "current study, prepared package, and checkpoint; generate a new plan.",
+        )
+    try:
+        restored = PipelineConfig.from_recovery_payload(
+            recovery_seed.pipeline_config,
+            expected_digest=recovery_seed.pipeline_config_sha256,
+        )
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_invalid",
+            "The approved run's exact recovery configuration is invalid; "
+            "generate a new plan.",
+        ) from exc
+    if Path(restored.workdir).resolve() != (
+        target.wrapper_dir / "pipeline"
+    ).resolve():
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_invalid",
+            "The approved run's recovery configuration points outside the "
+            "selected pipeline.",
+        )
+    return restored
+
+
+def _cleanup_recovery_after_projection(
+    *,
+    wrapper_dir: Path,
+    projection: Mapping[str, Any],
+) -> None:
+    """Keep retry authority for failed execution; prune it after a true finish."""
+
+    gate = projection.get("gate")
+    reason = gate.get("reason") if isinstance(gate, Mapping) else None
+    if reason not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS:
+        _remove_local_recovery(wrapper_dir)
+
+
+def _materialization_concept_roster(
+    *,
+    foundation_profile: Mapping[str, Any],
+    development_resume_acquisition: Optional[_DevelopmentResumeAcquisition],
+) -> Dict[str, tuple[str, ...]]:
+    """Resolve the patient-level roster for a reviewed execution.
+
+    A metadata-only checkpoint proves the planning catalog but contains no
+    patient-level roster.  It must therefore keep the current host-owned
+    foundation profile instead of replacing it with empty tuples.
+    """
+
+    materialized = (
+        development_resume_acquisition
+        if (
+            development_resume_acquisition is not None
+            and development_resume_acquisition.kind
+            == "materialized_patient_universe"
+        )
+        else None
+    )
+    return {
+        "outcome_concepts": tuple(
+            materialized.outcome_concepts
+            if materialized is not None
+            else foundation_profile["outcome_concepts"]
+        ),
+        "required_feature_concepts": tuple(
+            materialized.feature_concepts
+            if materialized is not None
+            else foundation_profile["required_feature_concepts"]
+        ),
+        "static_concepts": tuple(
+            materialized.static_concepts
+            if materialized is not None
+            else foundation_profile["static_concepts"]
+        ),
+    }
 
 
 def make_research_pipeline_run_runner(
@@ -3180,190 +3990,144 @@ def make_research_pipeline_run_runner(
     credential_source: str = "pi_verified",
     literature_search_authorized: bool = False,
     plan_revision_source_run_id: str = "",
+    execution_resume_source_run_id: str = "",
     development_resume_source_job_id: str = "",
     budget_mode: str = "planner_canary",
     runner_image: Optional[str] = None,
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
-    study = dict(study_context)
-    question = _clean_text(study.get("question"), 1_200)
-    if not question:
-        raise ResearchPipelineRunError(
-            "research_pipeline_question_required",
-            "A scientific question is required before starting the pipeline.",
-        )
-    source = study.get("data_source")
-    if not isinstance(source, Mapping):
-        raise ResearchPipelineRunError(
-            "research_pipeline_database_required",
-            "A typed ICU database is required before pipeline launch.",
-        )
-    database_raw = _clean_text(source.get("database"), 64)
-    if not database_raw:
-        raise ResearchPipelineRunError(
-            "research_pipeline_database_required",
-            "A typed ICU database is required before pipeline launch.",
-        )
-    try:
-        database = normalize_database_key(database_raw)
-    except KeyError as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_database_unknown",
-            "The configured ICU database is not supported.",
-            details={"database": database_raw},
-        ) from exc
-    target = _target_outcome(study)
-    primary_exposure = _primary_exposure(study)
-    covariates = _configured_covariates(study)
-    covariate_selection = _configured_covariate_selection(study)
-    sensitivity_specs = _configured_sensitivity_specs(study)
-    window = _cohort_window(study)
-    _validate_primary_concept_selection(study, primary_exposure)
-    validated_analysis_design = _validate_analysis_design(study)
-    patient_grouping = (
-        _patient_grouping_for_analysis_design(study)
-        if validated_analysis_design.get("variance_estimator") == "cluster_robust"
-        else None
-    )
-    # Compile and validate the display-to-execution boundary before JobManager
-    # creates a background job. A prose label or stale concept therefore fails
-    # at its owner instead of appearing later as an opaque pipeline crash.
-    foundation_profile = _data_foundation_profile(
-        export_path=export_path,
-        study=study,
-        target=target,
-        primary_exposure=primary_exposure,
-        covariates=covariates,
-        sensitivity_specs=sensitivity_specs,
-    )
-    try:
-        package_receipt = dataio.validate_research_pipeline_source(
-            export_path,
-            database=database,
-        )
-    except dataio.ExportCohortError as exc:
-        raise ResearchPipelineRunError(
-            str(exc.detail.get("error") or "research_pipeline_source_invalid"),
-            "The Research Agent requires a manifest-backed prepared data package.",
-            details={
-                key: value for key, value in exc.detail.items() if key != "error"
-            },
-        ) from exc
-    prepared_package_binding = dict(package_receipt["binding"])
-    selected_budget_mode = str(budget_mode or "").strip().lower()
-    try:
-        provider_adapter.web_research_agent_hard_stop_limits(selected_budget_mode)
-    except ValueError as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_budget_mode_invalid",
-            "Choose an explicit reviewed Research Agent budget mode.",
-        ) from exc
-    selected_credential_source = _validated_pipeline_credential_source(
-        credential_source,
-        provider=provider,
-    )
-    if provider_environment is None:
-        raise ResearchPipelineRunError(
-            (
-                "research_pipeline_codex_user_auth_required"
-                if selected_credential_source == "codex_user_auth"
-                else "research_pipeline_pi_verified_credentials_required"
-            ),
-            "A verified provider credential is required for this pipeline.",
-        )
-    if not project_root:
-        raise ResearchPipelineRunError(
-            "research_pipeline_project_workspace_required",
-            "A server-owned Pi project workspace is required for this pipeline.",
-        )
-    development_resume_binding: tuple[Path, str] | None = None
-    selected_resume_source = _clean_text(
-        development_resume_source_job_id
-        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
-        80,
-    )
-    if selected_resume_source:
-        development_resume_binding = _development_progressive_resume_binding(
+    prepared = prepare_research_pipeline_run(
+        ResearchPipelineLaunchRequest(
+            export_path=export_path,
+            study_context=study_context,
             project_root=project_root,
-            study_id=str(study.get("id") or ""),
-            source_job_id=selected_resume_source,
-            budget_mode=selected_budget_mode,
-            checkpoint_sequence=os.environ.get(
-                _DEVELOPMENT_RESUME_SEQUENCE_ENV
-            ),
+            provider=provider,
+            provider_environment=provider_environment,
+            credential_source=credential_source,
+            literature_search_authorized=literature_search_authorized,
+            plan_revision_source_run_id=plan_revision_source_run_id,
+            execution_resume_source_run_id=execution_resume_source_run_id,
+            development_resume_source_job_id=development_resume_source_job_id,
+            budget_mode=budget_mode,
+            runner_image=runner_image,
         )
-    capability_settings = capability_policy.capability_settings()
-    publication_skill_flags = publication_skill_flags_from_settings(
-        capability_settings
     )
-    try:
-        extension_registry = ExtensionRegistry()
-        extension_snapshot = extension_registry.snapshot()
-        if not bool(capability_settings.get("mcp_tools_enabled", False)):
-            extension_snapshot = ExtensionActivationSnapshot.build(
-                revision=extension_snapshot.revision,
-                skills=extension_snapshot.skills,
-                mcp_servers=(),
-            )
-        user_extension_activation = extension_registry.pipeline_activation(
-            extension_snapshot
-        )
-    except ExtensionRegistryError as exc:
-        raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
-    research_provider_environment = dict(provider_environment)
-    source_run_id = _clean_text(plan_revision_source_run_id, 160)
-    environment_runner_image = os.environ.get(_RUNNER_IMAGE_ENV)
-    raw_runner_image = (
-        runner_image if runner_image is not None else environment_runner_image
-    )
-    selected_runner_image = str(raw_runner_image or "").strip()
-    if raw_runner_image is not None and (
-        not selected_runner_image
-        or "\n" in selected_runner_image
-        or "\r" in selected_runner_image
-        or "\0" in selected_runner_image
-    ):
-        raise ResearchPipelineRunError(
-            "research_pipeline_runner_image_invalid",
-            "The server-owned runner image must be one non-empty reference.",
-        )
 
     def runner(job: Any) -> Dict[str, Any]:
-        try:
-            dataio.validate_research_pipeline_source(
-                export_path,
-                database=database,
-                expected_binding=prepared_package_binding,
-            )
-        except dataio.ExportCohortError as exc:
-            raise ResearchPipelineRunError(
-                str(exc.detail.get("error") or "research_pipeline_source_invalid"),
-                "The prepared data package changed after launch validation.",
-            ) from exc
+        scientific = prepared.scientific
+        authority = prepared.authority
+        execution = prepared.execution
+        export_path = execution.export_path
+        study = scientific.study
+        project_root = execution.project_root
+        provider = authority.provider
+        literature_search_authorized = authority.literature_search_authorized
+        question = scientific.question
+        database = scientific.database
+        selected_budget_mode = execution.budget_mode
+        configured_primary_exposure = scientific.configured_primary_exposure
+        target = scientific.target
+        primary_exposure = scientific.primary_exposure
+        covariates = scientific.covariates
+        covariate_selection = scientific.covariate_selection
+        sensitivity_specs = scientific.sensitivity_specs
+        window = scientific.cohort_window
+        validated_analysis_design = scientific.validated_analysis_design
+        patient_grouping = scientific.patient_grouping
+        metadata_only_planning = scientific.metadata_only_planning
+        candidate_planning_study = scientific.materialization_study
+        metadata_planning_coordinates = scientific.metadata_planning_coordinates
+        execution_concepts = scientific.execution_concepts
+        planning_exposure_source = scientific.planning_exposure_source
+        metadata_operationalized_columns = scientific.metadata_operationalized_columns
+        prepared_package_binding = scientific.prepared_package_binding
+        foundation_profile = scientific.foundation_profile
+        selected_credential_source = authority.credential_source
+        development_resume_binding = execution.development_resume_binding
+        development_resume_acquisition = execution.development_resume_acquisition
+        development_resume_literature = execution.development_resume_literature
+        publication_skill_flags = authority.publication_skill_flags
+        user_extension_activation = authority.user_extension_activation
+        research_provider_environment = authority.provider_environment
+        source_run_id = execution.plan_revision_source_run_id
+        execution_resume_run_id = execution.execution_resume_source_run_id
+        selected_runner_image = execution.runner_image
+        if prepared_package_binding is not None:
+            try:
+                dataio.validate_research_pipeline_source(
+                    export_path,
+                    database=database,
+                    expected_binding=prepared_package_binding,
+                )
+            except dataio.ExportCohortError as exc:
+                raise ResearchPipelineRunError(
+                    str(exc.detail.get("error") or "research_pipeline_source_invalid"),
+                    "The prepared data package changed after launch validation.",
+                ) from exc
         root = Path(project_root).expanduser().resolve()
-        wrapper_dir = root / _slug(study.get("id")) / f"run_{job.id}"
+        execution_resume_target = (
+            _resolve_execution_resume_wrapper(
+                study=study,
+                project_root=project_root,
+                source_run_id=execution_resume_run_id,
+            )
+            if execution_resume_run_id
+            else None
+        )
+        execution_resume_inputs = (
+            _verified_execution_resume_inputs(execution_resume_target)
+            if execution_resume_target is not None
+            else None
+        )
+        wrapper_dir = (
+            execution_resume_target.wrapper_dir
+            if execution_resume_target is not None
+            else root / _slug(study.get("id")) / f"run_{job.id}"
+        )
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         bound_plan_revision_contract = ""
         if source_run_id:
-            bound_plan_revision_contract = _compile_plan_revision_contract(
+            candidate_authority = _load_candidate_plan_materialization_authority(
                 study=study,
                 project_root=project_root,
                 source_run_id=source_run_id,
+                database=database,
+                covariates=covariates,
             )
+            if candidate_authority is not None:
+                # The visible acceptance granted data preparation for the exact
+                # metadata-only candidate.  It did not mutate StudyContext and
+                # did not approve analysis.  Rebuild only the materialization
+                # roster with those verified coordinates; the package-bound
+                # Planner must still pause for a second review.
+                target = candidate_authority.target_outcome
+                primary_exposure = candidate_authority.primary_exposure
+                foundation_profile = _data_foundation_profile(
+                    export_path=export_path,
+                    study=candidate_planning_study,
+                    target=target,
+                    primary_exposure=primary_exposure,
+                    require_target=True,
+                    require_primary_exposure=True,
+                    covariates=covariates,
+                    sensitivity_specs=sensitivity_specs,
+                )
+                bound_plan_revision_contract = candidate_authority.contract
+            else:
+                bound_plan_revision_contract = _compile_plan_revision_contract(
+                    study=study,
+                    project_root=project_root,
+                    source_run_id=source_run_id,
+                )
         _progress(job, step="provider", label="Research Agent provider authorized")
+        request_timeout, request_hard_timeout = _provider_request_timeouts_for_budget(
+            selected_budget_mode
+        )
         client, provider_public = provider_adapter.build_research_agent_provider_client(
             dict(provider),
-            request_timeout=(
-                _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS
-                if selected_budget_mode != "full_reviewed"
-                else None
-            ),
-            request_hard_timeout=(
-                _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS
-                if selected_budget_mode != "full_reviewed"
-                else None
-            ),
+            request_timeout=request_timeout,
+            request_hard_timeout=request_hard_timeout,
             environ=research_provider_environment,
         )
         provider_hard_stop = None
@@ -3375,8 +4139,6 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.execution.runner import DockerRunner
             from easyicu.research_agent.orchestration.config import PipelineConfig
             from easyicu.research_agent.orchestration.profiles import (
-                CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
-                CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
                 get_submission_profile,
             )
             from easyicu.research_agent.orchestration.services import PipelineServices
@@ -3390,6 +4152,11 @@ def make_research_pipeline_run_runner(
                     study_context_owner.scientific_configuration_sha256(study)
                 ),
                 budget_mode=selected_budget_mode,
+                ledger_name=(
+                    f"provider_hard_stop_retry_{_slug(job.id)}.json"
+                    if execution_resume_target is not None
+                    else "provider_hard_stop_ledger.json"
+                ),
             )
             provider_public["provider_hard_stop"] = {
                 "schema_version": "easyicu.web-provider-hard-stop-policy/1",
@@ -3407,41 +4174,117 @@ def make_research_pipeline_run_runner(
             _progress(
                 job,
                 step="data_foundation",
-                label="Selecting concepts and materializing a typed analysis universe",
-            )
-            acquisition = acquire_universe_for_question(
-                export_dir=Path(export_path).expanduser(),
-                question=question,
-                llm=acquisition_client,
-                output_dir=wrapper_dir / "pipeline_input",
-                stem="web_research_universe",
-                target_outcome=target,
-                primary_exposure_concept=(
-                    foundation_profile.get("primary_exposure_source_concept")
-                    or primary_exposure
+                label=(
+                    "Reusing the digest-verified cohort and trajectory from the "
+                    "approved execution checkpoint"
+                    if execution_resume_inputs is not None
+                    else "Selecting concepts from database metadata; no patient data "
+                    "will be read"
+                    if metadata_only_planning
+                    else "Selecting concepts and materializing a typed analysis universe"
                 ),
-                outcome_concepts=foundation_profile["outcome_concepts"],
-                required_feature_concepts=foundation_profile[
-                    "required_feature_concepts"
-                ],
-                static_concepts=foundation_profile["static_concepts"],
-                allowed_modules=foundation_profile["allowed_modules"],
-                concept_selection_authority=(
-                    "host_exact"
-                    if covariate_selection == "exact"
-                    else "agent_selectable"
-                ),
-                cohort_window=window,
-                database=database,
-                require_outcome=foundation_profile["require_outcome"],
-                # A verified composite patient/stay identity is needed by the
-                # cluster-robust model.  The current materializer deliberately
-                # refuses to attach a private mapping to a longitudinal table;
-                # this fixed stay-level design therefore requests no unused
-                # trajectory instead of silently publishing an ungrouped one.
-                emit_trajectory=patient_grouping is None,
-                patient_grouping=patient_grouping,
             )
+            if execution_resume_inputs is not None:
+                acquisition = _execution_resume_acquisition_projection(
+                    execution_resume_inputs
+                )
+            elif (
+                metadata_only_planning
+                and development_resume_acquisition is not None
+                and development_resume_acquisition.kind
+                == "metadata_only_planning_catalog"
+            ):
+                acquisition = _restore_metadata_only_planning_acquisition(
+                    database=database,
+                    profile=development_resume_acquisition,
+                    output_dir=wrapper_dir / "pipeline_input",
+                    endpoint=metadata_planning_coordinates.get("endpoint"),
+                    patient_grouping=patient_grouping,
+                    operationalized_columns=metadata_operationalized_columns,
+                )
+            elif metadata_only_planning:
+                acquisition = _metadata_only_planning_acquisition(
+                    database=database,
+                    question=question,
+                    llm=acquisition_client,
+                    output_dir=wrapper_dir / "pipeline_input",
+                    target_outcome=metadata_planning_coordinates.get("target_outcome"),
+                    endpoint=metadata_planning_coordinates.get("endpoint"),
+                    required_concepts=(
+                        target,
+                        primary_exposure,
+                        metadata_planning_coordinates.get("target_outcome"),
+                        metadata_planning_coordinates.get("primary_exposure"),
+                        *covariates,
+                        *(
+                            variable
+                            for spec in sensitivity_specs
+                            for variable in spec.source_materialization_variables
+                        ),
+                    ),
+                    patient_grouping=patient_grouping,
+                    operationalized_columns=metadata_operationalized_columns,
+                )
+            else:
+                materialization_roster = _materialization_concept_roster(
+                    foundation_profile=foundation_profile,
+                    development_resume_acquisition=development_resume_acquisition,
+                )
+                acquisition = acquire_universe_for_question(
+                    export_dir=Path(export_path).expanduser(),
+                    question=question,
+                    llm=acquisition_client,
+                    output_dir=wrapper_dir / "pipeline_input",
+                    stem="web_research_universe",
+                    target_outcome=target,
+                    primary_exposure_concept=(
+                        foundation_profile.get("primary_exposure_source_concept")
+                        or primary_exposure
+                    ),
+                    outcome_concepts=materialization_roster["outcome_concepts"],
+                    required_feature_concepts=materialization_roster[
+                        "required_feature_concepts"
+                    ],
+                    static_concepts=materialization_roster["static_concepts"],
+                    allowed_modules=foundation_profile["allowed_modules"],
+                    concept_selection_authority=(
+                        "host_exact"
+                        if (
+                            covariate_selection == "exact"
+                            or development_resume_acquisition is not None
+                        )
+                        else "agent_selectable"
+                    ),
+                    cohort_window=window,
+                    trajectory_window=window,
+                    database=database,
+                    require_outcome=foundation_profile["require_outcome"],
+                    emit_trajectory=(
+                        (patient_grouping is None or any(spec.strategy == "time_varying" for spec in sensitivity_specs))
+                        and _analysis_requires_longitudinal_trajectory(
+                            candidate_planning_study,
+                            validated_design=validated_analysis_design,
+                        )
+                    ),
+                    # The time-varying input owner applies the private grouping
+                    # to both row spaces together and emits opaque identifiers.
+                    patient_grouping=(None if any(spec.strategy == "time_varying" for spec in sensitivity_specs) else patient_grouping),
+                )
+                if not acquisition.blocked and any(spec.strategy == "time_varying" for spec in sensitivity_specs):
+                    from easyicu.webserver.time_varying_runtime_projection import materialize_web_time_varying_input
+
+                    source_exposure = foundation_profile.get("primary_exposure_source_concept") or primary_exposure
+                    aggregation = _primary_exposure_aggregation(study)
+                    acquisition = materialize_web_time_varying_input(
+                        acquisition, specs=sensitivity_specs, export_path=Path(export_path).expanduser(),
+                        database=database, patient_grouping=patient_grouping,
+                        exposure_column=f"{source_exposure}_{aggregation}" if aggregation else str(source_exposure),
+                    )
+                elif not acquisition.blocked:
+                    from easyicu.webserver.time_varying_runtime_projection import materialize_web_hospital_followup
+
+                    acquisition = materialize_web_hospital_followup(acquisition,
+                        specs=sensitivity_specs, export_path=Path(export_path).expanduser(), database=database)
             if acquisition.blocked or acquisition.universe_path is None:
                 _finish_web_provider_hard_stop(
                     provider_hard_stop,
@@ -3456,12 +4299,13 @@ def make_research_pipeline_run_runner(
                     blocked_reason="data_foundation_blocked",
                 )
             resolved_primary_exposure = primary_exposure
-            if primary_exposure:
+            if configured_primary_exposure and not metadata_only_planning:
                 resolved_primary_exposure = _resolve_materialized_primary_exposure(
-                    configured=primary_exposure,
+                    configured=configured_primary_exposure,
                     source_concept=foundation_profile.get(
                         "primary_exposure_source_concept"
                     ),
+                    aggregation=_primary_exposure_aggregation(study),
                     acquisition=acquisition,
                 )
                 if not resolved_primary_exposure:
@@ -3469,6 +4313,61 @@ def make_research_pipeline_run_runner(
                         "research_pipeline_primary_exposure_aggregation_required",
                         "The configured primary exposure requires an explicit "
                         "analysis aggregation before planning can start.",
+                    )
+            elif primary_exposure and not metadata_only_planning:
+                resolved_primary_exposure = _resolve_planner_proposed_primary_exposure(
+                    source_concept=str(
+                        foundation_profile.get("primary_exposure_source_concept")
+                        or primary_exposure
+                    ),
+                    acquisition=acquisition,
+                )
+                if not resolved_primary_exposure:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_planner_exposure_proposal_unavailable",
+                        "The Planner could not bind a reviewable materialized representation for the exposure named in the research question.",
+                    )
+            pipeline_target = target
+            if target and not metadata_only_planning:
+                pipeline_target = _resolve_materialized_target_outcome(
+                    source_concept=str(target),
+                    acquisition=acquisition,
+                )
+                if not pipeline_target:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_target_outcome_materialization_unavailable",
+                        "The selected outcome is not available as a verified analysis column in the materialized cohort.",
+                        details={
+                            "source_concept": str(target),
+                            "available_analysis_columns": dict(
+                                getattr(acquisition, "analysis_columns", {}) or {}
+                            ),
+                        },
+                    )
+            if metadata_only_planning:
+                execution_concepts = study.get("execution_concepts")
+                execution_concepts = (
+                    execution_concepts
+                    if isinstance(execution_concepts, Mapping)
+                    else {}
+                )
+                pipeline_target = (
+                    _clean_text(execution_concepts.get("outcome"), 160)
+                    or metadata_planning_coordinates.get("target_outcome")
+                    or None
+                )
+                resolved_primary_exposure = (
+                    _clean_text(
+                        execution_concepts.get("primary_exposure"),
+                        160,
+                    )
+                    or metadata_planning_coordinates.get("primary_exposure")
+                    or None
+                )
+                aggregation = _primary_exposure_aggregation(study)
+                if resolved_primary_exposure and aggregation:
+                    resolved_primary_exposure = (
+                        f"{resolved_primary_exposure}_{aggregation}"
                     )
             try:
                 bound_preplan_literature = idea_mining.load_bound_prior_art_literature(
@@ -3494,10 +4393,14 @@ def make_research_pipeline_run_runner(
                     )
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
-            submission_profile_ref = (
-                CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
-                if selected_budget_mode == "full_reviewed"
-                else CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF
+            if development_resume_literature is not None:
+                bound_preplan_literature = development_resume_literature
+            live_pubmed_requested = (
+                bool(literature_search_authorized) and bound_preplan_literature is None
+            )
+            submission_profile_ref = _submission_profile_ref(
+                budget_mode=selected_budget_mode,
+                live_pubmed=live_pubmed_requested,
             )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
@@ -3507,8 +4410,84 @@ def make_research_pipeline_run_runner(
                     "enable_experience_bank": False,
                     "enable_reviewed_memory": False,
                     "reviewed_memory_namespaces": (),
+                    # Copilot presents one complete digest-bound plan for the
+                    # operator to approve. Runtime replanning would replace
+                    # that approved plan without a second durable review.
+                    "enable_replanning": False,
                 }
             )
+            from easyicu.webserver.scientific_runtime_projection import (
+                WebScientificRuntimeProjectionError,
+                compile_web_scientific_runtime_projection,
+            )
+            from easyicu.research_agent.contracts.dependence import (
+                PlannedDependenceRequirement,
+            )
+
+            planning_endpoint = metadata_planning_coordinates.get("endpoint")
+            runtime_primary_exposure_source = str(
+                foundation_profile.get("primary_exposure_source_concept")
+                or planning_exposure_source
+                or primary_exposure
+                or ""
+            ).strip()
+            runtime_projection_specs = _runtime_projection_sensitivity_specs(
+                sensitivity_specs,
+                primary_exposure_source=runtime_primary_exposure_source,
+            )
+            try:
+                runtime_projection = compile_web_scientific_runtime_projection(
+                    study=candidate_planning_study,
+                    sensitivity_specs=runtime_projection_specs,
+                    primary_exposure=resolved_primary_exposure,
+                    primary_exposure_source=runtime_primary_exposure_source,
+                    target_outcome=pipeline_target,
+                    declared_covariates=covariates,
+                    covariate_operationalizations=dict(
+                        study.get("covariate_operationalizations") or {}
+                    ),
+                    target_is_event_status=(
+                        bool(foundation_profile.get("require_outcome"))
+                        or (
+                            metadata_only_planning
+                            and str(getattr(planning_endpoint, "kind", ""))
+                            .strip()
+                            .casefold()
+                            == "binary"
+                        )
+                    ),
+                    dependence=(
+                        PlannedDependenceRequirement(
+                            group_source=patient_grouping.output_identity_column,
+                            group_derivation="prefix_before_delimiter",
+                            delimiter=":s",
+                        )
+                        if patient_grouping is not None
+                        else None
+                    ),
+                    universe_path=Path(acquisition.universe_path),
+                    scientific_configuration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                )
+            except WebScientificRuntimeProjectionError as exc:
+                raise ResearchPipelineRunError(
+                    exc.code,
+                    str(exc),
+                    details=exc.details,
+                ) from exc
+            if runtime_projection is not None:
+                profile_options.update(
+                    {
+                        "current_case_scientific_runtime_authority": (
+                            runtime_projection.authority
+                        ),
+                        "scientific_runtime_projection_sha256": (
+                            runtime_projection.projection_sha256
+                        ),
+                    }
+                )
+            analysis_only_execution = bool(runtime_projection is not None and runtime_projection.analysis_only_execution)
             if development_resume_binding is not None:
                 profile_options.update(
                     {
@@ -3518,6 +4497,7 @@ def make_research_pipeline_run_runner(
                         "development_progressive_resume_checkpoint_sha256": (
                             development_resume_binding[1]
                         ),
+                        "development_progressive_resume_reuse_bound_literature": True,
                     }
                 )
             config = PipelineConfig(
@@ -3535,25 +4515,22 @@ def make_research_pipeline_run_runner(
                 # digest omits that authority and would make an otherwise
                 # valid Web analysis fail at the writing boundary.
                 require_human_plan_review=True,
-                require_reportable_scientific_capability=True,
+                # This explicit development-only owner may execute without
+                # implying reportable science. All other Web routes retain
+                # their existing reportable-capability requirement.
+                require_reportable_scientific_capability=not analysis_only_execution,
+                development_diagnostic=analysis_only_execution,
                 required_primary_cohort_selection_mode=(
                     _primary_cohort_selection_mode(study)
                 ),
                 enable_pdf_render=True,
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
-                bound_plan_revision_contract=(
-                    bound_plan_revision_contract or None
-                ),
-                # The Web host carries this from the user's turn grant.  When
-                # an accepted Idea handoff already supplies a digest-bound
-                # search receipt, reuse it and do not silently issue a second
-                # search.  Otherwise a full Web study can now establish dated
-                # direct prior art before the Planner runs.
-                enable_pubmed=(
-                    bool(literature_search_authorized)
-                    and bound_preplan_literature is None
-                ),
+                bound_plan_revision_contract=(bound_plan_revision_contract or None),
+                # Live PubMed is frozen by the selected additive profile, not
+                # passed as an ad-hoc override. When an accepted Idea handoff
+                # already supplies a digest-bound receipt, the no-search
+                # profile above prevents a silent second retrieval.
                 runner_kind=submission_profile.requires_runner,
                 runner_image=(selected_runner_image or DockerRunner.DEFAULT_IMAGE),
                 runner_network="none",
@@ -3579,21 +4556,32 @@ def make_research_pipeline_run_runner(
                 provider_output_cost_usd_per_million_tokens=(
                     hard_stop_limits.output_cost_usd_per_million_tokens
                 ),
-                development_planner_efficiency_max_calls=(
-                    6 if selected_budget_mode != "full_reviewed" else None
-                ),
-                development_planner_efficiency_max_reported_tokens=(
-                    100_000
-                    if selected_budget_mode != "full_reviewed"
-                    else None
-                ),
-                development_planner_efficiency_max_wall_seconds=(
-                    600.0
-                    if selected_budget_mode != "full_reviewed"
-                    else None
-                ),
+                # User-requested Web planning is already bounded by the durable
+                # provider hard stop above.  The smaller routine-E1 iteration
+                # envelope is intentionally not applied here: progressive plans
+                # can require more than six valid, checkpointed calls even when
+                # every remaining step succeeds on its first attempt.
+                development_planner_efficiency_max_calls=None,
+                development_planner_efficiency_max_reported_tokens=None,
+                development_planner_efficiency_max_wall_seconds=None,
                 **profile_options,
             )
+            original_recovery_seed = (
+                load_recovery_seed(wrapper_dir)
+                if execution_resume_target is not None
+                else None
+            )
+            if execution_resume_target is not None:
+                current_scientific_digest = (
+                    study_context_owner.scientific_configuration_sha256(study)
+                )
+                config = _validated_execution_retry_config(
+                    current_config=config,
+                    target=execution_resume_target,
+                    recovery_seed=original_recovery_seed,
+                    current_scientific_digest=current_scientific_digest,
+                    prepared_package_binding=prepared_package_binding,
+                )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
                 services=PipelineServices(
@@ -3613,34 +4601,40 @@ def make_research_pipeline_run_runner(
                     "research_pipeline_review_config_not_recoverable",
                     "The run configuration cannot be reconstructed safely.",
                 ) from exc
-            recovery_seed = WebReviewRecoverySeed.create(
-                wrapper_dir=str(wrapper_dir.resolve()),
-                study=study,
-                scientific_configuration_sha256=(
-                    study_context_owner.scientific_configuration_sha256(study)
-                ),
-                provider_meta=dict(provider),
-                provider_public=dict(provider_public),
-                credential_source=selected_credential_source,
-                budget_mode=selected_budget_mode,
-                prepared_package_binding=prepared_package_binding,
-                pipeline_config=config_payload,
-                pipeline_config_sha256=config.canonical_digest(),
-                acquisition_projection=_acquisition_recovery_projection(acquisition),
-                hard_stop_ledger_path=str(provider_hard_stop.ledger.path.resolve()),
-                hard_stop_task_id=str(provider_hard_stop.task_id),
-                hard_stop_declaration_sha256=(
-                    study_context_owner.scientific_configuration_sha256(study)
-                ),
-                created_at=time.time(),
-            )
-            # This local seed precedes Planner execution. If the process dies
-            # after the pipeline checkpoint but before the global index update,
-            # bounded reconciliation can still discover the exact pause.
-            register_pipeline_work_root(root)
-            put_recovery_seed(recovery_seed)
+            recovery_seed = original_recovery_seed
+            if recovery_seed is None:
+                recovery_seed = WebReviewRecoverySeed.create(
+                    wrapper_dir=str(wrapper_dir.resolve()),
+                    study=study,
+                    scientific_configuration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                    provider_meta=dict(provider),
+                    provider_public=dict(provider_public),
+                    credential_source=selected_credential_source,
+                    budget_mode=selected_budget_mode,
+                    prepared_package_binding=prepared_package_binding,
+                    pipeline_config=config_payload,
+                    pipeline_config_sha256=config.canonical_digest(),
+                    acquisition_projection=(
+                        _acquisition_recovery_projection(acquisition)
+                    ),
+                    hard_stop_ledger_path=str(
+                        provider_hard_stop.ledger.path.resolve()
+                    ),
+                    hard_stop_task_id=str(provider_hard_stop.task_id),
+                    hard_stop_declaration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                    created_at=time.time(),
+                )
+                # This local seed precedes Planner execution. If the process dies
+                # after the pipeline checkpoint but before the global index update,
+                # bounded reconciliation can still discover the exact pause.
+                register_pipeline_work_root(root)
+                put_recovery_seed(recovery_seed)
             preferences = _research_user_preferences(
-                study,
+                candidate_planning_study,
                 patient_grouping=patient_grouping,
             )
             _progress(
@@ -3653,26 +4647,52 @@ def make_research_pipeline_run_runner(
             )
             outcome = pipeline.run(
                 question=question,
-                cohort=acquisition.universe_path,
-                cohort_authority_path=acquisition.cohort_authority_path,
-                cohort_authority_ref=(
-                    acquisition.cohort_authority_ref.to_dict()
-                    if acquisition.cohort_authority_ref is not None
-                    else None
+                cohort=(
+                    execution_resume_inputs.cohort_path
+                    if execution_resume_inputs is not None
+                    else acquisition.universe_path
                 ),
-                trajectory_path=acquisition.trajectory_path,
-                trajectory_authority_path=acquisition.trajectory_authority_path,
+                cohort_authority_path=(
+                    execution_resume_inputs.cohort_authority_path
+                    if execution_resume_inputs is not None
+                    else acquisition.cohort_authority_path
+                ),
+                cohort_authority_ref=(
+                    execution_resume_inputs.cohort_authority_ref
+                    if execution_resume_inputs is not None
+                    else (
+                        acquisition.cohort_authority_ref.to_dict()
+                        if acquisition.cohort_authority_ref is not None
+                        else None
+                    )
+                ),
+                trajectory_path=(
+                    execution_resume_inputs.trajectory_path
+                    if execution_resume_inputs is not None
+                    else acquisition.trajectory_path
+                ),
+                trajectory_authority_path=(
+                    execution_resume_inputs.trajectory_authority_path
+                    if execution_resume_inputs is not None
+                    else acquisition.trajectory_authority_path
+                ),
                 trajectory_authority_ref=(
-                    acquisition.trajectory_authority_ref.to_dict()
-                    if acquisition.trajectory_authority_ref is not None
-                    else None
+                    execution_resume_inputs.trajectory_authority_ref
+                    if execution_resume_inputs is not None
+                    else (
+                        acquisition.trajectory_authority_ref.to_dict()
+                        if acquisition.trajectory_authority_ref is not None
+                        else None
+                    )
                 ),
                 cohort_name=f"web_{_slug(study.get('id'))}",
                 database=database,
-                target_outcome=target,
+                target_outcome=pipeline_target,
                 endpoint=acquisition.endpoint,
                 primary_exposure=resolved_primary_exposure,
                 inclusion_criteria=_inclusion_criteria(study),
+                exclusion_criteria=_exclusion_criteria(study),
+                time_windows=_declared_time_windows(window, study),
                 id_columns=(
                     [patient_grouping.output_identity_column]
                     if patient_grouping is not None
@@ -3691,13 +4711,25 @@ def make_research_pipeline_run_runner(
                 ),
                 user_preferences=preferences,
                 notes=_clean_text(study.get("analysis_goal"), 1_200) or None,
+                resume_run_id=(
+                    execution_resume_target.pipeline_run_id
+                    if execution_resume_target is not None
+                    else None
+                ),
                 progress_callback=lambda event: _pipeline_progress(job, event),
+                stop_after_analysis=analysis_only_execution,
             )
+            if execution_resume_target is not None and isinstance(
+                outcome, HumanReviewPending
+            ):
+                raise ResearchPipelineRunError(
+                    "research_pipeline_execution_retry_unexpected_plan_review",
+                    "The exact-plan execution retry unexpectedly requested a new "
+                    "plan review; no approval was created or overwritten.",
+                )
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
-                put_review_recovery_record(
-                    recovery_seed.record(str(outcome.run_id))
-                )
+                put_review_recovery_record(recovery_seed.record(str(outcome.run_id)))
                 entry = _PendingRun(
                     pipeline=pipeline,
                     pending=outcome,
@@ -3711,7 +4743,7 @@ def make_research_pipeline_run_runner(
                     prepared_package_binding=prepared_package_binding,
                     provider_hard_stop=provider_hard_stop,
                 )
-                _register_pending(entry)
+                _PENDING_REVIEWS.register(entry)
                 return _write_projection(
                     wrapper_dir=wrapper_dir,
                     study=study,
@@ -3721,18 +4753,35 @@ def make_research_pipeline_run_runner(
                     pending=outcome,
                 )
             _finish_web_provider_hard_stop(provider_hard_stop)
-            _remove_local_recovery(wrapper_dir)
-            return _write_projection(
+            projection = _write_projection(
                 wrapper_dir=wrapper_dir,
                 study=study,
                 provider=provider_public,
                 acquisition=acquisition,
                 run_dir=Path(outcome.manifest_path).parent,
             )
-        except ResearchPipelineRunError:
+            _cleanup_recovery_after_projection(
+                wrapper_dir=wrapper_dir,
+                projection=projection,
+            )
+            return projection
+        except ResearchPipelineRunError as exc:
             _finish_web_provider_hard_stop(
                 provider_hard_stop,
                 error="research_pipeline_error",
+            )
+            diagnostic = _write_pipeline_failure_diagnostic(
+                wrapper_dir=wrapper_dir,
+                exc=exc,
+                code=exc.code,
+            )
+            _write_pipeline_failure_projection(
+                wrapper_dir=wrapper_dir,
+                study=study,
+                provider=provider_public,
+                code=exc.code,
+                failure_type=_pipeline_failure_category(exc),
+                diagnostic=diagnostic,
             )
             raise
         except Exception as exc:
@@ -3740,11 +4789,19 @@ def make_research_pipeline_run_runner(
                 provider_hard_stop,
                 error=_pipeline_failure_category(exc),
             )
-            code = _pipeline_failure_code(exc)
+            code = _pipeline_failure_code(exc, budget_mode=selected_budget_mode)
             diagnostic = _write_pipeline_failure_diagnostic(
                 wrapper_dir=wrapper_dir,
                 exc=exc,
                 code=code,
+            )
+            _write_pipeline_failure_projection(
+                wrapper_dir=wrapper_dir,
+                study=study,
+                provider=provider_public,
+                code=code,
+                failure_type=_pipeline_failure_category(exc),
+                diagnostic=diagnostic,
             )
             if code == "research_pipeline_provider_timeout":
                 _progress(
@@ -3770,10 +4827,26 @@ def make_research_pipeline_run_runner(
                     "The development Planner reached its call, token, or time budget. "
                     "Its validated checkpoint prefix was preserved; no analysis was run."
                 )
+            elif code == "research_pipeline_planner_provider_unavailable":
+                message = (
+                    "The model provider became temporarily unavailable while the "
+                    "Planner was running. Its validated checkpoint prefix was "
+                    "preserved; no analysis was run."
+                )
             elif code == "research_pipeline_progressive_compile_failed":
                 message = (
                     "The deterministic host compiler rejected the bounded Planner "
                     "repairs. A local replay artifact was preserved; no analysis was run."
+                )
+            elif code == "research_pipeline_execution_runtime_unavailable":
+                # A host-environment failure, not a scientific one. Saying so
+                # is the whole point: the generic wording sent the researcher
+                # looking for a problem in their study. Reported through the
+                # raised code and message only -- ``_progress`` raises on a
+                # pending cancellation, which would replace this cause.
+                message = (
+                    "The container runtime that executes analysis code was not "
+                    "available, so no analysis was run. Start it and run again."
                 )
             else:
                 message = (
@@ -3812,13 +4885,13 @@ def resume_research_pipeline(
             "research_pipeline_review_decision_invalid",
             "Choose approved or rejected for the pending plan review.",
         )
-    with _PENDING_LOCK:
-        entry = _PENDING.get(key)
+    entry = _PENDING_REVIEWS.get(key)
     if entry is None:
         try:
-            entry = _recover_pending_run(
+            entry = recover_pending_review(
                 key,
                 provider_environment=provider_environment,
+                reviewer_identity=server_reviewer_identity(),
                 rejection_only=resolved == "rejected",
             )
         except Exception as exc:
@@ -3832,9 +4905,7 @@ def resume_research_pipeline(
                 "research_pipeline_review_not_resumable",
                 "No saved plan review exists for this run.",
             )
-        with _PENDING_LOCK:
-            incumbent = _PENDING.setdefault(key, entry)
-            entry = incumbent
+        entry = _PENDING_REVIEWS.install_recovered(key, entry)
     if _clean_text(entry.study.get("id"), 160) != _clean_text(study_context_id, 160):
         raise ResearchPipelineRunError(
             "research_pipeline_review_study_mismatch",
@@ -3848,8 +4919,7 @@ def resume_research_pipeline(
             dict(current_study_context)
         )
         if current_digest != planned_digest:
-            with _PENDING_LOCK:
-                _PENDING.pop(key, None)
+            _PENDING_REVIEWS.discard(key, expected=entry)
             remove_review_recovery_record(key)
             _remove_local_recovery(entry.wrapper_dir)
             _finish_web_provider_hard_stop(
@@ -3869,6 +4939,28 @@ def resume_research_pipeline(
             "research_pipeline_planner_canary_execution_blocked",
             "A Planner-only canary cannot approve or execute its proposed plan.",
         )
+    if resolved == "approved" and not _plan_has_complete_reviewable_recommendation(
+        _pending_plan_authority(entry.pending)
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_reviewable_plan_required",
+            "This candidate predates the complete reviewable-plan contract and "
+            "must be regenerated before it can be approved.",
+        )
+    if resolved == "approved":
+        current_review = _load_pending_scientific_review(
+            Path(entry.pending.run_dir), entry.pending
+        )
+        if not current_review:
+            raise ResearchPipelineRunError(
+                "scientific_plan_review_policy_stale",
+                "This plan was reviewed under an older scientific policy and must be regenerated before approval.",
+            )
+        if current_review.get("approval_allowed") is not True:
+            raise ResearchPipelineRunError(
+                "scientific_plan_review_changes_required",
+                "The current scientific review requires plan changes before approval.",
+            )
     if resolved == "approved":
         source = entry.study.get("data_source")
         source = source if isinstance(source, Mapping) else {}
@@ -3935,30 +5027,59 @@ def resume_research_pipeline(
         step="human_review",
         label=f"Applying {resolved} decision to the digest-bound Research Agent plan",
     )
-    from easyicu.research_agent.orchestration.workflow import (
-        HumanReviewPending,
-        HumanReviewRejected,
-    )
-
-    # Lease the live pause before resuming it. Two approval jobs for the same
-    # button click must not both drive one workflow or pause the Provider clock
-    # underneath each other. Recoverable failures and a new pause explicitly
-    # re-register the entry below.
-    with _PENDING_LOCK:
-        if _PENDING.get(key) is not entry:
-            raise ResearchPipelineRunError(
-                "research_pipeline_review_resume_in_progress",
-                "This plan review is already being resumed by another job.",
-            )
-        _PENDING.pop(key, None)
-
     try:
-        outcome = entry.pipeline.resume_human_review(
+        resume_result = resume_pending_review(
+            _PENDING_REVIEWS,
+            entry,
             decisions,
             run_id=key,
             progress_callback=lambda event: _pipeline_progress(job, event),
         )
-    except HumanReviewRejected:
+    except PendingReviewResumeInProgress as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_review_resume_in_progress",
+            "This plan review is already being resumed by another job.",
+        ) from exc
+    except PendingReviewResumeFailure as failure:
+        exc = failure.cause
+        remains_resumable = failure.resumable
+        diagnostic = _write_review_resume_failure_diagnostic(
+            wrapper_dir=entry.wrapper_dir,
+            exc=exc,
+            review_resumable=remains_resumable,
+        )
+        if not remains_resumable:
+            _finish_web_provider_hard_stop(
+                entry.provider_hard_stop,
+                error=_pipeline_failure_category(exc),
+            )
+            remove_review_recovery_record(key)
+            _remove_local_recovery(entry.wrapper_dir)
+        runtime_unavailable = (
+            _safe_pipeline_typed_failure(exc).get("owner")
+            == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER
+        )
+        raise ResearchPipelineRunError(
+            (
+                "research_pipeline_execution_runtime_unavailable"
+                if runtime_unavailable
+                else "research_pipeline_review_resume_failed"
+            ),
+            (
+                "The container runtime that executes analysis code was not "
+                "available, so the approved plan did not run. Start it and "
+                "resume again."
+                if runtime_unavailable
+                else "The governed Research Agent run could not resume after "
+                "plan review."
+            ),
+            details={
+                "failure_type": _pipeline_failure_category(exc),
+                "review_resumable": remains_resumable,
+                "diagnostic": diagnostic,
+            },
+        ) from exc
+    if resume_result.state == "rejected":
         remove_review_recovery_record(key)
         _remove_local_recovery(entry.wrapper_dir)
         _finish_web_provider_hard_stop(
@@ -3973,30 +5094,8 @@ def resume_research_pipeline(
             run_dir=Path(entry.pending.run_dir),
             blocked_reason="human_plan_review_rejected",
         )
-    except Exception as exc:
-        remains_resumable = bool(
-            getattr(entry.pipeline, "has_resumable_human_review", False)
-        )
-        if remains_resumable:
-            _register_pending(entry)
-        if not remains_resumable:
-            _finish_web_provider_hard_stop(
-                entry.provider_hard_stop,
-                error=_pipeline_failure_category(exc),
-            )
-            remove_review_recovery_record(key)
-            _remove_local_recovery(entry.wrapper_dir)
-        raise ResearchPipelineRunError(
-            "research_pipeline_review_resume_failed",
-            "The governed Research Agent run could not resume after plan review.",
-            details={
-                "failure_type": _pipeline_failure_category(exc),
-                "review_resumable": remains_resumable,
-            },
-        ) from exc
-    if isinstance(outcome, HumanReviewPending):
-        entry.pending = outcome
-        _register_pending(entry)
+    if resume_result.state == "pending":
+        outcome = resume_result.outcome
         return _write_projection(
             wrapper_dir=entry.wrapper_dir,
             study=entry.study,
@@ -4005,16 +5104,21 @@ def resume_research_pipeline(
             run_dir=Path(outcome.run_dir),
             pending=outcome,
         )
+    outcome = resume_result.outcome
     _finish_web_provider_hard_stop(entry.provider_hard_stop)
     remove_review_recovery_record(key)
-    _remove_local_recovery(entry.wrapper_dir)
-    return _write_projection(
+    projection = _write_projection(
         wrapper_dir=entry.wrapper_dir,
         study=entry.study,
         provider=entry.provider,
         acquisition=entry.acquisition,
         run_dir=Path(outcome.manifest_path).parent,
     )
+    _cleanup_recovery_after_projection(
+        wrapper_dir=entry.wrapper_dir,
+        projection=projection,
+    )
+    return projection
 
 
 def refresh_literature_evidence_projection(wrapper_dir: Path) -> Dict[str, Any]:
@@ -4047,7 +5151,9 @@ def refresh_literature_evidence_projection(wrapper_dir: Path) -> Dict[str, Any]:
         run_id=run_id,
         plan=plan if isinstance(plan, Mapping) else {},
     )
-    if not _projection_privacy_scan({"literature_evidence.json": payload})["passed"]:
+    if not run_artifact_disclosure.scan_browser_projection(
+        {"literature_evidence.json": payload}
+    )["passed"]:
         raise ResearchPipelineRunError(
             "research_pipeline_literature_projection_privacy_failed",
             "The literature projection failed the Web privacy boundary.",

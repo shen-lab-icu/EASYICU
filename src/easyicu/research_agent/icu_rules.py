@@ -137,6 +137,14 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         kind=VariableKind.CATEGORICAL,
         aggregation_default=AggregationRule.FIRST_VALUE,
     ),
+    "adm": ConceptHint(
+        role=VariableRole.DEMOGRAPHIC,
+        kind=VariableKind.CATEGORICAL,
+        aggregation_default=AggregationRule.FIRST_VALUE,
+        pitfalls=(
+            "Admission type is a baseline admission attribute; preserve its categorical levels rather than treating their stored codes as continuous.",
+        ),
+    ),
     "weight": ConceptHint(
         role=VariableRole.DEMOGRAPHIC,
         kind=VariableKind.CONTINUOUS,

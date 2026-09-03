@@ -5,21 +5,6 @@
    shortcuts; full conversation belongs to Guided Copilot.
    ============================================================ */
 
-/* floating launcher */
-#cpFab{
-  position: fixed; right: 20px; bottom: 20px; z-index: 60;
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 46px; padding: 0 16px 0 14px;
-  border: 1px solid var(--accent-border); border-radius: var(--r-pill);
-  background: var(--surface); color: var(--accent-ink);
-  box-shadow: var(--sh-3); cursor: pointer;
-  font: inherit; font-size: 13px; font-weight: 600;
-  transition: transform .14s, box-shadow .14s;
-}
-#cpFab:hover{ transform: translateY(-1px); box-shadow: var(--sh-4, 0 14px 40px rgba(14,17,22,.2)); }
-#cpFab .fab-mk{ width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; flex: none; }
-#cpFab[hidden]{ display: none; }
-
 /* dock panel */
 #cpDock{
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 61;
@@ -77,5 +62,4 @@
 
 @media (max-width: 600px){
   #cpDock{ width: 100vw; }
-  #cpFab{ right: 14px; bottom: calc(76px + env(safe-area-inset-bottom)); }
 }

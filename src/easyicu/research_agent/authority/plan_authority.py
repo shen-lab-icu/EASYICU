@@ -10,12 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from ..plan_utils import (
-    _augment_report_typed_product_inputs,
-    _cap_plan_preserving_figure_steps,
-    _preserve_figure_steps_after_replan,
-)
-from ..planning.figure_plan_shaping import bind_deterministic_figure_panels
+from ..planning.figure_step_contract import _preserve_figure_steps_after_replan
+from ..planning.plan_graph import _cap_plan_preserving_figure_steps
+from ..planning import figure_plan_shaping as _figure_plan
 from ..robustness.panel import (
     RobustnessSpec,
     robustness_specs_for_execution,
@@ -36,7 +33,6 @@ __all__ = [
     "_preserve_locked_robustness_specs_after_replan",
     "normalize_replan_candidate",
 ]
-
 
 @dataclass(frozen=True)
 class NormalizedPlanCandidate:
@@ -310,7 +306,8 @@ def normalize_replan_candidate(
         revised=revised,
     )
     findings.extend(figure_findings)
-    revised, report_input_findings = _augment_report_typed_product_inputs(plan=revised)
+    revised = _figure_plan.apply_required_plan_obligations(revised, context, findings)
+    revised, report_input_findings = _figure_plan.augment_report_typed_product_inputs(plan=revised)
     findings.extend(report_input_findings)
 
     if max_total_steps > 0:
@@ -353,7 +350,7 @@ def normalize_replan_candidate(
         context=context,
     )
     findings.extend(companion_findings)
-    revised, panel_findings = bind_deterministic_figure_panels(plan=revised)
+    revised, panel_findings = _figure_plan.bind_deterministic_figure_panels(plan=revised)
     findings.extend(panel_findings)
 
     # Structural transforms may touch an already completed step. Re-apply the

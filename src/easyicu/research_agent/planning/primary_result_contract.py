@@ -12,6 +12,7 @@ from ..schema import (
 )
 from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
 from ..contracts.survival_execution import survival_execution_verdict
+from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
 from ..contracts.time_units import canonical_time_unit
 from .analysis_types import infer_analysis_type
 from .capability_registry import resolve_primary_capability
@@ -258,6 +259,12 @@ def validate_required_primary_result(
         # the resolver's ``freeform_step_claims_host_product`` above. A
         # separate free-form validator here would only restate checks that
         # already ran, which reads as coverage it does not provide.
+        return
+    if verdict.capability_id == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
+        # The digest-bound runtime authority validates the landmark, columns,
+        # adjustment set, outputs and signed method. Reapplying the unrelated
+        # exact single-model Logit contract here would reject that owner after
+        # the capability resolver had correctly selected it.
         return
     _validate_exact_adjusted_association(
         primary=primary, exposure=exposure, outcome=outcome

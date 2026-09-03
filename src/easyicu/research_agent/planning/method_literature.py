@@ -44,7 +44,7 @@ __all__ = [
     "reporting_method_source_keys_for_guidelines",
 ]
 
-METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/3"
+METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/5"
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,7 @@ class MethodCard:
     source_pmid: str = ""
     source_doi: str = ""
     source_url: str = ""
+    source_bibliographic_notices: tuple[str, ...] = field(default=())
     # Exact planner design elements this *card* can govern.  A source may own
     # several cards (STROBE currently owns reporting, repeated-unit dependence,
     # and absolute/relative interpretation), so source-key membership alone is
@@ -89,6 +90,9 @@ class MethodCard:
             "source_pmid": self.source_pmid,
             "source_doi": self.source_doi,
             "source_url": self.source_url,
+            "source_bibliographic_notices": list(
+                self.source_bibliographic_notices
+            ),
             "design_elements": list(self.design_elements),
             "also_see": list(self.also_see),
         }
@@ -116,6 +120,9 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         source_pmid="17938396",
         source_doi="10.7326/0003-4819-147-8-200710160-00010",
         source_url="https://pubmed.ncbi.nlm.nih.gov/17938396/",
+        source_bibliographic_notices=(
+            "Erratum: Ann Intern Med. 2008;148(2):168.",
+        ),
         design_elements=("reporting",),
     ),
     MethodCard(
@@ -176,16 +183,66 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "being described, so say which estimate is primary and why."
         ),
         source_key="anderson_landmark_1983",
-        source_title=(
-            "Analysis of survival by tumor response and other comparisons of "
-            "time-to-event by outcome variables."
-        ),
+        source_title="Analysis of survival by tumor response.",
         source_year="1983",
         source_venue="Journal of Clinical Oncology",
         source_pmid="6668489",
         source_doi="10.1200/JCO.1983.1.11.710",
         source_url="https://pubmed.ncbi.nlm.nih.gov/6668489/",
         design_elements=("time_zero", "exposure", "estimand"),
+    ),
+    MethodCard(
+        id="proportional_hazards_diagnostics",
+        layer="survival_assumption",
+        question=(
+            "Can one constant hazard ratio adequately summarize the association "
+            "over follow-up?"
+        ),
+        requirement=(
+            "Pre-specify how proportional hazards will be assessed, report the "
+            "covariate-level and global diagnostics, and inspect the estimated "
+            "time pattern rather than treating a test as a formality. If the "
+            "assumption is not supported, do not headline one constant hazard "
+            "ratio; retain it as a diagnostic model and report a prespecified "
+            "time-varying or absolute-time summary instead."
+        ),
+        source_key="grambsch_therneau_ph_1994",
+        source_title=(
+            "Proportional hazards tests and diagnostics based on weighted residuals."
+        ),
+        source_year="1994",
+        source_venue="Biometrika",
+        source_doi="10.1093/biomet/81.3.515",
+        source_url="https://doi.org/10.1093/biomet/81.3.515",
+        design_elements=("robustness", "estimand"),
+    ),
+    MethodCard(
+        id="restricted_mean_survival_time",
+        layer="survival_estimand",
+        question=(
+            "Which absolute survival summary remains interpretable when hazards "
+            "are non-proportional?"
+        ),
+        requirement=(
+            "Choose the restriction time before inspecting the result and keep it "
+            "within the supported follow-up horizon. Report the restricted mean "
+            "survival time in each group, their contrast and uncertainty, and say "
+            "whether the contrast is adjusted or unadjusted. In an observational "
+            "study, an RMST contrast remains an association unless the design and "
+            "identification assumptions support a causal interpretation."
+        ),
+        source_key="royston_parmar_rmst_2011",
+        source_title=(
+            "The use of restricted mean survival time to estimate the treatment "
+            "effect in randomized clinical trials when the proportional hazards "
+            "assumption is in doubt."
+        ),
+        source_year="2011",
+        source_venue="Statistics in Medicine",
+        source_pmid="21611958",
+        source_doi="10.1002/sim.4274",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/21611958/",
+        design_elements=("estimand", "outcome"),
     ),
     MethodCard(
         id="repeated_units_per_patient",
@@ -386,6 +443,7 @@ def method_literature_citations() -> tuple[dict[str, Any], ...]:
             "pmid": card.source_pmid or None,
             "doi": card.source_doi or None,
             "url": card.source_url or None,
+            "bibliographic_notices": list(card.source_bibliographic_notices),
         }
     return tuple(seen.values())
 

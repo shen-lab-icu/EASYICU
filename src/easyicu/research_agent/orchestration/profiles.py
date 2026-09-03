@@ -8,7 +8,7 @@ part of the evaluation/submission scaffold defined in
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, Literal, Optional
 
 
@@ -83,6 +83,13 @@ class SubmissionProfile:
     # authority chain. Historical profiles omit it to preserve their replay
     # bytes; additive profiles may pin the progressive strategy explicitly.
     planner_strategy: Optional[Literal["monolithic_v1", "progressive_v2"]] = None
+    # Live bibliographic retrieval changes the run-bound evidence set and must
+    # therefore be a frozen coordinate for profiled runs. Historical profiles
+    # omit it to preserve their serialized replay contracts.
+    enable_pubmed: Optional[bool] = None
+    require_human_plan_review: Optional[bool] = None
+    require_literature_design_authority: Optional[bool] = None
+    development_stop_after_planner_outline: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -148,6 +155,18 @@ class SubmissionProfile:
             options["planner_only"] = self.planner_only
         if self.planner_strategy is not None:
             options["planner_strategy"] = self.planner_strategy
+        if self.enable_pubmed is not None:
+            options["enable_pubmed"] = self.enable_pubmed
+        if self.require_human_plan_review is not None:
+            options["require_human_plan_review"] = self.require_human_plan_review
+        if self.require_literature_design_authority is not None:
+            options["require_literature_design_authority"] = (
+                self.require_literature_design_authority
+            )
+        if self.development_stop_after_planner_outline is not None:
+            options["development_stop_after_planner_outline"] = (
+                self.development_stop_after_planner_outline
+            )
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -185,6 +204,10 @@ class SubmissionProfile:
             "allow_external_figure_upload",
             "planner_only",
             "planner_strategy",
+            "enable_pubmed",
+            "require_human_plan_review",
+            "require_literature_design_authority",
+            "development_stop_after_planner_outline",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -496,10 +519,108 @@ E1_REVIEWED_DEMO_2026_08_19 = SubmissionProfile(
     planner_strategy="progressive_v2",
 )
 
-CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
-    E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.ref
+E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+    version="20260903",
+    locked_at="2026-09-03T10:50:00-04:00",
+    # Additive re-lock after publishing the explicit binary domain for sep3.
+    # Keep 20260819 immutable so its historical runs remain reproducible.
+    expected_concept_dict_sha=(
+        "1f3c5b1b7057cf18590f4629476820dc95f1ffc6a0cf45f7dae59636abaab015"
+    ),
 )
-CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_08_19.ref
+
+E1_REVIEWED_DEMO_2026_09_03 = replace(
+    E1_REVIEWED_DEMO_2026_08_19,
+    version="20260903",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.expected_concept_dict_sha
+    ),
+)
+
+CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.ref
+)
+CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_09_03.ref
+
+# Web Copilot may request live prior-art retrieval only after an explicit turn
+# grant. Keep that evidence-changing option out of the default E1 profiles and
+# bind it to additive coordinates selected only for the authorized request.
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24 = SubmissionProfile(
+    name="npj_dm_e1_canary_live_pubmed_dev",
+    version="20260824",
+    locked_at="2026-08-24T00:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+    planner_strategy="progressive_v2",
+    enable_pubmed=True,
+)
+
+E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24 = SubmissionProfile(
+    name="npj_dm_e1_demo_live_pubmed_dev",
+    version="20260824",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.locked_at,
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
+    enable_pubmed=True,
+)
+
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24,
+    version="20260903",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.expected_concept_dict_sha
+    ),
+)
+
+E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03 = replace(
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24,
+    version="20260903",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.expected_concept_dict_sha
+    ),
+)
+
+CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF = (
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03.ref
+)
+CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF = (
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03.ref
+)
 
 DEV9_AI_REVIEWED_DEMO_2026_08_22 = SubmissionProfile(
     name="npj_dm_dev9_demo_dev",
@@ -530,7 +651,92 @@ DEV9_AI_REVIEWED_DEMO_2026_08_22 = SubmissionProfile(
     planner_strategy="progressive_v2",
 )
 
-CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF = DEV9_AI_REVIEWED_DEMO_2026_08_22.ref
+DEV9_AI_REVIEWED_DEMO_2026_08_24 = SubmissionProfile(
+    name="npj_dm_dev9_demo_dev",
+    version="20260824",
+    locked_at="2026-08-24T00:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive replacement for the archived 20260822 Dev9 coordinate. It keeps
+    # every execution/provider/scientific setting unchanged and only makes live
+    # PubMed retrieval an explicit, replayable preplan authority.
+    expected_concept_dict_sha=(
+        DEV9_AI_REVIEWED_DEMO_2026_08_22.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        DEV9_AI_REVIEWED_DEMO_2026_08_22.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=True,
+    allow_curated_mvp_know_how=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
+    enable_pubmed=True,
+)
+
+CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF = DEV9_AI_REVIEWED_DEMO_2026_08_24.ref
+
+QUALIFICATION12_LITERATURE_DESIGN_2026_08_25 = SubmissionProfile(
+    name="npj_dm_qualification12_design_dev",
+    version="20260825",
+    locked_at="2026-08-25T00:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=(
+        DEV9_AI_REVIEWED_DEMO_2026_08_24.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        DEV9_AI_REVIEWED_DEMO_2026_08_24.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=True,
+    allow_curated_mvp_know_how=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
+    enable_pubmed=True,
+    require_human_plan_review=True,
+    require_literature_design_authority=True,
+)
+
+CURRENT_QUALIFICATION12_LITERATURE_DESIGN_PROFILE_REF = (
+    QUALIFICATION12_LITERATURE_DESIGN_2026_08_25.ref
+)
+
+QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25 = replace(
+    QUALIFICATION12_LITERATURE_DESIGN_2026_08_25,
+    name="npj_dm_qualification12_design_canary_dev",
+    locked_at="2026-08-25T12:00:00-04:00",
+    planner_only=True,
+    # The canary consumes the reviewed, digest-bound seed pack. Repeating a
+    # live search here could introduce comparison sources without full-text
+    # cards and would test retrieval drift instead of literature-to-design use.
+    enable_pubmed=False,
+)
+
+QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25 = replace(
+    QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25,
+    name="npj_dm_qualification12_design_outline_canary_dev",
+    locked_at="2026-08-25T15:30:00-04:00",
+    development_stop_after_planner_outline=True,
+)
+
+CURRENT_QUALIFICATION12_LITERATURE_DESIGN_CANARY_PROFILE_REF = (
+    QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25.ref
+)
 
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     name="npj_dm_know_how_dev",
@@ -641,10 +847,36 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19
     ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03
+    ),
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
     E1_REVIEWED_DEMO_2026_08_19.ref: E1_REVIEWED_DEMO_2026_08_19,
+    E1_REVIEWED_DEMO_2026_09_03.ref: E1_REVIEWED_DEMO_2026_09_03,
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24
+    ),
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24.ref: (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24
+    ),
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03
+    ),
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03.ref: (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03
+    ),
     DEV9_AI_REVIEWED_DEMO_2026_08_22.ref: DEV9_AI_REVIEWED_DEMO_2026_08_22,
+    DEV9_AI_REVIEWED_DEMO_2026_08_24.ref: DEV9_AI_REVIEWED_DEMO_2026_08_24,
+    QUALIFICATION12_LITERATURE_DESIGN_2026_08_25.ref: (
+        QUALIFICATION12_LITERATURE_DESIGN_2026_08_25
+    ),
+    QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25.ref: (
+        QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25
+    ),
+    QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25.ref: (
+        QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25
+    ),
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -825,6 +1057,46 @@ def require_profile_planner_strategy(
         )
 
 
+def require_profile_pubmed_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+) -> None:
+    """Keep live bibliographic retrieval profile-owned and replay-safe."""
+
+    if name is None:
+        return
+    ref = f"{name}/{version}"
+    expected = bool(get_submission_profile(ref).enable_pubmed)
+    if bool(enabled) != expected:
+        raise ValueError(
+            "Live PubMed retrieval changes run-bound literature evidence and "
+            f"must match the submission profile; profile {ref!r} pins "
+            f"enable_pubmed={expected}"
+        )
+
+
+def require_profile_literature_design_authority_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+) -> None:
+    """Keep the strict literature-to-design gate profile-owned."""
+
+    if name is None:
+        return
+    ref = f"{name}/{version}"
+    expected = bool(get_submission_profile(ref).require_literature_design_authority)
+    if bool(enabled) != expected:
+        raise ValueError(
+            "Literature-to-design authority changes planning and Provider call "
+            f"eligibility and must match the submission profile; profile {ref!r} "
+            f"pins require_literature_design_authority={expected}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -838,11 +1110,27 @@ __all__ = [
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03",
     "E1_REVIEWED_DEMO_2026_08_15",
     "E1_REVIEWED_DEMO_2026_08_17",
     "E1_REVIEWED_DEMO_2026_08_19",
+    "E1_REVIEWED_DEMO_2026_09_03",
     "CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF",
     "CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF",
+    "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24",
+    "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24",
+    "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03",
+    "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03",
+    "CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF",
+    "CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF",
+    "DEV9_AI_REVIEWED_DEMO_2026_08_22",
+    "DEV9_AI_REVIEWED_DEMO_2026_08_24",
+    "CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF",
+    "QUALIFICATION12_LITERATURE_DESIGN_2026_08_25",
+    "CURRENT_QUALIFICATION12_LITERATURE_DESIGN_PROFILE_REF",
+    "QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25",
+    "QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25",
+    "CURRENT_QUALIFICATION12_LITERATURE_DESIGN_CANARY_PROFILE_REF",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
@@ -856,4 +1144,6 @@ __all__ = [
     "require_profile_reviewed_memory_setting",
     "require_profile_capability_workflow_setting",
     "require_profile_planner_strategy",
+    "require_profile_pubmed_setting",
+    "require_profile_literature_design_authority_setting",
 ]

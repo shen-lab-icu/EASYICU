@@ -139,6 +139,16 @@ class BaseICULoader:
                         'vitalPeriodic.parquet',
                         'vitalPeriodic.csv',
                     ],
+                    # The official eICU demo is converted into the same
+                    # prepared-table layout as a full eICU source.  Keep the
+                    # demo identity, but validate it with the eICU markers.
+                    'eicu_demo': [
+                        'patient.parquet',
+                        'patient.csv',
+                        'patient.csv.gz',
+                        'vitalPeriodic.parquet',
+                        'vitalPeriodic.csv',
+                    ],
                     'hirid': [
                         'general.csv',
                         'general_table.csv',

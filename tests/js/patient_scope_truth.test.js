@@ -1,4 +1,4 @@
-/* Executable contract for Patient Review scope and unknown-coverage rendering. */
+/* Executable contract for Patient Review quality and missingness truth. */
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -18,29 +18,26 @@ const helpers = {
 };
 
 const drill = {
-  summary: {
-    entities: 94458,
-    review_entities: 500,
-    review_entity_cap: 500,
-    review_scope: 'browser_bounded_entity_sample',
+  quality_metrics: {
+    summary: {
+      total_records: 1000400,
+      weighted_duplicate_time_pct: 0.2,
+      weighted_out_of_physio_pct: 0.1,
+    },
+    features: [
+      { feature: 'heart_rate', module: 'vitals', missing_pct: 20, records: 400 },
+      { feature: 'creatinine', module: 'labs', missing_pct: 35, records: 1000000 },
+      { feature: 'sepsis3', module: 'outcome', missing_pct: 90, records: 500 },
+    ],
   },
-  module_profiles: [
-    { module: 'vitals', label: 'Vitals', entities: 400, coverage_pct: 80, feature_count: 4 },
-    { module: 'labs', label: 'Laboratory', entities: null, coverage_pct: null, feature_count: 8, rows: 1000000 },
-  ],
-  quality: [
-    { module: 'vitals', metric_kind: 'coverage', entities: 400, coverage_pct: 80, quality_status: 'ok' },
-    { module: 'labs', metric_kind: 'coverage', entities: null, coverage_pct: null, quality_status: 'unknown' },
-  ],
 };
 
 const html = global.EU_PATIENT_OVERVIEW.renderQualityAudit({ drill }, helpers);
-assert.match(html, /500 reviewed \/ 94,458 full/);
-assert.match(html, /400 \/ 500/);
-assert.doesNotMatch(html, /400 \/ 94,458/);
-assert.match(html, /1 modules have inventory metadata only/);
-assert.doesNotMatch(html, /data-patient-missingness-module="labs"/);
+assert.match(html, /Feature-level missingness and observation volume/);
+assert.match(html, /1,000,400 records audited/);
+assert.match(html, /heart_rate: 20% missing, 400 records/);
+assert.match(html, /creatinine: 35% missing, 1000000 records/);
+assert.doesNotMatch(html, /sepsis3/);
 assert.doesNotMatch(html, /coverage across all selected entities/);
-assert.doesNotMatch(html, /Laboratory[\s\S]{0,300}100\.0%/);
 
 process.stdout.write(JSON.stringify({ ok: true }));

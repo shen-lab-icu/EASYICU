@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Sequence
 
 from .product_files import KNOWN_FILE_SUFFIXES
 
@@ -59,11 +60,75 @@ def typed_product(value: object) -> tuple[str, str] | None:
     return canonical_kind, product_name
 
 
+def normalised_expected_output_names(
+    expected_outputs: Sequence[str] | str,
+) -> set[str]:
+    """Return representation-agnostic names from declared outputs."""
+
+    values = (
+        re.split(r"[\s,]+", expected_outputs)
+        if isinstance(expected_outputs, str)
+        else [str(value or "") for value in (expected_outputs or [])]
+    )
+    names: set[str] = set()
+    for raw in values:
+        value = str(raw or "").strip().lower()
+        if not value:
+            continue
+        name = value.split(":", 1)[-1].rsplit("/", 1)[-1]
+        names.add(
+            re.sub(r"\.(?:csv|json|parquet|png|svg|pdf|tiff?)$", "", name)
+        )
+    return names
+
+
+_STRUCTURED_CONTRACT_OUTPUT_KINDS = frozenset(
+    {"", "statistic", "table", "model", "manifest", "dataset", "artifact"}
+)
+
+
+def normalised_structured_output_names(
+    expected_outputs: Sequence[str] | str,
+) -> set[str]:
+    """Return names only for outputs that carry structured plan authority."""
+
+    values = (
+        re.split(r"[\s,]+", expected_outputs)
+        if isinstance(expected_outputs, str)
+        else [str(value or "") for value in (expected_outputs or [])]
+    )
+    names: set[str] = set()
+    for raw in values:
+        value = str(raw or "").strip().lower()
+        if not value:
+            continue
+        parsed = typed_product(value)
+        if parsed is not None and parsed[0] in _STRUCTURED_CONTRACT_OUTPUT_KINDS:
+            names.add(parsed[1])
+            continue
+        kind, separator, product = value.partition(":")
+        if separator and kind not in _STRUCTURED_CONTRACT_OUTPUT_KINDS:
+            continue
+        name = (product if separator else kind).rsplit("/", 1)[-1]
+        names.add(re.sub(r"\.(?:csv|json|parquet)$", "", name))
+    return names
+
+
+def normalised_method_head(method: str) -> str:
+    """Return the normalized method head before an optional ``with`` rider."""
+
+    normalized = normalize_product_token(method)
+    return normalized.split("_with_", 1)[0]
+
+
 __all__ = [
     "CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN",
     "FIGURE_KIND_ALIASES",
     "canonical_product_kind",
     "is_canonical_typed_product_token",
     "normalize_product_token",
+    "normalised_expected_output_names",
+    "normalised_method_head",
+    "normalised_structured_output_names",
     "typed_product",
 ]

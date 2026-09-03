@@ -81,4 +81,40 @@ assert.equal(renderer.fmtCount(null), '—', 'missing denominators must not rend
 assert.equal(renderer.fmtCount(undefined), '—');
 assert.equal(renderer.fmtCount(''), '—');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 7 }));
+const manuscriptReader = renderer.manuscriptProvenanceView({
+  schema_version: 'easyicu.manuscript-provenance/1',
+  article_blocks: [{
+    kind: 'paragraph',
+    segments: [
+      { kind: 'text', text: '**Results:** <img src=x onerror="globalThis.pwned=4"> [research_context] [@paper_key]' },
+      { kind: 'claim', text: '0.5', claim_id: 'claim_1" onclick="globalThis.pwned=5' },
+    ],
+  }],
+  claims: [{
+    claim_id: 'claim_1" onclick="globalThis.pwned=5',
+    display_value: '0.5',
+    source_value: '0.5',
+    source_field: 'runtime.spline_knot_quantiles[1]',
+    source_json_pointer: '/runtime/spline_knot_quantiles[1]',
+    step_id: 'primary',
+    evidence: { evidence_id: 'summary', sha256: 'a'.repeat(64) },
+    related_artifacts: [],
+  }],
+});
+assert.ok(manuscriptReader.includes('data-gpi-claim='), 'bound numbers must be interactive');
+assert.match(
+  manuscriptReader,
+  /class="gpi-bound-number"[^>]*data-gpi-evidence-open[^>]*data-evidence-id="summary"[^>]*data-evidence-sha256="a{64}"/,
+  'bound numbers with valid evidence must open the exact result preview directly',
+);
+assert.ok(manuscriptReader.includes('open its exact result evidence preview'), 'reader must explain the primary click action');
+assert.ok(manuscriptReader.includes('JSON field'), 'reader must expose the exact JSON field');
+assert.ok(manuscriptReader.includes('Open registered evidence'), 'reader must expose execution lineage');
+assert.ok(manuscriptReader.includes('data-gpi-evidence-open'), 'registered evidence must be actionable');
+assert.ok(manuscriptReader.includes('<strong>Results:</strong>'), 'readable prose must render basic emphasis');
+assert.ok(manuscriptReader.includes('class="gpi-reader-citation"'), 'literature bindings need a readable citation marker');
+assert.ok(!manuscriptReader.includes('[research_context]'), 'internal evidence ids must stay out of readable prose');
+assert.ok(!manuscriptReader.includes('<img src=x'), 'article text must be escaped');
+assert.ok(!manuscriptReader.includes('onclick="globalThis.pwned=5'), 'claim ids must not create handlers');
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 12 }));

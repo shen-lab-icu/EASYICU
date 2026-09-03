@@ -45,6 +45,12 @@ _REQUIRED_COLUMNS = (
     "n_excluded",
     "n_remaining",
 )
+_MODEL_FLOW_REQUIRED_COLUMNS = (
+    "stage",
+    "n",
+    "excluded_from_previous",
+    "population_rule",
+)
 _PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
 
 
@@ -59,18 +65,37 @@ def _figure_product(value: Any) -> str | None:
     return product
 
 
-def _binding_is_cohort_flow(binding: Any) -> bool:
+def _population_flow_input(step: AnalysisStep) -> str | None:
+    if len(step.inputs) != 1:
+        return None
+    input_key = str(step.inputs[0])
+    kind, separator, product = input_key.partition(":")
+    if kind != "table" or not separator:
+        return None
+    if product != "cohort_flow" and not product.endswith("population_flow"):
+        return None
+    return input_key
+
+
+def _binding_is_cohort_flow(binding: Any, *, input_key: str) -> bool:
     if not isinstance(binding, Mapping):
         return False
     contract = binding.get("product_contract")
     consumption = binding.get("consumption_contract")
     columns = contract.get("columns") if isinstance(contract, Mapping) else None
+    product = input_key.partition(":")[2]
+    supported_columns = bool(
+        isinstance(columns, list)
+        and (
+            set(_REQUIRED_COLUMNS).issubset(set(columns))
+            or set(_MODEL_FLOW_REQUIRED_COLUMNS).issubset(set(columns))
+        )
+    )
     return bool(
         binding.get("declared_kind") == "table"
         and binding.get("evidence_kind") == "table"
-        and binding.get("product") == "cohort_flow"
-        and isinstance(columns, list)
-        and set(_REQUIRED_COLUMNS).issubset(set(columns))
+        and binding.get("product") == product
+        and supported_columns
         and isinstance(consumption, Mapping)
         and consumption.get("mode") == "all_rows"
     )
@@ -85,27 +110,31 @@ def cohort_flow_figure_executor_owns_step(
 
     products = [_figure_product(value) for value in step.expected_outputs]
     contracts = list(step.input_consumption_contracts or [])
+    source_input = _population_flow_input(step)
     return bool(
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and list(step.inputs) == [COHORT_FLOW_INPUT]
+        and source_input is not None
         and len(products) == 1
         and products[0] is not None
         and len(contracts) == 1
-        and contracts[0].input_key == COHORT_FLOW_INPUT
+        and contracts[0].input_key == source_input
         and contracts[0].mode == "all_rows"
         and not step.model_requirements
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
         and step.exposure_outcome_distribution_spec is None
         and isinstance(resolved_bindings, Mapping)
-        and set(resolved_bindings) == {COHORT_FLOW_INPUT}
-        and _binding_is_cohort_flow(resolved_bindings.get(COHORT_FLOW_INPUT))
+        and set(resolved_bindings) == {source_input}
+        and _binding_is_cohort_flow(
+            resolved_bindings.get(source_input), input_key=source_input
+        )
     )
 
 
 def cohort_flow_figure_executor_code(step: AnalysisStep) -> str:
-    if list(step.inputs) != [COHORT_FLOW_INPUT] or len(step.expected_outputs) != 1:
+    source_input = _population_flow_input(step)
+    if source_input is None or len(step.expected_outputs) != 1:
         raise ValueError("cohort-flow figure requires its one exact input and output")
     product = _figure_product(step.expected_outputs[0])
     if product is None:
@@ -125,6 +154,7 @@ def cohort_flow_figure_executor_code(step: AnalysisStep) -> str:
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            source_input={source_input!r},
         )
         """
     ).strip()
@@ -143,6 +173,7 @@ def _load_binding(
     run_dir: Path,
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
+    source_input: str,
 ) -> tuple[Path, Mapping[str, Any]]:
     payload = (
         dict(resolved_inputs)
@@ -152,10 +183,10 @@ def _load_binding(
     inputs = payload.get("inputs") if isinstance(payload, Mapping) else None
     if payload.get("step_id") != step_id or not isinstance(inputs, Mapping):
         raise ValueError("resolved-input manifest does not belong to this step")
-    if set(inputs) != {COHORT_FLOW_INPUT}:
+    if set(inputs) != {source_input}:
         raise ValueError("cohort-flow input binding is absent or widened")
-    binding = inputs[COHORT_FLOW_INPUT]
-    if not _binding_is_cohort_flow(binding):
+    binding = inputs[source_input]
+    if not _binding_is_cohort_flow(binding, input_key=source_input):
         raise ValueError("cohort-flow input has no supported host contract")
     expected_sha = str(binding.get("sha256") or "")
     relative_path = binding.get("relative_path")
@@ -165,8 +196,8 @@ def _load_binding(
         or not isinstance(relative_path, str)
         or not relative_path
         or not isinstance(identity, Mapping)
-        or identity.get("input_key") != COHORT_FLOW_INPUT
-        or identity.get("product") != "cohort_flow"
+        or identity.get("input_key") != source_input
+        or identity.get("product") != source_input.partition(":")[2]
         or identity.get("sha256") != expected_sha
     ):
         raise ValueError("cohort-flow authority binding is incomplete")
@@ -195,6 +226,35 @@ def _verified_flow(path: Path, binding: Mapping[str, Any]) -> pd.DataFrame:
         or len(frame) != expected_rows
     ):
         raise ValueError("cohort-flow bytes disagree with their contract")
+    if set(_MODEL_FLOW_REQUIRED_COLUMNS).issubset(frame.columns):
+        counts = pd.to_numeric(frame["n"], errors="coerce")
+        excluded = pd.to_numeric(frame["excluded_from_previous"], errors="coerce")
+        if (
+            counts.isna().any()
+            or excluded.isna().any()
+            or (counts < 0).any()
+            or (excluded < 0).any()
+            or not (counts % 1 == 0).all()
+            or not (excluded % 1 == 0).all()
+        ):
+            raise ValueError("model population flow contains invalid counts")
+        counts = counts.astype("int64")
+        excluded = excluded.astype("int64")
+        labels = frame["stage"].fillna("").astype(str).str.strip()
+        rules = frame["population_rule"].fillna("").astype(str).str.strip()
+        if labels.eq("").any() or rules.eq("").any() or labels.duplicated().any():
+            raise ValueError("model population flow contains invalid stage semantics")
+        before = counts.shift(1, fill_value=int(counts.iloc[0])).astype("int64")
+        if int(excluded.iloc[0]) != 0 or not (before - excluded).eq(counts).all():
+            raise ValueError("model population flow denominator arithmetic failed")
+        frame = frame.assign(
+            step_order=range(len(frame)),
+            predicate_kind=labels,
+            n_before=before,
+            n_excluded=excluded,
+            n_remaining=counts,
+        )
+
     numeric: dict[str, pd.Series] = {}
     for column in ("step_order", "n_before", "n_excluded", "n_remaining"):
         values = pd.to_numeric(frame[column], errors="coerce")
@@ -235,9 +295,36 @@ def _accounting_completeness(frame: pd.DataFrame) -> str:
     )
 
 
+def _unfiltered_universe(frame: pd.DataFrame) -> bool:
+    """Is the single stage the whole bound universe, with nothing excluded?
+
+    A one-row ledger has two very different causes and the figure used to
+    report only the pessimistic one. When the row IS the universe row and it
+    excluded nobody, the ledger is not missing upstream attrition -- it is
+    recording that no eligibility filter was applied, so every bound input row
+    is the analysis cohort. Saying "upstream attrition unavailable" there
+    reports a gap that does not exist and hides the fact a reader most needs:
+    this study declared no inclusion or exclusion criterion.
+    """
+
+    if len(frame) != 1:
+        return False
+    row = frame.iloc[0]
+    if str(row.get("predicate_kind") or "").strip().casefold() != "universe":
+        return False
+    try:
+        return int(row.get("n_excluded") or 0) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
     if not complete:
-        return ["Analysis denominator only"]
+        return [
+            "All bound input rows"
+            if _unfiltered_universe(frame)
+            else "Analysis denominator only"
+        ]
     labels: list[str] = []
     for index, row in frame.iterrows():
         kind = str(row.get("predicate_kind") or "").strip()
@@ -263,6 +350,7 @@ def run_cohort_flow_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    source_input: str = COHORT_FLOW_INPUT,
 ) -> dict[str, Any]:
     """Verify and render every row in the canonical cohort-flow artifact."""
 
@@ -274,10 +362,12 @@ def run_cohort_flow_figure(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
         step_id=step_id,
+        source_input=source_input,
     )
     frame = _verified_flow(path, binding)
     completeness = _accounting_completeness(frame)
     complete = completeness == COHORT_ACCOUNTING_COMPLETE
+    unfiltered_universe = (not complete) and _unfiltered_universe(frame)
     display_labels = _display_labels(frame, complete=complete)
     source = frame.copy()
     source.insert(0, "accounting_completeness", completeness)
@@ -317,38 +407,51 @@ def run_cohort_flow_figure(
                 fontsize=7,
             )
     else:
+        # A ONE-STAGE FLOW IS STILL A FLOW.
+        #
+        # This branch used to switch the axes off and centre three lines of
+        # text, so a manuscript figure slot shipped a caption card. The stage
+        # is real and countable, so it is drawn on the same axis the
+        # multi-stage ledger uses; what changes is only how many stages there
+        # are, and the note underneath says which of the two one-row cases
+        # this is.
         denominator = int(frame.iloc[0]["n_remaining"])
-        ax.set_axis_off()
-        ax.text(
-            0.5,
-            0.68,
-            "Analysis denominator only",
-            ha="center",
-            va="center",
-            fontsize=11,
-            fontweight="bold",
-            color=PALETTE_CLINICAL["baseline"],
-            transform=ax.transAxes,
+        unfiltered = unfiltered_universe
+        # A lone bar drawn at the multi-stage height fills the panel; keep it
+        # at the thickness a stage has when the ledger has several.
+        bar = ax.barh(
+            [0], [denominator], height=0.42, color=PALETTE_CLINICAL["blue"]
+        )[0]
+        ax.set_yticks([0])
+        ax.set_yticklabels(display_labels)
+        ax.set_ylim(-0.9, 0.9)
+        ax.invert_yaxis()
+        ax.set_xlabel("ICU stays remaining")
+        ax.set_title(
+            "Cohort accounting · single stage",
+            loc="left",
         )
-        ax.text(
-            0.5,
-            0.47,
-            f"n = {denominator:,} ICU stays",
-            ha="center",
+        ax.grid(axis="x", color=PALETTE_CLINICAL["neutral_light"], linewidth=0.6)
+        ax.annotate(
+            f"{denominator:,}",
+            (bar.get_width(), bar.get_y() + bar.get_height() / 2),
+            xytext=(5, 0),
+            textcoords="offset points",
             va="center",
-            fontsize=16,
-            color=PALETTE_CLINICAL["blue"],
-            transform=ax.transAxes,
+            fontsize=7,
         )
-        ax.text(
-            0.5,
-            0.27,
-            "Upstream attrition unavailable",
-            ha="center",
-            va="center",
-            fontsize=8,
+        ax.annotate(
+            "No eligibility filter was applied: every bound input row is the\n"
+            "analysis cohort."
+            if unfiltered
+            else "Upstream eligibility and attrition are not recorded in the\n"
+            "bound ledger.",
+            xy=(0.0, -0.24),
+            xycoords="axes fraction",
+            va="top",
+            ha="left",
+            fontsize=7,
             color=PALETTE_CLINICAL["neutral"],
-            transform=ax.transAxes,
         )
     fig.tight_layout()
     contract = make_figure_contract(
@@ -357,8 +460,16 @@ def run_cohort_flow_figure(
             "The figure reproduces the sequential source-to-final denominator "
             "ledger from the digest-verified cohort-flow table."
             if complete
-            else "The bound cohort-flow table proves only the final analysis "
-            "denominator; upstream eligibility and attrition are unavailable."
+            else (
+                "The bound cohort-flow table records one stage: no eligibility "
+                "filter was applied, so every bound input row is the analysis "
+                "cohort. Attrition upstream of the bound universe is outside "
+                "this ledger."
+                if unfiltered_universe
+                else "The bound cohort-flow table proves only the final "
+                "analysis denominator; upstream eligibility and attrition are "
+                "unavailable."
+            )
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -367,7 +478,13 @@ def run_cohort_flow_figure(
             {
                 "panel_id": COHORT_FLOW_FIGURE_PANELS[0].panel_id,
                 "title": (
-                    "Cohort accounting" if complete else "Analysis denominator only"
+                    "Cohort accounting"
+                    if complete
+                    else (
+                        "Cohort accounting · single stage"
+                        if unfiltered_universe
+                        else "Analysis denominator only"
+                    )
                 ),
                 "role": COHORT_FLOW_FIGURE_PANELS[0].article_role,
                 "claim": (
@@ -388,7 +505,7 @@ def run_cohort_flow_figure(
                     "article_role": COHORT_FLOW_FIGURE_PANELS[0].article_role,
                     "chart_type": COHORT_FLOW_FIGURE_PANELS[0].chart_type,
                     "source_products": list(
-                        COHORT_FLOW_FIGURE_PANELS[0].source_products
+                        (source_input,)
                     ),
                     "source_data": [source_path.name],
                     "accounting_completeness": completeness,
@@ -424,7 +541,7 @@ def run_cohort_flow_figure(
         "analysis_family": "descriptive",
         "deterministic_standard_analysis": "cohort_flow_figure",
         "rendering_only": True,
-        "source_input": COHORT_FLOW_INPUT,
+        "source_input": source_input,
         "source_step_id": binding.get("produced_by_step"),
         "source_evidence_id": binding.get("evidence_id"),
         "source_sha256": binding.get("sha256"),
@@ -437,7 +554,7 @@ def run_cohort_flow_figure(
         ),
         "input_bindings": [
             {
-                "input_key": COHORT_FLOW_INPUT,
+                "input_key": source_input,
                 "evidence_id": binding.get("evidence_id"),
                 "sha256": binding.get("sha256"),
                 "loaded": True,

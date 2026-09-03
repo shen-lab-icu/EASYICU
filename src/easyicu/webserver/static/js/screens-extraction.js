@@ -1,4 +1,4 @@
-/* Screens: Entry + Data Extraction (redesigned, bilingual).
+/* Screen: Data Extraction (redesigned, bilingual).
    Extraction is simplified from a 4-step wizard into:
      • an Express "recommended extraction" one-click path (the 80% case)
      • a single-page Custom panel with smart defaults + progressive disclosure
@@ -6,262 +6,12 @@
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
 
-  /* ---------------- ENTRY / home ---------------- */
-  function homeDataMode() { return window.EU_DATA || 'demo'; }
-  // Route through the canonical setDataMode so a Demo<->Real flip invalidates the
-  // downstream viz/cohort/patient/extraction workspaces, marks them stale, and —
-  // when the user already has work — shows the confirm-before-switch guard. The
-  // old direct EU_DATA write skipped all of that and left stale workspaces bound
-  // to the wrong data source.
-  function setHomeData(m) {
-    if (window.setDataMode) { window.setDataMode(m); return; }
-    window.EU_DATA = m; try { localStorage.setItem('easyicu_home_data', m); } catch (e) {}
-  }
-
-  const HOME_BRANCH_GOALS = Object.freeze({
-    predict: 'Model an outcome',
-    crossdb: 'Compare databases',
-    quality: 'Audit data quality',
-  });
-  const RESUME_ROUTE_ALLOWLIST = new Set(['guided', 'ideas', 'extraction', 'patient', 'cohort', 'crossdb', 'agent']);
-  const LEGACY_RESUME_ROUTES = Object.freeze({ predict: 'patient', crossdb: 'crossdb', quality: 'cohort' });
-  let homeQuestionDraft = '';
-
-  function startHomeStudy(route, patch) {
-    const store = window.EU_STUDY_CONTEXT;
-    if (!store || typeof store.startNew !== 'function') return;
-    store.startNew(Object.assign({
-      last_route: route,
-      current_stage: 'study_setup',
-    }, patch || {}), { reason: 'home-new-study' });
-  }
-
-  function launchCopilot(text, branchHint) {
-    const question = String(text || '').trim();
-    const analysisGoal = question || HOME_BRANCH_GOALS[branchHint] || '';
-    startHomeStudy('guided', { question, analysis_goal: analysisGoal });
-    try {
-      window.__cpBridge = { ts: Date.now(), route: 'entry', lastUser: question || null, dataMode: homeDataMode(), branchHint: branchHint || null };
-    } catch (e) {}
-    location.hash = '#guided';
-  }
-
-  function homeHeader() {
-    return `
-      <header class="entry-top">
-        <div class="row gap-12">
-          <div class="mark">${icon('flask', 18)}</div>
-          <div>
-            <div class="name" style="font-size:16px;font-weight:600;letter-spacing:-0.01em;">EasyICU</div>
-            <div class="tag" style="font-size:11px;color:var(--ink-4);">${t('ICU data research workspace', 'ICU 数据研究工作台')}</div>
-          </div>
-        </div>
-        <div class="row gap-10">
-          <div class="lang-seg" role="group" aria-label="Language">
-            <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
-            <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh" aria-pressed="${window.EU_LANG === 'zh'}">中</button>
-          </div>
-          <span class="mono" style="font-size:11px;color:var(--ink-4);">v1.0 · py3.10+</span>
-        </div>
-      </header>`;
-  }
-
-  S.entry = {
-    section: 'entry',
-    full: true,
-    render() {
-      const dm = homeDataMode();
-      const inner = `
-        <div class="home-inner" style="max-width:1180px;">
-          <h1 class="home-h1">${t('Welcome to EasyICU', '欢迎使用 EasyICU')}</h1>
-          <p class="home-sub">${t('Start from what you already have: a paper or topic, a clear research question, or local ICU data. EasyICU keeps the study local and carries its context between modules.', '从你已有的内容开始：文章或主题、明确的研究问题，或本地 ICU 数据。EasyICU 全程在本地运行，并在模块之间延续同一研究上下文。')}</p>
-          <div class="home-split">
-            <div class="home-col col-copilot">
-              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('I have a clear research question', '我有明确的研究问题')}</div><div class="col-sub">${t('Guided Copilot · describe it in one sentence', '研究引导 · 用一句话描述')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
-              <div class="col-body">
-                <p class="col-lead">${t('Guided Copilot collects the cohort, outcome, time window, modules, and export settings in the conversation before anything runs.', '研究引导会先在对话中收集队列、结局、时间窗、模块和导出设置，再开始运行。')}</p>
-                <div class="col-prompt">
-                  <textarea class="hp-input" id="homeInput" rows="3" placeholder="${t('e.g. Among Sepsis-3 patients, does early lactate predict in-hospital mortality, and does adding it to SOFA improve the model?', '例如:在脓毒症(Sepsis-3)患者中,早期乳酸能否预测院内死亡?把它加入 SOFA 是否提升模型?')}" autocomplete="off" aria-label="${t('Describe your study', '描述你的研究')}">${escHtml(homeQuestionDraft)}</textarea>
-                  <div class="hp-bar">
-                    <span class="hp-hint">${icon('shield', 12)} ${t('local-only · nothing uploaded', '仅本地 · 不上传')}</span>
-                    <button type="button" class="hp-send" id="homeSend" aria-label="${t('Start Guided Copilot', '开始研究引导')}">${icon('arrow', 17)}</button>
-                  </div>
-                </div>
-                <div class="col-chips">
-                  <span class="cc-lead">${t('or start from a question type', '或选一种研究类型')}</span>
-                  <button type="button" class="home-chip" data-hbranch="predict">${t('Model an outcome', '结局建模')}</button>
-                  <button type="button" class="home-chip" data-hbranch="crossdb">${t('Compare databases', '跨库比较')}</button>
-                  <button type="button" class="home-chip" data-hbranch="quality">${t('Audit data quality', '数据质量审计')}</button>
-                </div>
-              </div>
-            </div>
-            <div class="home-col col-classic">
-              <div class="col-head"><div class="col-mk">${icon('grid', 17)}</div><div><div class="col-t">${t('Classic Workspace', '经典工作台')}</div><div class="col-sub">${t('drive it yourself · for when you know the steps', '自己操作 · 熟悉流程后使用')}</div></div></div>
-              <div class="col-body">
-                <p class="col-lead">${t('Choose the entry that matches what you already have.', '按照你已经拥有的材料选择入口。')}</p>
-                <div class="col-entries">
-                  ${[
-                    ['ideas', 'target', t('I have a paper or topic', '我有文章或研究主题'), t('Mine a feasible question in Idea Mining', '在想法挖掘中形成可行问题'), 'ideas'],
-                    ['extraction', 'extract', t('I have local ICU data', '我有本地 ICU 数据'), t('Validate and extract analysis-ready tables', '校验并抽取可分析数据表'), 'extraction'],
-                    ['patient', 'viz', t('Patient Review', '患者审阅'), t('Review patients, tables, and trends from an export', '审阅导出中的患者、表格与趋势'), ''],
-                    ['agent', 'agent', t('Project Monitor', '项目监控'), t('Review runs, outputs, evidence, and sign-off', '查看运行、产出、证据与签署'), ''],
-                  ].map(([nav, ic, ti, d, newStudy]) => `
-                    <button type="button" class="col-entry" data-nav="${nav}" ${newStudy ? `data-home-new-study="${newStudy}"` : ''}>
-                      <span class="ce-ico">${icon(ic, 15)}</span>
-                      <span><span class="ce-t">${ti}</span><span class="ce-d">${d}</span></span>
-                      <span class="ce-go">${icon('arrow', 14)}</span>
-                    </button>`).join('')}
-                </div>
-                <div class="col-foot">
-                  <div class="home-datamode">
-                    <span class="hdm-lab">${t('Data', '数据')}</span>
-                    <div class="seg home-data-seg" id="homeData" role="group" aria-label="${t('Data mode', '数据模式')}">
-                      <button type="button" class="${dm === 'demo' ? 'on' : ''}" data-hd="demo" aria-pressed="${dm === 'demo'}">${t('Demo', '演示')}</button>
-                      <button type="button" class="${dm === 'real' ? 'on' : ''}" data-hd="real" aria-pressed="${dm === 'real'}">${t('Real', '真实')}</button>
-                    </div>
-                    <span class="col-dataline">${icon('shield', 12)} ${dm === 'demo' ? t('Demo data · reproducible', '演示数据 · 可复现') : t('Real data · local-only', '真实数据 · 仅本地')}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div id="resumeSlot" class="home-resume"></div>
-          <div class="entry-journey">
-            <div class="ej-cap">${t('The research journey · 4 steps', '研究旅程 · 四步')}</div>
-            <div class="ej-track">
-              ${[
-                ['1', t('Frame', '框定'), t('the question', '研究问题'), 'guided'],
-                ['2', t('Extract', '抽取'), t('the data', '数据'), 'extraction'],
-                ['3', t('Review', '审阅'), t('& explore', '与探索'), 'patient'],
-                ['4', t('Analyze', '分析'), t('& draft', '与撰稿'), 'guided'],
-              ].map((n, i) => `
-                ${i > 0 ? '<div class="ej-conn"></div>' : ''}
-                <button type="button" class="ej-node" data-nav="${n[3]}" title="${t('Go to this step', '前往这一步')}"><div class="ej-num">${n[0]}</div><div><div class="ej-lab">${n[1]}</div><div class="ej-sub">${n[2]}</div></div></button>`).join('')}
-            </div>
-            <div class="ej-foot">${t('Plan → extract → review → analyze, with the same study context carried forward.', '计划 → 抽取 → 审阅 → 分析，全程延续同一研究上下文。')}</div>
-          </div>
-          <div class="entry-firsttime" id="firstTimeNudge" hidden>
-            <span class="ft-ico">${icon('play', 13)}</span>
-            <span>${t('Want to explore first?', '想先体验一下？')} <b>${t('Try the 2-minute demo', '试用 2 分钟演示')}</b> ${t('— no setup or data required.', '—— 无需配置或自备数据。')}</span>
-            <button type="button" class="ft-go" data-firsttime>${t('Start the tour', '开始引导')} ${icon('arrow', 13)}</button>
-            <button type="button" class="ft-x" data-firsttime-dismiss aria-label="${t('Dismiss', '忽略')}">${icon('close', 13)}</button>
-          </div>
-        </div>`;
-      return `
-      <div class="entry-shell">
-        ${homeHeader()}
-        <div class="home-wrap">${inner}</div>
-      </div>`;
-    },
-    afterRender(root) {
-      const dataEl = root.querySelector('#homeData');
-      if (dataEl) dataEl.addEventListener('click', (e) => {
-        const b = e.target.closest('[data-hd]'); if (!b) return;
-        // Do NOT optimistically flip the segment here: setDataMode may open a
-        // confirm-before-switch modal (when work exists) and only applies + re-renders
-        // on confirm. Let that re-render reflect the true mode so a cancelled switch
-        // does not leave the toggle showing a mode the app never entered.
-        setHomeData(b.dataset.hd);
-      });
-      const input = root.querySelector('#homeInput');
-      const send = root.querySelector('#homeSend');
-      const ft = root.querySelector('[data-firsttime]');
-      if (ft) ft.addEventListener('click', () => { try { localStorage.setItem('easyicu_onboarded', '1'); } catch (e) {} if (window.setDataMode) window.setDataMode('demo', { force: true }); location.hash = '#tutorial'; });
-      // Keep the demo as a secondary, one-time option below the real start paths.
-      const nudge = root.querySelector('#firstTimeNudge');
-      if (nudge) {
-        let onboarded = false, hasStudy = false;
-        try { onboarded = !!localStorage.getItem('easyicu_onboarded'); } catch (e) {}
-        try { hasStudy = !!localStorage.getItem('easyicu_study'); } catch (e) {}
-        try { hasStudy = hasStudy || !!(window.EU_STUDY_CONTEXT && window.EU_STUDY_CONTEXT.active && window.EU_STUDY_CONTEXT.active()); } catch (e) {}
-        if (!onboarded && !hasStudy && !window.EU_HASWORK) nudge.hidden = false;
-        const dx = nudge.querySelector('[data-firsttime-dismiss]');
-        if (dx) dx.addEventListener('click', () => { try { localStorage.setItem('easyicu_onboarded', '1'); } catch (e) {} nudge.hidden = true; });
-      }
-      root.querySelectorAll('[data-home-new-study]').forEach(button => button.addEventListener('click', () => {
-        const target = button.dataset.homeNewStudy;
-        startHomeStudy(target, target === 'ideas' ? { purpose: 'idea_mining' } : {});
-        if (target === 'extraction' && window.setDataMode) window.setDataMode('real', { force: true });
-      }));
-      function submit() { const v = ((input && input.value) || '').trim(); launchCopilot(v || null); }
-      if (send) send.addEventListener('click', submit);
-      if (input) {
-        input.addEventListener('input', () => { homeQuestionDraft = input.value; });
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
-      }
-      root.querySelectorAll('[data-hbranch]').forEach(c => c.addEventListener('click', () => {
-        launchCopilot(null, c.dataset.hbranch);
-      }));
-      // resume banner
-      const slot = root.querySelector('#resumeSlot');
-      if (slot) {
-        let activeContext = null, legacyStudy = null;
-        try {
-          const store = window.EU_STUDY_CONTEXT;
-          activeContext = store && typeof store.active === 'function' ? store.active() : null;
-        } catch (e) {}
-        try { legacyStudy = JSON.parse(localStorage.getItem('easyicu_study') || 'null'); } catch (e) {}
-        const contextRoute = activeContext && RESUME_ROUTE_ALLOWLIST.has(activeContext.last_route) ? activeContext.last_route : null;
-        const legacyRoute = legacyStudy ? LEGACY_RESUME_ROUTES[legacyStudy.branch] : null;
-        const resumeRoute = contextRoute || legacyRoute || null;
-        const usingContext = !!contextRoute;
-        let contextDismissed = false;
-        try {
-          contextDismissed = usingContext && !!activeContext.id
-            && sessionStorage.getItem('easyicu.studyContext.resumeDismissed.v1') === activeContext.id;
-        } catch (e) {}
-        if (resumeRoute && !contextDismissed) {
-          const branchNames = { predict: t('Sepsis mortality prediction', '脓毒症死亡率预测'), crossdb: t('Cross-database comparison', '跨数据库对比'), quality: t('Data-quality audit', '数据质量审计') };
-          const routeNames = {
-            guided: t('Guided Copilot', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
-            extraction: t('Data Extraction', '数据抽取'), patient: t('Patient Review', '患者审阅'),
-            cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-database comparison', '跨库对比'),
-            agent: t('Project Monitor', '项目监控'),
-          };
-          const rawTime = usingContext ? Date.parse(activeContext.updated_at || '') : Number(legacyStudy.ts || 0);
-          const when = (function (ts) { const d = Math.max(0, Math.round((Date.now() - (Number.isFinite(ts) && ts > 0 ? ts : Date.now())) / 60000)); return d < 1 ? t('just now', '刚刚') : d < 60 ? d + t('m ago', ' 分钟前') : Math.round(d / 60) + t('h ago', ' 小时前'); })(rawTime);
-          const contextTitle = usingContext ? String(activeContext.question || activeContext.title || '').trim() : '';
-          const contextSummary = contextTitle && contextTitle !== 'Untitled ICU study'
-            ? `${escHtml(contextTitle)} · ${routeNames[resumeRoute]} · ${when}`
-            : `${routeNames[resumeRoute]} · ${when}`;
-          const legacySummary = `${branchNames[legacyStudy && legacyStudy.branch] || t('Study', '研究')} · ${(legacyStudy && legacyStudy.patientN) || 10} ${t('stays', '次住院')} · ${((legacyStudy && legacyStudy.mods) || []).length} ${t('modules', '模块')} · ${when}`;
-          slot.innerHTML = `
-            <div class="card flat" style="border-color:var(--accent-border);background:color-mix(in srgb, var(--accent-soft) 40%, var(--surface));">
-              <div class="row gap-12">
-                <div class="aux-ico" style="background:var(--accent-soft);color:var(--accent-ink);">${icon('history', 16)}</div>
-                <div><div style="font-weight:600;font-size:13px;">${t('Resume your last study', '继续上次的研究')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:1px;">${usingContext ? contextSummary : legacySummary}</div></div>
-              </div>
-              <div class="row gap-8">
-                <button type="button" class="btn sm" data-resume-open>${t('Open', '打开')} ${routeNames[resumeRoute]} ${icon('arrow', 14)}</button>
-                <button type="button" class="btn sm ghost" data-resume-clear>${t('Dismiss', '忽略')}</button>
-              </div>
-            </div>`;
-          slot.querySelector('[data-resume-open]').addEventListener('click', () => {
-            if (!usingContext && legacyStudy) {
-              try { if (window.__euExtractApply) window.__euExtractApply(legacyStudy.mods); } catch (e) {}
-              try { if (window.__euVizPreset) window.__euVizPreset(); } catch (e) {}
-            }
-            location.hash = '#' + resumeRoute;
-          });
-          slot.querySelector('[data-resume-clear]').addEventListener('click', () => {
-            try {
-              if (usingContext && activeContext.id) sessionStorage.setItem('easyicu.studyContext.resumeDismissed.v1', activeContext.id);
-              else localStorage.removeItem('easyicu_study');
-            } catch (e) {}
-            slot.innerHTML = '';
-          });
-        }
-      }
-      setTimeout(() => { if (input) input.focus(); }, 300);
-    },
-  };
-
   /* ================= DATA EXTRACTION (simplified) ================= */
   function dataMode() { return window.EU_DATA || 'demo'; }  // global Demo/Real (topbar)
   const DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30;
   const MAX_OBSERVATION_WINDOW_HOURS = 24 * 30;
   let exView = 'home';          // home | running | done
-  let exMaxPatients = 500;      // cohort sample cap for real extraction (full-cohort = 3c follow-up)
+  let exMaxPatients = 0;        // full cohort by default; a positive value is an explicit sample cap
   let exportJobId = null;       // current extract job id for cooperative cancel
   let exportProg = null;        // {current,total,module} latest extract progress
   let exportResult = null;      // terminal export summary {out_dir,files,total_rows,...}
@@ -269,10 +19,14 @@
   let exportCancelled = null;   // terminal user-requested cancel (partial result payload)
   let exportCohortReport = null; // cohort report from the job's start event (selected / before-cap)
   let exportCancelRequested = false;
+  let exOutputNotice = '';
+  let exOutputError = '';
+  let exSyncNotice = '';
+  let exSyncError = '';
   let exportRunMode = 'custom';  // custom | recommended
   let exportRunModules = null;   // module keys used by the current/last run
   let exCustomOpen = false;
-  let exAdvCohort = false, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;
+  let exAdvCohort = true, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;
   let exFormat = 'parquet';     // parquet | csv | excel
   let exMerge = 'separate';
   let exExportDir = null;
@@ -288,23 +42,20 @@
   let exSource = null;      // 'prepared' | 'module' | 'raw' — what the user pointed at
   let exScanResult = null;  // live /api/data/scan payload for exPath (null until scanned)
   let exScanError = null;   // scan failure message, if any
-  let exFilterOptions = null;   // real-source advanced filter metadata
-  let exFilterPreview = null;   // current metadata-filter preview
-  let exFilterLoading = false;
-  let exFilterError = null;
-  let exMinCoveragePct = 0;
-  let exQualityStatus = 'all';
-  let exCohortPreset = 'adult_first';
-  let exAgeMin = 18;
+  let exExpectedDatabase = ''; // path-free Copilot requirement; scan must match it
+  let exDatabaseMismatch = null;
+  let exHydratedStudyCoordinate = '';
+  let exCohortPreset = 'all_icu';
+  let exAgeMin = 0;
   let exAgeMax = 100;
   let exMinLosHours = 0;
   let exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;
-  let exExcludeReadmissions = true;
+  let exExcludeReadmissions = false;
   let convFail = false;     // demo: conversion hit a recoverable error
 
   const COHORT_PRESETS = [
     ['all_icu', 'All ICU stays', '全部 ICU 住院', 'Broad denominator; no diagnosis filter is applied.', '宽队列;不预设诊断筛选。'],
-    ['adult_first', 'Adult first ICU stay', '成年首次 ICU', 'Default ICU denominator for most extraction workflows.', '多数抽取流程的默认 ICU 分母。'],
+    ['adult_first', 'Adult first ICU stay', '成年首次 ICU', 'Use only when the study requires an adult first-stay denominator.', '仅在研究明确需要成年首次住院分母时使用。'],
     ['sepsis3', 'Sepsis-3 / suspected infection', 'Sepsis-3 / 疑似感染', 'Uses Sepsis concepts when available; ICD is not prefilled.', '可用时使用 Sepsis 概念;不会预填 ICD。'],
     ['aki', 'AKI / renal dysfunction', 'AKI / 肾功能异常', 'Renal cohort starting point for AKI studies.', 'AKI 研究的肾功能队列起点。'],
     ['ventilation', 'Mechanical ventilation', '机械通气', 'Ventilator exposure cohort starting point.', '机械通气暴露队列起点。'],
@@ -321,26 +72,26 @@
   // [name_en, name_zh, fallbackConceptCount, selected, isCore]
   const MODS = [
     // —— recommended core ——
-    ['Demographics', '人口统计', 6, true, true],
-    ['Vital signs', '生命体征', 12, true, true],
-    ['Lab — Chemistry', '实验室-生化', 49, true, true],
-    ['SOFA-2 scores', 'SOFA-2 评分', 10, true, true],
-    ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true, true],
-    ['Outcome', '结局', 13, true, true],
+    ['Demographics', '人口统计', 6, false, true],
+    ['Vital signs', '生命体征', 12, false, true],
+    ['Lab — Chemistry', '实验室-生化', 49, false, true],
+    ['SOFA-2 scores', 'SOFA-2 评分', 10, false, true],
+    ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, false, true],
+    ['Outcome', '结局', 13, false, true],
     // —— additional modules ——
-    ['SOFA-1 scores', 'SOFA-1 评分', 7, true, false],
-    ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, true, false],
-    ['Sepsis shared', 'Sepsis 共享概念', 5, true, false],
-    ['Respiratory', '呼吸系统', 15, true, false],
-    ['Ventilator', '呼吸机参数', 15, true, false],
-    ['Blood gas', '血气分析', 9, true, false],
-    ['Lab — Hematology', '实验室-血液学', 25, true, false],
-    ['Vasopressors', '血管活性药物', 17, true, false],
-    ['Other medications', '其他药物', 49, true, false],
-    ['Renal & urine output', '肾脏与尿量', 40, true, false],
-    ['Neurological', '神经系统', 14, true, false],
-    ['Circulatory', '循环系统', 10, true, false],
-    ['Other scores', '其他评分', 9, true, false],
+    ['SOFA-1 scores', 'SOFA-1 评分', 7, false, false],
+    ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, false, false],
+    ['Sepsis shared', 'Sepsis 共享概念', 5, false, false],
+    ['Respiratory', '呼吸系统', 15, false, false],
+    ['Ventilator', '呼吸机参数', 15, false, false],
+    ['Blood gas', '血气分析', 9, false, false],
+    ['Lab — Hematology', '实验室-血液学', 25, false, false],
+    ['Vasopressors', '血管活性药物', 17, false, false],
+    ['Other medications', '其他药物', 49, false, false],
+    ['Renal & urine output', '肾脏与尿量', 40, false, false],
+    ['Neurological', '神经系统', 14, false, false],
+    ['Circulatory', '循环系统', 10, false, false],
+    ['Other scores', '其他评分', 9, false, false],
   ];
   const CORE = MODS.filter(m => m[4]).map(m => m[0]);
   const EX_KEYS = {
@@ -383,7 +134,7 @@
     const key = moduleKey(m);
     const ids = conceptIdsForModule(m);
     if (!ids.length) return [];
-    const saved = Array.isArray(exSelectedConcepts[key]) ? exSelectedConcepts[key] : ids;
+    const saved = Array.isArray(exSelectedConcepts[key]) ? exSelectedConcepts[key] : (m[3] ? ids : []);
     const savedSet = new Set(saved);
     return ids.filter(id => savedSet.has(id));
   }
@@ -435,7 +186,14 @@
     setModuleConceptSelection(m, conceptIdsForModule(m).filter(id => selected.has(id)));
     window.EU_STALE = true;
   }
-  function repaint() { if (window.__euRender) window.__euRender(); }
+  function repaint() {
+    const embedded = window.EU_EXTRACTION_EMBEDDED_WORKSPACE;
+    if (embedded && typeof embedded.isMounted === 'function' && embedded.isMounted()) {
+      embedded.repaint();
+      return;
+    }
+    if (window.__euRender) window.__euRender();
+  }
   // Background job events (SSE progress / continuity restore) must never
   // trigger a full-shell re-render while the user works on another route —
   // that wipes focus, IME composition, and uncommitted input there. Module
@@ -509,6 +267,56 @@
     if (Number.isFinite(cfg.max_patients)) exMaxPatients = cfg.max_patients;
     if (Number.isFinite(cfg.observation_window_hours) && cfg.observation_window_hours > 0) exWindowHours = cfg.observation_window_hours;
   }
+
+  function applyStudySetup(setup) {
+    if (!setup || typeof setup !== 'object') return null;
+    const coordinate = `${setup.study_context_id || ''}:${setup.revision || 0}:${setup.expected_database || ''}`;
+    if (coordinate && coordinate === exHydratedStudyCoordinate) return setup;
+    exHydratedStudyCoordinate = coordinate;
+    exExpectedDatabase = String(setup.expected_database || '').trim();
+    exDatabaseMismatch = null;
+
+    const cohort = setup.cohort && typeof setup.cohort === 'object' ? setup.cohort : {};
+    const includeDiagnoses = Array.isArray(cohort.include_diagnoses) ? cohort.include_diagnoses : [];
+    const excludeDiagnoses = Array.isArray(cohort.exclude_diagnoses) ? cohort.exclude_diagnoses : [];
+    const requestedPreset = (cohort.icd_enabled || includeDiagnoses.length || excludeDiagnoses.length)
+      ? 'icd' : String(cohort.preset || '');
+    if (COHORT_PRESETS.some(row => row[0] === requestedPreset)) exCohortPreset = requestedPreset;
+    if (Number.isFinite(cohort.age_min)) exAgeMin = Math.max(0, Math.min(100, cohort.age_min));
+    if (Number.isFinite(cohort.age_max)) exAgeMax = Math.max(exAgeMin, Math.min(100, cohort.age_max));
+    if (Number.isFinite(cohort.min_icu_los_hours)) exMinLosHours = Math.max(0, Math.min(168, cohort.min_icu_los_hours));
+    const windowHours = Number.isFinite(cohort.observation_window_hours)
+      ? cohort.observation_window_hours
+      : (setup.time_window && (setup.time_window.observation_hours ?? setup.time_window.hours));
+    if (Number.isFinite(windowHours)) exWindowHours = Math.max(1, Math.min(MAX_OBSERVATION_WINDOW_HOURS, windowHours));
+    if (typeof cohort.exclude_readmissions === 'boolean') exExcludeReadmissions = cohort.exclude_readmissions;
+    if (Number.isFinite(cohort.max_patients)) exMaxPatients = Math.max(0, cohort.max_patients);
+    if (window.EUIcd && typeof window.EUIcd.apply === 'function') window.EUIcd.apply(cohort);
+
+    const requestedModules = new Set(Array.isArray(setup.modules) ? setup.modules.map(String) : []);
+    MODS.forEach(module => { module[3] = requestedModules.has(moduleKey(module)) || requestedModules.has(module[0]); });
+    exSelectedConcepts = {};
+    const execution = setup.execution_concepts && typeof setup.execution_concepts === 'object'
+      ? setup.execution_concepts : {};
+    const requestedConcepts = new Set([
+      execution.outcome,
+      execution.primary_exposure,
+      ...(Array.isArray(execution.covariates) ? execution.covariates : []),
+    ].map(value => String(value || '').trim()).filter(Boolean));
+    if (requestedConcepts.size) {
+      MODS.forEach(module => {
+        const selected = conceptIdsForModule(module).filter(id => requestedConcepts.has(id));
+        if (!selected.length) return;
+        module[3] = true;
+        setModuleConceptSelection(module, selected);
+      });
+    }
+    if (EX_EXT[setup.export_format]) exFormat = setup.export_format;
+    exAdvCohort = true;
+    exCustomOpen = true;
+    window.EU_STALE = true;
+    return setup;
+  }
   function setExportDir(path) {
     exExportDir = path || null;
     if (window.EU_API && window.EU_API.saveSetting) {
@@ -522,6 +330,12 @@
   }
   function pathDisplay(path) {
     return path ? path : t('No folder selected', '尚未选择文件夹');
+  }
+  function pathNeedsFolderChoice(path) {
+    const raw = String(path || '').trim();
+    if (!raw) return true;
+    const normalized = raw.replace(/\/+$/, '') || '/';
+    return normalized === '/' || normalized === '/Volumes';
   }
 
   /* continuity hook for Copilot / resume */
@@ -578,6 +392,7 @@
     exportRunMode = runMode;
     exportRunModules = modules;
     exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false;
+    exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = '';
     exView = 'running'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
     const conceptSelection = selectedConceptPayload(modules);
@@ -636,7 +451,7 @@
   function cancelExportJob() {
     if (!exportJobId || exportCancelRequested || !window.EU_API || !window.EU_API.postJSON) return;
     exportCancelRequested = true;
-    exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
+    exportProg = { phase: 'cancel', message: t('Cancel accepted. Stopping the current database query…', '已接受取消，正在停止当前数据库查询…') };
     repaint();
     window.EU_API.postJSON('/api/jobs/' + exportJobId + '/cancel', { reason: 'user_requested' })
       .catch(err => { exportErr = String(err && err.message || err); repaint(); });
@@ -649,6 +464,33 @@
     ['Write shard layout', '写入分片布局'],
     ['Index & freeze', '建立索引并冻结'],
   ];
+  function copilotPrefillSummary() {
+    if (!exHydratedStudyCoordinate) return '';
+    const cohort = cohortContract();
+    const database = {
+      miiv: 'MIMIC-IV 3.1', mimic: 'MIMIC-III 1.4', eicu: 'eICU 2.0',
+      aumc: 'AmsterdamUMCdb', hirid: 'HiRID 1.1.1', sic: 'SICdb 1.0.6',
+    }[exExpectedDatabase] || exExpectedDatabase.toUpperCase();
+    const diagnoses = Array.isArray(cohort.include_diagnoses) ? cohort.include_diagnoses.join(', ') : '';
+    const parts = [
+      database,
+      diagnoses ? `ICD ${diagnoses}` : t(cohortPresetMeta()[1], cohortPresetMeta()[2]),
+      t('age ', '年龄 ') + fmtAgeRange(),
+      fmtObservationWindow(exWindowHours),
+      selMods().map(moduleKey).join(', ') || t('modules not yet selected', '特征模块尚未选择'),
+      String(exFormat || '').toUpperCase(),
+    ].filter(Boolean);
+    return `
+      <div class="ex-connect-primary ex-copilot-prefill" role="note">
+        <div class="ex-connect-copy">
+          <div class="ex-connect-copy-ico">${icon('spark', 15)}</div>
+          <div>
+            <div class="ex-connect-copy-title">${t('Loaded from Copilot', '已从 Copilot 带入')}</div>
+            <div class="ex-connect-copy-desc">${escHtml(parts.join(' · '))}</div>
+          </div>
+        </div>
+      </div>`;
+  }
   function connectState() {
     const opt = (src, ico, tEn, tZh, dEn, dZh) => `
       <button class="modcard" data-ex-src="${src}" style="align-items:flex-start;padding:14px;">
@@ -662,6 +504,7 @@
           <div class="grow"><div class="cfg-h">${t('Connect your data', '连接你的数据')}</div><div class="cfg-sub">${t('local-only · nothing is uploaded', '仅本地 · 不上传任何数据')}</div></div>
         </div>
         <div class="cfg-body">
+          ${copilotPrefillSummary()}
           <label class="ex-connect-label" for="exPathInput">${t('Data folder on this machine', '本机上的数据文件夹')}</label>
           <div class="path-field editable ex-connect-path">
             <span class="pf-ico">${icon('folder', 14)}</span>
@@ -672,11 +515,11 @@
             <div class="ex-connect-copy">
               <div class="ex-connect-copy-ico">${icon('shield', 15)}</div>
               <div>
-                <div class="ex-connect-copy-title">${t('Let EasyICU identify the folder', '让 EasyICU 自动识别文件夹')}</div>
-                <div class="ex-connect-copy-desc">${t('We inspect filenames, manifests, and table layout only. No patient rows are uploaded or returned.', '只检查文件名、manifest 和表结构。不上传,也不返回患者行。')}</div>
+                <div class="ex-connect-copy-title">${t('Select the ICU data folder', '选择 ICU 数据文件夹')}</div>
+                <div class="ex-connect-copy-desc">${t('Choose the MIMIC folder; EasyICU then identifies its layout automatically. No patient rows are uploaded or returned.', '选择 MIMIC 数据文件夹后，EasyICU 会自动判断目录结构。不上传，也不返回患者行。')}</div>
               </div>
             </div>
-            <button class="btn primary ex-connect-analyze" data-ex-analyze>${icon('search', 14)} ${t('Analyze folder', '识别数据目录')}</button>
+            <button class="btn primary ex-connect-analyze" data-ex-analyze>${icon('folder', 14)} ${t('Choose folder and identify', '选择文件夹并识别')}</button>
           </div>
           <div class="ex-connect-actions">
             <button class="ex-linkbtn" data-ex-manual>${icon('sliders', 13)} ${t('Advanced: choose manually', '高级:手动选择')} <span class="chev">${icon('chevdown', 13)}</span></button>
@@ -740,7 +583,12 @@
              ready: d.ready, size: d.size || '', est: d.est || '', missing: [] };
   }
   function scanErrorState() {
-    const msg = exScanError === 'no_path'
+    const msg = exScanError === 'database_mismatch'
+      ? t(
+          `This study expects ${String(exDatabaseMismatch && exDatabaseMismatch.expected || '').toUpperCase()}, but the selected folder was identified as ${String(exDatabaseMismatch && exDatabaseMismatch.actual || 'unknown').toUpperCase()}. Choose the matching database folder; EasyICU will not continue with a different database.`,
+          `当前研究要求 ${String(exDatabaseMismatch && exDatabaseMismatch.expected || '').toUpperCase()}，但所选文件夹被识别为 ${String(exDatabaseMismatch && exDatabaseMismatch.actual || '未知').toUpperCase()}。请选择匹配的数据库目录；EasyICU 不会使用其他数据库继续。`
+        )
+      : exScanError === 'no_path'
       ? t('Choose or paste a local folder path first.', '请先选择或粘贴本机文件夹路径。')
       : exScanError === 'not_a_directory'
       ? t('That path is not a folder on this machine.', '该路径不是本机上的文件夹。')
@@ -755,7 +603,7 @@
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
           <div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>
-          <div class="grow"><div class="cfg-h">${t('Folder not recognized', '未识别该文件夹')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
+          <div class="grow"><div class="cfg-h">${exScanError === 'database_mismatch' ? t('Database does not match this study', '数据库与当前研究不匹配') : t('Folder not recognized', '未识别该文件夹')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
         </div>
         <div class="cfg-body">
           <div class="note mt-4" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
@@ -1072,13 +920,22 @@
       repaint();
       return;
     }
-    exSource = src || null; exScanResult = null; exScanError = null;
+    exSource = src || null; exScanResult = null; exScanError = null; exDatabaseMismatch = null;
     exReal = 'scanning'; repaint();
     // Real folder recognition is authoritative only when returned by FastAPI.
     if (window.EU_API && window.EU_API.scanPath) {
       window.EU_API.scanPath(exPath, src).then(r => {
         if (exReal !== 'scanning') return;          // user navigated away
-        if (r && r.ok) { exScanResult = r; exSource = r.source || src || null; exReal = 'scanresult'; }
+        if (r && r.ok) {
+          exScanResult = r;
+          exSource = r.source || src || null;
+          const bridge = window.EU_EXTRACTION_STUDY_CONTEXT;
+          if (exExpectedDatabase && (!bridge || !bridge.matchesDatabase(exExpectedDatabase, r.db_key))) {
+            exDatabaseMismatch = { expected: exExpectedDatabase, actual: String(r.db_key || '') };
+            exScanError = 'database_mismatch';
+          }
+          exReal = 'scanresult';
+        }
         else { exScanError = (r && r.error) || 'scan_failed'; exReal = 'scanresult'; }
         repaint();
       }).catch(err => {
@@ -1106,18 +963,19 @@
   function expressCard() {
     // Demo runs a local mock and needs no destination — only real extraction does.
     const exportReady = dataMode() === 'demo' || !!currentExportDir();
+    const cohortLead = t('all ICU stays', '全部 ICU 住院');
     return `
     <div class="express">
       <div class="express-grid">
         <div>
           <div class="eyebrow">${icon('spark', 13)} ${t('Recommended', '推荐')}</div>
           <h2>${t('Recommended extraction', '推荐抽取')}</h2>
-          <p class="lead">${t('Sensible defaults that work for most ICU studies — first ICU stay, the full available ICU window with a 30-day cap, and the six core feature modules. One click gives you analysis-ready tables.', '适用于大多数 ICU 研究的合理默认 —— 首次 ICU 住院、全可用 ICU 时间窗（30 天上限）,以及六个核心特征模块。一键得到可直接分析的数据表。')}</p>
+          <p class="lead">${t('Sensible defaults for this database — ', '适用于当前数据库的合理默认 —— ')}${cohortLead}, ${t('the full available ICU window with a 30-day cap, and the six core feature modules. One click gives you analysis-ready tables.', '全可用 ICU 时间窗（30 天上限），以及六个核心特征模块。一键得到可直接分析的数据表。')}</p>
           <div class="express-chips">
             ${CORE.map((n, i) => `<span class="chip solid">${t(n, MODS.find(m => m[0] === n)[1])}</span>`).join('')}
           </div>
           <div class="express-meta">
-            <span>${t('Cohort', '队列')} · <b>${t('first ICU stay', '首次 ICU')} · ${t('full window', '全窗口')}</b></span>
+            <span>${t('Cohort', '队列')} · <b>${cohortLead} · ${t('full window', '全窗口')}</b></span>
             <span>${t('Modules', '模块')} · <b>${CORE.length}</b></span>
             <span>${t('Concepts', '概念')} · <b>~${coreConceptN()}</b></span>
             <span>${dataMode() === 'demo' ? t('Stays', '住院数') + ' · <b>10</b>' : t('Stays', '住院数') + ' · <b>' + escHtml(fmtSampleCap()) + '</b>'}</span>
@@ -1133,7 +991,7 @@
   }
 
   function cohortPresetMeta() {
-    return COHORT_PRESETS.find(p => p[0] === exCohortPreset) || COHORT_PRESETS[1];
+    return COHORT_PRESETS.find(p => p[0] === exCohortPreset) || COHORT_PRESETS[0];
   }
   function cohortPresetIsRealExportReady(id) {
     return REAL_EXPORT_COHORT_PRESETS.has(id);
@@ -1182,37 +1040,44 @@
   }
   function recommendedCohortContract() {
     return {
-      preset: 'adult_first',
-      age_min: 18,
+      preset: 'all_icu',
+      age_min: 0,
       age_max: 100,
       min_icu_los_hours: 0,
       observation_window_hours: DEFAULT_OBSERVATION_WINDOW_HOURS,
-      exclude_readmissions: true,
+      exclude_readmissions: false,
       icd_enabled: false,
       sepsis_definition: sepsisDefinitionContract(),
     };
   }
   window.EU_EXTRACTION_CONTEXT = {
+    applyStudySetup,
     snapshot() {
     const recommended = exportRunMode === 'recommended';
     const cohort = recommended ? recommendedCohortContract() : cohortContract();
-    const preset = COHORT_PRESETS.find(row => row[0] === cohort.preset) || COHORT_PRESETS[1];
+    const preset = COHORT_PRESETS.find(row => row[0] === cohort.preset) || COHORT_PRESETS[0];
     const active = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
     const resultPath = exportResult && exportResult.out_dir;
+    const detectedDatabase = String(exScanResult && exScanResult.db_key || '').trim();
     const sourcePath = resultPath || (active && active.path) || '';
-    const sourceLabel = (active && active.label) || (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU export');
+    const sourceLabel = (active && active.label) || (resultPath
+      ? 'EasyICU extraction'
+      : (exExpectedDatabase ? exExpectedDatabase.toUpperCase() : (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU data')));
     const modules = (exportRunModules || runModuleKeys(recommended ? 'recommended' : 'custom')).slice();
     return {
       data_source: {
+        source_id: String(active && active.id || ''),
         path: sourcePath,
         label: sourceLabel,
-        database: (active && active.database) || (dataMode() === 'demo' ? 'demo' : ''),
+        database: detectedDatabase || exExpectedDatabase || (dataMode() === 'demo' ? 'demo' : ''),
       },
       cohort,
       modules,
       preset_label: preset[1],
       export_format: exFormat,
       observation_hours: cohort.observation_window_hours,
+      expected_database: exExpectedDatabase,
+      completed: !!(exportResult && resultPath),
     };
     },
   };
@@ -1270,7 +1135,7 @@
         }
         else if (message.type === 'cancel_requested') {
           exportCancelRequested = true;
-          exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
+          exportProg = { phase: 'cancel', message: t('Cancel accepted. Stopping the current database query…', '已接受取消，正在停止当前数据库查询…') };
         } else if (message.type === 'end') {
           if (message.status === 'done') {
             exportResult = message.result && typeof message.result === 'object' ? message.result : {};
@@ -1409,6 +1274,27 @@
     return chips.map(c => `<span class="chip solid">${escHtml(c)}</span>`).join('');
   }
 
+  function extractionSetupSummary() {
+    const preset = cohortPresetMeta();
+    return {
+      cohort: t(preset[1], preset[2]) + ' · ' + fmtObservationWindow(exWindowHours),
+      moduleCount: selMods().length,
+      conceptCount: conceptN(),
+      runnable: selMods().length > 0,
+    };
+  }
+
+  function icdSourceContext() {
+    const result = exScanResult && typeof exScanResult === 'object' ? exScanResult : {};
+    const database = String(result.db_key || '').trim();
+    const databaseLabel = String(result.db || '').trim();
+    return {
+      database,
+      databaseLabel,
+      real: dataMode() === 'real',
+    };
+  }
+
   /* ---- cohort cfg ---- */
   function cohortCfg() {
     const preset = cohortPresetMeta();
@@ -1444,17 +1330,11 @@
             ${advRow(t('Exclude readmissions', '排除再入院'), switchEl(exExcludeReadmissions, 'readmissions'))}
           </div>
           <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
-            ${showICD && window.EUIcd ? window.EUIcd.block() : `
+            ${showICD && window.EUIcd ? window.EUIcd.block(icdSourceContext()) : `
               <div class="note info" style="padding:10px 12px;">
                 <div class="ico">${icon('shield', 14)}</div>
                 <div class="body"><div class="t" style="font-size:12px;">${t('ICD filter is off by default', 'ICD 默认关闭')}</div><div class="d" style="font-size:11px;margin:0;">${t('Choose “Diagnosis / ICD cohort” above to enter code prefixes or diagnosis terms. Nothing is prefilled.', '在上方选择“诊断 / ICD 队列”后再输入编码前缀或诊断关键词。不会预填任何编码。')}</div></div>
               </div>`}
-          </div>
-          <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
-            <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;">
-              <div><div style="font-size:12.5px;font-weight:600;color:var(--ink-2);">${t('Real-source filter audit', '真实来源筛选审计')}</div><div style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('Metadata-only checks from the active registered export; unsupported cohort filters fail closed.', '从当前注册导出的元数据计算;未支持的队列筛选保持 fail-closed。')}</div></div>
-            </div>
-            <div class="ex-filter-card">${filterSourceBody()}</div>
           </div>
         </div>
       </div>
@@ -1464,106 +1344,6 @@
     return `<div class="adv-row"><span class="adv-label">${label}</span><span class="adv-control">${ctl}</span></div>`;
   }
   function switchEl(on, key) { return `<span class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" tabindex="0" ${key ? `data-ex-switch="${key}"` : ''}></span>`; }
-
-  function filterSourceBody() {
-    if (dataMode() !== 'real') {
-      return `
-        <div class="note info mt-16" style="padding:10px 12px;">
-          <div class="ico">${icon('shield', 14)}</div>
-          <div class="body"><div class="t" style="font-size:12px;">${t('Seeded demo filters', '种子演示筛选')}</div><div class="d" style="font-size:11px;margin:0;">${t('This is seeded demo metadata, not a real export source. Switch to Real and register an EasyICU export to compute filter provenance.', '这是种子演示元数据,不是真实导出源。切换到真实模式并注册 EasyICU 导出后才会计算筛选来源。')}</div></div>
-        </div>`;
-    }
-    if (exFilterLoading) {
-      return `
-        <div class="note info mt-16" style="padding:10px 12px;">
-          <div class="ico"><span class="spin sm" style="width:14px;height:14px;"></span></div>
-          <div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Reading registered export metadata…', '正在读取已注册导出的元数据…')}</div></div>
-        </div>`;
-    }
-    if (exFilterError) {
-      return `
-        <div class="note mt-16" style="padding:10px 12px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
-          <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 14)}</div>
-          <div class="body"><div class="t" style="font-size:12px;">${t('Advanced filters failed closed', '高级筛选已 fail-closed')}</div><div class="d mono" style="font-size:11px;margin:0;">${escHtml(exFilterError)}</div></div>
-        </div>
-        <button class="btn sm ghost mt-12" data-ex-filter-load>${icon('refresh', 13)} ${t('Retry metadata check', '重试元数据检查')}</button>`;
-    }
-    if (!exFilterOptions) {
-      return `
-        <div class="note info mt-16" style="padding:10px 12px;">
-          <div class="ico">${icon('shield', 14)}</div>
-          <div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Advanced filters are computed from the active registered EasyICU export. Unsupported cohort-row filters stay blocked rather than being guessed.', '高级筛选从当前注册的 EasyICU 导出计算。未支持的队列行级筛选会保持阻断,不会猜测。')}</div></div>
-        </div>
-        <button class="btn sm mt-12" data-ex-filter-load>${icon('refresh', 13)} ${t('Load real filter options', '加载真实筛选选项')}</button>`;
-    }
-    const src = exFilterOptions.source || {};
-    const mods = (exFilterPreview && exFilterPreview.matched_modules) || ((exFilterOptions.options || {}).modules || []);
-    const unsupported = (((exFilterOptions.filters || {}).unsupported) || []).slice(0, 5);
-    const qualitySeg = `<div class="seg" data-ex-filter-quality>
-      ${['all', 'ok', 'warn', 'bad', 'neutral', 'unknown'].map(q => `<button class="${exQualityStatus === q ? 'active' : ''}" data-val="${q}">${q}</button>`).join('')}
-    </div>`;
-    const coverageSeg = `<div class="seg" data-ex-filter-coverage>
-      ${[0, 50, 80].map(v => `<button class="${exMinCoveragePct === v ? 'active' : ''}" data-val="${v}">≥ ${v}%</button>`).join('')}
-    </div>`;
-    return `
-      <div class="note ok mt-16" style="padding:10px 12px;">
-        <div class="ico">${icon('check', 14, 2.6)}</div>
-        <div class="body">
-          <div class="t" style="font-size:12px;">${t('Real filter provenance', '真实筛选来源')}</div>
-          <div class="d" style="font-size:11px;margin:0;">${escHtml(src.label || 'local')} · ${escHtml(src.database || 'unknown')} · <span class="mono">${escHtml(src.id || src.path_hash || '')}</span> · ${t('hash', '哈希')} <span class="mono">${escHtml(src.path_hash || '')}</span></div>
-        </div>
-      </div>
-      <div class="col gap-10 mt-12">
-        ${advRow(t('Minimum module coverage', '最低模块覆盖度'), coverageSeg)}
-        ${advRow(t('Quality status', '质量状态'), qualitySeg)}
-      </div>
-      <div class="cols-2 mt-12" style="gap:8px;">
-        ${mods.slice(0, 6).map(m => `
-          <div class="ledger-row">
-            <span class="ledger-ico">${icon(m.quality_status === 'ok' ? 'check' : 'shield', 14)}</span>
-            <div><div class="mono" style="font-weight:600;font-size:12px;">${escHtml(m.module)}</div><div style="font-size:11px;color:var(--ink-4);">${Number(m.row_count || 0).toLocaleString()} ${t('rows', '行')} · ${m.coverage_pct == null ? 'coverage n/a' : m.coverage_pct + '%'} · ${escHtml(m.quality_status)}</div></div>
-          </div>`).join('')}
-      </div>
-      <div class="row gap-8 mt-12">
-        <button class="btn sm" data-ex-filter-apply>${icon('refresh', 13)} ${t('Preview supported filters', '预览支持的筛选')}</button>
-        <button class="btn sm ghost" data-ex-filter-usemods ${mods.length ? '' : 'disabled'}>${icon('layers', 13)} ${t('Use matched modules', '使用匹配模块')}</button>
-      </div>
-      <div class="note info mt-12" style="padding:10px 12px;">
-        <div class="ico">${icon('alert', 14)}</div>
-        <div class="body"><div class="t" style="font-size:12px;">${t('Unsupported filters stay blocked', '未支持筛选保持阻断')}</div><div class="d" style="font-size:11px;margin:0;">${unsupported.map(u => escHtml(u.id)).join(', ')}</div></div>
-      </div>`;
-  }
-
-  function loadExtractionFilters() {
-    if (!(window.EU_API && window.EU_API.loadExtractionFilterOptions)) return;
-    exFilterLoading = true; exFilterError = null; repaint();
-    window.EU_API.loadExtractionFilterOptions({})
-      .then(r => { exFilterOptions = r; exFilterPreview = null; exFilterError = null; })
-      .catch(err => { exFilterError = String(err && err.message || err); exFilterOptions = null; exFilterPreview = null; })
-      .finally(() => { exFilterLoading = false; repaint(); });
-  }
-
-  function previewExtractionFilters() {
-    if (!(window.EU_API && window.EU_API.previewExtractionFilters)) return;
-    exFilterLoading = true; exFilterError = null; repaint();
-    const filters = { min_coverage_pct: exMinCoveragePct };
-    if (exQualityStatus !== 'all') filters.quality_statuses = [exQualityStatus];
-    window.EU_API.previewExtractionFilters({ filters })
-      .then(r => { exFilterPreview = r; exFilterError = null; })
-      .catch(err => { exFilterError = String(err && err.message || err); exFilterPreview = null; })
-      .finally(() => { exFilterLoading = false; repaint(); });
-  }
-
-  function useMatchedFilterModules() {
-    const mods = exFilterPreview && Array.isArray(exFilterPreview.matched_modules)
-      ? exFilterPreview.matched_modules
-      : (exFilterOptions && exFilterOptions.options && exFilterOptions.options.modules) || [];
-    const keys = new Set(mods.map(m => m.module));
-    if (!keys.size) return;
-    MODS.forEach(m => { m[3] = keys.has(EX_KEYS[m[0]] || m[0].toLowerCase()); });
-    window.EU_STALE = true;
-    repaint();
-  }
 
   /* ---- modules cfg ---- */
   function sepsisDefinitionPanel() {
@@ -1736,6 +1516,160 @@
     }
     return sel ? t(`${sel.toLocaleString()} stays · full matched cohort`, `${sel.toLocaleString()} 条住院 · 完整匹配队列`) : '';
   }
+  function extractionSupportFiles(result) {
+    if (!result || typeof result !== 'object') return [];
+    const rows = [];
+    if (result.manifest) rows.push({ file: result.manifest, manifest: true });
+    if (Array.isArray(result.definition_files)) rows.push(...result.definition_files);
+    if (result.column_metadata) rows.push({ file: result.column_metadata, metadata: true });
+    if (result.readme) rows.push({ file: result.readme, readme: true });
+    return rows.filter((row, index, all) => row.file && all.findIndex(item => item.file === row.file) === index);
+  }
+  function extractionHandoffReceipt() {
+    const result = exportResult && typeof exportResult === 'object' ? exportResult : {};
+    const snapshot = window.EU_EXTRACTION_CONTEXT && window.EU_EXTRACTION_CONTEXT.snapshot
+      ? window.EU_EXTRACTION_CONTEXT.snapshot() : {};
+    const source = snapshot.data_source || {};
+    const databaseKey = String(source.database || '').toLowerCase();
+    const databaseLabel = {
+      miiv: 'MIMIC-IV', mimiciv: 'MIMIC-IV', mimic_iv: 'MIMIC-IV',
+      mimic: 'MIMIC-III', miii: 'MIMIC-III', mimiciii: 'MIMIC-III', mimic_iii: 'MIMIC-III',
+      eicu: 'eICU', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb', sicdb: 'SICdb',
+    }[databaseKey] || String(source.database || source.label || '');
+    return {
+      id: 'extraction-' + String(exportJobId || Date.now()),
+      job_id: String(exportJobId || ''),
+      database: databaseLabel,
+      source_label: String(source.label || ''),
+      output_dir: String(result.out_dir || ''),
+      data_file_count: Number(result.file_count || (Array.isArray(result.files) ? result.files.length : 0)),
+      support_file_count: extractionSupportFiles(result).length,
+      total_rows: result.total_rows == null ? null : Number(result.total_rows),
+      cohort_summary: cohortScaleNote() || extractionSetupSummary().cohort,
+      modules: Array.isArray(snapshot.modules) ? snapshot.modules.slice(0, 30) : [],
+      export_format: String(snapshot.export_format || ''),
+      expected_database: String(snapshot.expected_database || ''),
+      receipt_kind: result.out_dir ? 'extraction_result' : 'extraction_setup',
+    };
+  }
+  function sourceBindingSnapshot() {
+    const active = window.EU_SOURCES && window.EU_SOURCES.activeSource
+      ? window.EU_SOURCES.activeSource() : null;
+    const database = String(exScanResult && exScanResult.db_key || exExpectedDatabase || '').trim();
+    const path = String(exPath || active && active.path || '').trim();
+    const label = String(
+      exScanResult && exScanResult.db
+      || active && active.label
+      || database.toUpperCase()
+      || t('Local ICU data', '本地 ICU 数据')
+    ).trim();
+    return {
+      ready: dataMode() === 'real' && exReal === 'ready' && !!path && !!database,
+      data_source: {
+        source_id: String(active && active.id || ''),
+        path,
+        label,
+        database,
+      },
+    };
+  }
+  function bindSourceToCopilot() {
+    const snapshot = sourceBindingSnapshot();
+    const store = window.EU_STUDY_CONTEXT;
+    if (!snapshot.ready || !store || typeof store.update !== 'function' || typeof store.persist !== 'function') {
+      return Promise.reject(new Error(t(
+        'Select and validate a local ICU data folder first.',
+        '请先选择并验证本地 ICU 数据文件夹。'
+      )));
+    }
+    store.update(
+      { data_source: snapshot.data_source },
+      { persist: false, reason: 'extraction-source-binding' },
+    );
+    return Promise.resolve(store.persist()).then(saved => ({
+      id: 'source-binding-' + Date.now(),
+      receipt_kind: 'data_source_binding',
+      database: snapshot.data_source.database,
+      source_label: snapshot.data_source.label,
+      study_context_id: String(saved && saved.id || ''),
+      study_revision: Number(saved && saved.revision || 0),
+    }));
+  }
+  function syncExtractionToCopilot() {
+    const store = window.EU_STUDY_CONTEXT;
+    if (!store || typeof store.handoff !== 'function') {
+      return Promise.reject(new Error(t('StudyContext sync is unavailable.', '研究配置同步暂不可用。')));
+    }
+    if (exDatabaseMismatch) {
+      return Promise.reject(new Error(t(
+        'The selected folder does not match the database requested in Copilot. Choose the matching folder before syncing.',
+        '所选文件夹与 Copilot 要求的数据库不匹配。请先选择正确的数据库目录再同步。'
+      )));
+    }
+    const snapshot = window.EU_EXTRACTION_CONTEXT && window.EU_EXTRACTION_CONTEXT.snapshot
+      ? window.EU_EXTRACTION_CONTEXT.snapshot() : {};
+    const current = typeof store.active === 'function' ? store.active() : null;
+    const currentDatabase = current && current.data_source ? current.data_source.database : '';
+    const nextDatabase = snapshot && snapshot.data_source ? snapshot.data_source.database : '';
+    const bridge = window.EU_EXTRACTION_STUDY_CONTEXT;
+    const allowSourceRebind = !currentDatabase || !!(
+      bridge && typeof bridge.matchesDatabase === 'function'
+      && bridge.matchesDatabase(currentDatabase, nextDatabase)
+    );
+    const handoff = store.handoff({
+      sourceRoute: 'extraction', targetRoute: 'guided',
+      continueExisting: true, allowSourceRebind,
+    });
+    return Promise.resolve(handoff && handoff.persisted).then(saved => Object.assign(
+      extractionHandoffReceipt(),
+      {
+        study_context_id: String(saved && saved.id || ''),
+        study_revision: Number(saved && saved.revision || 0),
+      },
+    ));
+  }
+  function notifyCopilotOfExtraction(receipt) {
+    const copilot = window.EU_GUIDED_PI;
+    const rebound = copilot && typeof copilot.rebind === 'function' ? copilot.rebind() : null;
+    return Promise.resolve(rebound).then(() => {
+      if (copilot && typeof copilot.notifyExtractionHandoff === 'function') {
+        copilot.notifyExtractionHandoff(receipt);
+      }
+      return receipt;
+    });
+  }
+  function continueInGuidedCopilot(button) {
+    if (button) { button.disabled = true; button.textContent = t('Syncing…', '正在同步…'); }
+    exSyncError = '';
+    syncExtractionToCopilot()
+      .then(notifyCopilotOfExtraction)
+      .then(() => {
+        exSyncNotice = t('Synced to Copilot and added a conversation receipt.', '已同步到 Copilot，并写入对话回执。');
+        location.hash = '#guided';
+      })
+      .catch(error => {
+        exSyncError = String(error && error.message || error);
+        repaint();
+      });
+  }
+  function openExtractionOutput(file, button) {
+    const api = window.EU_API;
+    if (!exportJobId || !api || typeof api.openExtractionOutput !== 'function') return;
+    if (button) button.disabled = true;
+    exOutputNotice = '';
+    exOutputError = '';
+    api.openExtractionOutput(exportJobId, file || '').then(result => {
+      exOutputNotice = result && result.target === 'file'
+        ? (result.method === 'finder'
+          ? t(`Located ${result.name} in Finder because no default app could open it.`, `本机没有可直接打开该文件的默认应用，已在 Finder 中定位 ${result.name}。`)
+          : t(`Opened ${result.name} with the default local app.`, `已使用本机默认应用打开 ${result.name}。`))
+        : t('Opened the export folder in Finder.', '已在 Finder 中打开导出文件夹。');
+      repaint();
+    }).catch(error => {
+      exOutputError = String(error && error.message || error);
+      repaint();
+    });
+  }
   function cancelledState() {
     // Neutral terminal state for a user-requested cancel: not red, and honest
     // about the partial module files the cooperative cancel left on disk.
@@ -1769,7 +1703,7 @@
     <div class="card pad" style="max-width:680px;margin:0 auto;">
       <div class="load-strip">
         ${err ? `<span style="color:var(--bad,#c0392b);">${icon('alert', 18)}</span>` : `<span class="spin accent"></span>`}
-        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('local-only · writing to a timestamped export folder', '仅本地 · 写入带时间戳的导出文件夹')}</div></div>
+        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : exportCancelRequested ? t('Stopping extraction…', '正在停止抽取…') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('local-only · writing to a timestamped export folder', '仅本地 · 写入带时间戳的导出文件夹')}</div></div>
         ${tot ? `<span class="mono" style="font-size:11px;color:var(--ink-3);">${cur}/${tot}</span>` : ''}
       </div>
       ${err
@@ -1788,26 +1722,31 @@
       : (exportRunModules || modKeys()).map(k => ({ file: k + '.' + EX_EXT[exFormat], module: k, rows: null }));
     const outDir = (r && r.out_dir) || t('timestamped export folder', '带时间戳导出文件夹');
     const totalRows = r ? r.total_rows : null;
-    const fileList = files
-      .concat([{ file: '_manifest.json', manifest: true }])
-      .concat((r && r.definition_files) ? r.definition_files : [])
-      .concat((r && r.readme) ? [{ file: r.readme, readme: true }] : []);
+    const supportFiles = extractionSupportFiles(r);
+    const fileList = files.concat(supportFiles);
+    const canOpen = Boolean(r && exportJobId);
+    const dataFileCount = r ? Number(r.file_count || files.length) : files.length;
+    const supportFileCount = supportFiles.length;
     return `
       <div class="state-hero success solid" style="max-width:720px;margin:0 auto;">
         <div class="glyph">${icon('check', 26, 2.6)}</div>
         <div class="st-t">${t('Extraction complete', '抽取完成')}</div>
         <div class="st-d">${r
-          ? `${r.file_count} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${escHtml(outDir)}</span>. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
+          ? `${dataFileCount} ${t('data files', '个数据文件')} + ${supportFileCount} ${t('supporting files', '个配套文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''}. ${t('Written to', '写入')} ${canOpen ? `<button type="button" class="ex-output-path" data-ex-open-output title="${t('Open this folder in Finder', '在 Finder 中打开此文件夹')}"><span class="mono">${escHtml(outDir)}</span>${icon('folder', 12)}</button>` : `<span class="mono">${escHtml(outDir)}</span>`}. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
           : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
+        ${exOutputNotice ? `<div class="ex-output-feedback ok" role="status">${icon('check', 13)} ${escHtml(exOutputNotice)}</div>` : ''}
+        ${exOutputError ? `<div class="ex-output-feedback bad" role="alert">${icon('alert', 13)} ${escHtml(exOutputError)}</div>` : ''}
+        ${exSyncNotice ? `<div class="ex-output-feedback ok" role="status">${icon('check', 13)} ${escHtml(exSyncNotice)}</div>` : ''}
+        ${exSyncError ? `<div class="ex-output-feedback bad" role="alert">${icon('alert', 13)} ${escHtml(exSyncError)}</div>` : ''}
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
-          <button class="btn" data-study-handoff data-study-source="extraction" data-study-target="guided">${icon('agent', 14)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>
+          <button class="btn" data-ex-sync-guided>${icon('agent', 14)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>
           <button class="btn ghost" data-ex-reset>${icon('refresh', 14)} ${t('Extract again', '重新抽取')}</button>
         </div>
       </div>
       <div class="cols-2 mt-20" style="max-width:720px;margin-left:auto;margin-right:auto;">
         ${fileList.map(f => `
-          <div class="ledger-row"><span class="ledger-ico">${icon(f.manifest ? 'shield' : (String(f.kind || '').startsWith('feature_definitions') ? 'file' : 'file'), 14)}</span><div><div class="mono" style="font-weight:600;font-size:12px;">${f.file}</div><div style="font-size:11px;color:var(--ink-4);">${f.manifest ? t('reproducibility manifest', '可复现清单') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || ''))))}</div></div></div>`).join('')}
+          <${canOpen ? 'button type="button"' : 'div'} class="ledger-row ex-output-file" ${canOpen ? `data-ex-open-output="${escHtml(f.file)}" title="${t('Open this file', '打开此文件')}"` : ''}><span class="ledger-ico">${icon(f.manifest || f.metadata ? 'shield' : 'file', 14)}</span><span class="ex-output-file-copy"><span class="mono ex-output-file-name">${escHtml(f.file)}</span><span class="ex-output-file-detail">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.metadata ? t('digest-bound column metadata', '摘要绑定列元数据') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || '')))))}</span></span>${canOpen ? `<span class="ex-output-open-icon">${icon('arrow', 12)}</span>` : ''}</${canOpen ? 'button' : 'div'}>`).join('')}
       </div>`;
   }
 
@@ -1883,9 +1822,25 @@
       // real-data connect / scan / convert
       const pathInput = root.querySelector('#exPathInput');
       if (pathInput) pathInput.addEventListener('input', () => { exPath = pathInput.value; });
+      const chooseDataFolder = () => {
+        if (window.EU_API && window.EU_API.listDir) {
+          openFolderPicker(exPath, picked => {
+            exPath = picked;
+            exReal = 'connect'; exScanError = null; exScanResult = null;
+            startScan(null);
+          }, t('Select the ICU data folder', '选择 ICU 数据文件夹'));
+        } else if (pathInput) {
+          pathInput.focus();
+          pathInput.select();
+        }
+      };
       const analyzeBtn = root.querySelector('[data-ex-analyze]');
       if (analyzeBtn) analyzeBtn.addEventListener('click', () => {
         if (pathInput) exPath = pathInput.value || exPath;
+        if (pathNeedsFolderChoice(exPath)) {
+          chooseDataFolder();
+          return;
+        }
         startScan(null);
       });
       const manualBtn = root.querySelector('[data-ex-manual]');
@@ -1893,15 +1848,7 @@
         exManualSourceOpen = !exManualSourceOpen;
         repaint();
       });
-      root.querySelectorAll('[data-ex-browse]').forEach(browseBtn => browseBtn.addEventListener('click', () => {
-        if (window.EU_API && window.EU_API.listDir) {
-          openFolderPicker(exPath, picked => {
-            exPath = picked;
-            exReal = 'connect'; exScanError = null; exScanResult = null;
-            repaint();
-          });
-        } else if (pathInput) { pathInput.focus(); pathInput.select(); }
-      }));
+      root.querySelectorAll('[data-ex-browse]').forEach(browseBtn => browseBtn.addEventListener('click', chooseDataFolder));
       const openExportDestinationPicker = () => {
         if (window.EU_API && window.EU_API.listDir) {
           openFolderPicker(currentExportDir(), picked => {
@@ -1919,8 +1866,16 @@
         startScan(b.dataset.exSrc);
       }));
       const useDataBtn = root.querySelector('[data-ex-usedata]'); if (useDataBtn) useDataBtn.addEventListener('click', () => {
-        if (exSource === 'module') rememberExportPath(exPath);
-        exReal = 'ready'; repaint();
+        useDataBtn.disabled = true;
+        const registered = exSource === 'module'
+          ? rememberExportPath(exPath)
+          : Promise.resolve(null);
+        Promise.resolve(registered).then(() => {
+          exReal = 'ready';
+          repaint();
+        }).catch(() => {
+          useDataBtn.disabled = false;
+        });
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
       const resumeBtn = root.querySelector('[data-ex-resume]'); if (resumeBtn) resumeBtn.addEventListener('click', () => { resumeConvert(); });
@@ -1934,7 +1889,9 @@
         setTimeout(() => { const el = document.querySelector('.ex-export-destination'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
       }));
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
+      root.querySelectorAll('[data-ex-open-output]').forEach(b => b.addEventListener('click', () => openExtractionOutput(b.dataset.exOpenOutput || '', b)));
+      root.querySelectorAll('[data-ex-sync-guided]').forEach(b => b.addEventListener('click', () => continueInGuidedCopilot(b)));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
       // custom disclosure
       const cust = root.querySelector('[data-ex-custom]');
       if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); setTimeout(() => { const el = root.querySelector('.ex2-custom'); if (el && exCustomOpen) el.scrollIntoView ? null : null; }, 0); });
@@ -1983,22 +1940,6 @@
         exIncludeDefinitions = !exIncludeDefinitions;
         repaint();
       }));
-      root.querySelectorAll('[data-ex-filter-load]').forEach(b => b.addEventListener('click', loadExtractionFilters));
-      const coverage = root.querySelector('[data-ex-filter-coverage]'); if (coverage) coverage.addEventListener('click', e => {
-        const b = e.target.closest('button'); if (!b) return;
-        exMinCoveragePct = Number(b.dataset.val || 0);
-        previewExtractionFilters();
-      });
-      const quality = root.querySelector('[data-ex-filter-quality]'); if (quality) quality.addEventListener('click', e => {
-        const b = e.target.closest('button'); if (!b) return;
-        exQualityStatus = b.dataset.val || 'all';
-        previewExtractionFilters();
-      });
-      root.querySelectorAll('[data-ex-filter-apply]').forEach(b => b.addEventListener('click', previewExtractionFilters));
-      root.querySelectorAll('[data-ex-filter-usemods]').forEach(b => b.addEventListener('click', useMatchedFilterModules));
-      if (dataMode() === 'real' && exAdvCohort && !exFilterOptions && !exFilterLoading && !exFilterError) {
-        setTimeout(loadExtractionFilters, 0);
-      }
       if (window.EUExtractionSepsis && window.EUExtractionSepsis.bind) {
         window.EUExtractionSepsis.bind(root, {
           database: (exScanResult && exScanResult.db_key) || 'miiv',
@@ -2053,8 +1994,41 @@
       // Rule for this card: every control visible at configure/confirm time must
       // round-trip into the job payload — display-only switches were removed.
       // ICD disease-cohort filter (folded in from the former standalone screen)
-      if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root);
+      if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root, icdSourceContext());
       if (window.__euExtractFocusICD) window.__euExtractFocusICD = false;
+    },
+  };
+
+  window.EU_EXTRACTION_NATIVE_OWNER = {
+    render: () => S.extraction.render(),
+    bind: host => S.extraction.afterRender(host),
+    isReal: () => dataMode() === 'real',
+    isPreparedExport: () => dataMode() === 'real' && exSource === 'module' && exReal === 'ready',
+    setupSummary: extractionSetupSummary,
+    sourceBindingSnapshot,
+    bindSourceToCopilot,
+    syncToCopilot: syncExtractionToCopilot,
+    handoffReceipt: extractionHandoffReceipt,
+    applyExtractionScope(scope) {
+      if (scope === 'all_supported') {
+        setAllModules(true);
+        exShowAllMods = true;
+        exCustomOpen = true;
+      }
+    },
+    beginSourceBinding() {
+      abandonExtractionContinuity();
+      exView = 'home';
+      exReal = 'connect';
+      exPath = '';
+      exSource = null;
+      exScanResult = null;
+      exScanError = null;
+      exDatabaseMismatch = null;
+    },
+    useRealData() {
+      if (window.setDataMode) window.setDataMode('real', { force: true });
+      else window.EU_DATA = 'real';
     },
   };
 })();

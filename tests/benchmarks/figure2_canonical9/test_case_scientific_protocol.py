@@ -15,8 +15,10 @@ from benchmarks.figure2_canonical9.case_scientific_protocol import (
 )
 
 
-def test_e2_h1_h2_h3_protocols_are_strict_and_content_digestable() -> None:
+def test_governed_case_protocols_are_strict_and_content_digestable() -> None:
     e2 = load_default_case_protocol("e2_lactate_mortality")
+    e3 = load_default_case_protocol("e3_kdigo_gradient")
+    m1 = load_default_case_protocol("m1_hepatobiliary_missingness")
     h1 = load_default_case_protocol("h1_ventilation_survival")
     h2 = load_default_case_protocol("h2_vasopressor_causal")
     h3 = load_default_case_protocol("h3_trajectory_clustering")
@@ -25,6 +27,35 @@ def test_e2_h1_h2_h3_protocols_are_strict_and_content_digestable() -> None:
     assert e2.primary_model.exposure_form == "restricted_cubic_spline"
     assert e2.primary_model.knot_quantiles == (0.10, 0.50, 0.90)
     assert "ssc_adult_2026" in {item.citation_id for item in e2.citations}
+    assert e3.landmark_hours == 24
+    assert e3.stage_levels == (0, 1, 2, 3)
+    assert e3.exposure_definition_sensitivities == (
+        "aki_stage_creat_max",
+        "aki_stage_uo_max",
+    )
+    e3_projection = build_runtime_scientific_projection(e3)
+    e3_execution = e3_projection.deterministic_execution_contract
+    assert e3_execution is not None
+    assert e3_execution["output_product"] == "table:e3_scientific_sensitivity"
+    assert [item["analysis_id"] for item in e3_execution["variants"]] == [
+        "primary_full_cohort",
+        "landmark_combined_stage",
+        "landmark_creatinine_stage",
+        "landmark_urine_output_stage",
+        "landmark_non_readmission_stays",
+    ]
+    landmark = e3_execution["variants"][1]["filters"][0]
+    assert landmark["observation_duration_column"] == "los_icu"
+    assert landmark["observation_duration_unit"] == "days"
+    assert m1.primary_exposure_column == "bili_max"
+    assert m1.alternative_exposure_column == "bili_first"
+    m1_projection = build_runtime_scientific_projection(m1)
+    m1_execution = m1_projection.deterministic_execution_contract
+    assert m1_execution is not None
+    assert m1_execution["alternative_exposure_columns"] == ["bili_first"]
+    assert "table:m1_exposure_definition_sensitivity" in (
+        m1_execution["plan_outputs"]
+    )
     assert h1.landmark_hours == 24
     assert h1.proportional_hazards_policy == "block_paper_authorization"
     assert h1.review_status == "ai_development_reviewed_human_attestation_pending"
@@ -55,7 +86,7 @@ def test_e2_h1_h2_h3_protocols_are_strict_and_content_digestable() -> None:
         h3_execution["upper_boundary_action"]
         == "fail_closed_if_selected_at_upper_boundary"
     )
-    for protocol in (e2, h1, h2, h3):
+    for protocol in (e2, e3, m1, h1, h2, h3):
         assert len(case_protocol_content_sha256(protocol)) == 64
         projection = build_runtime_scientific_projection(protocol)
         assert projection.protocol_content_sha256 == case_protocol_content_sha256(

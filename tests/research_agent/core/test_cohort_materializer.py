@@ -1,0 +1,985 @@
+"""Unit tests for the cohort materializer's deterministic core.
+
+These do not touch a real database; they exercise the per-stay summarisation,
+windowing, predicate-column, binary-outcome helpers, and the CTAS 纳排
+integration on synthetic frames so the logic is covered in CI.
+"""
+
+import hashlib
+import json
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
+from easyicu.research_agent.cohort import materializer as M
+from easyicu.research_agent.cohort.schema import CohortDefinition, build_cohort
+from easyicu.research_agent.intake import export_package as intake
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_typed_bounds_exclusion_is_explicit_and_receipted():
+    values = pd.Series([1.0, 51.0, None])
+    counts = {}
+
+    filtered = M._bounded_typed_numeric(
+        pd.to_numeric(values, errors="coerce"),
+        original=values,
+        metadata=SimpleNamespace(
+            extraction_bounds=SimpleNamespace(minimum=0.0, maximum=50.0)
+        ),
+        concept="lact",
+        purpose="test",
+        bounds_violation_policy="exclude_with_receipt",
+        bounds_violation_counts=counts,
+    )
+
+    assert filtered.iloc[0] == 1.0
+    assert pd.isna(filtered.iloc[1])
+    assert counts == {"lact": 1}
+
+
+def test_typed_bounds_default_still_rejects():
+    values = pd.Series([51.0])
+
+    with pytest.raises(M.MaterializedMetadataError, match="outside sealed"):
+        M._bounded_typed_numeric(
+            values,
+            original=values,
+            metadata=SimpleNamespace(
+                extraction_bounds=SimpleNamespace(minimum=0.0, maximum=50.0)
+            ),
+            concept="lact",
+            purpose="test",
+        )
+
+
+def test_legacy_concept_bounds_exclude_before_stay_aggregation(
+    monkeypatch, tmp_path
+):
+    source = {
+        "age": pd.DataFrame({"stay_id": [1, 2], "age": [60.0, 70.0]}),
+        "lact": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2],
+                "charttime": [1.0, 2.0, 1.0],
+                "lact": [2.0, 1_276_103.0, 3.0],
+            }
+        ),
+        "death": pd.DataFrame({"stay_id": [1, 2], "death": [1, 0]}),
+    }
+
+    def fake_load(
+        _source_mode,
+        _source_handle,
+        concept,
+        _database,
+        _patient_ids,
+        _unavailable,
+    ):
+        return source[concept].copy()
+
+    monkeypatch.setattr(M, "_load_concept", fake_load)
+    cohort, provenance, _collector = M._materialize_cohort_from_resolved_source(
+        feature_concepts=("lact",),
+        database="miiv",
+        cohort_definition=None,
+        cohort_window=(0.0, 24.0),
+        outcome_concepts=("death",),
+        static_concepts=("age",),
+        patient_ids=None,
+        source_mode="converted",
+        root=tmp_path,
+        export_package=None,
+        t0=0.0,
+        bounds_violation_policy="exclude_with_receipt",
+        positive_only_event_concepts=(),
+        verify_source_package=False,
+    )
+
+    first_stay = cohort.loc[cohort["stay_id"].eq(1)].iloc[0]
+    assert first_stay["lact_max"] == 2.0
+    assert first_stay["lact_n"] == 1
+    assert provenance["source_bounds_violation_policy"] == "exclude_with_receipt"
+    assert provenance["source_bounds_exclusions"] == {"lact": 1}
+
+
+def test_replacement_patient_identity_preserves_rows_and_patient_groups(tmp_path):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [11, 12, 13],
+            "age": [60, 61, 70],
+        }
+    )
+    mapping_path = tmp_path / "stay_patient.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [11, 12, 13],
+            "patient_key": [100, 100, 200],
+        }
+    ).to_parquet(mapping_path, index=False)
+
+    result, receipt = M._replace_row_identity_from_mapping(
+        cohort,
+        mapping_path=mapping_path.absolute(),
+        mapping_sha256=_sha256(mapping_path),
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+        output_identity_column="patient_stay_id",
+        authority_coordinates={"bridge_ref": "test/bridge"},
+    )
+
+    assert result.columns.tolist() == ["patient_stay_id", "age"]
+    assert result["patient_stay_id"].tolist() == [
+        "p100:s11",
+        "p100:s12",
+        "p200:s13",
+    ]
+    assert result["patient_stay_id"].str.split(":s").str[0].tolist() == [
+        "p100",
+        "p100",
+        "p200",
+    ]
+    assert receipt["mapped_cohort_rows"] == 3
+    assert receipt["patient_group_derivation"] == {
+        "algorithm": "prefix_before_:s",
+        "delimiter": ":s",
+    }
+    assert receipt["authority_coordinates"] == {"bridge_ref": "test/bridge"}
+
+
+def test_replacement_patient_identity_rejects_uncovered_stay(tmp_path):
+    cohort = pd.DataFrame({"stay_id": [11, 12], "age": [60, 61]})
+    mapping_path = tmp_path / "stay_patient.parquet"
+    pd.DataFrame({"stay_id": [11], "patient_key": [100]}).to_parquet(
+        mapping_path, index=False
+    )
+
+    with pytest.raises(M.MaterializedMetadataError, match="cover every cohort stay"):
+        M._replace_row_identity_from_mapping(
+            cohort,
+            mapping_path=mapping_path.absolute(),
+            mapping_sha256=_sha256(mapping_path),
+            mapping_stay_column="stay_id",
+            mapping_patient_column="patient_key",
+            output_identity_column="patient_stay_id",
+            authority_coordinates=None,
+        )
+
+
+def test_replacement_patient_identity_rejects_digest_mismatch(tmp_path):
+    mapping_path = tmp_path / "stay_patient.parquet"
+    pd.DataFrame({"stay_id": [11], "patient_key": [100]}).to_parquet(
+        mapping_path, index=False
+    )
+
+    with pytest.raises(M.MaterializedMetadataError, match="digest mismatch"):
+        M._replace_row_identity_from_mapping(
+            pd.DataFrame({"stay_id": [11]}),
+            mapping_path=mapping_path.absolute(),
+            mapping_sha256="0" * 64,
+            mapping_stay_column="stay_id",
+            mapping_patient_column="patient_key",
+            output_identity_column="patient_stay_id",
+            authority_coordinates=None,
+        )
+
+
+def test_load_concept_uses_public_easyicu_api_after_package_move(monkeypatch, tmp_path):
+    from easyicu import api as easyicu_api
+
+    expected = pd.DataFrame({"stay_id": [1], "lact": [2.5]})
+    calls = []
+
+    def fake_load_concepts(concepts, **kwargs):
+        calls.append((concepts, kwargs))
+        return expected
+
+    monkeypatch.setattr(easyicu_api, "load_concepts", fake_load_concepts)
+
+    loaded = M._load_concept(
+        "converted",
+        tmp_path,
+        "lact",
+        "miiv",
+        None,
+        [],
+    )
+
+    pd.testing.assert_frame_equal(loaded, expected)
+    assert calls == [
+        (
+            ["lact"],
+            {
+                "database": "miiv",
+                "data_path": str(tmp_path),
+                "patient_ids": None,
+                "keep_components": False,
+            },
+        )
+    ]
+
+
+def test_summarize_timeseries_basic():
+    df = pd.DataFrame(
+        {"stay_id": [1, 1, 2], "charttime": [1, 5, 2], "lact": [3.0, 5.0, 1.0]}
+    )
+    out = M._summarize_timeseries(df, "lact", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.lact_max == 5.0
+    assert r1.lact_min == 3.0
+    assert r1.lact_first == 3.0
+    assert r1.lact_n == 2
+    assert r1.lact_measured == 1
+
+
+def test_summarize_timeseries_emits_first_and_last_observation_time():
+    # These are observation coordinates, not treatment initiation. An explicit
+    # zero is a real observation and must remain the first_time even when a
+    # later positive dose is the first evidence of treatment in this window.
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 1, 2],
+            "charttime": [1, 2, 6, 9, 4],
+            "norepi_rate": [None, 0.0, 0.04, 0.06, 0.10],
+        }
+    )
+    out = M._summarize_timeseries(df, "norepi_rate", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.norepi_rate_first_time == 2.0
+    assert r1.norepi_rate_last_time == 9.0
+    r2 = out[out.stay_id == 2].iloc[0]
+    assert r2.norepi_rate_first_time == 4.0
+
+
+def test_first_time_is_first_observation_for_categorical_concept():
+    # Presence encoding must not back-date the first observed categorical value
+    # to the window start. It still does not certify clinical onset/initiation.
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [2, 5, 8],
+            "vent": ["invasive", "invasive", "invasive"],
+        }
+    )
+    out = M._summarize_timeseries(df, "vent", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.vent_first_time == 2.0
+    assert r1.vent_last_time == 8.0
+
+
+def test_build_trajectory_long_emits_per_timepoint_series(monkeypatch, tmp_path):
+    # The trajectory layer must keep the raw per-timepoint values (so the agent
+    # can compute a threshold-crossing onset like "first MAP < 65"), only the
+    # recorded rows, with a numeric and a raw view.
+    synthetic = {
+        "map": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 1, 2],
+                "charttime": [0.0, 2.0, 5.0, 1.0],
+                "map": [80.0, 60.0, None, 55.0],  # stay 1 crosses <65 at t=2
+            }
+        ),
+        "peep": pd.DataFrame(
+            {"stay_id": [1, 2], "charttime": [1.0, 0.0], "peep": [5.0, 8.0]}
+        ),
+    }
+
+    def fake_load(source_mode, root, concept, database, patient_ids, unavailable):
+        return synthetic.get(concept, pd.DataFrame(columns=["stay_id"]))
+
+    monkeypatch.setattr(M, "_load_concept", fake_load)
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+
+    long_df, prov = M.build_trajectory_long(
+        data_path=tmp_path, concepts=["map", "peep", "absent"]
+    )
+    assert set(long_df.columns) == {
+        "stay_id",
+        "charttime",
+        "concept",
+        "value_num",
+        "value_str",
+        "evidence_state",
+        "owner_observed",
+        "owner_available",
+    }
+    # the None MAP row is dropped (not recorded); 3 map + 2 peep = 5 rows
+    assert len(long_df) == 5
+    assert prov["trajectory_concepts_materialized"] == ["map", "peep"]
+    assert "absent" not in prov["trajectory_concepts_materialized"]
+    # onset construction is now possible from the long frame
+    s1_map = long_df[(long_df.stay_id == 1) & (long_df.concept == "map")]
+    first_low = s1_map[s1_map.value_num < 65].sort_values("charttime").iloc[0]
+    assert first_low.charttime == 2.0
+
+
+def test_trajectory_excludes_owner_unavailable_zero_and_preserves_locf_receipt(
+    monkeypatch, tmp_path
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 0.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=tmp_path,
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0, 24.0]
+    assert long_df["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert long_df["owner_observed"].tolist() == [1, 0]
+    assert long_df["owner_available"].tolist() == [1, 1]
+    assert provenance["evidence_state_counts"] == {
+        "sofa2_resp": {
+            "unavailable": 1,
+            "direct_observed": 1,
+            "owner_locf_available": 1,
+        }
+    }
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+    assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
+
+
+def test_trajectory_excludes_owner_observed_but_unscoreable_measurement(
+    monkeypatch, tmp_path
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 12.0],
+            "sofa2_resp": [None, 2.0],
+            # A direct respiratory-domain measurement can be insufficient to
+            # issue a score (for example SpO2 >= 98%). Observed and available
+            # are intentionally distinct owner claims.
+            "sofa2_resp_observed": [1, 1],
+            "sofa2_resp_available": [0, 1],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=tmp_path,
+        concepts=["sofa2_resp"],
+        window=(0.0, 12.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0]
+    assert long_df["evidence_state"].tolist() == ["direct_observed"]
+    assert provenance["evidence_state_counts"] == {
+        "sofa2_resp": {
+            "unavailable": 1,
+            "direct_observed": 1,
+        }
+    }
+
+
+def test_trajectory_ignores_wide_module_row_without_owner_claim(
+    monkeypatch, tmp_path
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 12.0],
+            "sofa2_resp": [None, 2.0],
+            "sofa2_resp_observed": [None, 1],
+            "sofa2_resp_available": [None, 1],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    long_df, _ = M.build_trajectory_long(
+        data_path=tmp_path,
+        concepts=["sofa2_resp"],
+        window=(0.0, 12.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0]
+
+
+@pytest.mark.parametrize(
+    ("value", "observed", "available", "message"),
+    [
+        (2.0, None, None, "value without an owner evidence receipt"),
+        (2.0, 1, None, "incomplete owner evidence receipt row"),
+    ],
+)
+def test_trajectory_rejects_row_level_owner_receipt_gaps(
+    monkeypatch, tmp_path, value, observed, available, message
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2_resp": [value],
+            "sofa2_resp_observed": [observed],
+            "sofa2_resp_available": [available],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    with pytest.raises(M.MaterializedMetadataError, match=message):
+        M.build_trajectory_long(
+            data_path=tmp_path,
+            concepts=["sofa2_resp"],
+            window=(0.0, 12.0),
+        )
+
+
+def _write_native_sofa2_package(tmp_path, *, include_available=True):
+    root = tmp_path / "native_sofa2"
+    root.mkdir()
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 12.0, 24.0],
+            "sofa2_resp": [0.0, 0.0, 2.0],
+            "sofa2_resp_observed": [0, 1, 0],
+            "sofa2_resp_available": [0, 1, 1],
+        }
+    )
+    if not include_available:
+        frame = frame.drop(columns=["sofa2_resp_available"])
+    frame.to_parquet(root / "scores.parquet", index=False)
+    concept_ids = [
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        *(["sofa2_resp_available"] if include_available else []),
+    ]
+    manifest = {
+        "database": "miiv",
+        "format": "parquet",
+        "concept_selection": {
+            "mode": "explicit",
+            "modules": {"scores": concept_ids},
+        },
+        "files": [
+            {
+                "file": "scores.parquet",
+                "module": "scores",
+                "concepts": len(concept_ids),
+                "concept_ids": concept_ids,
+                "rows": len(frame),
+            }
+        ],
+        "feature_definitions": {"included": False},
+    }
+    (root / intake.NATIVE_MANIFEST).write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    return root
+
+
+def test_native_export_trajectory_preserves_owner_receipts(tmp_path):
+    root = _write_native_sofa2_package(tmp_path)
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=root,
+        database="miiv",
+        concepts=["sofa2_resp"],
+        window=(0.0, 24.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0, 24.0]
+    assert long_df["evidence_state"].tolist() == [
+        "direct_observed",
+        "owner_locf_available",
+    ]
+    assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
+    assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
+
+
+def test_native_export_trajectory_fails_closed_without_complete_owner_receipt(
+    tmp_path,
+):
+    root = _write_native_sofa2_package(tmp_path, include_available=False)
+
+    with pytest.raises(M.MaterializedMetadataError, match="owner.*receipt"):
+        M.build_trajectory_long(
+            data_path=root,
+            database="miiv",
+            concepts=["sofa2_resp"],
+            window=(0.0, 24.0),
+        )
+
+
+def test_build_trajectory_long_respects_window(monkeypatch, tmp_path):
+    synthetic = {
+        "lact": pd.DataFrame(
+            {"stay_id": [1, 1], "charttime": [3.0, 48.0], "lact": [2.0, 9.0]}
+        )
+    }
+    monkeypatch.setattr(
+        M,
+        "_load_concept",
+        lambda sm, r, c, db, pid, un: synthetic.get(
+            c, pd.DataFrame(columns=["stay_id"])
+        ),
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    long_df, _ = M.build_trajectory_long(
+        data_path=tmp_path, concepts=["lact"], window=(0.0, 24.0)
+    )
+    # the 48h row is outside the window
+    assert long_df.charttime.tolist() == [3.0]
+
+
+def test_event_time_column_carries_time_of_event():
+    # death indexed by deathtime: the charttime of the event row IS the
+    # time-of-death (hours from ICU admission). Survivors have no event -> no
+    # time row (NaN after merge), never a spurious 0.
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 2, 3],
+            "charttime": [87.0, float("nan"), float("nan"), 12.0],
+            "death": [True, None, None, True],
+        }
+    )
+    out = M._event_time_column(df, "death")
+    assert set(out.columns) == {"stay_id", "death_time"}
+    assert out[out.stay_id == 1].iloc[0].death_time == 87.0
+    assert out[out.stay_id == 3].iloc[0].death_time == 12.0
+    # stay 2 never died -> not present (becomes NaN after the left-merge)
+    assert (out.stay_id == 2).sum() == 0
+
+
+def test_event_time_column_empty_without_time_index():
+    # A purely stay-level derived flag with no charttime yields no event time.
+    df = pd.DataFrame({"stay_id": [1, 2], "death": [1, 0]})
+    out = M._event_time_column(df, "death")
+    assert list(out.columns) == ["stay_id"]
+    assert out.empty
+
+
+def test_first_time_absent_when_concept_never_recorded():
+    # A stay with only NaN values gets no observed-time coordinate. This does
+    # not prove that the clinical state/event never occurred.
+    df = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [1, 2], "norepi_rate": [None, None]}
+    )
+    out = M._summarize_timeseries(df, "norepi_rate", (0.0, 24.0))
+    # no recorded value -> no timing row for this stay
+    assert (
+        "norepi_rate_first_time" not in out.columns
+        or out["norepi_rate_first_time"].isna().all()
+    )
+
+
+def test_summarize_timeseries_categorical_concept_becomes_presence():
+    # A concept stored as object/text (e.g. a ventilation status or a
+    # vasopressor name) cannot be reduced with max/mean and used to raise
+    # "agg function failed dtype->object". It must instead summarise PRESENCE:
+    # 1 where the event is recorded, 0 for an explicit negative token.
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 3],
+            "charttime": [1, 2, 1, 5],
+            "vent": ["invasive", "invasive", "niv", "none"],
+        }
+    )
+    out = M._summarize_timeseries(df, "vent", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.vent_max == 1.0  # ever ventilated in window
+    assert r1.vent_mean == 1.0
+    assert r1.vent_n == 2
+    r3 = out[out.stay_id == 3].iloc[0]
+    assert r3.vent_max == 0.0  # "none" is a negative token
+    assert r3.vent_measured == 1
+
+
+def test_typed_categorical_value_becomes_recorded_presence():
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2],
+            "charttime": [1.0, 2.0, 1.0],
+            "mech_vent": ["invasive", "noninvasive", None],
+        }
+    )
+
+    out, presence_encoded = M._summarize_timeseries_with_representation(
+        df,
+        "mech_vent",
+        (0.0, 24.0),
+        source_role=M.ConceptColumnRole.VALUE,
+    )
+
+    assert presence_encoded is True
+    assert out.loc[out["stay_id"] == 1, "mech_vent_max"].iloc[0] == 1.0
+
+
+def test_declared_positive_only_event_decodes_structural_absence():
+    wide = pd.DataFrame(
+        {
+            "vaso_ind_max": [1.0, None],
+            "vaso_ind_min": [1.0, None],
+            "vaso_ind_mean": [0.5, None],
+            "vaso_ind_first": [1.0, None],
+            "vaso_ind_n": [3, 0],
+        }
+    )
+
+    normalized = M._normalize_declared_positive_only_event_concepts(
+        wide,
+        concepts=("vaso_ind",),
+    )
+
+    assert normalized == [
+        "vaso_ind_max",
+        "vaso_ind_min",
+        "vaso_ind_mean",
+        "vaso_ind_first",
+    ]
+    assert wide["vaso_ind_max"].tolist() == [1.0, 0.0]
+    assert wide["vaso_ind_mean"].tolist() == [0.5, 0.0]
+    assert wide["vaso_ind_n"].tolist() == [3, 0]
+
+
+def test_declared_positive_only_event_decodes_nullable_boolean_summary():
+    wide = pd.DataFrame(
+        {
+            "sep3_sofa2_max": pd.Series([True, pd.NA], dtype="boolean"),
+            "sep3_sofa2_mean": pd.Series([True, pd.NA], dtype="boolean"),
+        }
+    )
+
+    normalized = M._normalize_declared_positive_only_event_concepts(
+        wide,
+        concepts=("sep3_sofa2",),
+    )
+
+    assert normalized == ["sep3_sofa2_max", "sep3_sofa2_mean"]
+    assert wide["sep3_sofa2_max"].tolist() == [1, 0]
+    assert wide["sep3_sofa2_mean"].tolist() == [1.0, 0.0]
+
+
+def test_declared_positive_only_event_rejects_nonbinary_values():
+    wide = pd.DataFrame({"vaso_ind_max": [2.0]})
+
+    with pytest.raises(M.MaterializedMetadataError, match="outside its domain"):
+        M._normalize_declared_positive_only_event_concepts(
+            wide,
+            concepts=("vaso_ind",),
+        )
+
+
+def test_summarize_timeseries_numeric_stored_as_text_uses_numeric_view():
+    # Numbers stored as strings stay numeric (the object branch coerces);
+    # an unparseable cell honestly drops to NaN, not a crash.
+    df = pd.DataFrame({"stay_id": [1, 1], "charttime": [1, 2], "crea": ["1.2", "bad"]})
+    out = M._summarize_timeseries(df, "crea", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.crea_max == 1.2
+    assert r1.crea_n == 1  # only the parseable value counts
+
+
+def test_window_excludes_out_of_window_records():
+    df = pd.DataFrame({"stay_id": [1, 1], "charttime": [1, 30], "lact": [3.0, 9.0]})
+    out = M._summarize_timeseries(df, "lact", (0.0, 24.0))
+    # the 30h record is outside the first-24h window and must not count
+    assert out[out.stay_id == 1].iloc[0].lact_max == 3.0
+
+
+def test_predicate_column_uses_declared_aggregation():
+    df = pd.DataFrame({"stay_id": [1, 1, 2], "charttime": [1, 2, 1], "sofa": [2, 7, 1]})
+    out = M._predicate_column(df, "sofa", (0.0, 24.0), "max")
+    assert set(out.columns) == {"stay_id", "sofa"}
+    assert out[out.stay_id == 1].iloc[0].sofa == 7
+
+
+def test_predicate_column_rejects_unknown_aggregation():
+    df = pd.DataFrame({"stay_id": [1], "charttime": [1], "sofa": [2]})
+    with pytest.raises(ValueError, match="unsupported cohort predicate aggregation"):
+        M._predicate_column(df, "sofa", (0.0, 24.0), "mode")
+
+
+def test_predicate_column_supports_last_aggregation():
+    df = pd.DataFrame({"stay_id": [1, 1], "charttime": [2, 1], "sofa": [7, 2]})
+    first = M._predicate_column(df, "sofa", (0.0, 24.0), "first")
+    out = M._predicate_column(df, "sofa", (0.0, 24.0), "last")
+    assert first[first.stay_id == 1].iloc[0].sofa == 2
+    assert out[out.stay_id == 1].iloc[0].sofa == 7
+
+
+def test_predicate_column_all_requires_observed_truthy_values():
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 2],
+            "charttime": [1, 2, 1, 2],
+            "flag": [None, None, "1", "true"],
+        }
+    )
+    out = M._predicate_column(df, "flag", (0.0, 24.0), "all")
+    got = dict(zip(out.stay_id.tolist(), out.flag.tolist()))
+    assert got == {1: False, 2: True}
+
+
+def test_binary_event_column_is_whole_stay():
+    # a death at 200h must still count as 1 (not windowed away)
+    df = pd.DataFrame({"stay_id": [1, 3], "charttime": [200, 5], "death": [True, True]})
+    out = M._binary_event_column(df, "death")
+    assert set(out.stay_id) == {1, 3}
+    assert out.death.tolist() == [1, 1]
+
+
+def test_binary_event_column_respects_zero_one_values():
+    df = pd.DataFrame({"stay_id": [1, 2, 2], "death": [0, 0, 1]})
+    out = M._binary_event_column(df, "death")
+    got = dict(zip(out.stay_id.tolist(), out.death.tolist()))
+    assert got == {1: 0, 2: 1}
+
+
+def test_binary_event_column_respects_numeric_strings():
+    df = pd.DataFrame({"stay_id": [1, 2, 2, 3], "death": ["0.0", "0", "1.0", "false"]})
+    out = M._binary_event_column(df, "death")
+    got = dict(zip(out.stay_id.tolist(), out.death.tolist()))
+    assert got == {1: 0, 2: 1, 3: 0}
+
+
+def test_binary_event_column_treats_event_rows_without_value_as_positive():
+    df = pd.DataFrame({"stay_id": [1, 3], "charttime": [200, 5]})
+    out = M._binary_event_column(df, "death")
+    assert dict(zip(out.stay_id.tolist(), out.death.tolist())) == {1: 1, 3: 1}
+
+
+def test_ctas_inclusion_filters_cohort():
+    wide = pd.DataFrame(
+        {"stay_id": [1, 2, 3], "age": [40, 10, 80], "lact": [5.0, 9.0, 1.0]}
+    )
+    cdef = CohortDefinition.from_dict(
+        {
+            "name": "adult_hyperlactatemia",
+            "inclusion": [
+                {
+                    "concept_id": "age",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
+                    "aggregation": "max",
+                    "op": ">=",
+                    "value": 18,
+                },
+                {
+                    "concept_id": "lact",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
+                    "aggregation": "max",
+                    "op": ">=",
+                    "value": 2,
+                },
+            ],
+            "exclusion": [],
+        }
+    )
+    out = build_cohort(cdef, wide)
+    # stay 2 excluded (age 10 < 18); stay 3 excluded (lact 1 < 2); only stay 1 remains
+    assert out.stay_id.tolist() == [1]
+
+
+def test_ctas_builder_accepts_schema_declared_aggregations_on_materialised_columns():
+    wide = pd.DataFrame({"stay_id": [1, 2], "lact": [3.0, 1.0]})
+    cdef = CohortDefinition.from_dict(
+        {
+            "name": "mean_lactate_gate",
+            "inclusion": [
+                {
+                    "concept_id": "lact",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
+                    "aggregation": "mean",
+                    "op": ">=",
+                    "value": 2,
+                },
+            ],
+            "exclusion": [],
+        }
+    )
+    out = build_cohort(cdef, wide)
+    assert out.stay_id.tolist() == [1]
+
+
+# ----------- event-indicator NA normalization (sep3-style flags) -----------
+
+
+def test_is_positive_only_boolean_distinguishes_event_from_numeric():
+    # event flag: only True observed, rest NA
+    assert M._is_positive_only_boolean(pd.Series([True, None, True])) is True
+    # numeric score with NA -> NOT an event flag (real missingness)
+    assert M._is_positive_only_boolean(pd.Series([3.0, None, 8.0])) is False
+    # 0/1 numeric -> NOT a positive-only bool flag
+    assert M._is_positive_only_boolean(pd.Series([0.0, 1.0, None])) is False
+    # all-NA -> not detectable
+    assert M._is_positive_only_boolean(pd.Series([None, None])) is False
+
+
+def test_normalize_event_indicator_decodes_na_as_zero():
+    wide = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "sep3_max": pd.Series([True, None, True], dtype=object),
+            "sep3_first": pd.Series([True, None, True], dtype=object),
+            "sep3_mean": pd.Series([1.0, None, 1.0]),
+            "sofa_max": pd.Series([3.0, None, 8.0]),  # numeric: must stay untouched
+        }
+    )
+    normalized = M._normalize_event_indicator_columns(wide)
+    # the sep3_* event family is decoded; the absent stay becomes 0, not NA
+    assert wide["sep3_max"].tolist() == [1, 0, 1]
+    assert wide["sep3_first"].tolist() == [1, 0, 1]
+    assert wide["sep3_mean"].tolist() == [1.0, 0.0, 1.0]
+    assert set(normalized) == {"sep3_max", "sep3_first", "sep3_mean"}
+    # a real numeric score keeps its NA (measurement-missing preserved)
+    assert wide["sofa_max"].isna().tolist() == [False, True, False]
+
+
+def test_normalize_event_indicator_handles_nullable_boolean_columns():
+    """Regression (H1 universe rebuild): a positive-only event indicator stored
+    as a pandas *nullable* boolean (True/<NA>) must normalise to a 0/1 column.
+
+    ``(col == True).astype(int)`` kept <NA> in the result and raised
+    "cannot convert NA to integer", which crashed the whole universe build.
+    Absence is the negative level ("0 when absent"), so <NA> -> 0.
+    """
+    wide = pd.DataFrame(
+        {
+            "death_max": pd.array([True, None, True], dtype="boolean"),
+            "death_first": pd.array([True, None, True], dtype="boolean"),
+            "death_mean": pd.array([1.0, None, 1.0], dtype="Float64"),
+            # a genuine numeric measure must be left untouched (not an indicator)
+            "sofa_max": [7, 3, None],
+        }
+    )
+
+    normalized = M._normalize_event_indicator_columns(wide)
+
+    assert "death_max" in normalized and "death_first" in normalized
+    assert wide["death_max"].tolist() == [1, 0, 1]
+    assert wide["death_first"].tolist() == [1, 0, 1]
+    # the _mean branch already coerced NA -> 0.0
+    assert wide["death_mean"].tolist() == [1.0, 0.0, 1.0]
+    # a numeric score is not a positive-only boolean -> not normalised/corrupted
+    assert "sofa_max" not in normalized
+
+
+def test_normalize_event_indicator_still_handles_object_true_none():
+    # The original working path: a positive-only indicator stored as object
+    # dtype (True / None). absence(None) -> 0, must be unchanged by the fix.
+    wide = pd.DataFrame(
+        {
+            "vent_max": pd.Series([True, None, True], dtype=object),
+            "vent_first": pd.Series([True, None, True], dtype=object),
+        }
+    )
+    normalized = M._normalize_event_indicator_columns(wide)
+    assert wide["vent_max"].tolist() == [1, 0, 1]
+    assert set(normalized) >= {"vent_max", "vent_first"}
+
+
+def test_windowed_death_exclusion_uses_event_time_not_wholestay_flag():
+    """Regression (H1 survival): a bounded-window occurrence exclusion on an
+    OUTCOME concept (``death``) that carries an event-time sibling
+    (``death_time``) must exclude only events INSIDE the window, using the event
+    time — not drop every event because the whole-stay flag is set. Previously
+    the landmark exclusion "died within 24h" removed all deaths -> 0 events."""
+    from easyicu.research_agent.cohort.schema import build_cohort, CohortDefinition
+
+    data = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "age": [65, 70, 55, 80, 60],
+            "death": [1, 1, 0, 1, 0],  # whole-stay flag
+            "death_time": [10.0, 87.0, None, 5.0, None],  # hours from admit
+        }
+    )
+    definition = CohortDefinition.from_dict(
+        {
+            "name": "landmark",
+            "inclusion": [
+                {
+                    "concept_id": "age",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0.0,
+                        "end_offset_hours": 24.0,
+                    },
+                    "aggregation": "first",
+                    "op": ">=",
+                    "value": 18,
+                },
+            ],
+            "exclusion": [
+                {
+                    "concept_id": "death",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0.0,
+                        "end_offset_hours": 24.0,
+                    },
+                    "aggregation": "any",
+                    "op": "==",
+                    "value": 1,
+                },
+            ],
+        }
+    )
+    coh = build_cohort(definition, data)
+    kept = set(coh["stay_id"])
+    # stays 1 (death@10h) and 4 (death@5h) died within the 24h landmark -> excluded.
+    # stay 2 died at 87h (a valid later event) -> KEPT; stays 3,5 survived -> KEPT.
+    assert kept == {2, 3, 5}
+    assert int(coh["death"].sum()) == 1  # the one late death (stay 2) survives
+
+
+def test_windowed_predicate_without_event_time_column_is_unchanged():
+    """A concept with no ``<concept>_time`` sibling keeps whole-stay semantics
+    (association runs like E3 have no death_time and must be unaffected)."""
+    from easyicu.research_agent.cohort.schema import build_cohort, CohortDefinition
+
+    data = pd.DataFrame({"stay_id": [1, 2, 3], "age": [65, 70, 55], "death": [1, 0, 1]})
+    definition = CohortDefinition.from_dict(
+        {
+            "name": "assoc",
+            "inclusion": [],
+            "exclusion": [
+                {
+                    "concept_id": "death",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0.0,
+                        "end_offset_hours": 24.0,
+                    },
+                    "aggregation": "any",
+                    "op": "==",
+                    "value": 1,
+                },
+            ],
+        }
+    )
+    coh = build_cohort(definition, data)
+    # no death_time column -> whole-stay exclusion, both deaths removed
+    assert set(coh["stay_id"]) == {2}

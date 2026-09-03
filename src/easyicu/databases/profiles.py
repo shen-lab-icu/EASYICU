@@ -22,6 +22,7 @@ class DatabaseProfileMetadata(BaseModel):
     """Display metadata declared by a public data-source registry entry."""
 
     display_name: str
+    reference_release: str | None = None
     aliases: tuple[str, ...] = Field(default_factory=tuple)
     display_order: int
 
@@ -34,6 +35,14 @@ class DatabaseProfileMetadata(BaseModel):
         if not text:
             raise ValueError("database display_name must be non-empty")
         return text
+
+    @field_validator("reference_release")
+    @classmethod
+    def _normalize_reference_release(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     @field_validator("aliases", mode="before")
     @classmethod
@@ -294,6 +303,7 @@ def _build_declared_profile(
     return DatabaseProfile(
         key=config.name,
         display_name=raw.get("display_name"),
+        reference_release=raw.get("reference_release"),
         aliases=raw.get("aliases") or (),
         display_order=raw.get("display_order"),
         stay_table=stay_table,
@@ -310,6 +320,7 @@ def _build_demo_profile(
     return DatabaseProfile(
         key=config.name,
         display_name=f"{parent.display_name} Demo",
+        reference_release=parent.reference_release,
         aliases=(config.name, config.name.replace("_", "-")),
         display_order=parent.display_order + 1000,
         stay_table=stay_table,

@@ -26,14 +26,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..authority.evidence_store import EvidenceStore
 from ..authority.runtime_artifacts import current_step_records
-from ..plan_utils import (
+from ..contracts.step_families import effect_output_authorized
+from ..planning.figure_plan_mutation import (
     _effect_figure_semantics_supported_by_inputs,
     _effect_figure_semantics_supported_by_model_roster,
-    _migrate_render_step_contract,
     _render_only_figure_step_intent,
-    effect_output_authorized,
 )
-from ..planning.figure_plan_shaping import close_empty_deterministic_figure_contracts
+from ..planning import figure_plan_shaping as _figure_plan
 from ..providers.prompt_budget import budgeted_role_client
 from ..providers.protocol import LLMMessage
 from ..robustness.panel import load_locked_robustness_specs, robustness_specs_sha
@@ -291,6 +290,100 @@ def _restore_resume_plan_robustness_lock(
     return restored, revision_path
 
 
+def _migrate_resume_scientific_runtime_binding(
+    *,
+    plan: AnalysisPlan,
+    resume_state: Optional[Dict[str, Any]],
+    resume_from_step_id: Optional[str],
+    scientific_runtime_authorities: Any,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...], list[ValidationFinding]]:
+    """Recompile a signed host binding only on steps selected for replay.
+
+    A saved plan can predate a stricter deterministic runtime authority.  The
+    fresh-plan path runs ``bind_plan`` before validation; resume must do the
+    same or the two paths disagree.  This migration remains fail closed: step
+    identity and order may not change, plan-level science may not change, and
+    no step that remains completed across the requested resume cut may change.
+    """
+
+    rebound, compile_findings = scientific_runtime_authorities.bind_plan(plan)
+    if rebound == plan:
+        return plan, None, (), list(compile_findings)
+
+    original_ids = [str(step.step_id) for step in plan.steps]
+    rebound_ids = [str(step.step_id) for step in rebound.steps]
+    if rebound_ids != original_ids:
+        raise LegacyResumePlanMigrationError(
+            "signed runtime resume binding changed step identity or order; "
+            "start a fresh plan"
+        )
+
+    original_payload = plan.model_dump(mode="json")
+    rebound_payload = rebound.model_dump(mode="json")
+    for payload in (original_payload, rebound_payload):
+        payload.pop("steps", None)
+        payload.pop("revision", None)
+    if rebound_payload != original_payload:
+        raise LegacyResumePlanMigrationError(
+            "signed runtime resume binding changed plan-level science; start a fresh plan"
+        )
+
+    changed_step_ids = tuple(
+        str(before.step_id)
+        for before, after in zip(plan.steps, rebound.steps, strict=True)
+        if before != after
+    )
+    completed_step_ids = {
+        str(record.get("step_id") or "")
+        for record in _resume_completed_records_for_plan_migration(
+            plan=plan,
+            resume_state=resume_state,
+            resume_from_step_id=resume_from_step_id,
+        )
+    }
+    completed_changes = sorted(set(changed_step_ids) & completed_step_ids)
+    if completed_changes:
+        raise LegacyResumePlanMigrationError(
+            "signed runtime resume binding would change completed steps: "
+            + ", ".join(completed_changes)
+        )
+
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    rebound = rebound.model_copy(update={"revision": revision})
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(rebound.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Deterministic resume migration recompiling the signed scientific "
+            "runtime binding on replay-selected steps."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="system",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "restore_signed_scientific_runtime_binding",
+            "target_step_ids": list(changed_step_ids),
+            "llm_signature": llm_signature,
+        },
+    )
+    return rebound, revision_path, changed_step_ids, list(compile_findings)
+
+
 def _migrate_legacy_resume_figure_render_edges(
     *,
     plan: AnalysisPlan,
@@ -348,7 +441,7 @@ def _migrate_legacy_resume_figure_render_edges(
         if str(step.step_id) not in completed_step_ids
         and (cut_index is None or index >= cut_index)
     ]
-    closed_plan, _closure_findings = close_empty_deterministic_figure_contracts(
+    closed_plan, _closure_findings = _figure_plan.close_empty_deterministic_figure_contracts(
         plan=plan,
         eligible_step_ids=eligible_figure_ids,
     )
@@ -522,7 +615,7 @@ def _migrate_legacy_resume_figure_render_edges(
         ):
             continue
 
-        revised_steps[index] = _migrate_render_step_contract(
+        revised_steps[index] = _figure_plan.migrate_render_step_contract(
             child, source_tokens, method="visualization"
         )
         migrated_step_ids.append(child_id)
@@ -587,7 +680,7 @@ def _migrate_legacy_resume_figure_render_edges(
             source_step_id=source_step_id,
             figure_outputs=figure_outputs,
         )
-        migrated_child = _migrate_render_step_contract(
+        migrated_child = _figure_plan.migrate_render_step_contract(
             child, source_tokens, intent=intended
         )
         if child == migrated_child:

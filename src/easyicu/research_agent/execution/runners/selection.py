@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ...authority.time_varying_runtime import TimeVaryingRuntimeAuthority
+from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
+from .time_varying_executor import time_varying_executor_code
+
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -78,15 +82,17 @@ from .robustness_figure_executor import (
 )
 from .adjusted_association_figure_executor import (
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
+    ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
+    association_overview_figure_executor_code,
+    association_overview_figure_executor_owns_step,
 )
 from .audit_panel_executor import (
     audit_panel_executor_code,
     audit_panel_executor_owns_step,
 )
 from .cohort_flow_figure_executor import (
-    COHORT_FLOW_INPUT,
     cohort_flow_figure_executor_code,
     cohort_flow_figure_executor_owns_step,
 )
@@ -143,11 +149,21 @@ from .trajectory_scientific_representation_executor import (
     trajectory_scientific_representation_executor_code,
     trajectory_scientific_representation_executor_owns_step,
 )
+from .trajectory_selection_figure_executor import (
+    TRAJECTORY_SELECTION_FIGURE_INPUTS,
+    trajectory_selection_figure_executor_code,
+    trajectory_selection_figure_executor_owns_step,
+)
 from .typed_input_binding import sole_typed_cohort_input
 from .landmark_spline_executor import (
     LANDMARK_SPLINE_ANALYSIS_KIND,
     landmark_spline_executor_code,
     landmark_spline_executor_owns_step,
+)
+from .landmark_spline_functional_form_executor import (
+    LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
+    landmark_spline_functional_form_executor_code,
+    landmark_spline_functional_form_executor_owns_step,
 )
 from .landmark_spline_robustness_executor import (
     LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
@@ -172,6 +188,12 @@ from .feasibility_protocol_executor import (
     feasibility_protocol_consumed_input_keys,
     feasibility_protocol_executor_code,
     feasibility_protocol_executor_owns_step,
+)
+from .scientific_reporting_executor import (
+    SCIENTIFIC_REPORTING_ANALYSIS_KIND,
+    scientific_reporting_consumed_input_keys,
+    scientific_reporting_executor_code,
+    scientific_reporting_executor_owns_step,
 )
 from .prediction_model_executor import (
     PREDICTION_MODEL_ANALYSIS_KIND,
@@ -455,6 +477,17 @@ def select_standard_executor(
                     )
                 )
             _missed(LANDMARK_SURVIVAL_FIGURE_ANALYSIS_KIND)
+        elif isinstance(sealed_current, TimeVaryingRuntimeAuthority):
+            if sealed_current.governed_step(plan) == step:
+                return _selected(StandardExecutorSelection(
+                    analysis_kind=TIME_VARYING_ANALYSIS_KIND,
+                    selection_reason="signed_time_varying_contract_preflight",
+                    progress_message="Using source-bound time-varying Cox executor",
+                    code=time_varying_executor_code(step, authority=sealed_current,
+                        runtime_projection_sha256=projection_digest, plausibility_scope=plausibility_scope),
+                    consumed_input_keys=_consumed_typed_cohort_inputs(step),
+                ))
+            _missed(TIME_VARYING_ANALYSIS_KIND)
         elif isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
             if landmark_spline_executor_owns_step(
                 step,
@@ -501,6 +534,34 @@ def select_standard_executor(
                     )
                 )
             _missed(LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND)
+            if landmark_spline_functional_form_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=(
+                            LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND
+                        ),
+                        selection_reason=(
+                            "signed_landmark_spline_functional_form_preflight"
+                        ),
+                        progress_message=(
+                            "Using signed landmark spline functional-form projection"
+                        ),
+                        code=landmark_spline_functional_form_executor_code(
+                            step,
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                        ),
+                        consumed_input_keys=(
+                            sealed_current.downstream_parent_product,
+                            sealed_current.linear_sensitivity_product,
+                        ),
+                    )
+                )
+            _missed(LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND)
         elif isinstance(sealed_current, SourceFeasibilityRuntimeAuthority):
             if source_feasibility_executor_owns_step(
                 step,
@@ -522,6 +583,21 @@ def select_standard_executor(
                     )
                 )
             _missed(SOURCE_FEASIBILITY_ANALYSIS_KIND)
+
+    if scientific_reporting_executor_owns_step(step):
+        if receipt_required:
+            _receipt_declined(SCIENTIFIC_REPORTING_ANALYSIS_KIND)
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=SCIENTIFIC_REPORTING_ANALYSIS_KIND,
+                selection_reason="typed_evidence_bound_scientific_report",
+                progress_message="Indexing registered scientific results",
+                code=scientific_reporting_executor_code(step),
+                consumed_input_keys=scientific_reporting_consumed_input_keys(step),
+            )
+        )
+    _missed(SCIENTIFIC_REPORTING_ANALYSIS_KIND)
 
     if feasibility_protocol_executor_owns_step(step):
         if receipt_required:
@@ -692,6 +768,25 @@ def select_standard_executor(
             )
         )
     _missed("robustness_figure")
+    if association_overview_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("association_overview_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="association_overview_figure",
+                selection_reason="association_overview_figure_contract_preflight",
+                progress_message="Using source-bound association overview renderer",
+                code=association_overview_figure_executor_code(
+                    step, display_labels=plan.display_labels
+                ),
+                consumed_input_keys=ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("association_overview_figure")
     if adjusted_association_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):
@@ -721,7 +816,7 @@ def select_standard_executor(
                 selection_reason="cohort_flow_figure_contract_preflight",
                 progress_message="Using digest-bound cohort-flow renderer",
                 code=cohort_flow_figure_executor_code(step),
-                consumed_input_keys=(COHORT_FLOW_INPUT,),
+                consumed_input_keys=tuple(str(value) for value in step.inputs),
                 host_sealed_renderer=True,
             )
         )
@@ -1068,6 +1163,17 @@ def select_standard_executor(
             )
         )
     _missed("trajectory_cluster_stability")
+    if trajectory_selection_figure_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="trajectory_selection_diagnostic_figure",
+                selection_reason="signed_trajectory_selection_figure_contract",
+                progress_message="Rendering signed trajectory selection diagnostics",
+                code=trajectory_selection_figure_executor_code(step),
+                consumed_input_keys=TRAJECTORY_SELECTION_FIGURE_INPUTS,
+            )
+        )
+    _missed("trajectory_selection_diagnostic_figure")
     survival_verdict = survival_primary_executor_verdict(step)
     if survival_verdict.claimed:
         survival_requirement = step.family_primary_result_requirement

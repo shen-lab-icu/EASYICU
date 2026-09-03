@@ -1,9 +1,10 @@
 """Verified-tool adapter for prespecified adjusted-association model grids.
 
 The executor composes the existing adjusted-association owner; it does not fit
-regressions itself.  A run-bound authority declares eligibility filters and
-stable nonlinear covariate bases, while the parent primary step supplies the
-outcome, exposure, adjustment set, term coding, contrast and estimator.  Every
+regressions itself.  A run-bound authority declares eligibility filters, an
+optional prespecified exposure-definition column, and stable nonlinear
+covariate bases, while the parent primary step supplies the outcome,
+adjustment set, term coding, contrast and estimator.  Every
 variant is then passed through ``run_adjusted_association_from_env`` and its
 ``statsmodels`` adapter.  Failed convergence, separation, rank loss, non-finite
 results, or disagreement with the parent reference fit are terminal.
@@ -40,6 +41,12 @@ from .typed_input_binding import load_typed_input
 ASSOCIATION_MODEL_GRID_ANALYSIS_KIND = "association_model_grid"
 _CORE_COLUMNS = (
     "analysis_id",
+    "is_reference",
+    "exposure",
+    "outcome",
+    "adjustment_covariates",
+    "fitted_covariates",
+    "landmark_hours",
     "n_stays",
     "n_events",
     "estimate",
@@ -214,8 +221,33 @@ def _eligibility_mask(
                 raise AssociationModelGridError(
                     "landmark eligibility cannot time every outcome event"
                 )
+            nonnegative_event_time = outcome.eq(0.0) | event_time.ge(0.0)
             alive = outcome.eq(0.0) | event_time.gt(rule.landmark_hours)
-            mask &= alive
+            under_observation = pd.Series(True, index=frame.index)
+            if rule.observation_duration_column is not None:
+                duration_column = rule.observation_duration_column
+                if duration_column not in frame.columns:
+                    raise AssociationModelGridError(
+                        f"observation-duration column {duration_column!r} is absent"
+                    )
+                duration_source = frame[duration_column]
+                duration = pd.to_numeric(duration_source, errors="coerce")
+                if bool((duration_source.notna() & duration.isna()).any()):
+                    raise AssociationModelGridError(
+                        "landmark observation duration is non-numeric"
+                    )
+                if bool((duration < 0.0).any()):
+                    raise AssociationModelGridError(
+                        "landmark observation duration is negative"
+                    )
+                threshold = float(rule.landmark_hours)
+                if rule.observation_duration_unit == "days":
+                    threshold /= 24.0
+                # Missing duration cannot establish landmark eligibility.  It
+                # is therefore excluded from this variant, while remaining in
+                # any separately declared full-cohort analysis.
+                under_observation = duration.notna() & duration.ge(threshold)
+            mask &= nonnegative_event_time & alive & under_observation
             continue
         if not isinstance(rule, AssociationModelGridLevelFilter):
             raise AssociationModelGridError("unsupported model-grid filter")
@@ -298,6 +330,7 @@ def _variant_model(
     requirement: PlannedModelRequirement,
     variant: AssociationModelGridVariant,
 ):
+    exposure = variant.exposure_column or requirement.exposure_source
     nonlinear = {item.source_column: item for item in variant.nonlinear_terms}
     terms = list(requirement.model_terms or ())
     term_by_name = {item.name: item for item in terms}
@@ -312,6 +345,17 @@ def _variant_model(
     covariates: list[str] = []
     basis_receipts: list[dict[str, Any]] = []
     for term in terms:
+        if term.role == "exposure":
+            if term.name != requirement.exposure_source:
+                raise AssociationModelGridError(
+                    "parent exposure term disagrees with its requirement"
+                )
+            compiled_terms.append(
+                term
+                if exposure == term.name
+                else term.model_copy(update={"name": exposure})
+            )
+            continue
         transform = nonlinear.get(term.name)
         if transform is None:
             compiled_terms.append(term)
@@ -349,7 +393,7 @@ def _variant_model(
         )
     if set(nonlinear) - set(term_by_name):
         raise AssociationModelGridError("nonlinear source is absent from parent terms")
-    return derived, covariates, compiled_terms, basis_receipts
+    return derived, exposure, covariates, compiled_terms, basis_receipts
 
 
 def _model_grid_number(value: Any, *, field: str) -> float:
@@ -445,7 +489,7 @@ def run_association_model_grid(
         outcome = _binary_outcome(eligible, requirement.outcome)
         n_stays = int(len(eligible))
         n_events = int(outcome.eq(1.0).sum())
-        model_frame, covariates, terms, receipts = _variant_model(
+        model_frame, exposure, covariates, terms, receipts = _variant_model(
             eligible,
             requirement=requirement,
             variant=variant,
@@ -459,7 +503,7 @@ def run_association_model_grid(
                 requirement_id=(
                     f"{requirement.requirement_id}__{variant.analysis_id}"
                 ),
-                exposure=requirement.exposure_source,
+                exposure=exposure,
                 outcome=requirement.outcome,
                 covariates=covariates,
                 model_terms=terms,
@@ -509,6 +553,21 @@ def run_association_model_grid(
             raise AssociationModelGridError("variant standard error is invalid")
         row = {
             "analysis_id": variant.analysis_id,
+            "is_reference": variant.analysis_id == sealed.reference_variant_id,
+            "exposure": exposure,
+            "outcome": requirement.outcome,
+            "adjustment_covariates": ";".join(
+                str(value) for value in (requirement.covariates or ())
+            ),
+            "fitted_covariates": ";".join(str(value) for value in covariates),
+            "landmark_hours": next(
+                (
+                    float(rule.landmark_hours)
+                    for rule in variant.filters
+                    if isinstance(rule, AssociationModelGridLandmarkFilter)
+                ),
+                None,
+            ),
             "n_stays": n_stays,
             "n_events": n_events,
             "estimate": estimate,
@@ -575,6 +634,15 @@ def run_association_model_grid(
             "variant_ids": list(sealed.sensitivity_ids),
             "reference_variant_id": sealed.reference_variant_id,
             "adapter": "adjusted_association_executor/statsmodels",
+            "exposure": requirement.exposure_source,
+            "outcome": requirement.outcome,
+            "adjustment_covariates": list(requirement.covariates or ()),
+            "variant_exposures": {
+                variant.analysis_id: (
+                    variant.exposure_column or requirement.exposure_source
+                )
+                for variant in sealed.variants
+            },
         },
     }
 

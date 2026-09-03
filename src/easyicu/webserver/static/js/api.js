@@ -151,6 +151,10 @@
     return cat;
   }
 
+  async function loadConceptLineage(conceptId) {
+    return getJSON('/api/catalog/lineage/' + encodeURIComponent(String(conceptId || '')));
+  }
+
   async function hydrateWorkspaceRegistry() {
     const reg = await getJSON('/api/workspaces/registry');
     window.EU_WORKSPACE_REGISTRY = reg;
@@ -307,6 +311,9 @@
   function startAgentRun(body) {
     return postJSON('/api/jobs/agent-run', body || {});
   }
+  function submitAgentRunReview(body) {
+    return postJSON('/api/jobs/agent-run-review', body || {});
+  }
   function loadActiveStudyContext() {
     return getJSON('/api/study-contexts/active');
   }
@@ -327,6 +334,10 @@
   }
   function cancelJob(jobId, reason) {
     return postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/cancel', { reason: reason || 'user_requested' });
+  }
+  function openExtractionOutput(jobId, file) {
+    const body = file ? { file: file } : {};
+    return postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output', body);
   }
   function loadAgentRunReview(projectDir) {
     return postJSON('/api/agent-runs/review', { project_dir: projectDir });
@@ -446,6 +457,9 @@
   function loadPiCopilotProjectWorkflow(projectId) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId || '') + '/workflow');
   }
+  function loadPiCopilotLiteratureSource(pmid) {
+    return getJSON('/api/copilot/pi/literature/sources/' + encodeURIComponent(pmid || ''));
+  }
   function loadPiCopilotSessions(limit, projectId, agentMode) {
     const n = Math.max(1, Math.min(100, Number(limit) || 30));
     const mode = agentMode === 'research' || agentMode === 'workspace' ? '&agent_mode=' + encodeURIComponent(agentMode) : '';
@@ -463,6 +477,18 @@
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
   }
+  function confirmPiCopilotCohortEligibility(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/cohort-eligibility-selection', body || {});
+  }
+  function confirmPiCopilotPlanDecision(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/plan-decision-selection', body || {});
+  }
+  function regeneratePiCopilotMessage(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/regenerate', body || {});
+  }
+  function authorizePiCopilotDataSource(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/data-source-authorization', body || {});
+  }
   function rebindPiCopilotSession(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/rebind', body || {});
   }
@@ -473,6 +499,12 @@
     return postJSON(
       '/api/copilot/pi/sessions/' + encodeURIComponent(sessionId)
       + '/child-jobs/' + encodeURIComponent(jobId) + '/archive',
+      body || {},
+    );
+  }
+  function recordPiCopilotHostAction(sessionId, body) {
+    return postJSON(
+      '/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/host-actions',
       body || {},
     );
   }
@@ -487,11 +519,22 @@
       + '/workspace/preview?file=' + encodeURIComponent(file)
       + '&checked_sha256=' + encodeURIComponent(checkedSha256 || '');
   }
-  function loadPiCopilotResearchArtifact(projectId, runId, artifact) {
+  function loadPiCopilotResearchArtifact(projectId, runId, artifact, expectedSha256) {
+    const digest = String(expectedSha256 || '').trim().toLowerCase();
     return getJSON(
       '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
       + '/runs/' + encodeURIComponent(runId)
       + '/artifacts/' + encodeURIComponent(artifact)
+      + (/^[a-f0-9]{64}$/.test(digest)
+        ? '?expected_sha256=' + encodeURIComponent(digest) : '')
+    );
+  }
+  function loadPiCopilotResearchEvidence(projectId, runId, evidenceId, expectedSha256) {
+    return getJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/runs/' + encodeURIComponent(runId)
+      + '/evidence/' + encodeURIComponent(evidenceId)
+      + '?expected_sha256=' + encodeURIComponent(expectedSha256)
     );
   }
   function loadPiCopilotDataPackageReview(projectId, studyRevision, reviewSha256) {
@@ -499,6 +542,26 @@
       '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
       + '/data-package-review?study_revision=' + encodeURIComponent(studyRevision)
       + '&review_sha256=' + encodeURIComponent(reviewSha256)
+    );
+  }
+  function preparePiCopilotDataPackageReview(projectId) {
+    return postJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/data-package-review/prepare',
+      {},
+    );
+  }
+  function preparePiCopilotDataWorkbenchSnapshot(projectId) {
+    return postJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/data-workbench-snapshot/prepare',
+      {},
+    );
+  }
+  function loadPiCopilotDataWorkbenchSnapshot(projectId, snapshotSha256) {
+    return getJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/data-workbench-snapshot?snapshot_sha256=' + encodeURIComponent(snapshotSha256)
     );
   }
   function piCopilotResearchDocumentUrl(projectId, runId, documentName) {
@@ -582,6 +645,11 @@
     triggerDownload(file.blob, file.filename);
     return file;
   }
+  async function downloadRegisteredExport(sourceId) {
+    const file = await postBlob('/api/workspaces/download', { source_id: sourceId });
+    triggerDownload(file.blob, file.filename);
+    return file;
+  }
   function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -597,6 +665,7 @@
   window.EU_API.postJSON = postJSON;
   window.EU_API.postBlob = postBlob;
   window.EU_API.hydrateCatalog = hydrateCatalog;
+  window.EU_API.loadConceptLineage = loadConceptLineage;
   window.EU_API.hydrateSettings = hydrateSettings;
   window.EU_API.hydrateCapabilities = hydrateCapabilities;
   window.EU_API.hydrateWorkspaceRegistry = hydrateWorkspaceRegistry;
@@ -634,6 +703,7 @@
   window.EU_API.logoutCodexAuth = logoutCodexAuth;
   window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
+  window.EU_API.submitAgentRunReview = submitAgentRunReview;
   window.EU_API.loadActiveStudyContext = loadActiveStudyContext;
   window.EU_API.listStudyContexts = listStudyContexts;
   window.EU_API.loadStudyContext = loadStudyContext;
@@ -641,6 +711,7 @@
   window.EU_API.handoffStudyContext = handoffStudyContext;
   window.EU_API.loadJobSnapshot = loadJobSnapshot;
   window.EU_API.cancelJob = cancelJob;
+  window.EU_API.openExtractionOutput = openExtractionOutput;
   window.EU_API.loadAgentRunReview = loadAgentRunReview;
   window.EU_API.loadAgentScienceWorkbench = loadAgentScienceWorkbench;
   window.EU_API.loadCapabilities = loadCapabilities;
@@ -677,17 +748,27 @@
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
   window.EU_API.loadPiCopilotProjectWorkflow = loadPiCopilotProjectWorkflow;
+  window.EU_API.loadPiCopilotLiteratureSource = loadPiCopilotLiteratureSource;
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
+  window.EU_API.confirmPiCopilotCohortEligibility = confirmPiCopilotCohortEligibility;
+  window.EU_API.confirmPiCopilotPlanDecision = confirmPiCopilotPlanDecision;
+  window.EU_API.regeneratePiCopilotMessage = regeneratePiCopilotMessage;
+  window.EU_API.authorizePiCopilotDataSource = authorizePiCopilotDataSource;
   window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;
   window.EU_API.pinPiCopilotPresentation = pinPiCopilotPresentation;
   window.EU_API.archivePiCopilotChildJob = archivePiCopilotChildJob;
+  window.EU_API.recordPiCopilotHostAction = recordPiCopilotHostAction;
   window.EU_API.abortPiCopilotSession = abortPiCopilotSession;
   window.EU_API.loadPiCopilotWorkspaceFile = loadPiCopilotWorkspaceFile;
   window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;
   window.EU_API.loadPiCopilotResearchArtifact = loadPiCopilotResearchArtifact;
+  window.EU_API.loadPiCopilotResearchEvidence = loadPiCopilotResearchEvidence;
   window.EU_API.loadPiCopilotDataPackageReview = loadPiCopilotDataPackageReview;
+  window.EU_API.preparePiCopilotDataPackageReview = preparePiCopilotDataPackageReview;
+  window.EU_API.preparePiCopilotDataWorkbenchSnapshot = preparePiCopilotDataWorkbenchSnapshot;
+  window.EU_API.loadPiCopilotDataWorkbenchSnapshot = loadPiCopilotDataWorkbenchSnapshot;
   window.EU_API.piCopilotResearchDocumentUrl = piCopilotResearchDocumentUrl;
   window.EU_API.createPageGuideSession = createPageGuideSession;
   window.EU_API.sendPageGuideMessage = sendPageGuideMessage;
@@ -713,6 +794,7 @@
   window.EU_API.loadAgentRunArtifact = loadAgentRunArtifact;
   window.EU_API.downloadAgentRunArtifact = downloadAgentRunArtifact;
   window.EU_API.downloadAgentRunBundle = downloadAgentRunBundle;
+  window.EU_API.downloadRegisteredExport = downloadRegisteredExport;
 
   window.EU_SOURCES = window.EU_SOURCES || {};
   window.EU_SOURCES.registry = registry;

@@ -49,6 +49,7 @@ import textwrap
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -1800,7 +1801,12 @@ class DockerRunner:
     #: step (a Cox fit, a bootstrap, a figure render) with headroom, while
     #: keeping one runaway step from taking the host — or a sibling step —
     #: down with it.
-    DEFAULT_CPU_LIMIT = "4"
+    # Two CPUs fits the smallest supported Docker Desktop/Colima allocation
+    # used by the local Web workflow. A higher default makes Docker reject the
+    # container before Python starts on those hosts, which cannot be repaired
+    # by rewriting the generated analysis script. Callers may still widen this
+    # explicitly on larger runtimes.
+    DEFAULT_CPU_LIMIT = "2"
     DEFAULT_MEMORY_LIMIT = "8g"
     DEFAULT_PIDS_LIMIT = 256
     DEFAULT_OPEN_FILES_LIMIT = 4096
@@ -2353,9 +2359,20 @@ class DockerRunner:
                 errors="replace",
             )
             if inspect_proc.returncode != 0:
-                raise RuntimeError(
-                    "Docker image provenance inspection failed: "
-                    f"{inspect_proc.stderr.strip() or self.image}"
+                # A stopped daemon and an absent image both land here, and the
+                # host that has to act on it needs to know which one. Raise the
+                # typed availability failure rather than a bare RuntimeError
+                # whose only readable detail is the daemon's own socket path.
+                raise ExecutionRuntimeUnavailableError(
+                    RunnerAvailability(
+                        kind="docker",
+                        available=False,
+                        image=self.image,
+                        reason_code=_classify_docker_failure(
+                            str(inspect_proc.stderr or ""),
+                            str(inspect_proc.stdout or ""),
+                        ),
+                    )
                 )
             try:
                 inspected = json.loads(inspect_proc.stdout)
@@ -3260,6 +3277,180 @@ class SafeRunnerUnavailableError(RuntimeError):
     """No filesystem-isolating execution backend is ready for use."""
 
 
+EXECUTION_RUNTIME_DIAGNOSTIC_OWNER = "easyicu.execution.runtime_v1"
+
+# Closed reason set for "this backend cannot run generated code right now".
+# The daemon's own wording names a host socket path, so it is classified into
+# one of these codes and then discarded; callers never receive the raw text.
+RUNNER_UNAVAILABLE_REASON_CODES = frozenset(
+    {
+        "docker_daemon_unreachable",
+        "docker_executable_missing",
+        "docker_image_missing",
+        "docker_probe_failed",
+        "host_sandbox_missing",
+    }
+)
+
+_RUNNER_UNAVAILABLE_REMEDIATION = {
+    "docker_daemon_unreachable": (
+        "The Docker daemon is not responding. Start Docker (Docker Desktop, "
+        "'colima start', ...) and retry."
+    ),
+    "docker_executable_missing": (
+        "No 'docker' executable was found on PATH. Install Docker and retry."
+    ),
+    "docker_image_missing": (
+        "The pinned execution image is not present locally. Build or pull it "
+        "with a live Docker daemon and retry."
+    ),
+    "docker_probe_failed": (
+        "The Docker probe did not complete within its bounded timeout."
+    ),
+    "host_sandbox_missing": (
+        "macOS 'sandbox-exec' was not found, so no filesystem-isolating host "
+        "fallback is available."
+    ),
+}
+
+_DOCKER_DAEMON_UNREACHABLE_MARKERS = (
+    "cannot connect to the docker daemon",
+    "is the docker daemon running",
+    "docker daemon is not running",
+    "error during connect",
+)
+
+
+def runner_unavailable_remediation(reason_code: str) -> str:
+    """Return the constant, host-neutral remediation for one closed reason."""
+
+    return _RUNNER_UNAVAILABLE_REMEDIATION.get(
+        str(reason_code), "The configured execution backend is not usable."
+    )
+
+
+def _classify_docker_failure(stderr: str, stdout: str) -> str:
+    """Collapse one docker CLI failure into a closed reason code.
+
+    A missing image and a stopped daemon are different problems with different
+    fixes, and only the daemon's message distinguishes them -- but that message
+    carries the host socket path. Classify here, return the code, drop the text.
+    """
+
+    text = f"{stderr}\n{stdout}".strip().lower()
+    if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
+        return "docker_daemon_unreachable"
+    return "docker_image_missing"
+
+
+@dataclass(frozen=True)
+class RunnerAvailability:
+    """One answer to 'can this backend run generated code right now?'."""
+
+    kind: str
+    available: bool
+    image: str
+    reason_code: str = ""
+
+
+class ExecutionRuntimeUnavailableError(SafeRunnerUnavailableError):
+    """The mandated execution backend is unusable, and says which one and why.
+
+    A bare ``RuntimeError`` here reaches a host as an anonymous failure that
+    names neither the owner nor the fix. This carries a closed reason code so
+    the boundary stays attributable without persisting exception text.
+    """
+
+    def __init__(self, availability: RunnerAvailability) -> None:
+        super().__init__(
+            f"Execution runtime {availability.kind!r} is unavailable: "
+            f"{runner_unavailable_remediation(availability.reason_code)}"
+        )
+        self.runner_kind = availability.kind
+        self.runner_image = availability.image
+        self.reason_code = availability.reason_code
+        self.easyicu_safe_diagnostic = {
+            "owner": EXECUTION_RUNTIME_DIAGNOSTIC_OWNER,
+            "reason_code": availability.reason_code,
+            "runner_kind": availability.kind,
+        }
+
+
+def probe_runner_availability(
+    kind: str,
+    *,
+    image: Optional[str] = None,
+    docker_executable: Optional[str] = None,
+    probe_timeout_seconds: float = 5.0,
+) -> RunnerAvailability:
+    """Answer whether ``kind`` can run generated code, without running any.
+
+    Backend availability is a static fact a bounded probe settles in seconds.
+    Asking it here -- before a caller spends provider calls or materializes a
+    cohort -- is what keeps a stopped daemon from surfacing much later as an
+    anonymous pipeline failure.
+    """
+
+    runtime_image = image or os.environ.get(
+        "EASYICU_RUNNER_IMAGE", DockerRunner.DEFAULT_IMAGE
+    )
+    if kind != "docker":
+        if (
+            kind == "subprocess"
+            and sys.platform == "darwin"
+            and not shutil.which("sandbox-exec")
+        ):
+            return RunnerAvailability(
+                kind=kind,
+                available=False,
+                image=runtime_image,
+                reason_code="host_sandbox_missing",
+            )
+        return RunnerAvailability(kind=kind, available=True, image=runtime_image)
+    requested_executable = (
+        docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
+    )
+    resolved_docker = shutil.which(requested_executable)
+    if resolved_docker is None:
+        return RunnerAvailability(
+            kind=kind,
+            available=False,
+            image=runtime_image,
+            reason_code="docker_executable_missing",
+        )
+    try:
+        probe = _run_with_bounded_output(
+            [
+                resolved_docker,
+                "image",
+                "inspect",
+                runtime_image,
+                "--format={{.Id}}",
+            ],
+            text=True,
+            timeout=max(0.1, float(probe_timeout_seconds)),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return RunnerAvailability(
+            kind=kind,
+            available=False,
+            image=runtime_image,
+            reason_code="docker_probe_failed",
+        )
+    image_id = str(probe.stdout or "").strip()
+    if probe.returncode == 0 and image_id.startswith("sha256:"):
+        return RunnerAvailability(kind=kind, available=True, image=runtime_image)
+    return RunnerAvailability(
+        kind=kind,
+        available=False,
+        image=runtime_image,
+        reason_code=_classify_docker_failure(
+            str(probe.stderr or ""), str(probe.stdout or "")
+        ),
+    )
+
+
 def select_safe_runner_kind(
     *,
     image: Optional[str] = None,
@@ -3275,55 +3466,38 @@ def select_safe_runner_kind(
     host runner).
     """
 
-    runtime_image = image or os.environ.get(
-        "EASYICU_RUNNER_IMAGE", DockerRunner.DEFAULT_IMAGE
+    docker = probe_runner_availability(
+        "docker",
+        image=image,
+        docker_executable=docker_executable,
+        probe_timeout_seconds=probe_timeout_seconds,
     )
-    requested_executable = (
-        docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
-    )
-    resolved_docker = shutil.which(requested_executable)
-    docker_detail = f"Docker executable {requested_executable!r} was not found"
-    if resolved_docker is not None:
-        try:
-            probe = _run_with_bounded_output(
-                [
-                    resolved_docker,
-                    "image",
-                    "inspect",
-                    runtime_image,
-                    "--format={{.Id}}",
-                ],
-                text=True,
-                timeout=max(0.1, float(probe_timeout_seconds)),
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            docker_detail = f"Docker probe failed: {exc}"
-        else:
-            image_id = str(probe.stdout or "").strip()
-            if probe.returncode == 0 and image_id.startswith("sha256:"):
-                return "docker"
-            detail = str(probe.stderr or probe.stdout or "").strip()
-            docker_detail = f"Docker image {runtime_image!r} is not ready" + (
-                f": {detail[:240]}" if detail else ""
-            )
+    if docker.available:
+        return "docker"
 
     if sys.platform == "darwin" and shutil.which("sandbox-exec"):
         return "subprocess"
 
     raise SafeRunnerUnavailableError(
         "No safe generated-code runner is available. "
-        f"{docker_detail}. Build or pull {runtime_image!r} with a live Docker "
-        "daemon. For explicit development-only host execution, set "
+        f"{runner_unavailable_remediation(docker.reason_code)} "
+        f"Build or pull {docker.image!r} with a live Docker daemon. For "
+        "explicit development-only host execution, set "
         "runner_kind='subprocess' and "
         "runner_kwargs={'allow_unsafe_host_fallback': True}."
     )
 
 
 __all__ = [
+    "EXECUTION_RUNTIME_DIAGNOSTIC_OWNER",
+    "RUNNER_UNAVAILABLE_REASON_CODES",
     "RunResult",
     "CodeRunner",
     "DockerRunner",
+    "ExecutionRuntimeUnavailableError",
+    "RunnerAvailability",
     "SafeRunnerUnavailableError",
+    "probe_runner_availability",
+    "runner_unavailable_remediation",
     "select_safe_runner_kind",
 ]

@@ -1,0 +1,56 @@
+{
+  "schema_version": "easyicu.figure2_e3_scientific_protocol/1",
+  "task_id": "e3_kdigo_gradient",
+  "protocol_version": "e3_kdigo_gradient/20260824-v1",
+  "review_status": "ai_development_reviewed_human_attestation_pending",
+  "literature_search_cutoff": "2026-08-24",
+  "time_zero": "icu_admission",
+  "exposure_window_hours": [0, 24],
+  "landmark_hours": 24,
+  "primary_exposure_column": "aki_stage_max",
+  "exposure_definition_sensitivities": [
+    "aki_stage_creat_max",
+    "aki_stage_uo_max"
+  ],
+  "stage_levels": [0, 1, 2, 3],
+  "reference_stage": 0,
+  "primary_contrast_stage": 3,
+  "outcome_column": "death",
+  "event_time_column": "death_time",
+  "observation_duration_column": "los_icu",
+  "readmission_column": "icu_readmission",
+  "adjustment_set": [
+    "age",
+    "sex",
+    "sofa_cardio_max",
+    "sofa_cns_max",
+    "sofa_coag_max",
+    "sofa_liver_max",
+    "sofa_resp_max"
+  ],
+  "interpretation": "descriptive_prognostic_association_not_causal",
+  "reportability_rule": "Report stage-specific denominators and estimates for the combined KDIGO definition. Keep the full-cohort estimate labelled as a variable-opportunity operational reference, and explicitly report the alive-and-under-observation 24-hour landmark, creatinine-only, urine-output-only, and non-readmission sensitivities. A component definition with sparse or absent support is a boundary result, not permission to pool or impute it silently.",
+  "forbidden_interpretations": [
+    "causal_effect",
+    "linear_stage_dose_response_without_stage_specific_estimates",
+    "missing_component_as_normal",
+    "whole_stay_stage_substitution",
+    "silent_pooling_of_component_definitions"
+  ],
+  "citations": [
+    {
+      "citation_id": "kdigo_stage_outcomes_2019",
+      "title": "Acute kidney injury staging and mortality and length of stay in critically ill patients",
+      "year": 2019,
+      "url": "https://pubmed.ncbi.nlm.nih.gov/30819553/",
+      "doi": null
+    },
+    {
+      "citation_id": "kdigo_aki_guideline_2012",
+      "title": "KDIGO Clinical Practice Guideline for Acute Kidney Injury",
+      "year": 2012,
+      "url": "https://kdigo.org/guidelines/acute-kidney-injury/",
+      "doi": null
+    }
+  ]
+}

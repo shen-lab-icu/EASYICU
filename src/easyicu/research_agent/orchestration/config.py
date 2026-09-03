@@ -291,6 +291,10 @@ class PipelineConfig:
     # the Guided Web Copilot enables this because its product contract is
     # plan -> user confirmation -> execution.
     require_human_plan_review: bool = False
+    # Opt-in next-stage contract: reviewed comparator full text/supplements
+    # must shape all seven design dimensions before Provider planning, and the
+    # selected design must record its exact adopt/adapt/diverge decisions.
+    require_literature_design_authority: bool = False
     # A diagnostic Planner-only run may persist and expose the exact review
     # checkpoint, but no caller may resume it into Execute.
     planner_only: bool = False
@@ -381,12 +385,27 @@ class PipelineConfig:
         Union[str, Path]
     ] = None
     development_progressive_resume_checkpoint_sha256: Optional[str] = None
+    # Resume must see the exact literature authority that was hashed into the
+    # checkpoint. Repeating a live search could change that authority.
+    development_progressive_resume_reuse_bound_literature: bool = False
+    # Explicit non-paper execution of one previously locked AnalysisPlan.  The
+    # exact JSON bytes are digest-bound, then revalidated and shaped by the
+    # current host before any step runs.  This is deliberately separate from
+    # Progressive checkpoint replay: a changed Planner/compiler may invalidate
+    # its prompt dependency while the already selected scientific plan remains
+    # a valid execution input.
+    development_locked_analysis_plan_path: Optional[Union[str, Path]] = None
+    development_locked_analysis_plan_sha256: Optional[str] = None
     # Development canaries stop before another expensive Planner request once
     # any one of these exact-run limits is exhausted. Formal profiles cannot
     # enable this partial-run checkpointing envelope.
     development_planner_efficiency_max_calls: Optional[int] = None
     development_planner_efficiency_max_reported_tokens: Optional[int] = None
     development_planner_efficiency_max_wall_seconds: Optional[float] = None
+    # Development literature-design canaries may stop after the validated
+    # Progressive outline.  This is a terminal planning receipt, not an
+    # AnalysisPlan or a human-review checkpoint, and can never enter Execute.
+    development_stop_after_planner_outline: bool = False
     enable_deterministic_runner_repair: bool = True
     # --- literature search backends -------------------------------------
     enable_pubmed: bool = False
@@ -623,6 +642,20 @@ class PipelineConfig:
                 "require_reportable_scientific_capability requires "
                 "require_human_plan_review so the pre-execution gate cannot be skipped"
             )
+        if self.require_literature_design_authority:
+            if not self.enable_literature:
+                raise ValueError(
+                    "require_literature_design_authority requires enable_literature"
+                )
+            if not self.require_human_plan_review:
+                raise ValueError(
+                    "require_literature_design_authority requires "
+                    "require_human_plan_review"
+                )
+            if self.planner_strategy != "progressive_v2":
+                raise ValueError(
+                    "require_literature_design_authority requires progressive_v2"
+                )
         if self.planner_strategy not in {"monolithic_v1", "progressive_v2"}:
             raise ValueError(
                 "planner_strategy must be 'monolithic_v1' or 'progressive_v2'"
@@ -630,12 +663,24 @@ class PipelineConfig:
         from .profiles import (
             is_paper_facing_profile,
             require_profile_planner_strategy,
+            require_profile_pubmed_setting,
+            require_profile_literature_design_authority_setting,
         )
 
         require_profile_planner_strategy(
             name=self.submission_profile_name,
             version=self.submission_profile_version,
             planner_strategy=self.planner_strategy,
+        )
+        require_profile_pubmed_setting(
+            name=self.submission_profile_name,
+            version=self.submission_profile_version,
+            enabled=self.enable_pubmed,
+        )
+        require_profile_literature_design_authority_setting(
+            name=self.submission_profile_name,
+            version=self.submission_profile_version,
+            enabled=self.require_literature_design_authority,
         )
         progressive_resume_values = (
             self.development_progressive_resume_checkpoint_path,
@@ -682,6 +727,55 @@ class PipelineConfig:
                 raise ValueError(
                     "development progressive resume checkpoint SHA-256 is invalid"
                 )
+        if self.development_progressive_resume_reuse_bound_literature:
+            if not all(value is not None for value in progressive_resume_values):
+                raise ValueError(
+                    "exact resume literature replay requires a progressive "
+                    "resume checkpoint"
+                )
+            if self.bound_preplan_literature is None:
+                raise ValueError(
+                    "exact resume literature replay requires bound literature"
+                )
+            if self.enable_pubmed or self.enable_tavily:
+                raise ValueError(
+                    "exact resume literature replay cannot repeat a live search"
+                )
+        locked_plan_values = (
+            self.development_locked_analysis_plan_path,
+            self.development_locked_analysis_plan_sha256,
+        )
+        if any(value is not None for value in locked_plan_values):
+            if any(value is None for value in locked_plan_values):
+                raise ValueError(
+                    "development locked analysis plan path and SHA-256 must be "
+                    "configured together"
+                )
+            if not self.development_diagnostic:
+                raise ValueError(
+                    "development locked analysis plan requires "
+                    "development_diagnostic=True"
+                )
+            if is_paper_facing_profile(self.submission_profile_name):
+                raise ValueError(
+                    "development locked analysis plan cannot be combined with "
+                    "a paper-facing submission profile"
+                )
+            if any(value is not None for value in progressive_resume_values):
+                raise ValueError(
+                    "development locked analysis plan and Progressive checkpoint "
+                    "resume are mutually exclusive"
+                )
+            locked_digest = str(
+                self.development_locked_analysis_plan_sha256 or ""
+            ).strip()
+            if len(locked_digest) != 64 or any(
+                character not in "0123456789abcdef"
+                for character in locked_digest
+            ):
+                raise ValueError(
+                    "development locked analysis plan SHA-256 is invalid"
+                )
         planner_efficiency_values = (
             self.development_planner_efficiency_max_calls,
             self.development_planner_efficiency_max_reported_tokens,
@@ -726,6 +820,54 @@ class PipelineConfig:
                     self.development_planner_efficiency_max_wall_seconds or 0.0
                 ),
             )
+        if self.development_stop_after_planner_outline:
+            profile_is_development_only = bool(
+                self.submission_profile_name
+                and not is_paper_facing_profile(self.submission_profile_name)
+            )
+            if not self.development_diagnostic and not profile_is_development_only:
+                raise ValueError(
+                    "development outline-only Planner termination requires either "
+                    "development_diagnostic=True or a registered development-only "
+                    "profile"
+                )
+            if self.planner_strategy != "progressive_v2":
+                raise ValueError(
+                    "development outline-only Planner termination requires "
+                    "planner_strategy='progressive_v2'"
+                )
+            if not self.planner_only:
+                raise ValueError(
+                    "development outline-only Planner termination requires "
+                    "planner_only=True"
+                )
+            if not self.require_literature_design_authority:
+                raise ValueError(
+                    "development outline-only Planner termination requires "
+                    "require_literature_design_authority=True"
+                )
+            if is_paper_facing_profile(self.submission_profile_name):
+                raise ValueError(
+                    "development outline-only Planner termination cannot be "
+                    "combined with a paper-facing submission profile"
+                )
+        if self.submission_profile_name:
+            from .profiles import get_submission_profile
+
+            profile = get_submission_profile(
+                f"{self.submission_profile_name}/{self.submission_profile_version}"
+            )
+            expected_outline_stop = bool(
+                profile.development_stop_after_planner_outline
+            )
+            if (
+                self.development_stop_after_planner_outline
+                != expected_outline_stop
+            ):
+                raise ValueError(
+                    "development outline-only Planner termination must match "
+                    f"submission profile {profile.ref!r}"
+                )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,

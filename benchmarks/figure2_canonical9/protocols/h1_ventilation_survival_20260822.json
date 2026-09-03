@@ -26,8 +26,11 @@
   "proportional_hazards_diagnostic": "schoenfeld_residual_test",
   "proportional_hazards_alpha": 0.05,
   "proportional_hazards_policy": "block_paper_authorization",
+  "non_ph_alternative": "unadjusted_rmst_difference",
+  "time_varying_effect_method": "piecewise_time_varying_cox",
+  "time_varying_interval_cutpoints_days": [7, 14],
   "interpretation": "descriptive_prognostic_association_not_causal",
-  "reportability_rule": "Development execution may report the landmark population, Kaplan-Meier curves, adjusted hazard ratio, confidence interval, and PH audit only as analysis_only while human scientific attestation is pending. A PH violation blocks paper authorization, and all text must preserve the observational, source-specific exposure boundary.",
+  "reportability_rule": "Development execution may report the landmark population, Kaplan-Meier curves, adjusted hazard ratio, confidence interval, PH audit, prespecified piecewise time-varying Cox sensitivity, and unadjusted RMST contrast only as analysis_only while human scientific attestation is pending. A PH violation forbids the constant hazard ratio as a headline effect; the interval-specific adjusted estimates and PH-free RMST contrast remain descriptive sensitivities, and all text must preserve the observational, source-specific exposure boundary.",
   "forbidden_interpretations": [
     "Do not interpret the hazard ratio as the causal effect of mechanical ventilation.",
     "Do not call ventilation first observed at ICU hour 0 an incident exposure.",
@@ -56,6 +59,13 @@
       "year": 2008,
       "url": "https://doi.org/10.1093/aje/kwm324",
       "doi": "10.1093/aje/kwm324"
+    },
+    {
+      "citation_id": "time_varying_ventilation_intensity",
+      "title": "Time-varying intensity of mechanical ventilation and mortality in patients with acute respiratory failure: a registry-based, prospective cohort study",
+      "year": 2020,
+      "url": "https://pubmed.ncbi.nlm.nih.gov/32735841/",
+      "doi": "10.1016/S2213-2600(20)30325-8"
     }
   ]
 }

@@ -1,0 +1,29 @@
+/* Owner: Guided Copilot shell side-panel controls and column allocation. */
+.gd-main.threecol.gd-context-aside-collapsed{grid-template-columns:292px minmax(0,1fr)}
+.gd-main.threecol.gd-project-rail-collapsed.gd-context-aside-collapsed{grid-template-columns:minmax(0,1fr)}
+.gd-main.gd-context-aside-collapsed>.gd-aside{display:none}
+.gd-main.gd-context-aside-collapsed>.gd-aside-restore{display:grid}
+
+.gd-aside-restore{
+  position:absolute;z-index:24;top:10px;right:10px;width:34px;height:34px;display:none;place-items:center;
+  padding:0;border:1px solid var(--hair-2);border-radius:9px;background:var(--surface);color:var(--ink-3);
+  box-shadow:var(--shadow-2);cursor:pointer
+}
+.gd-aside-restore svg{transform:rotate(180deg)}
+.gd-aside-restore:hover,.gd-aside-restore:focus-visible{
+  border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-ink);outline:0
+}
+.gd-aside{position:relative}
+.gd-aside-collapse{
+  position:absolute;z-index:5;top:10px;right:10px;width:30px;height:30px;display:grid;place-items:center;
+  padding:0;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--ink-4);cursor:pointer
+}
+.gd-aside-collapse svg{transform:none}
+.gd-aside-collapse:hover,.gd-aside-collapse:focus-visible{
+  border-color:var(--hair);background:var(--surface);color:var(--accent-ink);outline:0
+}
+.gd-study-aside>.gd-aside-head{padding-right:54px}
+
+@media (max-width:1180px){
+  .gd-aside-restore,.gd-aside-collapse{display:none!important}
+}

@@ -426,6 +426,32 @@ def run_ordered_stratified_from_env(
         "multiplicity_policy": "holm_familywise",
         "multiplicity_family_size": 2,
     }
+    continuous_trend = trend_rows[1]
+    reportable_secondary_results = {
+        "schema_version": "easyicu.ordered_stratified_reporting/1",
+        "analysis_role": analysis_role,
+        "interpretation_ceiling": "secondary_unadjusted_not_causal",
+        "ordered_exposure": spec.ordered_exposure,
+        "continuous_outcome": spec.continuous_outcome,
+        "continuous_level_summaries": [
+            {
+                "level": row["level_value"],
+                "n": row["continuous_n"],
+                "median": row["continuous_median"],
+                "q25": row["continuous_q25"],
+                "q75": row["continuous_q75"],
+            }
+            for row in rows
+        ],
+        "continuous_trend": {
+            "test_id": continuous_trend["test_id"],
+            "n": continuous_trend["n"],
+            "adjusted_p": continuous_trend["adjusted_p"],
+            "p_value_reporting": continuous_trend["p_value_reporting"],
+            "effect_size": continuous_trend["effect_size"],
+            "effect_size_name": continuous_trend["effect_size_name"],
+        },
+    }
     summary = {
         "status": "ok",
         "analysis_family": "association",
@@ -440,6 +466,7 @@ def run_ordered_stratified_from_env(
             "excluded_missing_exposure_rows": int(len(frame) - valid_exposure_n),
             "filtering_performed": valid_exposure_n != len(frame),
         },
+        "reportable_secondary_results": reportable_secondary_results,
         CONTRACT_KEY: contract,
         "output_files": {
             spec.trend_product: trend_path.name,

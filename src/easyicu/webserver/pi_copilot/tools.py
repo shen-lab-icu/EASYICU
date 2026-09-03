@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
 
+from easyicu.databases.profiles import get_database_profile, iter_database_profiles
 from easyicu.extensions import ExtensionRegistry, ExtensionRegistryError
 from easyicu.extensions.mcp_client import call_mcp_tool
 
@@ -20,13 +21,26 @@ from easyicu.webserver import (
     agent_pipeline_runs,
     agent_runs,
     capabilities,
+    cohort_review,
+    crossdb_review,
+    dataio,
+    demo_sources,
     jobs,
-    literature_authority,
+    literature_search_transaction,
+    patient_drilldown,
+    research_run_submission,
     settings,
     sources,
     study_contexts,
 )
+from easyicu.webserver.copilot_data_workbench import (
+    CopilotDataWorkbenchError,
+    CopilotDataWorkbenchSnapshotStore,
+    build_snapshot as build_data_workbench_snapshot,
+    project_patient_snapshot_payload,
+)
 from easyicu.webserver.ideas import mining as idea_mining
+from easyicu.webserver.ideas import handoff as idea_handoff
 
 from .contracts import (
     AuthorityBinding,
@@ -34,7 +48,10 @@ from .contracts import (
     PiToolResult,
     ToolExecutionContext,
     WorkspaceMutationLimitError,
+    plan_approval_allowed,
 )
+from . import cohort_eligibility
+from . import extraction_handoff
 from .literature_tool_projection import compile_literature_tool_projection
 from .projections import (
     bounded_json_projection,
@@ -45,69 +62,25 @@ from .projections import (
     project_job,
     project_run_row,
     project_study_context,
-    reject_sensitive_message,
     stable_code,
 )
-from .run_authority import list_bound_run_history
+from .run_authority import (
+    list_bound_run_history,
+    research_pipeline_project_root,
+)
+from .study_context_update import update_study_context
+from .tool_catalog import (
+    ALLOWED_TOOLS,
+    CONTROL_TOOLS,
+    DATA_SOURCE_REQUIRED_TOOLS,
+    MUTATING_HOST_TOOLS as MUTATING_HOST_TOOLS,
+    READ_TOOLS,
+    WORKSPACE_TOOLS,
+)
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
 from .workflow import (
-    build_research_workflow_snapshot,
-    registered_export_matches_study,
+    build_project_workflow_projection,
 )
-
-READ_TOOLS = frozenset(
-    {
-        "easyicu_workspace_status",
-        "easyicu_list_data_sources",
-        "easyicu_list_source_concepts",
-        "easyicu_inspect_data_package",
-        "easyicu_inspect_workflow",
-        "easyicu_inspect_context",
-        "easyicu_inspect_plan",
-        "easyicu_inspect_literature",
-        "easyicu_inspect_capability",
-        "easyicu_inspect_run",
-        "easyicu_inspect_step",
-        "easyicu_inspect_validation",
-        "easyicu_list_artifacts",
-        "easyicu_inspect_evidence",
-        "easyicu_explain_blocker",
-        "easyicu_inspect_interpretation",
-        "easyicu_inspect_manuscript",
-        "easyicu_resume",
-        "easyicu_list_extensions",
-        "easyicu_load_skill",
-    }
-)
-CONTROL_TOOLS = frozenset(
-    {
-        "easyicu_update_study_context",
-        "easyicu_mine_ideas",
-        "easyicu_search_literature",
-        "easyicu_prepare_idea_handoff",
-        "easyicu_accept_idea_handoff",
-        "easyicu_start_extraction",
-        "easyicu_run",
-        "easyicu_cancel",
-        "easyicu_request_replan",
-        "easyicu_call_mcp_tool",
-    }
-)
-WORKSPACE_TOOLS = frozenset(
-    {
-        "easyicu_list_project_files",
-        "easyicu_read_project_file",
-        "easyicu_write_project_file",
-        "easyicu_edit_project_file",
-        "easyicu_check_project_file",
-        "easyicu_preview_project_file",
-    }
-)
-ALLOWED_TOOLS = READ_TOOLS | CONTROL_TOOLS | WORKSPACE_TOOLS
-MUTATING_HOST_TOOLS = CONTROL_TOOLS | frozenset(
-    {"easyicu_write_project_file", "easyicu_edit_project_file"}
-)
-
 
 def _bounded_model_text(value: Any, limit: int = 1_200) -> str:
     """Normalize one already-governed text field for a bounded tool result."""
@@ -269,10 +242,8 @@ def _bound_context(binding: AuthorityBinding) -> Optional[Dict[str, Any]]:
 
 
 def _run_rows(context: ToolExecutionContext) -> Sequence[Dict[str, Any]]:
-    project_root = (
-        context.workspace.project_root(context.session.project_id)
-        if context.session.project_id and context.workspace is not None
-        else None
+    project_root = research_pipeline_project_root(
+        context.session.binding.study_context_id
     )
     return list_bound_run_history(
         study_context_id=context.session.binding.study_context_id,
@@ -343,6 +314,52 @@ def _artifact_resource(
             else {}
         ),
     }
+
+
+def extraction_workspace_resource(
+    study: Mapping[str, Any],
+    *,
+    state: str,
+    job_id: Any = None,
+    source_id: Any = None,
+    expected_database: Any = None,
+    entry_mode: Any = None,
+    extraction_scope: Any = None,
+) -> Dict[str, Any]:
+    """Project the native Extraction owner without exposing its host paths."""
+
+    resource: Dict[str, Any] = {
+        "kind": "native_workspace",
+        "route": "extraction",
+        "state": state,
+        "study_context_id": str(study.get("id") or "")[:160],
+        "study_revision": int(study.get("revision") or 0),
+        "label": "Data Extraction",
+        "media_type": "application/vnd.easyicu.native-workspace",
+    }
+    clean_job_id = str(job_id or "").strip()
+    if clean_job_id:
+        resource["job_id"] = clean_job_id[:160]
+    clean_source_id = str(source_id or "").strip()
+    if clean_source_id:
+        resource["source_id"] = clean_source_id[:80]
+    if str(entry_mode or "").strip() == "source_binding":
+        resource["entry_mode"] = "source_binding"
+        resource["label"] = "Data source setup"
+    clean_scope = str(extraction_scope or "").strip()
+    if clean_scope in {"study_required", "all_supported", "reuse_prepared_full"}:
+        resource["extraction_scope"] = clean_scope
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    database = str(expected_database or source.get("database") or "").strip()
+    if database:
+        try:
+            profile = get_database_profile(database)
+        except KeyError:
+            profile = None
+        if profile is not None and profile.is_public:
+            resource["expected_database"] = profile.key
+    return resource
 
 
 def _document_resource(
@@ -486,7 +503,7 @@ def _workspace_status(
 
 
 def _registered_source_projection(
-    source: Mapping[str, Any], *, active_path: Any
+    source: Mapping[str, Any], *, active_path: Any, database_label: str
 ) -> Dict[str, Any]:
     """Return one path-free registered-export choice for conversational setup."""
 
@@ -498,10 +515,31 @@ def _registered_source_projection(
     modules = [
         str(item)[:120] for item in (source.get("modules") or []) if str(item).strip()
     ][:64]
+    official_demo_specs = (
+        demo_sources.get_source(source_id)
+        for source_id in demo_sources.allowed_source_ids()
+    )
+    official_demo_labels = {
+        f"{spec.title} v{spec.version}".casefold() for spec in official_demo_specs
+    }
+    source_scope = (
+        "official_demo"
+        if label.casefold() in official_demo_labels
+        else "registered_export"
+    )
     return {
         "source_id": str(source.get("id") or "")[:80],
-        "label": label,
+        # Registry labels are execution identity and may contain internal run
+        # names such as "full6".  Conversational setup gets the canonical
+        # database/release label instead; exact source_id remains authoritative.
+        "label": label if source_scope == "official_demo" else database_label,
         "database": str(source.get("database") or "")[:80],
+        "source_scope": source_scope,
+        "availability": (
+            "official_demo"
+            if source_scope == "official_demo"
+            else "available_in_easyicu"
+        ),
         "generated": str(source.get("generated") or "")[:80] or None,
         "active": bool(
             str(source.get("path") or "").strip()
@@ -517,28 +555,246 @@ def _registered_source_projection(
     }
 
 
+def _dominant_local_source(
+    choices: Sequence[Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return one unambiguously most-complete local dataset, if present."""
+
+    local_choices = [
+        row for row in choices if row.get("source_scope") == "registered_export"
+    ]
+    dominant = []
+    for candidate in local_choices:
+        candidate_stays = int((candidate.get("aggregate") or {}).get("stays") or 0)
+        candidate_modules = int(candidate.get("module_count") or 0)
+        if all(
+            candidate_stays >= int((other.get("aggregate") or {}).get("stays") or 0)
+            and candidate_modules >= int(other.get("module_count") or 0)
+            for other in local_choices
+        ):
+            dominant.append(candidate)
+    return dict(dominant[0]) if len(dominant) == 1 else None
+
+
+def _database_named_in_message(message: str) -> Optional[str]:
+    for database, pattern in (
+        ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
+        ("mimic", r"\bmimic[\s_-]*(?:iii|3)\b"),
+        ("eicu", r"\beicu\b"),
+        ("aumc", r"\b(?:amsterdamumcdb|aumc)\b"),
+        ("hirid", r"\bhirid\b"),
+        ("sic", r"\b(?:sicdb|sic)\b"),
+    ):
+        if re.search(pattern, message):
+            return database
+    return None
+
+
+def _registered_source_alternatives_requested(message: str) -> bool:
+    """Return whether the user explicitly asked to inspect non-default exports."""
+
+    normalized = " ".join(str(message or "").casefold().split())
+    return any(
+        marker in normalized
+        for marker in (
+            "其他已注册",
+            "其他本地数据",
+            "其他数据包",
+            "另一个已注册",
+            "other registered",
+            "other local export",
+            "another registered",
+        )
+    )
+
+
 def _list_data_sources(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """List validated registered exports without exposing their host paths."""
+    """List source families first, then exact exports for one selected family."""
 
-    _require_args(params, allowed=())
+    _require_args(params, allowed=("database",))
+    requested_database = str(params.get("database") or "").strip()
+    user_message = str(context.user_message or "").casefold()
+    explicit_database = _database_named_in_message(user_message)
+    if explicit_database:
+        # The current user's exact database wording is stronger authority than
+        # a model-generated tool argument. Recover the request deterministically
+        # instead of returning a receipt for a different database family.
+        requested_database = explicit_database
+    ambiguous_mimic_request = bool(
+        requested_database in {"miiv", "mimic"}
+        and "mimic" in user_message
+        and explicit_database not in {"miiv", "mimic"}
+    )
+    if ambiguous_mimic_request:
+        # The model argument is not user authority. A bare "MIMIC" request
+        # cannot inherit an active source or silently become MIMIC-IV.
+        requested_database = ""
+    selected_profile = None
+    if requested_database:
+        try:
+            selected_profile = get_database_profile(requested_database)
+        except KeyError as exc:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose one exact database returned by easyicu_list_data_sources.",
+            ) from exc
+        if not selected_profile.is_public:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose a full-database family before selecting a source mode.",
+            )
     registry = sources.load_registry()
-    choices = [
-        _registered_source_projection(row, active_path=registry.get("active_path"))
-        for row in (registry.get("sources") or [])
-        if isinstance(row, Mapping) and row.get("ok") and row.get("id")
-    ][:40]
+    choices = []
+    if selected_profile is not None:
+        database_label = selected_profile.display_name
+        if selected_profile.reference_release:
+            database_label = (
+                f"{database_label} v{selected_profile.reference_release}"
+            )
+        for row in (registry.get("sources") or []):
+            if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
+                continue
+            try:
+                row_profile = get_database_profile(str(row.get("database") or ""))
+            except KeyError:
+                continue
+            row_family = row_profile.parent_key or row_profile.key
+            if row_family != selected_profile.key:
+                continue
+            choices.append(
+                _registered_source_projection(
+                    row,
+                    active_path=registry.get("active_path"),
+                    database_label=database_label,
+                )
+            )
+            if len(choices) >= 40:
+                break
+    recommended_source = _dominant_local_source(choices)
+    exact_database_named = bool(
+        selected_profile is not None
+        and explicit_database == selected_profile.key
+    )
+    alternatives_requested = _registered_source_alternatives_requested(user_message)
+    auto_select_recommended = bool(
+        recommended_source and exact_database_named and not alternatives_requested
+    )
+    visible_choices = choices
+    if auto_select_recommended:
+        recommended_source_id = str(recommended_source.get("source_id") or "")
+        visible_choices = [
+            row
+            for row in choices
+            if str(row.get("source_id") or "") == recommended_source_id
+        ]
+    if recommended_source is not None:
+        recommended_source = {
+            key: recommended_source.get(key)
+            for key in (
+                "source_id",
+                "label",
+                "database",
+                "availability",
+                "module_count",
+                "aggregate",
+            )
+        }
+        recommended_source.update(
+            {
+                "selection_reason": "most_complete_local_dataset",
+                "auto_select_for_exact_database_request": auto_select_recommended,
+            }
+        )
+    supported_databases = [
+        {
+            "database": profile.key,
+            "label": profile.display_name,
+            "reference_release": profile.reference_release,
+            "display_label": (
+                f"{profile.display_name} v{profile.reference_release}"
+                if profile.reference_release
+                else profile.display_name
+            ),
+            "selection_required": True,
+        }
+        for profile in iter_database_profiles(public_only=True)
+    ]
+    official_demos = []
+    for source_id in demo_sources.allowed_source_ids():
+        source = demo_sources.get_source(source_id)
+        profile = get_database_profile(source.database)
+        demo_projection = (
+            {
+                "source_id": source.id,
+                "label": source.title,
+                "database": profile.parent_key or profile.key,
+                "version": source.version,
+                "scope_summary": source.scope_summary,
+                "research_scope": "demo_only",
+            }
+        )
+        if selected_profile is None or demo_projection["database"] == selected_profile.key:
+            official_demos.append(demo_projection)
     return _result(
         context,
         status="ok",
         code="easyicu_data_sources_listed",
         summary=(
-            f"Listed {len(choices)} validated EasyICU export choices without "
-            "filesystem paths or patient rows."
+            f"Listed {len(supported_databases)} supported ICU database families "
+            "and their reference releases."
+            if selected_profile is None
+            else (
+                f"EasyICU can use {database_label} from the local data catalog "
+                "without exposing filesystem paths or patient rows."
+            )
         ),
         owner="easyicu.webserver.sources",
-        details={"sources": choices, "source_count": len(choices)},
+        details={
+            "sources": visible_choices,
+            "source_count": len(visible_choices),
+            "selected_database": (
+                {
+                    "database": selected_profile.key,
+                    "label": selected_profile.display_name,
+                    "reference_release": selected_profile.reference_release,
+                }
+                if selected_profile is not None
+                else None
+            ),
+            "supported_databases": supported_databases,
+            "official_demos": official_demos,
+            "recommended_source": recommended_source,
+            "source_modes": (
+                []
+                if selected_profile is None
+                else (
+                    ["easyicu_available_data"]
+                    if auto_select_recommended
+                    else [
+                        "local_full_database",
+                        "registered_export",
+                        "official_demo",
+                    ]
+                )
+            ),
+            "database_selection_deferred": ambiguous_mimic_request,
+            "selection_policy": {
+                "database_family_selected_before_source_mode": True,
+                "mimic_database_choices": ["mimic", "miiv"],
+                "registered_sources_deferred_until_database_selected": True,
+                "exact_source_id_required_for_data_queries": True,
+                "local_folder_paths_stay_host_side": True,
+                "demo_never_implies_full_database": True,
+                "official_demo_only_when_explicitly_requested_if_local_available": True,
+                "recommended_source_is_already_available_export": True,
+                "registered_alternatives_require_explicit_request": True,
+                "alternative_local_directory_requires_registration": True,
+                "show_returned_safe_aggregates_for_recommendation": True,
+                "user_facing_availability_term": "EasyICU can use",
+            },
+        },
     )
 
 
@@ -618,6 +874,21 @@ def _list_source_concepts(
     from easyicu.research_agent.acquisition.catalog import build_available_catalog
 
     catalog = build_available_catalog(Path(source_path).expanduser())
+    def project_concept(concept: Any) -> Dict[str, str]:
+        return {
+            "concept_id": str(concept.concept_id)[:80],
+            "module": Path(concept.file_name).stem.lower()[:80],
+            "role": str(concept.column_role or "value")[:40],
+            "description": " ".join(str(concept.description or "").split())[:300],
+            "selection_mode": str(concept.selection_mode or "ordinary")[:40],
+            "selection_note": " ".join(
+                str(concept.selection_note or "").split()
+            )[:500],
+            "canonical_alternative": str(
+                concept.canonical_alternative or ""
+            )[:80],
+        }
+
     rows = []
     for concept in catalog.concepts:
         module = Path(concept.file_name).stem.lower()
@@ -634,24 +905,23 @@ def _list_source_concepts(
         searchable = " ".join(re.findall(r"[a-z0-9]+", searchable))
         if query_terms and not any(term in searchable for term in query_terms):
             continue
-        rows.append(
+        rows.append(project_concept(concept))
+    rows = rows[:limit]
+    catalog_by_id = {
+        str(concept.concept_id): concept for concept in catalog.concepts
+    }
+    canonical_alternatives = []
+    for row in rows:
+        alternative_id = str(row.get("canonical_alternative") or "")
+        alternative = catalog_by_id.get(alternative_id)
+        if alternative is None:
+            continue
+        canonical_alternatives.append(
             {
-                "concept_id": str(concept.concept_id)[:80],
-                "module": module[:80],
-                "role": str(concept.column_role or "value")[:40],
-                "description": " ".join(
-                    str(concept.description or "").split()
-                )[:300],
-                "selection_mode": str(concept.selection_mode or "ordinary")[:40],
-                "selection_note": " ".join(
-                    str(concept.selection_note or "").split()
-                )[:500],
-                "canonical_alternative": str(
-                    concept.canonical_alternative or ""
-                )[:80],
+                "source_concept_id": row["concept_id"],
+                **project_concept(alternative),
             }
         )
-    rows = rows[:limit]
     return _result(
         context,
         status="ok",
@@ -664,6 +934,7 @@ def _list_source_concepts(
         details={
             "source_id": source_id,
             "concepts": rows,
+            "canonical_alternatives": canonical_alternatives,
             "returned_count": len(rows),
             "truncated": len(rows) == limit,
         },
@@ -748,28 +1019,761 @@ def _inspect_data_package(
     )
 
 
-def _workflow_snapshot(context: ToolExecutionContext) -> Dict[str, Any]:
-    study = _bound_context(context.session.binding)
+def _project_id_for_workbench(context: ToolExecutionContext) -> str:
+    project_id = str(context.session.project_id or "").strip()
+    if not project_id:
+        raise PiCopilotError(
+            "pi_project_required",
+            "A bound Copilot project is required for a Data Workbench view.",
+        )
+    return project_id
+
+
+def _registered_source_choice(
+    context: ToolExecutionContext, requested_source_id: Any = None
+) -> Dict[str, Any]:
+    """Resolve an exact registered export while keeping its path host-side."""
+
+    requested = str(requested_source_id or "").strip()
+    if not requested:
+        raise PiCopilotError(
+            "pi_data_source_selection_required",
+            "Choose one exact registered source_id before running a data query. "
+            "A bound or globally active source is not implicit user consent.",
+        )
     registry = sources.load_registry()
-    active_job = None
-    if study and study.get("active_job_id"):
-        job = jobs.MANAGER.get(str(study["active_job_id"]))
-        active_job = project_job(job.snapshot() if job else None)
-    rows = _run_rows(context)
-    latest_run = project_run_row(rows[0]) if rows else None
-    plan_review_authority = (
-        agent_pipeline_runs.pending_review(latest_run.get("run_id"))
-        if latest_run
-        else None
+    rows = [
+        row
+        for row in (registry.get("sources") or [])
+        if isinstance(row, Mapping) and row.get("ok") and row.get("id")
+    ]
+    source = next(
+        (row for row in rows if str(row.get("id") or "") == requested), None
     )
-    snapshot = build_research_workflow_snapshot(
-        study=study,
-        active_export_present=registered_export_matches_study(study, registry),
-        active_job=active_job,
-        latest_run=latest_run,
-        plan_review_authority=plan_review_authority,
+    if source is None:
+        return {}
+    if not str(source.get("path") or "").strip():
+        return {}
+    return dict(source)
+
+
+def _data_workbench_resource(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "kind": "data_workbench_snapshot",
+        "view": str(snapshot.get("view") or "")[:80],
+        "snapshot_sha256": str(snapshot.get("snapshot_sha256") or "")[:64],
+        "label": str(snapshot.get("title") or "Data Workbench")[:160],
+        "media_type": "application/json",
+    }
+
+
+def _persist_workbench_snapshot(
+    context: ToolExecutionContext,
+    *,
+    view: str,
+    title: str,
+    payload: Mapping[str, Any],
+    privacy: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    try:
+        snapshot = build_data_workbench_snapshot(
+            project_id=_project_id_for_workbench(context),
+            view=view,
+            title=title,
+            payload=payload,
+            privacy=privacy,
+        )
+        CopilotDataWorkbenchSnapshotStore().persist(snapshot)
+    except CopilotDataWorkbenchError as exc:
+        raise PiCopilotError(
+            exc.code,
+            exc.message,
+            status_code=409,
+            details=exc.details,
+        ) from exc
+    return _data_workbench_resource(snapshot)
+
+
+def _requested_workbench_features(
+    payload: Mapping[str, Any], requested: Any
+) -> list[str]:
+    if requested in (None, []):
+        return []
+    if not isinstance(requested, list):
+        raise PiCopilotError(
+            "pi_workbench_features_invalid",
+            "Data Workbench features must be a bounded list of exact concept or module:column identifiers.",
+        )
+    raw = [str(value or "").strip() for value in requested if str(value or "").strip()]
+    if len(raw) > 8:
+        raise PiCopilotError(
+            "pi_workbench_features_too_many",
+            "Select at most eight features for one conversational view.",
+        )
+    catalog = payload.get("feature_catalog")
+    catalog = catalog if isinstance(catalog, Mapping) else {}
+    features = [
+        feature
+        for module in (catalog.get("modules") or [])
+        if isinstance(module, Mapping)
+        for feature in (module.get("features") or [])
+        if isinstance(feature, Mapping) and feature.get("id")
+    ]
+    by_id = {str(row.get("id") or "").lower(): str(row.get("id")) for row in features}
+    by_column: Dict[str, list[str]] = {}
+    for row in features:
+        column = str(row.get("column") or "").lower()
+        by_column.setdefault(column, []).append(str(row.get("id")))
+    resolved: list[str] = []
+    unknown: list[str] = []
+    ambiguous: Dict[str, list[str]] = {}
+    for value in raw:
+        lower = value.lower()
+        match = by_id.get(lower)
+        if match:
+            if match not in resolved:
+                resolved.append(match)
+            continue
+        candidates = by_column.get(lower) or []
+        if len(candidates) == 1:
+            if candidates[0] not in resolved:
+                resolved.append(candidates[0])
+        elif len(candidates) > 1:
+            ambiguous[value] = candidates[:8]
+        else:
+            unknown.append(value)
+    if unknown or ambiguous:
+        raise PiCopilotError(
+            "pi_workbench_feature_not_resolved",
+            "One or more requested features do not resolve uniquely in this registered export.",
+            details={"unknown": unknown, "ambiguous": ambiguous},
+        )
+    return resolved
+
+
+def _review_cohort(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open cohort attrition and selected-feature distributions in Copilot."""
+
+    _require_args(params, allowed=("source_id", "features"))
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU export before reviewing its cohort.",
+            owner="easyicu.webserver.sources",
+        )
+    source_path = str(source.get("path") or "")
+    try:
+        base = cohort_review.cohort_review_summary({"source_path": source_path})
+        feature_ids = _requested_workbench_features(base, params.get("features"))
+        payload = (
+            cohort_review.cohort_review_summary(
+                {"source_path": source_path, "selected_features": feature_ids}
+            )
+            if feature_ids
+            else base
+        )
+        from easyicu.webserver.patient_drilldown.eligibility import (
+            _eligibility_flow_payload,
+        )
+
+        description = dataio.describe_export_source(source_path)
+        eligibility = _eligibility_flow_payload(
+            Path(source_path), description, dict(payload.get("summary") or {})
+        )
+    except cohort_review.CohortReviewError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=str((exc.detail or {}).get("error") or "cohort_review_blocked"),
+            summary="The Cohort Review owner could not produce this aggregate view.",
+            owner="easyicu.webserver.cohort_review",
+            details={
+                "reason_code": str((exc.detail or {}).get("error") or "")[:160]
+            },
+        )
+    view = "feature_distribution" if feature_ids else "cohort_summary"
+    title = "Feature distribution" if feature_ids else "Cohort and filter flow"
+    resource = _persist_workbench_snapshot(
+        context,
+        view=view,
+        title=title,
+        payload={
+            "source": payload.get("source"),
+            "summary": payload.get("summary"),
+            "eligibility_flow": eligibility,
+            "groups": payload.get("groups"),
+            "feature_catalog": payload.get("feature_catalog"),
+            "feature_selection": payload.get("feature_selection"),
+            "selected_feature_distributions": payload.get(
+                "selected_feature_distributions"
+            ),
+            "coverage": payload.get("coverage"),
+            "quality": payload.get("quality"),
+            "survival_analysis": payload.get("survival_analysis"),
+            "blocked_features": payload.get("blocked_features"),
+            "provenance": payload.get("provenance"),
+        },
+        privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
     )
-    return snapshot.model_dump(mode="json")
+    summary = payload.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    cohort_size = summary.get("cohort_size")
+    return _result(
+        context,
+        status="ok",
+        code=(
+            "easyicu_feature_distribution_ready"
+            if feature_ids
+            else "easyicu_cohort_review_ready"
+        ),
+        summary=(
+            f"Prepared a path-free conversational Data Workbench view for {cohort_size or 0} ICU stays"
+            + (f" and {len(feature_ids)} selected features." if feature_ids else ".")
+        ),
+        owner="easyicu.webserver.cohort_review",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "cohort_size": cohort_size,
+            "selected_features": feature_ids,
+            "resource": resource,
+        },
+    )
+
+
+def _open_data_download(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open a browser-controlled download for one registered export."""
+
+    _require_args(params, allowed=("source_id",))
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU export before downloading it.",
+            owner="easyicu.webserver.sources",
+        )
+    study = _bound_context(context.session.binding) or {}
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_registered_export_download_ready",
+        summary=(
+            "Prepared a user-controlled browser download for the exact registered "
+            "export. The model received only the source coordinate and aggregate "
+            "package metadata; bytes remain behind the browser click."
+        ),
+        owner="easyicu.webserver.export_download",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "file_count": int((source.get("summary") or {}).get("file_count") or 0),
+            "total_rows": int((source.get("summary") or {}).get("total_rows") or 0),
+            "resource": extraction_workspace_resource(
+                study,
+                state="review",
+                source_id=source.get("id"),
+            ),
+        },
+    )
+
+
+def _bounded_icd_codes(value: Any, *, field: str, required: bool) -> list[str]:
+    if value in (None, []):
+        if required:
+            raise PiCopilotError(
+                "pi_icd_include_codes_required",
+                "At least one ICD include code is required for a cohort preview.",
+                details={"field": field},
+            )
+        return []
+    if not isinstance(value, list):
+        raise PiCopilotError(
+            "pi_icd_codes_invalid",
+            "ICD codes must be supplied as a bounded list.",
+            details={"field": field},
+        )
+    if len(value) > 16:
+        raise PiCopilotError(
+            "pi_icd_codes_too_many",
+            "Use at most sixteen ICD code prefixes in one cohort preview.",
+            details={"field": field},
+        )
+    codes: list[str] = []
+    for raw in value:
+        code = re.sub(r"\s+", "", str(raw or "")).strip().upper()
+        if not code or len(code) > 32:
+            raise PiCopilotError(
+                "pi_icd_code_invalid",
+                "Each ICD code prefix must contain 1 to 32 non-space characters.",
+                details={"field": field},
+            )
+        if code not in codes:
+            codes.append(code)
+    if required and not codes:
+        raise PiCopilotError(
+            "pi_icd_include_codes_required",
+            "At least one ICD include code is required for a cohort preview.",
+            details={"field": field},
+        )
+    return codes
+
+
+def _preview_icd_cohort(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Preview an ICD-filtered extraction cohort without exposing its ids."""
+
+    _require_args(
+        params,
+        allowed=("source_id", "include_codes", "exclude_codes"),
+        required=("include_codes",),
+    )
+    include_codes = _bounded_icd_codes(
+        params.get("include_codes"), field="include_codes", required=True
+    )
+    exclude_codes = _bounded_icd_codes(
+        params.get("exclude_codes"), field="exclude_codes", required=False
+    )
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU source before previewing an ICD cohort.",
+            owner="easyicu.webserver.sources",
+        )
+    study = _bound_context(context.session.binding) or {}
+    study_source = study.get("data_source")
+    study_source = study_source if isinstance(study_source, Mapping) else {}
+    database = str(source.get("database") or study_source.get("database") or "").strip()
+    if not database:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_database_missing",
+            summary="The registered source has no database identity for ICD matching.",
+            owner="easyicu.webserver.sources",
+        )
+    base_cohort = study.get("cohort")
+    try:
+        preview = dataio.preview_registered_export_icd_cohort(
+            str(source.get("path") or ""),
+            database,
+            base_cohort if isinstance(base_cohort, Mapping) else {},
+            include_codes=include_codes,
+            exclude_codes=exclude_codes,
+        )
+    except dataio.ExportCohortError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.error,
+            summary="The Data Extraction owner could not resolve this ICD cohort honestly.",
+            owner="easyicu.webserver.dataio",
+            details={"reason_code": exc.error},
+        )
+    report = preview.get("cohort_report")
+    report = report if isinstance(report, Mapping) else {}
+    cohort_size = int(preview.get("cohort_size") or 0)
+    source_total = report.get("source_total")
+    before_icd = report.get("selected_before_icd")
+    resource = _persist_workbench_snapshot(
+        context,
+        view="icd_cohort_preview",
+        title="ICD cohort preview",
+        payload={
+            "source": {
+                "id": str(source.get("id") or "")[:80],
+                "label": str(source.get("label") or database)[:160],
+                "database": str(preview.get("database") or database)[:40],
+            },
+            "summary": {
+                "cohort_size": cohort_size,
+                "source_total": source_total,
+                "selected_before_icd": before_icd,
+                "count_unit": "icu_stays",
+            },
+            "cohort_contract": preview.get("cohort_contract"),
+            "cohort_report": report,
+            "provenance": {
+                "owner": "easyicu.webserver.dataio",
+                "operation": "preview_export_cohort",
+                "execution_started": False,
+            },
+        },
+        privacy=(
+            preview.get("privacy")
+            if isinstance(preview.get("privacy"), Mapping)
+            else {}
+        ),
+    )
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_icd_cohort_preview_ready",
+        summary=f"The requested ICD filter selects {cohort_size} ICU stays in the current source.",
+        owner="easyicu.webserver.dataio",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "database": str(preview.get("database") or database)[:40],
+            "cohort_size": cohort_size,
+            "resource": resource,
+        },
+    )
+
+
+def _review_patient_timeline(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open one bounded pseudonymous patient timeline without model-visible rows."""
+
+    _require_args(params, allowed=("source_id", "entity_ordinal", "features"))
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU export before opening a patient timeline.",
+            owner="easyicu.webserver.sources",
+        )
+    ordinal = params.get("entity_ordinal", 1)
+    if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 1:
+        raise PiCopilotError(
+            "pi_entity_ordinal_invalid",
+            "The patient timeline requires a positive pseudonymous entity ordinal.",
+        )
+    requested_features = params.get("features")
+    if requested_features in (None, []):
+        feature_ids: list[str] = []
+    elif not isinstance(requested_features, list):
+        raise PiCopilotError(
+            "pi_patient_features_invalid",
+            "Patient Review features must be a bounded list of exact concept identifiers.",
+        )
+    else:
+        if len(requested_features) > 8:
+            raise PiCopilotError(
+                "pi_patient_features_too_many",
+                "Select at most eight Patient Review features for one conversational view.",
+            )
+        feature_ids = []
+        for raw in requested_features:
+            feature = str(raw or "").strip().lower()
+            if not feature or len(feature) > 80 or not re.fullmatch(
+                r"[a-z][a-z0-9_]*", feature
+            ):
+                raise PiCopilotError(
+                    "pi_patient_feature_invalid",
+                    "Each Patient Review feature must be an exact bounded EasyICU concept identifier.",
+                )
+            if feature not in feature_ids:
+                feature_ids.append(feature)
+    page_size = 24
+    page = ((ordinal - 1) // page_size) + 1
+    source_path = str(source.get("path") or "")
+    try:
+        navigation = patient_drilldown.patient_review_entity_page(
+            {
+                "source_path": source_path,
+                "entity_page": page,
+                "entity_page_size": page_size,
+            }
+        )
+        options = ((navigation.get("navigation") or {}).get("options") or [])
+        selected = next(
+            (row for row in options if int(row.get("ordinal") or 0) == ordinal), None
+        )
+        if not selected or not selected.get("ref"):
+            raise patient_drilldown.PatientReviewError(
+                {"error": "unknown_entity_ordinal"}
+            )
+        payload = patient_drilldown.patient_review_drilldown(
+            {"source_path": source_path, "entity_ref": selected["ref"]}
+        )
+        loaded_feature_details = []
+        for feature in feature_ids:
+            loaded_feature_details.append(
+                patient_drilldown.patient_review_feature(
+                    {
+                        "source_path": source_path,
+                        "entity_ref": selected["ref"],
+                        "entity_ordinal": ordinal,
+                        "feature": feature,
+                    }
+                )
+            )
+    except patient_drilldown.PatientReviewError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=str((exc.detail or {}).get("error") or "patient_review_blocked"),
+            summary="The Patient Review owner could not open that pseudonymous entity timeline.",
+            owner="easyicu.webserver.patient_drilldown",
+        )
+    patient_snapshot_payload = project_patient_snapshot_payload(
+        {
+            "source": payload.get("source"),
+            "summary": payload.get("summary"),
+            "eligibility_flow": payload.get("eligibility_flow"),
+            "selected": payload.get("selected"),
+            "time_lanes": payload.get("time_lanes"),
+            "feature_coverage": payload.get("feature_coverage"),
+            "loaded_feature_details": loaded_feature_details,
+            "patient_overview": payload.get("patient_overview"),
+            "trajectory_review": payload.get("trajectory_review"),
+            "quality_metrics": payload.get("quality_metrics"),
+            "blocked_features": payload.get("blocked_features"),
+            "provenance": payload.get("provenance"),
+        }
+    )
+    resource = _persist_workbench_snapshot(
+        context,
+        view="patient_timeline",
+        title=f"Patient timeline · Entity {ordinal}",
+        payload=patient_snapshot_payload,
+        privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
+    )
+    lanes = payload.get("time_lanes")
+    available_lane_count = sum(
+        1
+        for lane in (lanes if isinstance(lanes, list) else [])
+        if isinstance(lane, Mapping) and (lane.get("signals") or [])
+    )
+    loaded_trajectory_count = sum(
+        1
+        for detail in loaded_feature_details
+        if isinstance(detail, Mapping)
+        and detail.get("status") == "numeric_trajectory"
+    )
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_patient_timeline_ready",
+        summary=(
+            f"Prepared a bounded browser-only timeline for pseudonymous Entity {ordinal} "
+            f"with {available_lane_count} populated time lanes and "
+            f"{loaded_trajectory_count} requested feature trajectories. Direct identifiers, raw rows, "
+            "timestamps, and host locations stayed inside the browser-only boundary."
+        ),
+        owner="easyicu.webserver.patient_drilldown",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "entity_ordinal": ordinal,
+            "available_time_lane_count": available_lane_count,
+            "requested_feature_count": len(feature_ids),
+            "loaded_trajectory_count": loaded_trajectory_count,
+            "resource": resource,
+        },
+    )
+
+
+def _compare_data_sources(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open an aggregate Cross-DB comparison using exact registered source ids."""
+
+    _require_args(params, allowed=("source_ids", "features"), required=("source_ids",))
+    raw_ids = params.get("source_ids")
+    if not isinstance(raw_ids, list):
+        raise PiCopilotError(
+            "pi_crossdb_sources_invalid",
+            "Cross-DB comparison requires a list of registered source ids.",
+        )
+    source_ids = list(dict.fromkeys(str(value or "").strip() for value in raw_ids))
+    source_ids = [value for value in source_ids if value]
+    if len(source_ids) < 2 or len(source_ids) > 6:
+        raise PiCopilotError(
+            "pi_crossdb_source_count_invalid",
+            "Select between two and six registered exports for one Cross-DB view.",
+        )
+    registry = sources.load_registry()
+    registered = {
+        str(row.get("id") or ""): row
+        for row in (registry.get("sources") or [])
+        if isinstance(row, Mapping) and row.get("ok") and row.get("id")
+    }
+    missing = [source_id for source_id in source_ids if source_id not in registered]
+    if missing:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_crossdb_source_not_registered",
+            summary="One or more Cross-DB source ids are not validated registered exports.",
+            owner="easyicu.webserver.sources",
+            details={"missing_source_ids": missing},
+        )
+    paths = [str(registered[source_id].get("path") or "") for source_id in source_ids]
+    try:
+        payload = crossdb_review.crossdb_review_summary({"paths": paths})
+    except crossdb_review.CrossdbReviewError as exc:
+        detail = exc.detail or {}
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "crossdb_review_blocked"),
+            summary="The Cross-DB owner blocked this comparison because its registered exports are not safely comparable.",
+            owner="easyicu.webserver.crossdb_review",
+            details={
+                "source_count": len(source_ids),
+                "compatibility": str(
+                    (detail.get("compatibility_gate") or {}).get("status") or "blocked"
+                )[:80],
+            },
+        )
+    requested_features = params.get("features")
+    if requested_features not in (None, []) and not isinstance(requested_features, list):
+        raise PiCopilotError(
+            "pi_crossdb_features_invalid",
+            "Cross-DB features must be a bounded list of exact feature identifiers.",
+        )
+    if isinstance(requested_features, list) and len(requested_features) > 8:
+        raise PiCopilotError(
+            "pi_crossdb_feature_limit",
+            "Cross-DB comparison accepts at most eight requested features.",
+        )
+    feature_names = {
+        str(value or "").strip().lower()
+        for value in (requested_features or [])[:8]
+        if str(value or "").strip()
+    }
+    distributions = []
+    for module in payload.get("feature_distributions") or []:
+        if not isinstance(module, Mapping):
+            continue
+        module_name = str(module.get("module") or "").strip().lower()
+        rows = [
+            row
+            for row in (module.get("features") or [])
+            if isinstance(row, Mapping)
+            and (
+                not feature_names
+                or str(row.get("feature") or "").strip().lower() in feature_names
+                or (
+                    module_name
+                    and f"{module_name}:{str(row.get('feature') or '').strip().lower()}"
+                    in feature_names
+                )
+            )
+        ]
+        if not feature_names:
+            rows = rows[:4]
+        if rows:
+            distributions.append({**dict(module), "features": rows})
+        if sum(len(row.get("features") or []) for row in distributions) >= 16:
+            break
+    resource = _persist_workbench_snapshot(
+        context,
+        view="crossdb_comparison",
+        title="Cross-database comparison",
+        payload={
+            "source_count": payload.get("source_count"),
+            "sources": payload.get("sources"),
+            "selection_receipt": payload.get("selection_receipt"),
+            "rows": payload.get("rows"),
+            "availability": payload.get("availability"),
+            "feature_density": payload.get("feature_density"),
+            "feature_distributions": distributions,
+            "shared_modules": payload.get("shared_modules"),
+            "all_modules": payload.get("all_modules"),
+            "compatibility_gate": payload.get("compatibility_gate"),
+            "blocked_features": payload.get("blocked_features"),
+            "provenance": payload.get("provenance"),
+        },
+        privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
+    )
+    gate = payload.get("compatibility_gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    shared = payload.get("shared_modules") or []
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_crossdb_comparison_ready",
+        summary=(
+            f"Prepared a descriptive Cross-DB comparison for {len(source_ids)} registered exports "
+            f"with {len(shared)} shared modules. Inferential and matched-cohort claims remain blocked."
+        ),
+        owner="easyicu.webserver.crossdb_review",
+        details={
+            "source_ids": source_ids,
+            "source_count": len(source_ids),
+            "shared_module_count": len(shared),
+            "compatibility": str(gate.get("status") or "")[:80],
+            "resource": resource,
+        },
+    )
+
+
+def _prepare_demo_source(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Start the existing official download -> convert -> export -> register owner."""
+
+    _require_args(params, allowed=("source_id",), required=("source_id",))
+    source_id = str(params.get("source_id") or "").strip()
+    try:
+        source = demo_sources.get_source(source_id)
+    except KeyError:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_demo_source_unknown",
+            summary="Choose one allowlisted official EasyICU demo source id.",
+            owner="easyicu.webserver.demo_sources",
+            details={"allowed_source_ids": list(demo_sources.allowed_source_ids())},
+        )
+    grant_block = _consume_action(context, "extract")
+    if grant_block is not None:
+        return grant_block
+    try:
+        job = jobs.MANAGER.submit(
+            "demo-source-prepare", demo_sources.make_prepare_runner(source.id)
+        )
+    except jobs.JobCapacityError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code="job_capacity_exceeded",
+            summary="Wait for a running local data job to finish before preparing the demo source.",
+            owner="easyicu.webserver.jobs",
+            details={"running": exc.running, "max_running": exc.max_running},
+        )
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_demo_source_preparation_submitted",
+        summary=(
+            "Submitted the existing official demo-source pipeline: download, validate, "
+            "convert, all-module export, and registration will run locally."
+        ),
+        owner="easyicu.webserver.demo_sources",
+        details={
+            "job_id": job.id,
+            "kind": job.kind,
+            "status": job.status,
+            "source_id": source.id,
+        },
+    )
+
+
+def _workflow_snapshot(
+    context: ToolExecutionContext,
+    *,
+    study_override: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    projection = build_project_workflow_projection(
+        study_context_id=context.session.binding.study_context_id,
+        study_override=study_override,
+    )
+    return projection.workflow.model_dump(mode="json")
 
 
 def _inspect_workflow(
@@ -1027,6 +2031,64 @@ def _inspect_step(
     )
 
 
+def _validated_operational_mappings(
+    payloads: Mapping[str, Any],
+) -> list[Dict[str, str]]:
+    """Project owner-recorded semantic-to-physical bindings from result audits."""
+
+    result_tables = payloads.get("result_tables.json")
+    if not isinstance(result_tables, Mapping):
+        return []
+    tables = result_tables.get("tables")
+    if not isinstance(tables, list):
+        return []
+    mappings: list[Dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for table in tables[:40]:
+        if not isinstance(table, Mapping):
+            continue
+        headers = table.get("headers")
+        rows = table.get("rows")
+        if not isinstance(headers, list) or not isinstance(rows, list):
+            continue
+        header_names = [str(value or "").strip() for value in headers]
+        if "concept" not in header_names or "value_column" not in header_names:
+            continue
+        concept_index = header_names.index("concept")
+        value_column_index = header_names.index("value_column")
+        semantics_index = (
+            header_names.index("indicator_semantics")
+            if "indicator_semantics" in header_names
+            else None
+        )
+        for row in rows[:50]:
+            if not isinstance(row, list):
+                continue
+            if max(concept_index, value_column_index) >= len(row):
+                continue
+            concept = _bounded_model_text(row[concept_index], 80)
+            value_column = _bounded_model_text(row[value_column_index], 80)
+            if not concept or not value_column:
+                continue
+            identity = (concept, value_column)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            mapping = {
+                "semantic_concept": concept,
+                "operational_value_column": value_column,
+                "authority": "validated_result_measurement_audit",
+            }
+            if semantics_index is not None and semantics_index < len(row):
+                semantics = _bounded_model_text(row[semantics_index], 80)
+                if semantics:
+                    mapping["indicator_semantics"] = semantics
+            mappings.append(mapping)
+            if len(mappings) >= 20:
+                return mappings
+    return mappings
+
+
 def _inspect_validation(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -1094,6 +2156,13 @@ def _inspect_validation(
     scientific_facts = scientific_facts if isinstance(scientific_facts, Mapping) else {}
     analysis_facts = scientific_facts.get("analysis")
     analysis_facts = analysis_facts if isinstance(analysis_facts, Mapping) else {}
+    gate_checks = {
+        str(check.get("id") or "").strip(): bool(check.get("passed"))
+        for check in checks
+        if isinstance(check, Mapping) and str(check.get("id") or "").strip()
+    }
+    result_tables = payloads.get("result_tables.json")
+    result_tables = result_tables if isinstance(result_tables, Mapping) else {}
     details = bounded_json_projection(
         {
             "run_id": row.get("run_id"),
@@ -1143,6 +2212,13 @@ def _inspect_validation(
                 "resource": _artifact_resource(
                     row.get("run_id"), "scientific_readiness.json"
                 ),
+            },
+            "analysis_execution": {
+                "analysis_validated": bool(analysis_facts.get("analysis_validated")),
+                "numeric_verified": bool(gate_checks.get("numeric_verified")),
+                "result_table_count": int(result_tables.get("table_count") or 0),
+                "operational_mappings": _validated_operational_mappings(payloads),
+                "publication_gate_separate": True,
             },
             "signed": bool(review.get("signed")),
             "signoff_stale": bool(review.get("signoff_stale")),
@@ -1313,6 +2389,23 @@ def _inspect_interpretation(
         if card.status == "blocked"
         else "easyicu_result_interpretation_projected"
     )
+    card_projection = card.model_dump(mode="json")
+    safe_claims = []
+    for claim in card_projection.get("claims") or []:
+        try:
+            ensure_safe_projection(claim)
+        except PiCopilotError:
+            continue
+        safe_claims.append(claim)
+    card_projection["claims"] = safe_claims
+    safe_limitations = []
+    for limitation in card_projection.get("limitations") or []:
+        try:
+            ensure_safe_projection(limitation)
+        except PiCopilotError:
+            continue
+        safe_limitations.append(limitation)
+    card_projection["limitations"] = safe_limitations
     return _result(
         context,
         status=status,
@@ -1320,7 +2413,10 @@ def _inspect_interpretation(
         summary=card.summary,
         owner="easyicu.research_agent.reporting.result_card",
         details={
-            "interpretation": card.model_dump(mode="json"),
+            "interpretation": card_projection,
+            "withheld_claim_count": len(card.claims) - len(safe_claims),
+            "withheld_limitation_count": len(card.limitations)
+            - len(safe_limitations),
             "resources": resources,
         },
     )
@@ -1392,6 +2488,14 @@ def _inspect_manuscript(
         )
         if resource is not None
     ]
+    safe_review_claims = []
+    for claim in interpretation.claims:
+        projected_claim = claim.model_dump(mode="json")
+        try:
+            ensure_safe_projection(projected_claim)
+        except PiCopilotError:
+            continue
+        safe_review_claims.append(projected_claim)
     return _result(
         context,
         status="ok",
@@ -1409,10 +2513,9 @@ def _inspect_manuscript(
                     "question": _bounded_model_text(manuscript.get("question"), 1200),
                     "source": stable_code(manuscript.get("source")),
                     "claim_count": len(manuscript.get("claims") or []),
-                    "review_claims": [
-                        claim.model_dump(mode="json")
-                        for claim in interpretation.claims
-                    ],
+                    "review_claims": safe_review_claims,
+                    "withheld_review_claim_count": len(interpretation.claims)
+                    - len(safe_review_claims),
                 }
             ),
             "governance": bounded_json_projection(governance),
@@ -1476,418 +2579,15 @@ def _explain_blocker(
     )
 
 
-_STUDY_SETUP_FIELDS = frozenset(
-    {
-        "title",
-        "question",
-        "purpose",
-        "cohort",
-        "modules",
-        "outcome",
-        "primary_exposure",
-        "covariates",
-        "covariate_selection",
-        "covariate_rationales",
-        "covariate_temporal_roles",
-        "execution_concepts",
-        "analysis_design",
-        "sensitivity_specs",
-        "time_window",
-        "comparator",
-        "export_format",
-        "analysis_goal",
-        "confirmations",
-        "bind_active_export",
-        "bind_source_id",
-    }
-)
-
-_NESTED_STUDY_PATCH_FIELDS = frozenset(
-    {"cohort", "time_window", "confirmations", "execution_concepts"}
-)
-
-
-def _merge_nested_study_patch(
-    current: Mapping[str, Any], patch: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Merge bounded conversational object patches without erasing siblings.
-
-    Pi tool arguments naturally contain only the slot the user just changed.
-    StudyContext persists complete nested value objects.  Replacing the whole
-    object would let ``cohort.exclude_readmissions=true`` silently erase age,
-    comparator, and cohort-review authority.  Lists and scalar leaves still
-    replace exactly; only mappings merge recursively.
-    """
-
-    def merge(existing: Mapping[str, Any], proposed: Mapping[str, Any]) -> Dict[str, Any]:
-        combined = dict(existing)
-        for key, value in proposed.items():
-            prior = combined.get(key)
-            if isinstance(prior, Mapping) and isinstance(value, Mapping):
-                combined[key] = merge(prior, value)
-            else:
-                combined[key] = value
-        return combined
-
-    merged = dict(patch)
-    for field in _NESTED_STUDY_PATCH_FIELDS:
-        if field not in merged:
-            continue
-        existing = current.get(field)
-        proposed = merged.get(field)
-        if isinstance(existing, Mapping) and isinstance(proposed, Mapping):
-            merged[field] = merge(existing, proposed)
-    return merged
-
-
 def _update_study_context(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """Persist conversational setup through the existing typed owner."""
-
-    _require_args(params, allowed=_STUDY_SETUP_FIELDS)
-    binding = context.session.binding
-    current = _bound_context(binding)
-    if binding.study_context_id and current is None:
-        return _result(
-            context,
-            status="not_found",
-            code="study_context_not_found",
-            summary="The bound StudyContext no longer exists; no replacement context was created.",
-            owner="easyicu.webserver.study_contexts",
-        )
-    if current and current.get("active_job_id"):
-        return _result(
-            context,
-            status="blocked",
-            code="study_context_active_job_conflict",
-            summary="Study setup cannot change while its authoritative EasyICU job is active.",
-            owner="easyicu.webserver.study_contexts",
-        )
-
-    patch = {
-        key: params[key]
-        for key in _STUDY_SETUP_FIELDS - {"bind_active_export", "bind_source_id"}
-        if key in params
-    }
-    if current:
-        patch = _merge_nested_study_patch(current, patch)
-    if current and current.get("id"):
-        patch["id"] = current["id"]
-    for field in (
-        "title",
-        "question",
-        "purpose",
-        "outcome",
-        "primary_exposure",
-        "comparator",
-        "analysis_goal",
-    ):
-        if patch.get(field):
-            reject_sensitive_message(str(patch[field]))
-    for covariate in patch.get("covariates") or []:
-        reject_sensitive_message(str(covariate))
-    for rationale in (patch.get("covariate_rationales") or {}).values():
-        reject_sensitive_message(str(rationale))
-    for spec in patch.get("sensitivity_specs") or []:
-        if isinstance(spec, Mapping):
-            for variable in spec.get("execution_variables") or []:
-                reject_sensitive_message(str(variable))
-
-    bind_source_id = str(params.get("bind_source_id") or "").strip()
-    if params.get("bind_active_export") or bind_source_id:
-        registry = sources.load_registry()
-        if bind_source_id:
-            source = next(
-                (
-                    row
-                    for row in (registry.get("sources") or [])
-                    if isinstance(row, Mapping)
-                    and row.get("ok")
-                    and str(row.get("id") or "") == bind_source_id
-                ),
-                None,
-            )
-            if source is None:
-                return _result(
-                    context,
-                    status="blocked",
-                    code="pi_data_source_not_registered",
-                    summary=(
-                        "The selected source id is not a validated registered "
-                        "EasyICU export. List sources again before binding."
-                    ),
-                    owner="easyicu.webserver.sources",
-                )
-            selected_path = str(source.get("path") or "").strip()
-        else:
-            selected_path = str(registry.get("active_path") or "").strip()
-            source = next(
-                (
-                    row
-                    for row in (registry.get("sources") or [])
-                    if isinstance(row, Mapping)
-                    and row.get("ok")
-                    and str(row.get("path") or "") == selected_path
-                ),
-                None,
-            )
-        if not selected_path or source is None:
-            return _result(
-                context,
-                status="blocked",
-                code="no_active_export",
-                summary="No validated active EasyICU export is available to bind.",
-                owner="easyicu.webserver.sources",
-            )
-        database = str(source.get("database") or "").strip()
-        if not database:
-            return _result(
-                context,
-                status="blocked",
-                code="pi_data_source_database_unavailable",
-                summary=(
-                    "The selected registered export has no validated database "
-                    "identity and cannot be bound for extraction."
-                ),
-                owner="easyicu.webserver.sources",
-            )
-        patch["data_source"] = {
-            "path": selected_path,
-            "label": source.get("label") or "active EasyICU export",
-            "database": database,
-        }
-    effective_source = patch.get("data_source") or (current or {}).get("data_source")
-    effective_source = effective_source if isinstance(effective_source, Mapping) else {}
-    effective_modules = patch.get("modules")
-    if effective_modules is None:
-        effective_modules = (current or {}).get("modules") or []
-    execution = patch.get("execution_concepts")
-    if execution is not None:
-        try:
-            normalized_execution = study_contexts.normalize_execution_concepts(
-                execution
-            )
-        except study_contexts.StudyContextError as exc:
-            return _result(
-                context,
-                status="blocked",
-                code=str(exc.detail.get("error") or "study_execution_concepts_invalid"),
-                summary="The StudyContext owner rejected the executable concept binding.",
-                owner="easyicu.webserver.study_contexts",
-                details={
-                    key: exc.detail.get(key)
-                    for key in ("field", "fields", "max_items")
-                    if exc.detail.get(key) is not None
-                },
-            )
-        source_path = str(effective_source.get("path") or "").strip()
-        if not source_path:
-            return _result(
-                context,
-                status="blocked",
-                code="study_execution_source_required",
-                summary="Bind a validated data source before saving executable concept identifiers.",
-                owner="easyicu.webserver.study_contexts",
-            )
-        from easyicu.research_agent.acquisition.catalog import build_available_catalog
-
-        catalog = build_available_catalog(Path(source_path).expanduser())
-        allowed_modules = {
-            str(value).strip().lower()
-            for value in effective_modules
-            if str(value).strip()
-        }
-        allowed_ids = {
-            concept.concept_id
-            for concept in catalog.concepts
-            if Path(concept.file_name).stem.lower() in allowed_modules
-        }
-        bound_ids = [
-            value
-            for value in (
-                normalized_execution.get("outcome"),
-                normalized_execution.get("primary_exposure"),
-                *(normalized_execution.get("covariates") or []),
-            )
-            if value
-        ]
-        unavailable = sorted(set(bound_ids) - allowed_ids)
-        if unavailable:
-            return _result(
-                context,
-                status="blocked",
-                code="study_execution_concepts_unavailable",
-                summary="One or more executable concepts are absent from the selected modules.",
-                owner="easyicu.research_agent.acquisition.catalog",
-                details={"unavailable_concepts": unavailable},
-            )
-        primary_concept = normalized_execution.get("primary_exposure")
-        if primary_concept:
-            from easyicu.concept.selection_policy import evaluate_concept_selection
-
-            # The model must not self-authorize an experimental concept by
-            # putting its name in a generated exposure label or analysis goal.
-            # The persisted scientific question is the user-intent authority.
-            effective_intent = str(
-                patch.get("question")
-                if "question" in patch
-                else (current or {}).get("question") or ""
-            )
-            decision = evaluate_concept_selection(
-                primary_concept,
-                user_intent=effective_intent,
-            )
-            if not decision.allowed:
-                return _result(
-                    context,
-                    status="blocked",
-                    code=decision.reason_code,
-                    summary=(
-                        "The selected primary concept is an explicit-only "
-                        "variant that the user's research intent did not request."
-                    ),
-                    owner="easyicu.concept.selection_policy",
-                    details=decision.to_dict(),
-                )
-        patch["execution_concepts"] = normalized_execution
-    if "analysis_design" in patch:
-        try:
-            patch["analysis_design"] = study_contexts.normalize_analysis_design(
-                patch.get("analysis_design")
-            )
-        except study_contexts.StudyContextError as exc:
-            return _result(
-                context,
-                status="blocked",
-                code=str(exc.detail.get("error") or "study_analysis_design_invalid"),
-                summary="The StudyContext owner rejected the proposed analysis design.",
-                owner="easyicu.webserver.study_contexts",
-                details={
-                    key: exc.detail.get(key)
-                    for key in ("field", "fields", "allowed")
-                    if exc.detail.get(key) is not None
-                },
-            )
-    if "covariate_selection" in patch:
-        selection = str(patch.get("covariate_selection") or "").strip()
-        if selection not in {"planner_selectable", "exact"}:
-            return _result(
-                context,
-                status="blocked",
-                code="study_covariate_selection_invalid",
-                summary="The adjustment-set authority must be planner_selectable or exact.",
-                owner="easyicu.webserver.study_contexts",
-                details={
-                    "field": "covariate_selection",
-                    "allowed": ["exact", "planner_selectable"],
-                },
-            )
-        patch["covariate_selection"] = selection
-    if not patch:
-        raise PiCopilotError(
-            "pi_tool_arguments_required",
-            "At least one typed study-setup field is required.",
-        )
-
-    # Validate the complete proposed StudyContext before spending the one-use
-    # Configure grant.  A rejected typed proposal is not a mutation; consuming
-    # the grant here used to prevent Pi from correcting a mechanical schema
-    # error in the same turn.
-    try:
-        patch = study_contexts.validate_context_update(
-            patch,
-            current_context=current,
-            lifecycle_write=False,
-        )
-    except study_contexts.StudyContextError as exc:
-        return _result(
-            context,
-            status="blocked",
-            code=str(exc.detail.get("error") or "study_context_update_blocked"),
-            summary="The typed StudyContext owner rejected the proposed setup update.",
-            owner="easyicu.webserver.study_contexts",
-            details={
-                key: exc.detail.get(key)
-                for key in (
-                    "error",
-                    "field",
-                    "fields",
-                    "reason",
-                    "allowed",
-                    "required_design",
-                    "alternative",
-                )
-                if exc.detail.get(key) is not None
-            },
-        )
-
-    if "analysis_design" in params:
-        proposed = {**dict(current or {}), **patch}
-        try:
-            agent_pipeline_runs.validate_analysis_design_for_execution(proposed)
-        except agent_pipeline_runs.ResearchPipelineRunError as exc:
-            return _result(
-                context,
-                status="blocked",
-                code=exc.code,
-                summary=str(exc),
-                owner="easyicu.webserver.agent_pipeline_runs.analysis_design",
-                details=exc.details,
-            )
-
-    grant_block = _consume_action(context, "configure")
-    if grant_block is not None:
-        return grant_block
-
-    try:
-        updated = study_contexts.upsert_context(
-            patch,
-            active=True,
-            expected_revision=(int(current.get("revision") or 0) if current else None),
-            require_revision=bool(current),
-            lifecycle_write=False,
-        )
-    except study_contexts.StudyContextError as exc:
-        return _result(
-            context,
-            status="blocked",
-            code=str(exc.detail.get("error") or "study_context_update_blocked"),
-            summary="The typed StudyContext owner rejected the proposed setup update.",
-            owner="easyicu.webserver.study_contexts",
-            details={
-                key: exc.detail.get(key)
-                for key in (
-                    "error",
-                    "field",
-                    "fields",
-                    "reason",
-                    "allowed",
-                    "required_design",
-                    "alternative",
-                    "expected_revision",
-                    "current_revision",
-                )
-                if exc.detail.get(key) is not None
-            },
-        )
-    result = _result(
+    return update_study_context(
         context,
-        status="ok",
-        code="study_context_updated",
-        summary=(
-            f"Saved typed StudyContext revision {int(updated.get('revision') or 0)}. "
-            "The conversation host will rebind this Copilot session after the turn settles."
-        ),
-        owner="easyicu.webserver.study_contexts",
-        details={
-            "study": project_study_context(updated),
-            "rebind_required": True,
-            "host_rebind_after_turn": True,
-        },
+        params,
+        load_context=_bound_context,
+        project_workflow=_workflow_snapshot,
     )
-    context.invalidate_authority("study_context_updated")
-    return result
 
 
 def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1923,6 +2623,34 @@ def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
         )
     pre = payload.get("pre_experiment")
     pre = pre if isinstance(pre, Mapping) else {}
+    design_support = selected.get("design_support")
+    design_support = design_support if isinstance(design_support, Mapping) else {}
+    construct_answerability = [
+        {
+            key: row.get(key)
+            for key in (
+                "construct_id",
+                "label_zh",
+                "resolution_kind",
+                "source_state",
+                "verdict",
+                "required_primitives",
+                "available_primitives",
+                "missing_primitives",
+                "unresolved_requirements",
+                "supported_databases",
+                "materialized",
+                "requires_confirmation",
+                "recipe",
+                "rationale_zh",
+                "semantic_warning",
+                "user_facing",
+            )
+            if row.get(key) is not None
+        }
+        for row in list(selected.get("construct_answerability") or [])[:8]
+        if isinstance(row, Mapping)
+    ]
     return bounded_json_projection(
         {
             "run_id": payload.get("run_id"),
@@ -1944,7 +2672,39 @@ def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 )
                 if selected.get(key) is not None
             }
-            | {"mapped_concepts": concepts},
+            | {
+                "mapped_concepts": concepts,
+                "construct_answerability": construct_answerability,
+                "unresolved_slots": list(selected.get("unresolved_slots") or [])[:8],
+                "design_support": {
+                    key: design_support.get(key)
+                    for key in (
+                        "card_id",
+                        "version",
+                        "file_sha256",
+                        "trust_level",
+                        "review_status",
+                        "summary",
+                        "study_families",
+                        "topic_aliases",
+                        "population",
+                        "time_zero",
+                        "observation_window",
+                        "prediction_or_followup_window",
+                        "eligibility_candidates",
+                        "exposure_family",
+                        "outcome_family",
+                        "estimand_family",
+                        "recommended_methods",
+                        "sensitivity_analyses",
+                        "requires_confirmation",
+                        "stop_conditions",
+                        "citations",
+                        "authority",
+                    )
+                    if design_support.get(key) is not None
+                },
+            },
             "feasibility": {
                 "status": pre.get("status"),
                 "reason": pre.get("reason"),
@@ -1987,16 +2747,21 @@ def _mine_ideas(
             summary="Save a scientific question or provide a bounded idea topic first.",
             owner="easyicu.webserver.ideas.mining",
         )
+    source_seed = dict(context.idea_source or {})
     body = {
-        "source_type": "manual",
+        "source_type": str(source_seed.get("source_type") or "manual"),
+        "metadata_only": True,
         "topic": topic,
         "research_question": topic,
-        "title": str(params.get("title") or topic)[:220],
-        "excerpt": str(params.get("excerpt") or topic)[:1200],
-        "journal": params.get("journal"),
-        "year": params.get("year"),
-        "doi": params.get("doi"),
-        "pmid": params.get("pmid"),
+        "title": str(source_seed.get("title") or params.get("title") or topic)[:220],
+        "excerpt": str(source_seed.get("excerpt") or params.get("excerpt") or topic)[:1200],
+        "journal": source_seed.get("journal") or params.get("journal"),
+        "year": source_seed.get("year") or params.get("year"),
+        "doi": source_seed.get("doi") or params.get("doi"),
+        "pmid": source_seed.get("pmid") or params.get("pmid"),
+        "url": source_seed.get("url"),
+        "source_file_name": source_seed.get("source_file_name"),
+        "source_file_sha256": source_seed.get("source_file_sha256"),
     }
     try:
         mined = idea_mining.mine_ideas(body)
@@ -2028,7 +2793,10 @@ def _search_literature(
 ) -> Dict[str, Any]:
     """Run the existing PubMed Idea Mining owner after one-turn opt-in."""
 
-    _require_args(params, allowed=("topic", "journal", "limit"))
+    _require_args(
+        params,
+        allowed=("topic", "journal", "limit", "run_id", "idea_id"),
+    )
     try:
         requested_limit = max(1, min(int(params.get("limit") or 5), 8))
     except (TypeError, ValueError):
@@ -2055,7 +2823,19 @@ def _search_literature(
     )
     bound_idea_run = str(idea_handoff.get("run_id") or "").strip()
     bound_idea_id = str(idea_handoff.get("idea_id") or "").strip()
-    if not (bound_idea_run and bound_idea_id):
+    candidate_run = str(params.get("run_id") or "").strip()
+    candidate_idea = str(params.get("idea_id") or "").strip()
+    if bool(candidate_run) != bool(candidate_idea):
+        return _result(
+            context,
+            status="blocked",
+            code="idea_identity_incomplete",
+            summary="Both run_id and idea_id are required to search one mined candidate.",
+            owner="easyicu.webserver.ideas.mining",
+        )
+    if not (candidate_run and candidate_idea) and not (
+        bound_idea_run and bound_idea_id
+    ):
         missing_scope = [
             field
             for field, value in (
@@ -2070,216 +2850,70 @@ def _search_literature(
             if not str(value or "").strip()
         ]
         if missing_scope:
+            # The Planner -- not Copilot -- chooses the exposure and outcome, so
+            # before a plan exists these fields are empty *by design*.  Blocking
+            # here is still correct (plan-authority literature must cite exact
+            # concepts), but a bare refusal made Pi conclude the plan itself was
+            # impossible and stop.  Name the owning next step instead, so an
+            # unplanned study is routed to the Planner rather than dead-ended.
+            plan_workflow = _workflow_snapshot(context, study_override=study)
+            plan_ready = (
+                str(plan_workflow.get("next_action_code") or "")
+                == "provider_ready_to_generate_plan"
+            )
+            summary = (
+                "Bind the study exposure and outcome to exact source concepts "
+                "before searching literature for Plan authority. Broad Idea "
+                "Mining literature must use an accepted idea handoff instead."
+            )
+            if plan_ready:
+                summary = (
+                    "Plan-authority literature is produced by the EasyICU Planner "
+                    "run, which also chooses the exposure and outcome this search "
+                    "would need. Do not ask the user to supply them: start the "
+                    "formal research plan instead. This is not a data or "
+                    "permission failure."
+                )
             return _result(
                 context,
                 status="blocked",
                 code="literature_study_scope_incomplete",
-                summary=(
-                    "Bind the study exposure and outcome to exact source concepts "
-                    "before searching literature for Plan authority. Broad Idea "
-                    "Mining literature must use an accepted idea handoff instead."
-                ),
+                summary=summary,
                 owner="easyicu.webserver.literature_authority",
-                details={"missing_fields": missing_scope},
+                details={
+                    "missing_fields": missing_scope,
+                    "next_action_code": plan_workflow.get("next_action_code"),
+                    "plan_generation_ready": plan_ready,
+                },
             )
     grant_block = _consume_action(context, "literature")
     if grant_block is not None:
         return grant_block
     try:
-        if bound_idea_run and bound_idea_id:
-            checked = idea_mining.check_prior_art(
-                {
-                    "run_id": bound_idea_run,
-                    "idea_id": bound_idea_id,
-                    "allow_network": True,
-                }
-            )
-            prior = checked.get("prior_art")
-            prior = prior if isinstance(prior, Mapping) else {}
-            raw_candidates = [
-                row
-                for row in list(prior.get("results") or [])[:requested_limit]
-                if isinstance(row, Mapping)
-            ]
-            candidates = [
-                {
-                    "citation_key": f"idea_pubmed_{str(row.get('pmid') or '').strip()}",
-                    "title": row.get("title"),
-                    "journal": row.get("journal") or row.get("source"),
-                    "year": row.get("year") or row.get("pubdate"),
-                    "doi": row.get("doi"),
-                    "pmid": row.get("pmid"),
-                    "url": (
-                        f"https://pubmed.ncbi.nlm.nih.gov/{str(row.get('pmid') or '').strip()}/"
-                        if str(row.get("pmid") or "").strip()
-                        else None
-                    ),
-                    "evidence_quote": (
-                        str(
-                            row.get("abstract_excerpt")
-                            or row.get("evidence_sentence")
-                            or (
-                                "Matched the accepted Idea Mining prior-art query: "
-                                + str(row.get("query") or "")
-                            )
-                        )[:600]
-                    ),
-                    "design_excerpt": str(
-                        row.get("design_excerpt")
-                        or row.get("abstract_excerpt")
-                        or ""
-                    )[:1200],
-                    "publication_types": [
-                        str(value)[:120]
-                        for value in list(row.get("publication_types") or [])[:12]
-                        if str(value).strip()
-                    ],
-                    "matched_queries": [str(row.get("query") or "")[:1500]]
-                    if str(row.get("query") or "").strip()
-                    else [],
-                    "matched_query_strata": ["accepted_idea_prior_art"],
-                }
-                for row in raw_candidates
-            ]
-            discovered = {
-                "status": prior.get("status"),
-                "search_performed": prior.get("search_performed"),
-                "queries_to_run": prior.get("queries_to_run") or [],
-                "network_calls": prior.get("network_calls") or 0,
-                "source_candidates": candidates,
-            }
-            receipt_binding = idea_mining.prior_art_receipt_binding(bound_idea_run)
-        else:
-            cohort_scope = (
-                study.get("cohort")
-                if isinstance(study.get("cohort"), Mapping)
-                else {}
-            )
-            data_source = (
-                study.get("data_source")
-                if isinstance(study.get("data_source"), Mapping)
-                else {}
-            )
-            analysis_design = (
-                study.get("analysis_design")
-                if isinstance(study.get("analysis_design"), Mapping)
-                else {}
-            )
-            discovered = idea_mining.discover_literature(
-                {
-                    "topic": topic,
-                    "exposure": str(study.get("primary_exposure") or "").strip(),
-                    "outcome": str(study.get("outcome") or "").strip(),
-                    "exposure_concept": str(
-                        execution_concepts.get("primary_exposure") or ""
-                    ).strip(),
-                    "outcome_concept": str(
-                        execution_concepts.get("outcome") or ""
-                    ).strip(),
-                    "population": " ".join(
-                        str(cohort_scope.get(key) or "").strip()
-                        for key in ("label", "review", "preset")
-                        if str(cohort_scope.get(key) or "").strip()
-                    ),
-                    "database": str(data_source.get("database") or "").strip(),
-                    "analysis_family": str(
-                        analysis_design.get("analysis_family") or ""
-                    ).strip(),
-                    "journal": str(params.get("journal") or "").strip(),
-                    "limit": requested_limit,
-                    "allow_network": True,
-                }
-            )
-            receipt_binding = None
-    except idea_mining.IdeaMiningWebError as exc:
-        detail = exc.detail
+        transaction = literature_search_transaction.execute_literature_search(
+            study=study,
+            topic=topic,
+            journal=str(params.get("journal") or "").strip(),
+            requested_limit=requested_limit,
+            bound_study_id=str(
+                context.session.binding.study_context_id or ""
+            ).strip(),
+            candidate_run_id=candidate_run,
+            candidate_idea_id=candidate_idea,
+        )
+    except literature_search_transaction.LiteratureSearchTransactionError as exc:
         return _result(
             context,
             status="blocked",
-            code=str(detail.get("error") or "literature_search_blocked"),
-            summary=str(
-                detail.get("reason") or "Idea Mining rejected the literature search."
-            ),
-            owner="easyicu.webserver.ideas.mining",
+            code=exc.code,
+            summary=exc.message,
+            owner=exc.owner,
         )
-    generic_authority_binding: Optional[Dict[str, Any]] = None
-    updated_study: Optional[Dict[str, Any]] = None
-    if performed := bool(discovered.get("search_performed")):
-        if not (bound_idea_run and bound_idea_id):
-            study_id = str(study.get("id") or "").strip()
-            bound_study_id = str(
-                context.session.binding.study_context_id or ""
-            ).strip()
-            stored = (
-                study_contexts.get_context(study_id)
-                if study_id and bound_study_id == study_id
-                else None
-            )
-            if stored is None and context.session.binding.study_context_id:
-                return _result(
-                    context,
-                    status="blocked",
-                    code="literature_authority_study_missing",
-                    summary=(
-                        "The bound StudyContext disappeared before its literature "
-                        "receipt could be attached. Search results were not authorized."
-                    ),
-                    owner="easyicu.webserver.literature_authority",
-                )
-            if stored is not None:
-                if int(stored.get("revision") or 0) != int(study.get("revision") or 0):
-                    return _result(
-                        context,
-                        status="blocked",
-                        code="literature_authority_study_revision_conflict",
-                        summary=(
-                            "The study changed while PubMed was being searched. "
-                            "Search again against the current study revision."
-                        ),
-                        owner="easyicu.webserver.literature_authority",
-                    )
-                try:
-                    generic_authority_binding = (
-                        literature_authority.persist_literature_authority(
-                            study=stored,
-                            discovered=discovered,
-                        )
-                    )
-                    updated_study = study_contexts.bind_literature_authority(
-                        study_id,
-                        generic_authority_binding,
-                        expected_revision=int(stored.get("revision") or 0),
-                    )
-                except literature_authority.LiteratureAuthorityError as exc:
-                    return _result(
-                        context,
-                        status="blocked",
-                        code=exc.code,
-                        summary=exc.message,
-                        owner="easyicu.webserver.literature_authority",
-                    )
-                except study_contexts.StudyContextError as exc:
-                    return _result(
-                        context,
-                        status="blocked",
-                        code=str(
-                            exc.detail.get("error")
-                            or "literature_authority_binding_failed"
-                        ),
-                        summary=(
-                            "The StudyContext changed before the literature receipt "
-                            "could be bound. Search again against the current revision."
-                        ),
-                        owner="easyicu.webserver.study_contexts",
-                    )
-
-    candidates = [
-        row
-        for row in list(discovered.get("source_candidates") or [])[
-            :requested_limit
-        ]
-        if isinstance(row, Mapping)
-    ]
+    discovered = transaction.discovered
+    candidates = list(transaction.candidates)
+    receipt_binding = transaction.idea_receipt_binding
+    generic_authority_binding = transaction.study_authority_binding
+    updated_study = transaction.updated_study
     status = str(discovered.get("status") or "search_failed")
     performed = bool(discovered.get("search_performed"))
     query_count = len(list(discovered.get("queries_to_run") or []))
@@ -2290,7 +2924,8 @@ def _search_literature(
             receipt_binding if isinstance(receipt_binding, Mapping) else None
         ),
         study_authority_binding=generic_authority_binding,
-        bound_idea_run_id=bound_idea_run,
+        bound_idea_run_id=transaction.bound_idea_run_id,
+        searched_idea_was_accepted=transaction.searched_idea_was_accepted,
     )
     if updated_study is not None:
         projection.update(
@@ -2319,8 +2954,13 @@ def _search_literature(
             + (
                 " The current Idea handoff must now be re-accepted so this "
                 "exact literature receipt becomes part of Plan authority."
-                if receipt_binding
-                else ""
+                if receipt_binding and transaction.searched_idea_was_accepted
+                else (
+                    " The exact receipt is attached to the mined candidate; "
+                    "prepare its Idea Plan next before accepting a handoff."
+                    if receipt_binding
+                    else ""
+                )
             )
             + (
                 " The exact Web search receipt is now digest-bound to this "
@@ -2342,16 +2982,50 @@ def _prepare_idea_handoff(
 ) -> Dict[str, Any]:
     _require_args(
         params,
-        allowed=("run_id", "idea_id", "plan_edits"),
+        allowed=("run_id", "idea_id", "plan_edits", "plan_fields"),
         required=("run_id",),
     )
+    run_id = str(params.get("run_id") or "").strip()
+    try:
+        prior_art_binding = idea_mining.prior_art_receipt_binding(run_id)
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_prior_art_receipt_invalid"),
+            summary=str(detail.get("reason") or "Idea literature receipt is invalid."),
+            owner="easyicu.webserver.ideas.mining",
+        )
+    if prior_art_binding and int(
+        prior_art_binding.get("prior_art_result_count") or 0
+    ) == 0:
+        return _result(
+            context,
+            status="blocked",
+            code="idea_literature_zero_results_requires_refinement",
+            summary=(
+                "The exact bounded topic search returned no retrieval candidates. "
+                "This does not establish novelty or absence of literature. Keep the "
+                "study in Idea Mining, refine or split the direction, and search the "
+                "new candidate before preparing a scientific-question handoff."
+            ),
+            owner="easyicu.webserver.ideas.mining",
+            details={
+                "run_id": run_id,
+                "prior_art_status": prior_art_binding.get("prior_art_status"),
+                "prior_art_result_count": 0,
+                "handoff_allowed": False,
+            },
+        )
     grant_block = _consume_action(context, "idea")
     if grant_block is not None:
         return grant_block
     body = {
-        "run_id": str(params.get("run_id") or "").strip(),
+        "run_id": run_id,
         "idea_id": str(params.get("idea_id") or "").strip(),
         "plan_edits": str(params.get("plan_edits") or "").strip()[:1200],
+        "plan_fields": params.get("plan_fields") or {},
     }
     try:
         plan = idea_mining.plan_idea(body)
@@ -2365,7 +3039,11 @@ def _prepare_idea_handoff(
             summary=str(detail.get("reason") or "Idea handoff preparation failed."),
             owner="easyicu.webserver.ideas.handoff",
         )
-    plan_body = plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {}
+    plan_body = (
+        handoff.get("handoff_plan")
+        if isinstance(handoff.get("handoff_plan"), Mapping)
+        else (plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {})
+    )
     agent_seed = (
         handoff.get("agent_seed")
         if isinstance(handoff.get("agent_seed"), Mapping)
@@ -2387,9 +3065,17 @@ def _prepare_idea_handoff(
                     "exposure",
                     "comparator",
                     "outcome",
+                    "time_zero",
                     "time_window",
                     "plan_status",
                     "selection_mode",
+                    "confirmed_plan_fields",
+                    "prior_art_review",
+                    "active_export_contract",
+                    "prior_art_adjudication",
+                    "source_feasibility_summary",
+                    "execution_readiness",
+                    "execution_gate",
                 )
                 if plan_body.get(key) is not None
             },
@@ -2413,7 +3099,216 @@ def _prepare_idea_handoff(
             "still requires user confirmation in the Copilot conversation."
         ),
         owner="easyicu.webserver.ideas.handoff",
-        details={"idea_handoff": details},
+        details={
+            "idea_handoff": details,
+            "resource": {
+                "kind": "idea_plan",
+                "run_id": handoff.get("run_id"),
+                "artifact": "idea_plan.json",
+                "label": "Idea Mining plan preview",
+                "media_type": "application/json",
+                "authority_class": "idea_mining_planning_only",
+            },
+        },
+    )
+
+
+def _adjudicate_idea_literature(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(
+        params,
+        allowed=("run_id", "idea_id", "decision", "rationale", "plan_fields"),
+        required=("run_id", "idea_id", "decision", "rationale", "plan_fields"),
+    )
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
+    body = {
+        "run_id": str(params.get("run_id") or "").strip(),
+        "idea_id": str(params.get("idea_id") or "").strip(),
+        "decision": str(params.get("decision") or "").strip(),
+        "rationale": str(params.get("rationale") or "").strip()[:1200],
+        "plan_fields": params.get("plan_fields") or {},
+    }
+    try:
+        idea_mining.plan_idea(body)
+        adjudication = idea_mining.adjudicate_prior_art(body)
+        binding = idea_mining.prior_art_adjudication_binding(
+            body["run_id"], body["idea_id"]
+        )
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_prior_art_adjudication_blocked"),
+            summary=str(detail.get("reason") or "Prior-art adjudication was blocked."),
+            owner="easyicu.webserver.ideas.mining",
+            details={key: value for key, value in detail.items() if key != "reason"},
+        )
+    decision = str(adjudication.get("decision") or "uncertain")
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_idea_literature_adjudicated",
+        summary=(
+            "Recorded a digest-bound differentiated prior-art decision; confirm a "
+            "real data source and run bounded feasibility next."
+            if decision == "differentiated"
+            else (
+                "Recorded that prior work already answers this direction; keep Idea "
+                "Mining open and reframe the candidate."
+                if decision == "already_answered"
+                else "Recorded an uncertain prior-art decision; execution remains blocked."
+            )
+        ),
+        owner="easyicu.webserver.ideas.mining",
+        details={
+            "prior_art_adjudication": bounded_json_projection(
+                {
+                    "run_id": adjudication.get("run_id"),
+                    "idea_id": adjudication.get("idea_id"),
+                    "decision": decision,
+                    "rationale": adjudication.get("rationale"),
+                    "screening": adjudication.get("screening"),
+                    "comparison_axes": adjudication.get("comparison_axes"),
+                    "authority": adjudication.get("authority"),
+                    "binding": binding,
+                }
+            ),
+            "execution_can_advance": decision == "differentiated",
+        },
+    )
+
+
+def _bound_registered_export(
+    context: ToolExecutionContext,
+) -> tuple[Dict[str, Any], Dict[str, Any]] | None:
+    study = _bound_context(context.session.binding)
+    study_source = study.get("data_source") if isinstance(study, Mapping) else None
+    study_source = study_source if isinstance(study_source, Mapping) else {}
+    source_path = str(study_source.get("path") or "").strip()
+    if not source_path:
+        return None
+    registry = sources.load_registry()
+    source = next(
+        (
+            dict(row)
+            for row in registry.get("sources") or []
+            if isinstance(row, Mapping)
+            and bool(row.get("ok"))
+            and str(row.get("path") or "").strip() == source_path
+        ),
+        None,
+    )
+    if source is None:
+        return None
+    desc = dataio.describe_export_source(source_path)
+    if not desc.get("ok"):
+        return None
+    return source, desc
+
+
+def _assess_idea_feasibility(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(
+        params,
+        allowed=("run_id", "idea_id", "concept_bindings", "max_records"),
+        required=("run_id", "idea_id", "concept_bindings"),
+    )
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
+    export = _bound_registered_export(context)
+    if export is None:
+        return _result(
+            context,
+            status="blocked",
+            code="idea_bound_registered_source_required",
+            summary=(
+                "Confirm one validated registered EasyICU export in this project "
+                "before running Idea feasibility."
+            ),
+            owner="easyicu.webserver.study_contexts",
+        )
+    source, _desc = export
+    bindings = params.get("concept_bindings")
+    bindings = bindings if isinstance(bindings, Mapping) else {}
+    requested = [
+        str(bindings.get(key) or "").strip()
+        for key in ("primary_exposure", "outcome", "time_zero")
+    ] + [str(value or "").strip() for value in bindings.get("covariates") or []]
+    requested = list(dict.fromkeys(value for value in requested if value))
+    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+
+    catalog = build_available_catalog(Path(str(source.get("path") or "")))
+    available = {str(item.concept_id) for item in catalog.concepts}
+    unknown = [value for value in requested if value not in available]
+    if unknown:
+        return _result(
+            context,
+            status="blocked",
+            code="idea_concept_bindings_not_in_source",
+            summary="One or more confirmed concepts are not present in the selected source.",
+            owner="easyicu.research_agent.acquisition.catalog",
+            details={"unknown_concepts": unknown},
+        )
+    body = {
+        "run_id": str(params.get("run_id") or "").strip(),
+        "idea_id": str(params.get("idea_id") or "").strip(),
+        "concept_bindings": dict(bindings),
+        "max_records": params.get("max_records"),
+        "require_adjudication": True,
+    }
+    try:
+        feasibility = idea_mining.bounded_sample_feasibility(body, export=export)
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_source_feasibility_blocked"),
+            summary=str(detail.get("reason") or "Source-bound Idea feasibility was blocked."),
+            owner="easyicu.webserver.ideas.mining",
+            details={key: value for key, value in detail.items() if key != "reason"},
+        )
+    projected = {
+        key: feasibility.get(key)
+        for key in (
+            "run_id",
+            "idea_id",
+            "status",
+            "claim_level",
+            "source",
+            "cohort",
+            "feature_statistics",
+            "concept_bindings",
+            "required_concepts",
+            "design_answerability",
+            "construct_answerability",
+            "missing_required_concepts",
+            "blockers",
+            "interpretation",
+            "privacy",
+        )
+    }
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_idea_feasibility_assessed",
+        summary=(
+            "The selected real source passed bounded Idea feasibility and is ready "
+            "for an execution-plan preview."
+            if feasibility.get("status") == "ready"
+            else "Bounded source feasibility completed, but execution remains blocked or needs review."
+        ),
+        owner="easyicu.webserver.ideas.mining",
+        details={
+            "idea_feasibility": bounded_json_projection(projected),
+            "execution_ready_for_plan_preview": feasibility.get("status") == "ready",
+        },
     )
 
 
@@ -2447,6 +3342,27 @@ def _accept_idea_handoff(
             summary="An Idea Mining handoff cannot replace study setup while an authoritative job is active.",
             owner="easyicu.webserver.study_contexts",
         )
+    current_source = current.get("data_source")
+    current_source = current_source if isinstance(current_source, Mapping) else {}
+    try:
+        readiness_binding = idea_mining.idea_execution_readiness_binding(
+            str(params.get("run_id") or "").strip(),
+            str(params.get("idea_id") or "").strip(),
+            source_path=current_source.get("path"),
+        )
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_execution_readiness_blocked"),
+            summary=str(
+                detail.get("reason")
+                or "The selected Idea has not passed the current literature and data gates."
+            ),
+            owner="easyicu.webserver.ideas.mining",
+            details={key: value for key, value in detail.items() if key != "reason"},
+        )
     body = {
         "run_id": str(params.get("run_id") or "").strip(),
         "idea_id": str(params.get("idea_id") or "").strip(),
@@ -2464,20 +3380,6 @@ def _accept_idea_handoff(
             summary=str(detail.get("reason") or "Idea handoff acceptance failed."),
             owner="easyicu.webserver.ideas.handoff",
         )
-    digest = str(handoff.get("canonical_handoff_sha256") or "").strip().lower()
-    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-        return _result(
-            context,
-            status="blocked",
-            code="canonical_idea_handoff_digest_required",
-            summary="The selected Idea Mining handoff has no valid canonical digest.",
-            owner="easyicu.webserver.ideas.handoff",
-        )
-    canonical = (
-        handoff.get("canonical_handoff")
-        if isinstance(handoff.get("canonical_handoff"), Mapping)
-        else {}
-    )
     try:
         prior_art_binding = idea_mining.prior_art_receipt_binding(body["run_id"])
     except idea_mining.IdeaMiningWebError as exc:
@@ -2492,177 +3394,27 @@ def _accept_idea_handoff(
             ),
             owner="easyicu.webserver.ideas.mining",
         )
-    selected_row = (
-        canonical.get("selected_ledger_row")
-        if isinstance(canonical.get("selected_ledger_row"), Mapping)
-        else {}
-    )
-    mapped_concepts = [
-        row
-        for row in selected_row.get("mapped_concepts") or []
-        if isinstance(row, Mapping)
-    ]
-    module_by_concept = {
-        str(row.get("concept_id") or "").strip(): str(row.get("module") or "").strip()
-        for row in mapped_concepts
-        if str(row.get("concept_id") or "").strip()
-        and str(row.get("module") or "").strip()
-    }
-    predictor_concept = str(canonical.get("resolved_predictor_concept") or "").strip()
-    outcome_concept = str(
-        canonical.get("resolved_outcome_concept")
-        or canonical.get("target_outcome")
-        or ""
-    ).strip()
-    analysis_concepts = list(
-        dict.fromkeys(
-            str(value).strip()
-            for value in canonical.get("resolved_analysis_concepts") or []
-            if str(value).strip()
-        )
-    )
-    execution_concepts = list(
-        dict.fromkeys(
-            value
-            for value in (predictor_concept, outcome_concept, *analysis_concepts)
-            if value
-        )
-    )
-    missing_modules = [
-        concept_id
-        for concept_id in execution_concepts
-        if concept_id not in module_by_concept
-    ]
-    if not canonical or not execution_concepts or missing_modules:
-        return _result(
-            context,
-            status="blocked",
-            code="canonical_idea_execution_contract_required",
-            summary=(
-                "The canonical Idea Mining handoff does not contain a complete "
-                "digest-bound concept-to-module execution contract."
-            ),
-            owner="easyicu.webserver.ideas.handoff",
-            details={"missing_concept_modules": missing_modules},
-        )
-    plan_body = plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {}
-    agent_seed = (
-        handoff.get("agent_seed")
-        if isinstance(handoff.get("agent_seed"), Mapping)
-        else {}
-    )
-    patch: Dict[str, Any] = {
-        "id": current["id"],
-        "idea_handoff": {
-            "schema_version": "easyicu.pi-idea-selection/1",
-            "run_id": body["run_id"],
-            "idea_id": str(handoff.get("idea_id") or body["idea_id"]),
-            "canonical_handoff_sha256": digest,
-            "status": "accepted",
-            "accepted_at": str(handoff.get("created_at") or ""),
-            "go_no_go": str(handoff.get("go_no_go") or ""),
-            "go_no_go_reason": str(handoff.get("go_no_go_reason") or "")[:500],
-            **dict(prior_art_binding or {}),
-        },
-        "current_stage": "study_setup",
-        "last_route": "guided",
-    }
-    derived_fields = {
-        "title": handoff.get("candidate_topic"),
-        "question": plan_body.get("research_question") or agent_seed.get("question"),
-        "outcome": outcome_concept or plan_body.get("outcome"),
-        "primary_exposure": predictor_concept or plan_body.get("exposure"),
-        "comparator": plan_body.get("comparator"),
-        "analysis_goal": canonical.get("analysis_family")
-        or plan_body.get("analysis_family"),
-    }
-    limits = {
-        "title": 160,
-        "question": 1200,
-        "outcome": 500,
-        "primary_exposure": 160,
-        "comparator": 500,
-        "analysis_goal": 1200,
-    }
-    patch.update(
-        {
-            key: str(value).strip()[: limits[key]]
-            for key, value in derived_fields.items()
-            if str(value or "").strip()
-        }
-    )
-    # A comparator belongs to its exposure.  Re-selecting an idea can change
-    # the digest-bound predictor while the new handoff intentionally leaves
-    # comparator selection to the remaining conversational setup.  Retaining
-    # the previous idea's comparator in that case silently creates an invalid
-    # study contract (for example, a per-unit lab contrast on a binary
-    # phenotype).  Clear only this dependent slot; the user can then confirm
-    # the new comparator in the same Copilot conversation.
-    previous_exposure = str(current.get("primary_exposure") or "").strip()
-    if (
-        predictor_concept != previous_exposure
-        and not str(plan_body.get("comparator") or "").strip()
-    ):
-        patch["comparator"] = ""
-    patch["modules"] = list(
-        dict.fromkeys(
-            module_by_concept[concept_id] for concept_id in execution_concepts
-        )
-    )
-    requested_adjustment_concepts = list(
-        dict.fromkeys(
-            str(value).strip()
-            for value in selected_row.get("requested_adjustment_concepts") or []
-            if str(value).strip()
-        )
-    )
-    invalid_adjustment_concepts = [
-        concept_id
-        for concept_id in requested_adjustment_concepts
-        if concept_id not in analysis_concepts
-        or concept_id in {predictor_concept, outcome_concept}
-    ]
-    if invalid_adjustment_concepts:
-        return _result(
-            context,
-            status="blocked",
-            code="canonical_idea_adjustment_contract_invalid",
-            summary=(
-                "The canonical Idea Mining handoff contains adjustment variables "
-                "outside its digest-bound analysis concept set."
-            ),
-            owner="easyicu.webserver.ideas.handoff",
-            details={"invalid_adjustment_concepts": invalid_adjustment_concepts},
-        )
-    # Only an explicit adjustment clause may populate this slot. Mentioning a
-    # marker for feasibility or descriptive review is not authority to adjust
-    # for it; an absent clause intentionally leaves the list empty for the
-    # conversational setup/human Plan gate.
-    patch["covariates"] = requested_adjustment_concepts
-    patch["execution_concepts"] = {
-        **({"outcome": outcome_concept} if outcome_concept else {}),
-        **(
-            {"primary_exposure": predictor_concept}
-            if predictor_concept
-            else {}
-        ),
-        "covariates": requested_adjustment_concepts,
-    }
     try:
-        updated = study_contexts.upsert_context(
-            patch,
-            active=True,
-            expected_revision=int(current.get("revision") or 0),
-            require_revision=True,
-            lifecycle_write=False,
+        updated = idea_handoff.accept_canonical_handoff(
+            current=current,
+            body=body,
+            plan=plan,
+            handoff=handoff,
+            prior_art_binding=(
+                prior_art_binding
+                if isinstance(prior_art_binding, Mapping)
+                else None
+            ),
+            readiness_binding=readiness_binding,
         )
-    except study_contexts.StudyContextError as exc:
+    except idea_handoff.CanonicalHandoffAcceptanceError as exc:
         return _result(
             context,
             status="blocked",
-            code=str(exc.detail.get("error") or "idea_handoff_binding_blocked"),
-            summary="The StudyContext owner rejected the selected Idea Mining handoff.",
-            owner="easyicu.webserver.study_contexts",
+            code=exc.code,
+            summary=exc.message,
+            owner=exc.owner,
+            details=exc.details,
         )
     result = _result(
         context,
@@ -2688,7 +3440,7 @@ def _accept_idea_handoff(
 def _start_extraction(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
+    _require_args(params, allowed=("source_mode", "database"))
     grant_block = _consume_action(context, "extract")
     if grant_block is not None:
         return grant_block
@@ -2701,9 +3453,91 @@ def _start_extraction(
             summary="Complete and bind the typed study setup before extraction.",
             owner="easyicu.webserver.study_contexts",
         )
-    registry = sources.load_registry()
+    source_mode = str(params.get("source_mode") or "").strip()
+    requested_database = str(params.get("database") or "").strip()
+    current_message = str(context.user_message or "").casefold()
+    local_request = any(
+        marker in current_message
+        for marker in ("本机", "本地", "local", "数据文件夹", "data folder")
+    )
+    explicit_database = None
+    for database, pattern in (
+        ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
+        ("mimic", r"\bmimic[\s_-]*(?:iii|3)\b"),
+        ("eicu", r"\beicu\b"),
+        ("aumc", r"\b(?:amsterdamumcdb|aumc)\b"),
+        ("hirid", r"\bhirid\b"),
+        ("sic", r"\b(?:sicdb|sic)\b"),
+    ):
+        if re.search(pattern, current_message):
+            explicit_database = database
+            break
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
+    if (
+        not source_mode
+        and not requested_database
+        and not str(source.get("path") or "").strip()
+        and local_request
+        and explicit_database
+    ):
+        # Recover a model-omitted tool argument only from the current user's
+        # exact local database wording. Bare family names remain unresolved.
+        source_mode = "local"
+        requested_database = explicit_database
+    if source_mode:
+        if source_mode != "local":
+            raise PiCopilotError(
+                "pi_data_source_mode_invalid",
+                "The explicit Data Extraction source mode must be 'local'.",
+            )
+        if not requested_database:
+            raise PiCopilotError(
+                "pi_database_selection_required",
+                "Choose one exact supported database before opening a local folder.",
+            )
+        try:
+            profile = get_database_profile(requested_database)
+        except KeyError as exc:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose one exact database returned by easyicu_list_data_sources.",
+            ) from exc
+        if not profile.is_public:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Official demos use easyicu_prepare_demo_source; local selection "
+                "requires a supported full-database family.",
+            )
+        release_label = (
+            f" {profile.reference_release}" if profile.reference_release else ""
+        )
+        resource = extraction_workspace_resource(
+            study, state="setup", expected_database=profile.key
+        )
+        resource["label"] = (
+            f"Connect local {profile.display_name}{release_label}"
+        )[:160]
+        return _result(
+            context,
+            status="ok",
+            code="easyicu_local_source_workspace_ready",
+            summary=(
+                f"Opened the path-private local folder workflow for "
+                f"{profile.display_name}{release_label}. Folder identity and layout "
+                "must pass the Data Extraction scan before registration or query."
+            ),
+            owner="easyicu.webserver.dataio",
+            details={
+                "database": {
+                    "key": profile.key,
+                    "label": profile.display_name,
+                    "reference_release": profile.reference_release,
+                },
+                "resource": resource,
+            },
+        )
+    registry = sources.load_registry()
     source_path = str(source.get("path") or "").strip()
     registered_source = next(
         (
@@ -2715,24 +3549,6 @@ def _start_extraction(
         ),
         None,
     )
-    if source_path and registered_source is not None:
-        return _result(
-            context,
-            status="ok",
-            code="easyicu_registered_export_reused",
-            summary=(
-                "The bound study already uses a validated registered EasyICU "
-                "export; no duplicate extraction was started."
-            ),
-            owner="easyicu.webserver.sources",
-            details={
-                "active_export": {
-                    "present": True,
-                    "path_digest": path_digest(source_path),
-                    "source_id": str(registered_source.get("id") or "")[:80],
-                }
-            },
-        )
     database = str(source.get("database") or "").strip()
     modules = [str(item) for item in (study.get("modules") or []) if str(item).strip()]
     if not source_path or not database or not modules:
@@ -2751,7 +3567,12 @@ def _start_extraction(
             code="extraction_setup_incomplete",
             summary="The typed study setup does not yet contain a prepared source, database, and feature modules.",
             owner="easyicu.webserver.study_contexts",
-            details={"missing_fields": missing},
+            details={
+                "missing_fields": missing,
+                "resource": extraction_workspace_resource(
+                    study, state="setup"
+                ),
+            },
         )
     export_format = str(study.get("export_format") or "parquet").strip().lower()
     if export_format not in {"csv", "parquet"}:
@@ -2763,23 +3584,25 @@ def _start_extraction(
             owner="easyicu.webserver.routes.jobs",
             details={"supported_formats": ["csv", "parquet"]},
         )
-    from easyicu.webserver.routes.jobs import jobs_extract
-
     try:
-        submitted = jobs_extract(
-            {
-                "path": source_path,
-                "database": database,
-                "modules": modules,
-                "format": export_format,
-                "merge": True,
-                "cohort": dict(study.get("cohort") or {}),
-                "max_patients": (study.get("cohort") or {}).get("max_patients"),
-                "include_feature_definitions": True,
-                "label": study.get("title"),
-                "study_context_id": study["id"],
-                "study_context_revision": int(study.get("revision") or 0),
-            }
+        from easyicu.webserver.routes.jobs import jobs_extract
+
+        transaction = extraction_handoff.submit_study_extraction(
+            study=study,
+            registered_source=registered_source,
+            submit=jobs_extract,
+        )
+    except dataio.ExportCohortError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.error,
+            summary=(
+                "The Copilot-to-Data Extraction owner could not compile a "
+                "path-safe extraction handoff from the registered export."
+            ),
+            owner="easyicu.webserver.pi_copilot.extraction_handoff",
+            details={"reason_code": exc.error},
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -2795,6 +3618,28 @@ def _start_extraction(
                 if detail.get(key) is not None
             },
         )
+    if transaction.reused:
+        return _result(
+            context,
+            status="ok",
+            code="easyicu_registered_export_reused",
+            summary=(
+                "The bound registered export exactly matches the requested "
+                "cohort, window, format, and module contract; no duplicate "
+                "extraction was started."
+            ),
+            owner="easyicu.webserver.pi_copilot.extraction_handoff",
+            details={
+                "active_export": {
+                    "present": True,
+                    "path_digest": path_digest(source_path),
+                    "source_id": transaction.source_id,
+                },
+                "extraction_contract": transaction.handoff_receipt,
+                "resource": extraction_workspace_resource(study, state="review"),
+            },
+        )
+    submitted = dict(transaction.submitted or {})
     result = _result(
         context,
         status="ok",
@@ -2811,6 +3656,18 @@ def _start_extraction(
                 "study_context_revision",
             )
             if submitted.get(key) is not None
+        }
+        | {
+            **(
+                {"extraction_contract": transaction.handoff_receipt}
+                if transaction.handoff_receipt is not None
+                else {}
+            ),
+            "resource": extraction_workspace_resource(
+                study,
+                state="running",
+                job_id=submitted.get("job_id"),
+            )
         },
     )
     context.invalidate_authority("easyicu_extraction_submitted")
@@ -2853,8 +3710,19 @@ def _run(
     params: Mapping[str, Any],
     *,
     plan_revision_source_run_id: str = "",
+    planner_start_mode: str = "auto",
+    run_intent: research_run_submission.RunIntent | None = None,
 ) -> Dict[str, Any]:
     _require_args(params, allowed=("run_type", "llm_provider"))
+    planner_start_mode = str(planner_start_mode or "auto").strip().lower()
+    if planner_start_mode not in {"auto", "fresh", "resume_checkpoint"}:
+        return _result(
+            context,
+            status="blocked",
+            code="planner_start_mode_invalid",
+            summary="Choose a fresh plan or an explicitly validated Planner checkpoint.",
+            owner="easyicu.webserver.routes.agent",
+        )
     requested_run_type = str(params.get("run_type") or "").strip().lower()
     # The UI holds the user's one-turn intent outside the model.  When Pi uses
     # the tool's optional/default form, prefer the strongest action the user
@@ -2880,10 +3748,11 @@ def _run(
             summary="Choose either the deterministic preflight or a full Research Agent run.",
             owner="easyicu.webserver.routes.agent",
         )
-    grant_action = "provider_run" if run_type == "full" else "run"
-    grant_block = _consume_action(context, grant_action)
-    if grant_block is not None:
-        return grant_block
+    if run_type == "preflight":
+        grant_block = _consume_action(context, "run")
+        if grant_block is not None:
+            return grant_block
+    study = _bound_context(context.session.binding)
     requested_provider = str(params.get("llm_provider") or "").strip()
     if run_type == "full" and is_offline_llm_choice(requested_provider):
         return _result(
@@ -2910,7 +3779,6 @@ def _run(
             summary="A full provider analysis requires the session's explicit external-model authorization.",
             owner="easyicu.webserver.provider_gate",
         )
-    study = _bound_context(context.session.binding)
     if not study or not study.get("id"):
         return _result(
             context,
@@ -2919,91 +3787,106 @@ def _run(
             summary="Create and bind a typed StudyContext before starting an EasyICU run.",
             owner="easyicu.webserver.study_contexts",
         )
-    source = study.get("data_source")
-    source = source if isinstance(source, Mapping) else {}
-    source_path = str(source.get("path") or "").strip()
-    if not source_path:
-        return _result(
-            context,
-            status="blocked",
-            code="study_context_source_required",
-            summary=(
-                "Bind one validated registered EasyICU data source to this "
-                "StudyContext before starting a run."
-            ),
-            owner="easyicu.webserver.study_contexts",
-        )
-    account_environment = None
-    if run_type == "full":
-        account_environment, account_error = (
-            _account_environment_for_research_provider(context)
+    if run_type == "preflight":
+        source = study.get("data_source")
+        source = source if isinstance(source, Mapping) else {}
+        from easyicu.webserver.routes.agent import submit_agent_run
+
+        try:
+            submitted = submit_agent_run(
+                {
+                    "path": str(source.get("path") or ""),
+                    "study_context_id": study["id"],
+                    "question": study.get("question"),
+                    "run_type": "preflight",
+                    "llm_provider": "mock",
+                    "external_llm_opt_in": False,
+                    "engine": "native_summary",
+                }
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            return _result(
+                context,
+                status="blocked",
+                code=str(detail.get("error") or "easyicu_run_submission_blocked"),
+                summary=_bounded_model_text(detail.get("message"), 400)
+                or "The EasyICU preflight owner rejected this submission.",
+                owner="easyicu.webserver.routes.agent",
+                details=detail,
+            )
+        resume_source_job_id = ""
+    else:
+        account_environment, account_error = _account_environment_for_research_provider(
+            context
         )
         if account_error is not None:
             return account_error
-    # Import lazily to keep the route-composition module out of this package's
-    # import graph. The function remains the one existing run submission path;
-    # this adapter does not reconstruct its validation or JobManager behavior.
-    from easyicu.webserver.routes.agent import submit_agent_run
 
-    try:
-        submitted = submit_agent_run(
-            {
-                "path": source_path,
-                "study_context_id": study["id"],
-                "question": study.get("question"),
-                "run_type": run_type,
-                "llm_provider": provider,
-                "external_llm_opt_in": run_type == "full",
-                "engine": (
-                    "research_agent_pipeline"
-                    if run_type == "full"
-                    else "native_summary"
-                ),
-                **(
-                    {
-                        "credential_source": research_provider.credential_source,
-                    }
-                    if run_type == "full"
-                    else {}
-                ),
-                **(
-                    {"literature_search_authorized": True}
-                    if run_type == "full" and literature_search_authorized
-                    else {}
-                ),
-                **(
-                    {
-                        "plan_revision_source_run_id": str(
-                            plan_revision_source_run_id
-                        )
-                    }
-                    if plan_revision_source_run_id
-                    else {}
-                ),
-            },
-            account_environment=account_environment,
+        def authorize() -> None:
+            outcome = context.grant.consume_once("provider_run")
+            if outcome == "granted":
+                return
+            code = (
+                "pi_action_grant_consumed"
+                if outcome == "consumed"
+                else "pi_action_authorization_required"
+            )
+            raise research_run_submission.ResearchRunSubmissionError(
+                {
+                    "error": code,
+                    "message": (
+                        "The one-use provider_run grant for this message was already consumed."
+                        if outcome == "consumed"
+                        else "This action requires a one-use provider_run grant for the current message."
+                    ),
+                    "owner": "easyicu.webserver.pi_copilot",
+                }
+            )
+
+        workflow = _workflow_snapshot(context, study_override=study)
+        effective_run_intent: research_run_submission.RunIntent = (
+            run_intent
+            if run_intent is not None
+            else (
+                "candidate_plan"
+                if str(workflow.get("next_action_code") or "").strip()
+                == "provider_ready_to_generate_plan"
+                else "reviewed_analysis"
+            )
         )
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {}
-        return _result(
-            context,
-            status="blocked",
-            code=str(detail.get("error") or "easyicu_run_submission_blocked"),
-            summary="The existing EasyICU run submission boundary rejected the request.",
-            owner="easyicu.webserver.routes.agent",
-            details={
-                key: detail.get(key)
-                for key in (
-                    "error",
-                    "message",
-                    "details",
-                    "blockers",
-                    "blocker_codes",
-                    "job_id",
+        request = research_run_submission.ResearchRunSubmissionRequest(
+            study_context_id=str(study["id"]),
+            provider=provider,
+            credential_source=research_provider.credential_source,
+            external_llm_opt_in=context.session.external_llm_opt_in,
+            intent=effective_run_intent,
+            planner_start_mode=planner_start_mode,
+            plan_revision_source_run_id=str(plan_revision_source_run_id),
+            literature_search_authorized=literature_search_authorized,
+        )
+        try:
+            receipt = research_run_submission.submit_research_run(
+                request,
+                account_environment=account_environment,
+                authorize=authorize,
+            )
+        except research_run_submission.ResearchRunSubmissionError as exc:
+            details = dict(exc.detail)
+            if exc.code == "cohort_eligibility_confirmation_required":
+                details["eligibility"] = cohort_eligibility.eligibility_proposal(
+                    study
                 )
-                if detail.get(key) is not None
-            },
-        )
+            return _result(
+                context,
+                status="blocked",
+                code=exc.code,
+                summary=exc.summary,
+                owner=exc.owner,
+                details=details,
+            )
+        submitted = receipt.model_dump(mode="json")
+        resume_source_job_id = str(receipt.resume_source_job_id or "")
     result = _result(
         context,
         status="ok",
@@ -3013,7 +3896,13 @@ def _run(
             else "easyicu_run_submitted"
         ),
         summary=(
-            f"Submitted full EasyICU Research Agent job {submitted.get('job_id')}."
+            (
+                "Submitted an EasyICU Research Agent Planner continuation "
+                f"job {submitted.get('job_id')} from validated checkpoint job "
+                f"{resume_source_job_id}."
+            )
+            if run_type == "full" and resume_source_job_id
+            else f"Submitted full EasyICU Research Agent job {submitted.get('job_id')}."
             if run_type == "full"
             else f"Submitted deterministic EasyICU preflight job {submitted.get('job_id')}."
         ),
@@ -3035,6 +3924,18 @@ def _run(
             # time.  This explicit state prevents a historical bound run id
             # from being presented as the identity of the new job.
             "run_id_status": "pending_pipeline_start",
+            **(
+                {"planner_start_mode": planner_start_mode}
+                if run_type == "full"
+                else {}
+            ),
+            **(
+                {
+                    "resume_source_job_id": resume_source_job_id
+                }
+                if resume_source_job_id
+                else {}
+            ),
         },
     )
     context.invalidate_authority("easyicu_run_submitted")
@@ -3056,6 +3957,19 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
                 summary="Choose approved or rejected for the pending Research Agent plan.",
                 owner="easyicu.research_agent.pipeline",
             )
+        if decision == "approved":
+            study = _bound_context(context.session.binding)
+            if study and study.get("id"):
+                workflow = _workflow_snapshot(context, study_override=study)
+                if (
+                    str(workflow.get("next_action_code") or "")
+                    == "plan_execution_upgrade_required"
+                ):
+                    return _run(
+                        context,
+                        {"run_type": "full"},
+                        planner_start_mode="fresh",
+                    )
         grant_block = _consume_action(context, "provider_run")
         if grant_block is not None:
             return grant_block
@@ -3212,7 +4126,20 @@ def _cancel(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
 def _request_replan(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("reason",), required=("reason",))
+    _require_args(
+        params,
+        allowed=("reason", "strategy"),
+        required=("reason",),
+    )
+    strategy = str(params.get("strategy") or "fresh").strip().lower()
+    if strategy not in {"fresh", "resume_checkpoint"}:
+        return _result(
+            context,
+            status="blocked",
+            code="planner_start_mode_invalid",
+            summary="Choose a fresh plan or an explicitly validated Planner checkpoint.",
+            owner="easyicu.webserver.routes.agent",
+        )
     study = _bound_context(context.session.binding)
     latest = _select_run(context)
     artifacts = {
@@ -3258,7 +4185,12 @@ def _request_replan(
         and isinstance(live_review, Mapping)
         and planned_digest
         and planned_digest == current_digest
-        and live_review.get("plan_approval_allowed") is not False
+        and plan_approval_allowed(live_review)
+        and (
+            "operator_plan_approval_required" not in pending_codes
+            or str(live_review.get("budget_mode") or "full_reviewed")
+            == "full_reviewed"
+        )
     )
     fresh_run_required = bool(same_study_plan and not current_review_is_resumable)
     preflight_only_history = bool(
@@ -3281,18 +4213,11 @@ def _request_replan(
         # mutation of an unregistered nested pipeline artifact.
         # `_run` consumes the fresh provider grant and invalidates this turn
         # after submission.
-        source_run_id = ""
-        if (
-            review_declared
-            and "plan_scientific_changes_required" in pending_codes
-            and planned_digest
-            and planned_digest == current_digest
-        ):
-            source_run_id = str((latest or {}).get("run_id") or "")
         return _run(
             context,
             {"run_type": "full"},
-            plan_revision_source_run_id=source_run_id,
+            planner_start_mode=strategy,
+            run_intent="candidate_plan",
         )
     return _result(
         context,
@@ -3736,6 +4661,11 @@ _DISPATCH = {
     "easyicu_list_data_sources": _list_data_sources,
     "easyicu_list_source_concepts": _list_source_concepts,
     "easyicu_inspect_data_package": _inspect_data_package,
+    "easyicu_review_cohort": _review_cohort,
+    "easyicu_open_data_download": _open_data_download,
+    "easyicu_preview_icd_cohort": _preview_icd_cohort,
+    "easyicu_review_patient_timeline": _review_patient_timeline,
+    "easyicu_compare_data_sources": _compare_data_sources,
     "easyicu_inspect_workflow": _inspect_workflow,
     "easyicu_inspect_context": _inspect_context,
     "easyicu_inspect_plan": _inspect_plan,
@@ -3752,8 +4682,11 @@ _DISPATCH = {
     "easyicu_update_study_context": _update_study_context,
     "easyicu_mine_ideas": _mine_ideas,
     "easyicu_search_literature": _search_literature,
+    "easyicu_adjudicate_idea_literature": _adjudicate_idea_literature,
+    "easyicu_assess_idea_feasibility": _assess_idea_feasibility,
     "easyicu_prepare_idea_handoff": _prepare_idea_handoff,
     "easyicu_accept_idea_handoff": _accept_idea_handoff,
+    "easyicu_prepare_demo_source": _prepare_demo_source,
     "easyicu_start_extraction": _start_extraction,
     "easyicu_run": _run,
     "easyicu_resume": _resume,
@@ -3769,6 +4702,13 @@ _DISPATCH = {
     "easyicu_check_project_file": _check_project_file,
     "easyicu_preview_project_file": _preview_project_file,
 }
+_dispatch_names = frozenset(_DISPATCH)
+if _dispatch_names != ALLOWED_TOOLS:
+    raise RuntimeError(
+        "pi_tool_dispatch_catalog_mismatch:"
+        f"missing={sorted(ALLOWED_TOOLS - _dispatch_names)}:"
+        f"extra={sorted(_dispatch_names - ALLOWED_TOOLS)}"
+    )
 
 
 def execute_tool(
@@ -3792,12 +4732,34 @@ def execute_tool(
             "pi_tool_arguments_invalid",
             "EasyICU tool arguments must be an object.",
         )
+    authorization = context.session.data_source_authorization
+    if (
+        tool_name in DATA_SOURCE_REQUIRED_TOOLS
+        and authorization.status in {"pending", "selection_in_progress"}
+    ):
+        return _result(
+            context,
+            status="blocked",
+            code="pi_session_data_source_confirmation_required",
+            summary=(
+                "Choose and confirm a local or official-demo data source before "
+                "EasyICU reads data or starts analysis. Research planning can continue."
+            ),
+            owner="easyicu.webserver.pi_copilot.data_source_authority",
+            details={
+                "status": authorization.status,
+                "reason": authorization.reason,
+                "conversation_available": True,
+            },
+        )
     return handler(context, arguments)
 
 
 __all__ = [
     "ALLOWED_TOOLS",
     "CONTROL_TOOLS",
+    "DATA_SOURCE_REQUIRED_TOOLS",
+    "MUTATING_HOST_TOOLS",
     "READ_TOOLS",
     "WORKSPACE_TOOLS",
     "execute_tool",

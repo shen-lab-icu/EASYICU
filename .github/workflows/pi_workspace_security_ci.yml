@@ -5,13 +5,24 @@ on:
     paths:
       - "src/easyicu/webserver/pi_copilot/**"
       - "src/easyicu/webserver/routes/pi_copilot.py"
+      - "src/easyicu/webserver/routes/agent.py"
       - "src/easyicu/webserver/agent_runs.py"
+      - "src/easyicu/webserver/agent_pipeline_runs.py"
+      - "src/easyicu/webserver/figure_presentation.py"
+      - "src/easyicu/webserver/dataio.py"
+      - "src/easyicu/webserver/primary_cohort.py"
+      - "src/easyicu/webserver/study_contexts.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
+      - "src/easyicu/webserver/static/js/api.js"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
-      - "tests/test_pi_copilot_*.py"
-      - "tests/js/agent_render_security.test.js"
+      - "tests/webserver/copilot/test_pi_copilot_*.py"
+      - "tests/webserver/test_web_cohort_exclusion_binding.py"
+      - "tests/webserver/test_agent_run_artifact_privacy.py"
+      - "tests/webserver/test_web_figure_presentation_overlay.py"
+      - "tests/js/*.test.js"
+      - "tools/run_js_contracts.py"
       - "tools/qa_pi_workspace_preview_security.py"
       - "tools/qa_native_fastapi_patient_drilldown.py"
       - ".github/workflows/pi_workspace_security_ci.yml"
@@ -19,13 +30,24 @@ on:
     paths:
       - "src/easyicu/webserver/pi_copilot/**"
       - "src/easyicu/webserver/routes/pi_copilot.py"
+      - "src/easyicu/webserver/routes/agent.py"
       - "src/easyicu/webserver/agent_runs.py"
+      - "src/easyicu/webserver/agent_pipeline_runs.py"
+      - "src/easyicu/webserver/figure_presentation.py"
+      - "src/easyicu/webserver/dataio.py"
+      - "src/easyicu/webserver/primary_cohort.py"
+      - "src/easyicu/webserver/study_contexts.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
+      - "src/easyicu/webserver/static/js/api.js"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
-      - "tests/test_pi_copilot_*.py"
-      - "tests/js/agent_render_security.test.js"
+      - "tests/webserver/copilot/test_pi_copilot_*.py"
+      - "tests/webserver/test_web_cohort_exclusion_binding.py"
+      - "tests/webserver/test_agent_run_artifact_privacy.py"
+      - "tests/webserver/test_web_figure_presentation_overlay.py"
+      - "tests/js/*.test.js"
+      - "tools/run_js_contracts.py"
       - "tools/qa_pi_workspace_preview_security.py"
       - "tools/qa_native_fastapi_patient_drilldown.py"
       - ".github/workflows/pi_workspace_security_ci.yml"
@@ -52,18 +74,18 @@ jobs:
           pip install -e ".[dev,webapp]" playwright
           python -m playwright install --with-deps chromium
 
+      - name: Compile Python source and tests
+        run: python -m compileall -q src tests
+
       - name: Run scoped Pi contract tests
         run: |
+          # Auto-discover every Pi Copilot owner test so a new contract file
+          # cannot exist in the repository while remaining invisible to CI.
           pytest -q -m "" \
-            tests/test_pi_copilot_routes.py \
-            tests/test_pi_copilot_workspace.py \
-            tests/test_pi_copilot_contract.py \
-            tests/test_pi_copilot_static.py \
-            tests/test_pi_copilot_gateway.py \
-            tests/test_pi_copilot_provider_config.py \
-            tests/test_pi_copilot_install.py \
-            tests/test_pi_copilot_multiprocess_locking.py \
-            tests/test_pi_copilot_security_workflow.py
+            tests/webserver/copilot/test_pi_copilot_*.py \
+            tests/webserver/test_web_cohort_exclusion_binding.py \
+            tests/webserver/test_agent_run_artifact_privacy.py \
+            tests/webserver/test_web_figure_presentation_overlay.py
 
       - name: Parse-check Pi sidecar owners
         if: ${{ !cancelled() }}
@@ -71,12 +93,13 @@ jobs:
           node --check src/easyicu/webserver/pi_copilot/node_app/src/main.mjs
           node --check src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs
           node --check src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs
+          node --check src/easyicu/webserver/static/js/api.js
+          node --check src/easyicu/webserver/static/js/screens-guided-pi.js
+          node --check src/easyicu/webserver/static/js/screens-guided-pi-cohort-eligibility.js
 
-      - name: Run research artifact renderer security vectors
+      - name: Run JavaScript owner and security contracts
         if: ${{ !cancelled() }}
-        run: |
-          node tests/js/agent_render_security.test.js \
-            src/easyicu/webserver/static/js/screens-agent-render.js
+        run: python tools/run_js_contracts.py
 
       - name: Prove hostile preview origin isolation in Chromium
         if: ${{ !cancelled() }}

@@ -16,7 +16,6 @@ and never upgrades the protocol into an executable analysis.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -25,6 +24,8 @@ from typing import Any, Mapping
 
 from ...contracts.declared_product import RUNTIME_BINDABLE_TYPED_INPUT_KINDS
 from ...schema import AnalysisStep
+from .report_input_authority import verify_report_input_authorities
+from .typed_input_binding import sha256_file
 
 FEASIBILITY_PROTOCOL_ANALYSIS_KIND = "planner_declared_feasibility_protocol"
 
@@ -128,14 +129,6 @@ def feasibility_protocol_executor_code(step: AnalysisStep) -> str:
     ).strip()
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def run_feasibility_protocol(
     *,
     out_dir: Path,
@@ -154,56 +147,15 @@ def run_feasibility_protocol(
         raise ValueError("report product must be one canonical token")
     if not str(intent or "").strip():
         raise ValueError("feasibility protocol intent must be non-empty")
-    payload = (
-        dict(resolved_inputs)
-        if isinstance(resolved_inputs, Mapping)
-        else json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
-    )
-    if not isinstance(payload, dict) or payload.get("step_id") != step_id:
-        raise ValueError("resolved-input manifest does not belong to this step")
-    bindings = payload.get("inputs")
-    if not isinstance(bindings, dict):
-        raise ValueError("resolved-input manifest carries no binding map")
-
-    authorities: list[dict[str, Any]] = []
-    for key in declared_inputs:
-        match = _TYPED_KEY.fullmatch(str(key or "").strip())
-        binding = bindings.get(key)
-        if (
-            match is None
-            or match.group(1) not in RUNTIME_BINDABLE_TYPED_INPUT_KINDS
-            or not isinstance(binding, dict)
-        ):
-            raise ValueError("feasibility protocol input authority is incomplete")
-        digest = str(binding.get("sha256") or "")
-        relative_path = str(binding.get("relative_path") or "")
-        relative_input_path = Path(relative_path)
-        resolved_run_dir = Path(run_dir).resolve()
-        bound_path = (resolved_run_dir / relative_input_path).resolve()
-        try:
-            bound_path.relative_to(resolved_run_dir)
-        except ValueError as error:
-            raise ValueError(
-                "feasibility protocol input escapes EASYICU_RUN_DIR"
-            ) from error
-        if (
-            not re.fullmatch(r"[0-9a-f]{64}", digest)
-            or not relative_path
-            or relative_input_path.is_absolute()
-            or not bound_path.is_file()
-            or _sha256(bound_path) != digest
-            or str(binding.get("declared_kind") or "") != match.group(1)
-            or str(binding.get("identity_row", {}).get("input_key") or "") != key
-        ):
-            raise ValueError("feasibility protocol input lacks a digest binding")
-        authorities.append(
-            {
-                "input_key": key,
-                "evidence_id": str(binding.get("evidence_id") or ""),
-                "sha256": digest,
-                "produced_by_step": binding.get("produced_by_step"),
-            }
+    authorities = [
+        authority.to_dict()
+        for authority in verify_report_input_authorities(
+            run_dir=run_dir,
+            resolved_inputs=resolved_inputs,
+            step_id=step_id,
+            declared_inputs=declared_inputs,
         )
+    ]
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -256,7 +208,7 @@ def run_feasibility_protocol(
         "declared_intent": str(intent).strip(),
         "bound_input_authorities": authorities,
         "ignored_raw_inputs": ignored,
-        "report_sha256": _sha256(report_path),
+        "report_sha256": sha256_file(report_path),
     }
     receipt_path = out_dir / f"{report_product}.receipt.json"
     receipt_path.write_text(
