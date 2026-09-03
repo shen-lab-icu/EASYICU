@@ -16,6 +16,7 @@ from ..cohort.schema import (
 from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
 from ..planning.adjustment_authority import (
     AdjustmentSetAuthority,
+    adjusted_model_term_planning_authority,
     validate_plan_against_adjustment_authority,
 )
 from ..planning.analysis_types import (
@@ -109,6 +110,7 @@ from ..reporting.article_contract import (
 from ..research_context.outbound import format_outbound_safe_context
 from ..schema import AnalysisPlan, ResearchContext
 from .progressive_payload import (
+    parse_progressive_step_materialization as _parse_step_materialization,
     product_refs_for_materialization_coordinate,
     progressive_foundation_structured_output_request,
     progressive_outline_structured_output_request,
@@ -159,75 +161,6 @@ _TYPED_PRODUCT_TOKEN = re.compile(
 )
 _SEPARATE_ANALYSIS_STEP = re.compile(r"\bseparate\s+analysis\s+step\b", re.I)
 _EXPLICIT_FIGURE_OUTPUT = re.compile(r"\bfigures?\b", re.I)
-
-_MODEL_TERM_INELIGIBLE_ROLES = frozenset({"id", "time", "index", "meta", "outcome"})
-_MODEL_TERM_DYNAMIC_ROLES = frozenset(
-    {"vital", "lab", "intervention", "ordinal_score", "composite_score"}
-)
-
-
-def _adjusted_model_term_planning_authority(
-    context: ResearchContext,
-    variable_names: Sequence[str],
-) -> dict[str, Any]:
-    """Project the compiler's model-term boundary into the Planner prompt.
-
-    This is metadata-only authority. It does not select an adjustment set or
-    infer clinical timing. It tells the Planner which catalog variables can be
-    proposed as covariates under the current user-owned authority and which
-    encodings are compatible with their sealed domains.
-    """
-
-    adjustment = AdjustmentSetAuthority.from_context(context)
-    temporal_roles = adjustment.operational_temporal_roles
-    authorized_time_zero = frozenset(
-        name
-        for name in adjustment.operational_covariates
-        if adjustment.selection == "exact"
-        and temporal_roles.get(name) in {"baseline_static", "at_or_before_time_zero"}
-    )
-    primary_exposure = str(context.primary_exposure or "").strip()
-    outcome = str(context.target_outcome or "").strip()
-    variables = {item.name: item for item in context.variables}
-    eligible: list[dict[str, Any]] = []
-    excluded: list[dict[str, str]] = []
-    for name in dict.fromkeys(str(value or "").strip() for value in variable_names):
-        if not name or name in {primary_exposure, outcome}:
-            continue
-        variable = variables.get(name)
-        if variable is None:
-            continue
-        role = str(getattr(variable.role, "value", variable.role) or "")
-        if role in _MODEL_TERM_INELIGIBLE_ROLES:
-            excluded.append({"name": name, "reason": f"semantic_role:{role}"})
-            continue
-        if role in _MODEL_TERM_DYNAMIC_ROLES and name not in authorized_time_zero:
-            excluded.append({"name": name, "reason": "time_zero_authority_missing"})
-            continue
-        observed = observed_levels_for(name=name, variables=variables)
-        declared, declared_basis = declared_domain_for_variable(variable)
-        closed_domain = observed or list(declared or ())
-        if closed_domain:
-            allowed_codings = ["binary" if len(closed_domain) == 2 else "categorical"]
-        else:
-            allowed_codings = ["continuous"]
-        eligible.append(
-            {
-                "name": name,
-                "semantic_role": role,
-                "allowed_codings": allowed_codings,
-                "closed_domain_size": len(closed_domain) or None,
-                "domain_authority": "observed" if observed else declared_basis,
-            }
-        )
-    return {
-        "selection": adjustment.selection,
-        "primary_exposure": primary_exposure,
-        "outcome": outcome,
-        "eligible_covariates": eligible,
-        "excluded_covariates": excluded,
-    }
-
 
 def _sealed_cohort_predicate_binding_rows(
     context: ResearchContext,
@@ -1169,129 +1102,6 @@ def _parse_model(raw: str, model: type[Any]) -> Any:
     if model is ProgressivePlanOutline:
         payload = _canonicalize_outline_coordinates(payload)
     return model.model_validate(payload)
-
-
-def _parse_step_materialization(
-    raw: str,
-    *,
-    outline_step: ProgressiveOutlineStep | None = None,
-    outline_step_sha256: str | None = None,
-) -> ProgressiveStepMaterialization:
-    payload = json.loads(str(raw or "").strip())
-    if not isinstance(payload, dict):
-        raise ValueError("progressive Planner response root must be an object")
-    if outline_step is not None and not outline_step_sha256:
-        raise ValueError("host outline step digest is required")
-    if outline_step_sha256 is not None:
-        # The digest is host-computed transport authority, not a scientific
-        # choice for the model to reproduce. Bind it here while leaving every
-        # semantic outline coordinate untouched for the strict validator below.
-        payload = dict(payload)
-        payload["outline_step_sha256"] = outline_step_sha256
-    # Semantic host coordinates remain fail-closed input. They are
-    # intentionally not rewritten here: the coordinate validator below the
-    # parser must observe and reject model drift in step id, role, module,
-    # objective, dependencies, or scientific action.
-    step = payload.get("step")
-    raw_inputs = step.get("raw_inputs") if isinstance(step, dict) else None
-    if isinstance(raw_inputs, list) and all(
-        isinstance(raw_input, str) for raw_input in raw_inputs
-    ):
-        normalized = [raw_input.strip() for raw_input in raw_inputs]
-        if all(normalized):
-            # Repeating an exact normalized source-column name adds no
-            # scientific meaning and is a common structured-generation
-            # artifact. Preserve first-seen order and leave every other roster
-            # strict so dependency and sensitivity conflicts still fail closed.
-            canonical_step = dict(step)
-            product_inputs = canonical_step.get("product_inputs")
-            bound_products = (
-                {
-                    str(item.get("product_id") or "").strip()
-                    for item in product_inputs
-                    if isinstance(item, Mapping)
-                }
-                if isinstance(product_inputs, list)
-                else set()
-            )
-            # A typed product is not a cohort column.  When the same exact
-            # product already has its governed producer/product edge, remove
-            # only that redundant raw-input spelling.  An unbound product token
-            # or any other unknown name still reaches the compiler and fails.
-            canonical_step["raw_inputs"] = list(
-                dict.fromkeys(
-                    value
-                    for value in normalized
-                    if not (
-                        _TYPED_PRODUCT_TOKEN.fullmatch(value)
-                        and value in bound_products
-                    )
-                )
-            )
-            payload = dict(payload)
-            payload["step"] = canonical_step
-    step = payload.get("step")
-    if (
-        isinstance(step, dict)
-        and step.get("module_id") != "custom_analysis"
-        and step.get("custom_method") is not None
-    ):
-        # ``custom_method`` has no execution authority for a registered module:
-        # its executor is already selected by the host-bound module and
-        # scientific-action coordinates. Structured providers sometimes fill
-        # this inapplicable field with a schema node or method description even
-        # after targeted repair. Canonicalize only the authority-free field;
-        # custom_analysis keeps its method and remains strictly validated.
-        canonical_step = dict(step)
-        canonical_step["custom_method"] = None
-        payload = dict(payload)
-        payload["step"] = canonical_step
-    step = payload.get("step")
-    if (
-        isinstance(step, dict)
-        and step.get("module_id") != "exposure_outcome_distribution"
-        and any(
-            step.get(field) is not None
-            for field in (
-                "denominator_policy",
-                "missing_exposure_policy",
-                "missing_outcome_policy",
-            )
-        )
-    ):
-        # These policy fields are executable only for the host-owned
-        # exposure/outcome distribution product.  They have no semantic or
-        # execution authority on other modules, but structured providers
-        # occasionally fill their optional schema nodes with arbitrary text.
-        # Canonicalize that irrelevant decoration before Pydantic's literal
-        # validation; the distribution module retains its fail-closed literals.
-        canonical_step = dict(step)
-        for field in (
-            "denominator_policy",
-            "missing_exposure_policy",
-            "missing_outcome_policy",
-        ):
-            canonical_step[field] = None
-        payload = dict(payload)
-        payload["step"] = canonical_step
-    step = payload.get("step")
-    if (
-        isinstance(step, dict)
-        and isinstance(step.get("outputs"), list)
-        and str(step.get("module_id") or "") in PROGRESSIVE_HOST_COMPILED_OUTPUTS
-        and step["outputs"]
-    ):
-        # Registered modules expose an exact host-owned product roster and the
-        # run-bound strict schema sets outputs.maxItems=0. A model-declared
-        # alias *or extra result* cannot be executed by that owner. Clear this
-        # authority-free field to the same canonical shape advertised by the
-        # transport; a genuine additional analysis must have its own outline
-        # step and typed product owner.
-        canonical_step = dict(step)
-        canonical_step["outputs"] = []
-        payload = dict(payload)
-        payload["step"] = canonical_step
-    return ProgressiveStepMaterialization.model_validate(payload)
 
 
 def _parse_foundation_materialization(
@@ -3044,7 +2854,7 @@ class ProgressivePlannerAgent:
                 "metadata authority constrains proposals; it does not require "
                 "including every eligible covariate.\n"
                 + json.dumps(
-                    _adjusted_model_term_planning_authority(context, variables),
+                    adjusted_model_term_planning_authority(context, variables),
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )

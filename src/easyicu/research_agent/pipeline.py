@@ -479,9 +479,8 @@ from .authority.runtime_artifacts import (
 )
 from .authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
-    RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
-    align_resume_scientific_identity_layout,
+    align_resume_scientific_identity_from_capsule,
     build_environment_identity,
     build_scientific_identity,
     load_verified_run_input_capsule,
@@ -2612,19 +2611,7 @@ class ResearchAgentPipeline:
                 self._scientific_runtime_authorities.bind_plan(plan)
             )
             findings.extend(scientific_runtime_compile_findings)
-            # A signed runtime may replace one generic primary product with a
-            # richer, exact result family (for example an effect curve plus an
-            # aligned standardised-risk curve).  The earlier renderer pass
-            # cannot select a contract for products that do not exist yet.
-            # Re-run the generic renderer owner after that late binding so the
-            # human-reviewed plan, not just Execute, carries the exact figure
-            # sources and panel roles.  The selection helpers are idempotent,
-            # so ordinary plans already closed by the first pass are unchanged.
-            plan, post_runtime_renderer_findings = (
-                _figure_plan.select_deterministic_result_renderers(plan=plan)
-            )
-            findings.extend(post_runtime_renderer_findings)
-            plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
+            plan = _figure_plan.apply_runtime_bound_figure_contracts(plan, findings)
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
@@ -4381,9 +4368,7 @@ class ResearchAgentPipeline:
         )
         progress_channel = ResumableProgressChannel(progress_callback)
         _emit_progress = progress_channel.emit
-
         _emit_progress("run", "Starting research-agent run.")
-
         spec_obj: Optional[ExperimentSpec] = None
         if experiment_spec is not None:
             spec_obj = (
@@ -4447,27 +4432,8 @@ class ResearchAgentPipeline:
             ),
             capability_workflow=self._capability_runtime.scientific_coordinate(),
         )
-        if resume_run_id:
-            # A non-sibling source trajectory is staged under the canonical
-            # ``cohort_trajectory.parquet`` name.  That filename change must
-            # not move an otherwise identical trajectory coordinate and turn
-            # a safe retry into false scientific-identity drift.  The capsule
-            # itself is still verified below before any resume write.
-            capsule_path = self.workdir / run_id / RUN_INPUT_CAPSULE_FILENAME
-            try:
-                raw_capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError):
-                raw_capsule = None
-            sealed_identity = (
-                raw_capsule.get("scientific_identity")
-                if isinstance(raw_capsule, Mapping)
-                else None
-            )
-            if isinstance(sealed_identity, Mapping):
-                run_scientific_identity = align_resume_scientific_identity_layout(
-                    generated=run_scientific_identity,
-                    sealed=sealed_identity,
-                )
+        run_scientific_identity = align_resume_scientific_identity_from_capsule(
+            run_scientific_identity, self.workdir / run_id if resume_run_id else None)
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
         )
