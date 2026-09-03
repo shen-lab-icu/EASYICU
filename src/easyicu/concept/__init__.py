@@ -8862,6 +8862,7 @@ class ConceptResolver:
         
         # 🔧 FIX 2025-01-31: 根据数据源确定默认ID列
         default_id_col = 'stay_id'
+        db_name = ''
         if data_source is not None and hasattr(data_source, 'config'):
             db_name = getattr(data_source.config, 'name', '')
             if db_name in ['eicu', 'eicu_demo']:
@@ -8917,14 +8918,14 @@ class ConceptResolver:
                 declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
                 if declared_index and declared_index in df.columns:
                     declared_time_columns[name] = declared_index
-                # The 2026-09 IMV source repair needs the producer-owned
-                # window duration to survive the public multi-concept merge.
-                # Do not apply this to every WinTbl: doing so changes the time
-                # grid of unrelated renal, sepsis and medication concepts when
-                # only the respiratory module was requested for refresh.
+                # The MIMIC-III IMV repair needs its reconstructed duration to
+                # survive the public multi-concept merge. Keep this scoped to
+                # that newly bound source: changing all mech_vent WinTbls would
+                # alter the already-sealed MIIV/AUMC/SIC extraction contract.
                 declared_duration = getattr(table, 'dur_var', None)
                 if (
                     name == "mech_vent"
+                    and db_name in {"mimic", "mimic_demo"}
                     and declared_duration
                     and declared_duration in df.columns
                 ):
@@ -9007,11 +9008,9 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
-            # Only mech_vent opts into interval preservation here. Its dur_var
-            # is an elapsed duration, while source frames can retain an
-            # auxiliary absolute end timestamp. The compatibility expander
-            # must use the bounded elapsed duration, without changing the
-            # historical merge contract of unrelated WinTbl concepts.
+            # Only the newly bound MIMIC-III mech_vent source opts into interval
+            # preservation here. Its dur_var is an elapsed duration, while the
+            # source frame can retain an auxiliary absolute end timestamp.
             declared_duration = declared_duration_columns.get(name)
             if declared_duration and declared_duration in df.columns:
                 if declared_duration != "duration":
