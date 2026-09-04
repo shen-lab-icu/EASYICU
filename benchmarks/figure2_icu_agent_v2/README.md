@@ -117,9 +117,17 @@ registered site identifiers before scoring without interpreting clinical slash
 units as paths. `blinded_evaluator.py` mechanically instantiates Heldout27
 sheets from the frozen rubric and taskbank, normalizes both source bundles
 through one `BlindedReviewPackage`, verifies every post-normalization file
-digest, and binds the exact pre/post digest maps and package digest into the
-two eligible reviewers' score lock before unblinding. Reviewers consume the
+digest, verifies both source receipts name the same frozen task as the review
+sheet, and binds the exact pre/post digest maps, redaction-log digest, package
+digest, and per-bundle digest into each eligible review and the final score
+lock before unblinding. The lock is published from complete fsynced staging
+bytes with atomic no-overwrite linking, so a failed write leaves no partial
+final file and remains retryable. Reviewers consume the
 package's sealed bytes rather than reopening mutable source paths.
+The same seam creates split-specific Heldout27 and Qualification12 sheets;
+Qualification12 sheets bind the frozen `meta_generalization` row and its
+`bound_result` or `fail_closed` contract so the preregistered blinding pilot
+and binary reviewer-reliability gate can run before core launch.
 `formal_release_identity.py` is the single owner of required
 registration fields, implementation-owner paths, and registered source paths.
 `formal_authority.py` verifies an Ed25519-signed atomic declaration, the exact

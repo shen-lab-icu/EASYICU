@@ -152,6 +152,7 @@ class FormalGenericCodeAgentRunner:
                 task_hard_stop=provider_hard_stop,
             )
             return GenericCodeAgentHarness(
+                task_id=task_id,
                 model=gateway,
                 executor=executor,
                 resource_snapshot=validated_resource_snapshot,

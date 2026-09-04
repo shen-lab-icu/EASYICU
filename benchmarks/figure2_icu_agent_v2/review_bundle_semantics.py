@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import math
+import re
 from typing import Any, Mapping, Sequence
 
 
@@ -35,6 +36,15 @@ RESOURCE_RECEIPT_FIELDS = (
     "tool_calls",
     "wall_seconds",
 )
+_REVIEW_TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def validate_review_task_id(value: Any) -> str:
+    """Return the single neutral task identity accepted by every bundle owner."""
+
+    if not isinstance(value, str) or not _REVIEW_TASK_ID_RE.fullmatch(value):
+        raise ValueError("task_id must be a stable neutral identity")
+    return value
 
 
 class TerminalStatus(str, Enum):
@@ -314,4 +324,5 @@ __all__ = [
     "asserted_artifact_presence",
     "normalize_artifact_inventory",
     "substantive_file_flags",
+    "validate_review_task_id",
 ]

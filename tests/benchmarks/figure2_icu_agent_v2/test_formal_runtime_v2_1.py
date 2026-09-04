@@ -122,6 +122,7 @@ def _write_bundle(root: Path) -> None:
         },
         "07_run_receipt.json": {
             "resource_receipt_schema_version": "easyicu.figure2_resource_receipt/1",
+            "task_id": "icu27_t01",
             "terminal_status": "completed",
             "within_frozen_budget": True,
             "failure_category": None,
@@ -985,12 +986,14 @@ def test_normalizer_preserves_science_and_hides_arm_resource_fingerprints(
     assert normalized_results["arm"] == "the producing workflow"
     normalized_receipt = json.loads(result.files["07_run_receipt.json"])
     assert set(normalized_receipt) == {
+        "task_id",
         "terminal_status",
         "within_frozen_budget",
         "failure_category",
         "agent_asserted_mandatory_artifact_presence",
         "substantive_output_files",
     }
+    assert normalized_receipt["task_id"] == "icu27_t01"
     assert "provider_tokens" not in normalized_receipt
     assert "EasyICU" not in result.files["06_report.md"].decode("utf-8")
     assert result.pre_normalization_sha256.keys() == result.post_normalization_sha256.keys()

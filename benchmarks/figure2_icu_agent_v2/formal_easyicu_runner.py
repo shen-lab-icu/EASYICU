@@ -69,6 +69,7 @@ class FormalEasyICURunner:
             ),
         )
         self._trajectory = session
+        self._task_id = task_id
         self._provider_hard_stop = provider_hard_stop
 
     def run(self, **kwargs: Any) -> Any:
@@ -100,6 +101,7 @@ class FormalEasyICURunner:
         write_easyicu_review_bundle(
             failed,
             output_dir=output_dir,
+            task_id=self._task_id,
             mandatory_artifacts=mandatory_artifacts,
             resource_receipt=resource_receipt,
             outcome=TerminalOutcome.failed(FailureCategory.EXECUTION_FAILURE),
@@ -141,6 +143,7 @@ class FormalEasyICURunner:
         write_easyicu_review_bundle(
             material,
             output_dir=output_dir,
+            task_id=self._task_id,
             mandatory_artifacts=mandatory_artifacts,
             resource_receipt=resource_receipt,
         )

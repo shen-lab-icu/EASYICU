@@ -705,6 +705,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     if "model-turn and provider-call counts" not in receipt_projection["reviewer_hidden_until_scores_lock"]:
         _fail("BLINDING_RAW_RESOURCE_PROJECTION_INVALID", repr(receipt_projection))
     audit = review_contract.get("audit", {})
+    outcome_review = review_contract.get("outcome_review_projection", {})
     if (
         audit.get("pre_normalization_digest_required") is not True
         or audit.get("post_normalization_digest_required") is not True
@@ -712,12 +713,49 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         != "easyicu.figure2_blinded_review_package/1"
         or audit.get("blinded_score_lock_schema")
         != "easyicu.figure2_blinded_score_lock/2"
+        or "normalized source receipt" not in str(
+            audit.get("source_task_identity_required", "")
+        )
+        or not all(
+            term in str(audit.get("qualification_review_sheet_required", ""))
+            for term in (
+                "same blinded package and score-lock interface",
+                "meta_generalization taskbank",
+                "bound_result versus fail_closed",
+                "binary reliability gate",
+            )
+        )
         or not all(
             term in str(audit.get("score_lock_binding", ""))
             for term in (
                 "exact blinded review package digest",
+                "exact normalized bundle digest",
                 "pre- and post-normalization SHA-256 maps",
                 "sealed bytes",
+            )
+        )
+        or not all(
+            term in str(audit.get("score_lock_publication", ""))
+            for term in (
+                "staged and fsynced",
+                "atomically linked",
+                "without overwrite",
+                "leaves no final path",
+            )
+        )
+        or audit.get("redaction_log_required") is not True
+        or audit.get("redaction_log_hidden_from_blinded_reviewers") is not True
+        or "confidence" not in str(
+            outcome_review.get("arm_guess_after_review", "")
+        )
+        or outcome_review.get("arm_guess_confidence_scale")
+        != "finite number from 0.0 to 1.0 inclusive"
+        or not all(
+            term in str(audit.get("redaction_log_binding", ""))
+            for term in (
+                "retains each immutable redaction log",
+                "SHA-256 digest",
+                "score-lock receipt",
             )
         )
     ):

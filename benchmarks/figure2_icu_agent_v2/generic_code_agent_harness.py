@@ -34,6 +34,7 @@ from .review_bundle_semantics import (
     ReviewResourceReceipt,
     TerminalOutcome,
     TerminalStatus,
+    validate_review_task_id,
 )
 
 
@@ -292,11 +293,13 @@ class GenericCodeAgentHarness:
     def __init__(
         self,
         *,
+        task_id: str,
         model: GenericModelGateway,
         executor: GenericExecutionBackend,
         resource_snapshot: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+        self._task_id = validate_review_task_id(task_id)
         self._system_prompt = str(spec["system_prompt"])
         self._model = model
         self._executor = executor
@@ -655,6 +658,7 @@ class GenericCodeAgentHarness:
             write_review_bundle(
                 material,
                 output_dir=destination,
+                task_id=self._task_id,
                 mandatory_artifacts=mandatory_artifacts,
                 resource_receipt=receipt,
             )
@@ -698,6 +702,7 @@ class GenericCodeAgentHarness:
             write_review_bundle(
                 material,
                 output_dir=destination,
+                task_id=self._task_id,
                 mandatory_artifacts=mandatory_artifacts,
                 resource_receipt=receipt,
                 outcome=TerminalOutcome.failed(category),
