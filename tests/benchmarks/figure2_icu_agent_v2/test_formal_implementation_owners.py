@@ -34,6 +34,7 @@ from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     ReviewBlindingContext,
     normalize_review_bundle,
 )
+from benchmarks.figure2_icu_agent_v2 import review_bundle_writer
 from easyicu.research_agent.schema import PipelineResult
 from benchmarks.figure2_icu_agent_v2.multi_host_acceptance import (
     MultiHostAcceptanceError,
@@ -102,6 +103,48 @@ def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -
     receipt = json.loads(normalized.files["07_run_receipt.json"])
     assert receipt["substantive_output_files"]["03_results.json"] is True
     assert "provider_tokens" not in receipt
+
+
+def test_shared_review_bundle_writer_rolls_back_partial_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    material = EasyICUReviewMaterial(
+        plan={"population": "adult ICU"},
+        cohort={"n": 42},
+        results={"estimate": 1.2},
+        diagnostics={"complete": True},
+        report="The estimate was 1.2.",
+        headline_evidence=(),
+        artifact_inventory={"main result": ["03_results.json"]},
+    )
+    original = review_bundle_writer._write_new_file
+    write_count = 0
+
+    def fail_during_commit(root: Path, name: str, payload: bytes) -> None:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 3:
+            raise OSError("injected write failure")
+        original(root, name, payload)
+
+    monkeypatch.setattr(
+        review_bundle_writer,
+        "_write_new_file",
+        fail_during_commit,
+    )
+    output = tmp_path / "partial-bundle"
+
+    with pytest.raises(OSError, match="injected write failure"):
+        write_easyicu_review_bundle(
+            material,
+            output_dir=output,
+            mandatory_artifacts=("main result",),
+            resource_receipt={"within_frozen_budget": True},
+        )
+
+    assert output.is_dir()
+    assert list(output.iterdir()) == []
 
 
 def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
