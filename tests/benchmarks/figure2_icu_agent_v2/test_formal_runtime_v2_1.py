@@ -11,6 +11,13 @@ import benchmarks.figure2_icu_agent_v2.formal_provider_gate as formal_provider_g
 import benchmarks.figure2_icu_agent_v2.formal_authority as formal_authority
 import benchmarks.figure2_icu_agent_v2.review_bundle_normalizer as review_bundle_normalizer
 from benchmarks.figure2_icu_agent_v2.design_v2_1 import DesignContractError
+from benchmarks.figure2_icu_agent_v2.formal_release_identity import (
+    FormalReleaseIdentityError,
+    REGISTERED_SOURCE_PATHS,
+    registered_source_digests,
+    required_registration_fields,
+    validate_registered_source_identity,
+)
 from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
     FormalCallCoordinate,
     FormalProviderBudgetMissingError,
@@ -214,7 +221,7 @@ def _signed_qualification_authority(
         "protocol_sha256": binding["protocol_sha256"],
         **{
             field: hashlib.sha256(path.read_bytes()).hexdigest()
-            for field, path in formal_authority.REGISTERED_SOURCE_PATHS.items()
+            for field, path in REGISTERED_SOURCE_PATHS.items()
         },
         "design_commit": binding["design_commit"],
         "annotated_tag": binding["annotated_tag"],
@@ -500,6 +507,34 @@ def test_formal_authority_rejects_tampered_receipt(
         )
 
     assert exc_info.value.reason_code == "FORMAL_AUTHORITY_RECEIPT_DIGEST_MISMATCH"
+
+
+def test_release_identity_owns_complete_registration_field_set() -> None:
+    preregistration = json.loads(
+        formal_authority.PREREGISTRATION_PLAN_PATH.read_text(encoding="utf-8")
+    )
+
+    assert tuple(preregistration["required_receipt_fields"]) == (
+        required_registration_fields()
+    )
+    assert all(path.is_file() for path in REGISTERED_SOURCE_PATHS.values())
+    assert {
+        "review_bundle_writer_sha256",
+        "formal_trajectory_lifecycle_sha256",
+        "formal_release_identity_sha256",
+    } <= set(REGISTERED_SOURCE_PATHS)
+
+
+def test_release_identity_rejects_tampered_registered_source_digest() -> None:
+    registration = registered_source_digests()
+    registration["formal_release_identity_sha256"] = "0" * 64
+
+    with pytest.raises(FormalReleaseIdentityError) as exc_info:
+        validate_registered_source_identity(registration)
+
+    assert exc_info.value.reason_code == (
+        "FORMAL_AUTHORITY_REGISTERED_SOURCE_MISMATCH"
+    )
 
 
 def test_formal_authority_rejects_invalid_signature(

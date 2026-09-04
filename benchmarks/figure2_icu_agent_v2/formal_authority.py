@@ -24,45 +24,18 @@ from .formal_scheduler import (
     validate_authorized_site_coordinates,
     validate_output_root_by_site,
 )
+from .formal_release_identity import (
+    FormalReleaseIdentityError,
+    required_registration_fields,
+    validate_registered_source_identity,
+)
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
-REPO_ROOT = PACKAGE_ROOT.parents[1]
 PROTOCOL_PATH = PACKAGE_ROOT / "experiment_protocol_v2_1.json"
 LAUNCH_CONTRACT_PATH = PACKAGE_ROOT / "formal_launch_contract_v1.json"
 PREREGISTRATION_PLAN_PATH = PACKAGE_ROOT / "preregistration_plan_v1.json"
 EXECUTION_CONTRACT_PATH = PACKAGE_ROOT / "execution_acceptance_contract_v1.json"
-REGISTERED_SOURCE_PATHS = {
-    "validator_sha256": PACKAGE_ROOT / "design_v2_1.py",
-    "validator_test_sha256": (
-        REPO_ROOT / "tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py"
-    ),
-    "formal_authority_sha256": PACKAGE_ROOT / "formal_authority.py",
-    "formal_authority_test_sha256": (
-        REPO_ROOT
-        / "tests/benchmarks/figure2_icu_agent_v2/test_formal_runtime_v2_1.py"
-    ),
-    "formal_provider_gate_sha256": PACKAGE_ROOT / "formal_provider_gate.py",
-    "formal_easyicu_runner_sha256": PACKAGE_ROOT / "formal_easyicu_runner.py",
-    "formal_generic_runner_sha256": PACKAGE_ROOT / "formal_generic_runner.py",
-    "generic_harness_sha256": PACKAGE_ROOT / "generic_code_agent_harness.py",
-    "easyicu_review_adapter_sha256": (
-        PACKAGE_ROOT / "easyicu_review_bundle_adapter.py"
-    ),
-    "review_bundle_normalizer_sha256": (
-        PACKAGE_ROOT / "review_bundle_normalizer.py"
-    ),
-    "review_bundle_semantics_sha256": PACKAGE_ROOT / "review_bundle_semantics.py",
-    "formal_scheduler_sha256": PACKAGE_ROOT / "formal_scheduler.py",
-    "multi_host_acceptance_sha256": PACKAGE_ROOT / "multi_host_acceptance.py",
-    "blinded_evaluator_sha256": PACKAGE_ROOT / "blinded_evaluator.py",
-    "formal_implementation_owner_test_sha256": (
-        REPO_ROOT
-        / "tests/benchmarks/figure2_icu_agent_v2/"
-        "test_formal_implementation_owners.py"
-    ),
-}
-
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SCOPE_RECEIPT_GROUPS = {
     "qualification12": ("qualification_preconditions",),
@@ -218,7 +191,13 @@ def _validate_registration_details(
         isinstance(field, str) and field for field in required_fields
     ):
         _fail("FORMAL_AUTHORITY_CONTRACT_INVALID", "required_receipt_fields")
-    missing = sorted(set(required_fields) - set(registration))
+    canonical_required_fields = required_registration_fields()
+    if tuple(required_fields) != canonical_required_fields:
+        _fail(
+            "FORMAL_AUTHORITY_CONTRACT_INVALID",
+            "required_receipt_fields",
+        )
+    missing = sorted(set(canonical_required_fields) - set(registration))
     if missing:
         _fail("FORMAL_AUTHORITY_REGISTRATION_RECEIPT_INVALID", repr(missing))
     for field in (
@@ -232,35 +211,14 @@ def _validate_registration_details(
         registration["registration_timestamp_utc"],
         field="registration.registration_timestamp_utc",
     )
-    for field in (
-        "package_sha256",
-        "protocol_sha256",
-        "validator_sha256",
-        "validator_test_sha256",
-        "formal_authority_sha256",
-        "formal_authority_test_sha256",
-        "formal_provider_gate_sha256",
-        "formal_easyicu_runner_sha256",
-        "formal_generic_runner_sha256",
-        "generic_harness_sha256",
-        "easyicu_review_adapter_sha256",
-        "review_bundle_normalizer_sha256",
-        "review_bundle_semantics_sha256",
-        "formal_scheduler_sha256",
-        "multi_host_acceptance_sha256",
-        "blinded_evaluator_sha256",
-        "formal_implementation_owner_test_sha256",
-    ):
+    for field in ("package_sha256", "protocol_sha256"):
         _require_sha256(registration[field], field=f"registration.{field}")
     if registration["protocol_sha256"] != binding["protocol_sha256"]:
         _fail("FORMAL_AUTHORITY_REGISTRATION_BINDING_MISMATCH", "protocol_sha256")
-    for field, path in REGISTERED_SOURCE_PATHS.items():
-        try:
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
-            _fail("FORMAL_AUTHORITY_REGISTERED_SOURCE_UNREADABLE", str(path))
-        if registration[field] != actual:
-            _fail("FORMAL_AUTHORITY_REGISTERED_SOURCE_MISMATCH", field)
+    try:
+        validate_registered_source_identity(registration)
+    except FormalReleaseIdentityError as exc:
+        _fail(exc.reason_code, exc.detail)
     if registration["design_commit"] != binding["design_commit"]:
         _fail("FORMAL_AUTHORITY_REGISTRATION_BINDING_MISMATCH", "design_commit")
     if registration["annotated_tag"] != binding["annotated_tag"]:
