@@ -2421,6 +2421,25 @@ def _stream_special_extraction_batches(
                 raise FileNotFoundError(f"missing streamed dependency module: {source}")
             return pd.DataFrame(columns=[id_col, *value_columns])
         dataset = ds.dataset(source, format="parquet")
+        # A selected-module refresh can combine a newly extracted producer
+        # artifact (which still uses the database-native identifier) with a
+        # hash-verified dependency copied from a sealed native-v2 package
+        # (whose public identifier is ``stay_id``).  Resolve the identifier
+        # per dependency and normalize it back to the worker's native name.
+        # This is an identifier-only adapter: values and time semantics remain
+        # byte-for-byte those of the sealed dependency.
+        dependency_id_col = (
+            id_col
+            if id_col in dataset.schema.names
+            else "stay_id"
+            if "stay_id" in dataset.schema.names
+            else None
+        )
+        if dependency_id_col is None:
+            raise ValueError(
+                f"streamed dependency {module_name} lacks patient identifier "
+                f"{id_col!r} or canonical 'stay_id'"
+            )
         time_column = next(
             (
                 name
@@ -2439,13 +2458,18 @@ def _stream_special_extraction_batches(
         )
         projected = [
             column
-            for column in dict.fromkeys([id_col, time_column, *value_columns])
+            for column in dict.fromkeys(
+                [dependency_id_col, time_column, *value_columns]
+            )
             if column is not None and column in dataset.schema.names
         ]
-        return dataset.to_table(
+        frame = dataset.to_table(
             columns=projected,
-            filter=ds.field(id_col).isin(ids),
+            filter=ds.field(dependency_id_col).isin(ids),
         ).to_pandas()
+        if dependency_id_col != id_col:
+            frame = frame.rename(columns={dependency_id_col: id_col})
+        return frame
 
     def _append_frame(concept: str, frame) -> None:
         if frame is None or frame.empty:

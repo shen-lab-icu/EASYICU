@@ -757,6 +757,49 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     assert (output / "sep3_sofa2.parquet").is_file()
 
 
+def test_streamed_special_export_adapts_sealed_canonical_stay_id(tmp_path):
+    """A sealed dependency can be joined to a raw-native eICU score artifact."""
+
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
+    pd.DataFrame(
+        {
+            # Selected refresh stages this file from native-v2, where every
+            # database has already been normalized to the public stay_id.
+            "stay_id": [1, 1],
+            "charttime": time,
+            "susp_inf": pd.Series([False, True], dtype="boolean"),
+        }
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
+    _write_complete_score_dependencies(source, time)
+    score_path = source / "sofa2_score.parquet"
+    score = pd.read_parquet(score_path).rename(
+        columns={"stay_id": "patientunitstayid"}
+    )
+    score.to_parquet(score_path, index=False)
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa2"],
+        "eicu",
+        str(tmp_path),
+        {"patientunitstayid": [1]},
+        1,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert set(manifest["saved"]) == {"sep3_sofa2"}
+    exported = pd.read_parquet(output / "sep3_sofa2.parquet")
+    assert "patientunitstayid" in exported.columns
+    assert exported["patientunitstayid"].eq(1).all()
+
+
 def test_streamed_special_export_rejects_positive_null_time_suspicion(tmp_path):
     source = tmp_path / "published"
     output = tmp_path / "special"
