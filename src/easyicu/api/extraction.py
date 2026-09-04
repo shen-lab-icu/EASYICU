@@ -3724,6 +3724,224 @@ def _native_export_duckdb_consolidate_row_grain(
     return after_audit, concept_non_null
 
 
+def _enforce_native_export_supp_o2_support(
+    path: Path,
+    *,
+    module: str,
+) -> Optional[Dict[str, int | str]]:
+    """Remove supplemental-oxygen claims orphaned by canonical time filtering.
+
+    ``supp_o2`` is derived before native-v2 applies its ICU-episode time-axis
+    guard. A ventilation point just beyond ``LOS + 24 h`` can therefore be
+    removed while its hour-bucketed ``supp_o2`` row remains inside the allowed
+    interval. Re-evaluate support against the canonical file so every true
+    claim is backed by either FiO2 > 21% at that key or a true ventilation
+    indicator in the corresponding one-hour bucket.
+
+    The global support join is spillable and bounded. Rows made completely
+    empty by clearing an orphan are removed as well; native-v2 must not publish
+    a key with no physical concept evidence.
+    """
+    if module != "respiratory":
+        return None
+
+    import tempfile
+
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    target_schema = pq.read_schema(path)
+    names = list(target_schema.names)
+    required = {"stay_id", "charttime", "fio2", "supp_o2", "vent_ind"}
+    if "supp_o2" not in names:
+        return None
+    missing_support_columns = required - set(names)
+    if missing_support_columns:
+        raise ValueError(
+            "native respiratory publication cannot validate supp_o2 without "
+            f"its support columns: {sorted(missing_support_columns)}"
+        )
+
+    def quote_identifier(value: str) -> str:
+        return '"' + str(value).replace('"', '""') + '"'
+
+    memory_mb = _native_export_duckdb_memory_mb()
+    duckdb_output = path.with_name(
+        f".{module}.native-v2-supp-support.duckdb.tmp.parquet"
+    )
+    arrow_output = path.with_name(
+        f".{module}.native-v2-supp-support.arrow.tmp.parquet"
+    )
+    for candidate in (duckdb_output, arrow_output):
+        if candidate.exists() or candidate.is_symlink():
+            raise ValueError(
+                "native_export_v2 refuses stale supplemental-oxygen support "
+                f"file: {candidate}"
+            )
+
+    value_columns = [
+        name for name in names if name not in {"stay_id", "charttime"}
+    ]
+    other_value_columns = [name for name in value_columns if name != "supp_o2"]
+    other_value_predicate = " OR ".join(
+        f"s.{quote_identifier(name)} IS NOT NULL" for name in other_value_columns
+    )
+    if not other_value_predicate:  # pragma: no cover - required columns prevent it
+        other_value_predicate = "FALSE"
+    output_columns = ",\n                            ".join(
+        (
+            "CASE WHEN _orphan_supp_o2 THEN NULL::BOOLEAN "
+            f"ELSE s.{quote_identifier(name)} END AS {quote_identifier(name)}"
+            if name == "supp_o2"
+            else f"s.{quote_identifier(name)}"
+        )
+        for name in names
+    )
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f".{module}.native-v2-supp-support-",
+            dir=path.parent,
+        ) as spill_dir:
+            connection = duckdb.connect(
+                database=":memory:",
+                config={
+                    "memory_limit": f"{memory_mb}MB",
+                    "threads": "1",
+                    "temp_directory": spill_dir,
+                    "preserve_insertion_order": "true",
+                },
+            )
+            try:
+                support_ctes = """
+                    WITH source AS (
+                        SELECT file_row_number::BIGINT AS _row_order, *
+                        FROM read_parquet(?, file_row_number=true)
+                    ), vent_support AS (
+                        SELECT DISTINCT
+                            stay_id,
+                            floor(charttime)::DOUBLE AS charttime,
+                            TRUE AS _vent_support
+                        FROM source
+                        WHERE vent_ind IS TRUE AND charttime IS NOT NULL
+                    ), marked AS (
+                        SELECT
+                            s.*,
+                            (
+                                s.supp_o2 IS TRUE
+                                AND NOT (
+                                    coalesce(s.fio2 > 21.0, FALSE)
+                                    OR coalesce(v._vent_support, FALSE)
+                                )
+                            ) AS _orphan_supp_o2,
+                            (""" + other_value_predicate + """) AS _has_other_value
+                        FROM source AS s
+                        LEFT JOIN vent_support AS v
+                          ON s.stay_id IS NOT DISTINCT FROM v.stay_id
+                         AND floor(s.charttime) IS NOT DISTINCT FROM v.charttime
+                    )
+                """
+                before = connection.execute(
+                    support_ctes
+                    + """
+                    SELECT
+                        count(*)::BIGINT,
+                        count(*) FILTER (WHERE _orphan_supp_o2)::BIGINT,
+                        count(*) FILTER (
+                            WHERE _orphan_supp_o2 AND NOT _has_other_value
+                        )::BIGINT,
+                        count(*) FILTER (
+                            WHERE _orphan_supp_o2
+                              AND NOT _has_other_value
+                              AND charttime IS NULL
+                        )::BIGINT
+                    FROM marked
+                    """,
+                    [str(path)],
+                ).fetchone()
+                if before is None:  # pragma: no cover - aggregate always returns
+                    raise RuntimeError(
+                        "native supplemental-oxygen support audit returned no row"
+                    )
+                rows_before, orphan_claims, empty_rows, empty_null_time_rows = (
+                    int(value) for value in before
+                )
+                if orphan_claims:
+                    connection.execute(
+                        f"""
+                        COPY (
+                            {support_ctes}
+                            SELECT
+                                {output_columns}
+                            FROM marked AS s
+                            WHERE NOT (
+                                _orphan_supp_o2 AND NOT _has_other_value
+                            )
+                            ORDER BY _row_order
+                        ) TO ? (
+                            FORMAT PARQUET,
+                            COMPRESSION SNAPPY,
+                            ROW_GROUP_SIZE 262144
+                        )
+                        """,
+                        # DuckDB binds COPY's destination before the CTE input.
+                        [str(duckdb_output), str(path)],
+                    )
+            finally:
+                connection.close()
+
+        if orphan_claims:
+            source_file = pq.ParquetFile(duckdb_output)
+            writer = pq.ParquetWriter(
+                arrow_output, target_schema, compression="snappy"
+            )
+            rows_after = 0
+            try:
+                for batch in source_file.iter_batches(
+                    batch_size=_native_export_arrow_batch_rows(),
+                    use_threads=False,
+                ):
+                    table = pa.Table.from_batches([batch]).cast(
+                        target_schema, safe=True
+                    )
+                    rows_after += len(table)
+                    if len(table):
+                        writer.write_table(table)
+                    del table
+                    _release_stream_batch_memory(pa, trim_native_allocator=False)
+            finally:
+                writer.close()
+            expected_rows = rows_before - empty_rows
+            if rows_after != expected_rows:
+                raise RuntimeError(
+                    "native supplemental-oxygen support repair changed the row "
+                    f"count unexpectedly ({rows_after} != {expected_rows})"
+                )
+            arrow_output.replace(path)
+        else:
+            rows_after = rows_before
+    except Exception:
+        arrow_output.unlink(missing_ok=True)
+        raise
+    finally:
+        duckdb_output.unlink(missing_ok=True)
+
+    return {
+        "policy": (
+            "true_supp_o2_requires_canonical_fio2_gt_21_or_"
+            "hour_bucketed_canonical_vent_ind"
+        ),
+        "ventilation_time_projection": "floor_to_one_hour",
+        "excluded_semantically_invalid": orphan_claims,
+        "empty_rows_removed": empty_rows,
+        "empty_null_charttime_rows_removed": empty_null_time_rows,
+        "rows_before": rows_before,
+        "rows_after": rows_after,
+        "duckdb_memory_limit_mb": memory_mb,
+    }
+
+
 def _try_publish_native_export_arrow_fast_path(
     *,
     source_parquet: Path,
@@ -4605,6 +4823,42 @@ def _publish_native_export_v2(
                 metadata_frame = arrow_result["schema_frame"]
                 published_rows = int(arrow_result["rows"])
                 concept_non_null = dict(arrow_result["concept_non_null"])
+            supp_o2_audit = _enforce_native_export_supp_o2_support(
+                temporary_parquet,
+                module=module,
+            )
+            if supp_o2_audit is not None:
+                semantic_audit["supp_o2"] = supp_o2_audit
+                removed_claims = int(
+                    supp_o2_audit["excluded_semantically_invalid"]
+                )
+                removed_rows = int(supp_o2_audit["empty_rows_removed"])
+                concept_non_null["supp_o2"] -= removed_claims
+                if concept_non_null["supp_o2"] < 0:
+                    raise RuntimeError(
+                        "native supplemental-oxygen support repair produced a "
+                        "negative non-null count"
+                    )
+                published_rows -= removed_rows
+                removed_null_time_rows = int(
+                    supp_o2_audit["empty_null_charttime_rows_removed"]
+                )
+                null_charttime_rows_after = int(
+                    row_grain_audit["null_charttime_rows_after"]
+                )
+                if (
+                    published_rows < 0
+                    or removed_null_time_rows > null_charttime_rows_after
+                ):
+                    raise RuntimeError(
+                        "native supplemental-oxygen support repair produced "
+                        "inconsistent row-grain counts"
+                    )
+                row_grain_audit["published_rows"] = published_rows
+                row_grain_audit["semantic_rows_excluded"] = removed_rows
+                row_grain_audit["null_charttime_rows_after"] = (
+                    null_charttime_rows_after - removed_null_time_rows
+                )
             binding = build_export_file_metadata_binding(
                 relative_path=relative_path,
                 module=module,
