@@ -67,16 +67,22 @@ class FormalTrajectoryLifecycle:
         self._committed = False
 
     def require_workdir(self, workdir: Path) -> Path:
-        """Require the exact derived scratch path under the signed site root."""
+        """Require the exact ordinary scratch path under the signed site root."""
 
         candidate = Path(workdir)
         if candidate.is_symlink() or candidate.resolve() != self.workdir:
             raise FormalTrajectoryLifecycleError(
                 "formal implementation workdir does not match the derived signed path"
             )
-        if candidate.exists() and (
-            not candidate.is_dir() or any(candidate.iterdir())
-        ):
+        if candidate.exists() and not candidate.is_dir():
+            raise FormalTrajectoryLifecycleError(
+                "formal implementation workdir must be an ordinary directory"
+            )
+        return candidate.resolve()
+
+    def _require_pristine_workdir(self, workdir: Path) -> Path:
+        candidate = self.require_workdir(workdir)
+        if candidate.exists() and any(candidate.iterdir()):
             raise FormalTrajectoryLifecycleError(
                 "formal implementation workdir must be absent or empty"
             )
@@ -90,7 +96,7 @@ class FormalTrajectoryLifecycle:
     ) -> _T:
         """Construct the implementation before consuming the single-use lease."""
 
-        validated_workdir = self.require_workdir(workdir)
+        validated_workdir = self._require_pristine_workdir(workdir)
         existed_before = validated_workdir.exists()
         try:
             implementation = factory()

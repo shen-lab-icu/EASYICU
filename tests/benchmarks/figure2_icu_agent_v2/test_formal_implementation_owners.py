@@ -45,6 +45,14 @@ from benchmarks.figure2_icu_agent_v2.review_bundle_semantics import (
 )
 from benchmarks.figure2_icu_agent_v2 import review_bundle_writer
 from easyicu.research_agent.schema import PipelineResult
+from easyicu.research_agent.authority.provider_hard_stop import (
+    ProviderHardStopLedger,
+    ProviderHardStopLimits,
+)
+from easyicu.research_agent.execution.runner import DockerRunner
+from easyicu.research_agent.orchestration.config import PipelineConfig
+from easyicu.research_agent.orchestration.services import PipelineServices
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from benchmarks.figure2_icu_agent_v2.multi_host_acceptance import (
     MultiHostAcceptanceError,
     validate_two_host_preflight,
@@ -390,6 +398,137 @@ def _first_core_lifecycle(
         ),
         lease,
     )
+
+
+def _first_core_runner_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    arm: str,
+):
+    roots = {
+        "server": tmp_path / "server-output",
+        "laptop": tmp_path / "laptop-output",
+    }
+    dry_run = build_core_schedule_dry_run(roots)
+    trajectory = next(
+        row
+        for row in dry_run.trajectories
+        if row.arm == arm and row.arm_sequence_within_pair == 1
+    )
+    lease_root = tmp_path / "runner-leases"
+    lease_root.mkdir()
+    lease = claim_trajectory_lease(
+        trajectory,
+        schedule=dry_run,
+        logical_site=trajectory.execution_site,
+        lease_root=lease_root,
+    )
+    assignment = expected_site_assignment("core_wp2_wp3")
+    monkeypatch.setattr(
+        formal_trajectory_lifecycle,
+        "signed_site_assignment",
+        lambda _receipts, *, scope: assignment,
+    )
+    monkeypatch.setattr(
+        formal_trajectory_lifecycle,
+        "signed_output_root",
+        lambda _receipts, *, execution_site: str(
+            roots[execution_site].resolve()
+        ),
+    )
+    limits = ProviderHardStopLimits(
+        max_provider_attempts_per_run=2,
+        max_provider_attempts_per_batch=2,
+        max_total_tokens_per_run=200_000,
+        max_total_tokens_per_batch=200_000,
+        max_estimated_cost_usd_per_batch=1.0,
+        max_wall_clock_seconds_per_task=60.0,
+        input_cost_usd_per_million_tokens=0.1,
+        output_cost_usd_per_million_tokens=0.1,
+    )
+    hard_stop = ProviderHardStopLedger(
+        path=tmp_path / f"{arm}-hard-stop.json",
+        task_ids=(trajectory.task_id,),
+        limits=limits,
+        batch_id=f"{arm}-constructor-test",
+    ).start_task(trajectory.task_id)
+    return trajectory, lease, hard_stop
+
+
+def test_easyicu_runner_public_constructor_uses_formal_execution_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trajectory, lease, hard_stop = _first_core_runner_context(
+        tmp_path,
+        monkeypatch,
+        arm="easyicu_full",
+    )
+    services = PipelineServices(
+        llm=ScriptedMockLLMClient([]),
+        provider_hard_stop=hard_stop,
+    )
+
+    runner = FormalEasyICURunner(
+        config=PipelineConfig(
+            workdir=tmp_path / "uncommitted-workdir",
+            max_provider_attempts_per_run=2,
+            max_provider_attempts_per_batch=2,
+            max_total_tokens_per_run=200_000,
+            max_total_tokens_per_batch=200_000,
+            max_estimated_cost_usd_per_batch=1.0,
+            max_wall_clock_seconds_per_task=60.0,
+            provider_input_cost_usd_per_million_tokens=0.1,
+            provider_output_cost_usd_per_million_tokens=0.1,
+        ),
+        services=services,
+        receipts={},
+        scope=trajectory.scope,
+        task_id=trajectory.task_id,
+        execution_site=trajectory.execution_site,
+        trajectory_lease_path=lease,
+        provider_hard_stop=hard_stop,
+    )
+
+    assert Path(f"{lease}.started").is_file()
+    assert runner._trajectory.workdir.name == "easyicu_full"
+
+
+def test_generic_runner_public_constructor_uses_formal_execution_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trajectory, lease, hard_stop = _first_core_runner_context(
+        tmp_path,
+        monkeypatch,
+        arm="generic_code_agent",
+    )
+    cohort = tmp_path / "sealed-cohort.parquet"
+    cohort.write_bytes(b"offline constructor fixture")
+
+    runner = FormalGenericCodeAgentRunner(
+        client=ScriptedMockLLMClient([]),
+        receipts={},
+        scope=trajectory.scope,
+        task_id=trajectory.task_id,
+        execution_site=trajectory.execution_site,
+        trajectory_lease_path=lease,
+        max_tokens=100,
+        temperature=0.0,
+        docker_runner_factory=lambda workdir: DockerRunner(
+            workdir=workdir,
+            cohort_parquet=cohort,
+        ),
+        provider_hard_stop=hard_stop,
+        resource_snapshot=lambda: {
+            "within_frozen_budget": True,
+            "billed_cost": 0.0,
+        },
+    )
+
+    assert Path(f"{lease}.started").is_file()
+    assert runner._trajectory.workdir.name == "generic_code_agent"
 
 
 def test_formal_lifecycle_does_not_consume_lease_when_initialization_fails(
