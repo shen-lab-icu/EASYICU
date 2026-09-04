@@ -2036,28 +2036,23 @@ def _stream_module_batches_to_parquet(
                         )
                     if batch_part.exists():
                         part_schema = pq.read_schema(batch_part)
-                        if writer is None:
+                        if schema is None:
                             schema = part_schema
-                            writer = pq.ParquetWriter(
-                                partial,
-                                schema,
-                                compression="snappy",
-                            )
                         produced_concepts.update(
                             concept
                             for concept in concepts
                             if concept in part_schema.names
                         )
-                        output_rows = _append_isolated_stream_batch(
-                            batch_part,
-                            writer=writer,
-                            schema=schema,
-                            pyarrow_module=pa,
-                            parquet_module=pq,
+                        # Keep the atomic child output until every extraction
+                        # batch has exited. Appending here leaves Arrow writer
+                        # pages resident in this parent while the next heavy
+                        # child is alive; measured AUMC respiratory runs then
+                        # crossed the same RSS stop even at smaller batches.
+                        # Deferred append separates extraction and merge peaks.
+                        output_rows = int(
+                            pq.ParquetFile(batch_part).metadata.num_rows
                         )
                         rows += output_rows
-                        batch_part.unlink()
-                        part_files.remove(batch_part)
                     else:
                         # An empty source batch intentionally produces no part.
                         part_files.remove(batch_part)
@@ -2140,7 +2135,28 @@ def _stream_module_batches_to_parquet(
                     available_memory_mb=batch_memory["available_memory_mb_at_start"],
                     remaining_patients=len(all_ids) - start,
                 )
-        if writer is None:
+        if isolate_batch_process:
+            if not part_files:
+                return None
+            assert schema is not None
+            writer = pq.ParquetWriter(partial, schema, compression="snappy")
+            for part_file in list(part_files):
+                appended_rows = _append_isolated_stream_batch(
+                    part_file,
+                    writer=writer,
+                    schema=schema,
+                    pyarrow_module=pa,
+                    parquet_module=pq,
+                )
+                if appended_rows != int(pq.ParquetFile(part_file).metadata.num_rows):
+                    raise RuntimeError(
+                        f"{module_name}: isolated batch row count changed during "
+                        f"deferred merge: {part_file.name}"
+                    )
+                part_file.unlink()
+                part_files.remove(part_file)
+                _release_stream_batch_memory(pa)
+        elif writer is None:
             return None
         writer.close()
         writer = None
