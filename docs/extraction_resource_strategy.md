@@ -10,8 +10,11 @@ Patient batching is a fallback for insufficient memory, not the normal path.
 2. If every selected module has a full-cohort measurement and the largest
    measured process-tree peak plus 10% launch headroom fits, EasyICU runs the
    entire selected cohort in one shot.
-3. Multiple modules run sequentially in isolated workers, so the requirement is
-   the **maximum** selected-module threshold, not their sum.
+3. Multiple modules run sequentially in isolated workers. Each module therefore
+   follows its own measured strategy: a batch-only module must not force a
+   measured one-shot module in the same request to repeat source scans. The
+   aggregate request plan remains a conservative summary, not the execution
+   batch applied to every module.
 4. If available memory is below the threshold, EasyICU falls back to patient
    batches and tells the user the available memory, required threshold, expected
    speed penalty, and how to restore the fastest mode. A measured batch profile
@@ -19,7 +22,9 @@ Patient batching is a fallback for insufficient memory, not the normal path.
    larger batches cross the memory contract. The selected batch is the largest
    successful measured size, not an arbitrary small default.
 5. If memory is sufficient, no cleanup warning is shown.
-6. An explicit user `batch_size` remains authoritative.
+6. An explicit user `batch_size` remains authoritative in the public API. The
+   formal selected-module release launcher blocks this override unless the
+   operator supplies both an explicit acknowledgement and an audit reason.
 7. A measured light-module profile never authorises an unmeasured module. Mixed
    or unmeasured MIMIC-III, MIMIC-IV, and AUMC requests retain the conservative
    24 GiB full-cohort guard until their own measurements are recorded.
@@ -153,14 +158,19 @@ successful measured batch instead:
 | sofa1_score | stopped at 7,631.4 MiB | 67,000 stays (3 batches) | 512.5 s | 6,316.5 MiB |
 | sepsis3_sofa1 | stopped at 7,475.6 MiB | 67,000 stays (3 batches) | 586.9 s | 6,294.5 MiB |
 
-At 8 GiB currently available, selecting any subset of the 14 one-shot modules
-runs each selected module one-shot. Selecting `respiratory` or `circulatory`
-uses 50,000-stay batches; selecting any of the other three batch-only modules
-uses 67,000-stay batches. A full 19-module request uses the strictest measured
-50,000-stay batch. These measured batch paths show no cleanup warning because
-8 GiB already fits their fastest verified peak plus headroom. A warning appears
-only when currently available memory is below the relevant measured batch
-threshold.
+At an 8 GiB planning budget, selecting any subset of the 14 one-shot modules
+runs each selected module one-shot. `respiratory` and `circulatory` use
+50,000-stay batches; the other three batch-only modules use 67,000-stay
+batches. Mixed and full requests preserve those per-module decisions rather
+than applying the strictest 50,000-stay batch to every module. These measured
+batch paths show no cleanup warning because 8 GiB already fits their fastest
+verified peak plus headroom. A warning appears only when the planning budget is
+below the relevant measured batch threshold.
+
+The formal selected-module release launcher fixes its default planning budget
+at 8,192 MiB for reproducibility even on a very large server. Use
+`EX-A03_refresh_selected_modules.py --plan-only` to inspect the complete
+database-by-module plan without cloning a candidate or opening raw data.
 
 The physical-layout A/B found that contiguous 25,000-stay respiratory batches
 took 234.2 seconds at 6,061.4 MiB versus 251.7 seconds at 6,252.8 MiB for the

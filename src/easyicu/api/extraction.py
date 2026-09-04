@@ -904,6 +904,42 @@ def plan_extraction_resources(
     )
 
 
+def plan_module_extraction_resources(
+    database: str,
+    modules: Sequence[str],
+    num_patients: int,
+    requested_batch_size: Optional[int] = None,
+    *,
+    available_memory_mb: Optional[float] = None,
+) -> Dict[str, ExtractionResourcePlan]:
+    """Return the authoritative resource decision for every module.
+
+    A database-level request may contain both measured one-shot modules and
+    batch-only modules.  Returning one plan per isolated execution unit keeps
+    the fast modules one-shot instead of inheriting the strictest batch in the
+    request.  An explicit override intentionally remains common to all units.
+    """
+
+    selected_modules = tuple(dict.fromkeys(str(module) for module in modules))
+    if not selected_modules:
+        raise ValueError("modules must not be empty")
+    available = (
+        _available_memory_mb()
+        if available_memory_mb is None
+        else max(0.0, float(available_memory_mb))
+    )
+    return {
+        module: plan_extraction_resources(
+            database,
+            [module],
+            num_patients,
+            requested_batch_size,
+            available_memory_mb=available,
+        )
+        for module in selected_modules
+    }
+
+
 def _next_stream_retry_batch_size(current_batch_size: int) -> int:
     """Return the next bounded batch after one adaptive worker crash."""
 
@@ -1768,42 +1804,9 @@ def _run_module_extraction(
     # load_concepts 一次拿到该模块**所有概念**（chartevents/labevents 等共享源表只扫
     # 一次；内部若按患者分批也由它自己 concat，对外仍是一次调用、一次扫描）。
     #
-    # 分批策略：**除超大队列外一律一次性**。只有患者数 > ONESHOT_MAX_PATIENTS（15万，
-    # 实际只有 eICU ~20万命中）才让 auto_batch_size 以 ≤ MAX_EXTRACT_CHUNKS（默认 3）份
-    # 启用。实测最重非 eICU 模块 miiv medications（49 概念 × 9.4万患者）merge=True 一次性
-    # 峰值仅 5.44GB，远低于预算；旧内存估算器约 3-5× 高估会把这类模块误判成要分批（见
-    # web 端 dataio.py:1657 的同款观察），故对 ≤15万 的库直接跳过估算、强制一次性。
-    _n_ids = 0
-    if patient_ids_filter:
-        try:
-            _n_ids = len(next(iter(patient_ids_filter.values())))
-        except Exception:
-            _n_ids = 0
-    if _n_ids > ONESHOT_MAX_PATIENTS and (not batch_size or batch_size >= _n_ids):
-        try:
-            from easyicu.runtime.memory_manager import auto_batch_size as _auto_bs
-
-            # 稳定预算：用物理总内存判定（而非波动的当前可用），避免后台程序临时吃内存
-            # 把本可一次性的模块误判成分批。EASYICU_ONESHOT_BUDGET_MB 可覆盖此上限(MB)。
-            _stable_avail_mb = None
-            _env_budget = os.environ.get("EASYICU_ONESHOT_BUDGET_MB")
-            if _env_budget:
-                _stable_avail_mb = float(_env_budget) / 0.6
-            else:
-                try:
-                    import psutil as _ps
-
-                    _stable_avail_mb = _ps.virtual_memory().total / (1024 * 1024)
-                except Exception:
-                    _stable_avail_mb = None
-            _safe_bs = _auto_bs(
-                list(concepts), database, _n_ids, available_memory_mb=_stable_avail_mb
-            )
-            if _safe_bs and _safe_bs < _n_ids:
-                batch_size = _safe_bs
-        except Exception:
-            pass
-
+    # 分批大小已由 ``plan_extraction_resources`` 在主进程中唯一决定。
+    # 这里不再调用旧 ``auto_batch_size`` 进行第二次改写；否则同一次
+    # release 的预检计划、manifest 和实际执行可能不一致。
     if batch_size:
         kwargs["batch_size"] = batch_size
 
@@ -5035,6 +5038,8 @@ def _publish_native_export_v2(
         "module_peak_working_set_mb": module_peak_working_set_mb,
         "stream_retry_history": list(result.get("stream_retry_history", [])),
         "resource_plan": result.get("resource_plan"),
+        "module_resource_plans": result.get("module_resource_plans"),
+        "resource_budget_mb": result.get("resource_budget_mb"),
         "time_window_authority": time_window_authority,
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
@@ -5073,6 +5078,7 @@ def extract_database(
     stream_output_batches: bool = False,
     verbose: bool = True,
     adaptive_stream_batches: Optional[bool] = None,
+    resource_budget_mb: Optional[float] = None,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -5125,6 +5131,9 @@ def extract_database(
             会自适应，用户显式 ``batch_size`` 固定不变。六库 launcher 会同时
             显式传入有 provenance 的首批计划和 ``True``，从而保证 plan 与实际
             首批一致，同时允许后续批次继续按实测增长或收缩。
+        resource_budget_mb: 资源规划可使用的内存预算（MiB）。None 使用当前
+            可用内存；可复现的正式 release 应显式传入其资源合同（例如 8192），
+            避免同一任务仅因换到大内存服务器就绕过已验证的分批边界。
 
     Note:
         提取 worker 在所有平台均使用 ``spawn`` 以隔离 Arrow/DuckDB 原生状态。
@@ -5227,45 +5236,49 @@ def extract_database(
         raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
 
     automatic_batch = batch_size is None
+    if resource_budget_mb is not None and float(resource_budget_mb) <= 0:
+        raise ValueError("resource_budget_mb must be positive")
+    planning_available_mb = (
+        _available_memory_mb()
+        if resource_budget_mb is None
+        else float(resource_budget_mb)
+    )
     resource_plan = plan_extraction_resources(
         database,
         modules,
         num_patients,
         batch_size,
+        available_memory_mb=planning_available_mb,
     )
     batch_size = resource_plan.batch_size
-    if (
-        len(modules) > 1
-        and resource_plan.reason_code == "measured_profile_fast_path"
+    module_resource_plans = plan_module_extraction_resources(
+        database,
+        modules,
+        num_patients,
+        None if automatic_batch else batch_size,
+        available_memory_mb=planning_available_mb,
+    )
+    # A mixed request must not force light modules through the strictest
+    # module's batches.  Each module was profiled in an isolated process, so
+    # automatic release execution uses that same per-module unit of planning.
+    # Grouped execution remains available only when every selected module has
+    # the same safe one-shot mode.
+    any_streamed_module = bool(stream_output_batches) and any(
+        plan.mode != "one_shot" for plan in module_resource_plans.values()
+    )
+    if automatic_batch and (
+        any_streamed_module
+        or len({plan.batch_size for plan in module_resource_plans.values()}) > 1
     ):
-        # The profiles were measured one module per isolated worker.  Do not
-        # silently combine their working sets merely because total RAM is high.
         group_modules = False
-
-    if (
-        stream_output_batches
-        and automatic_batch
-        and resource_plan.mode == "one_shot"
-    ):
-        # A single streamed partition gives up source/cache reuse without any
-        # memory benefit.  Use the true one-shot path when the measured profile
-        # authorises it.
-        stream_output_batches = False
-        _adaptive_stream_batches = False
-        _auto_one_shot = True
-    elif stream_output_batches:
-        _adaptive_stream_batches = (
-            automatic_batch
-            if adaptive_stream_batches is None
-            else bool(adaptive_stream_batches)
-        )
-        _auto_one_shot = False
-    elif resource_plan.mode == "one_shot":
-        _adaptive_stream_batches = False
-        _auto_one_shot = True
-    else:
-        _adaptive_stream_batches = False
-        _auto_one_shot = False
+    _adaptive_stream_batches = bool(stream_output_batches) and (
+        automatic_batch
+        if adaptive_stream_batches is None
+        else bool(adaptive_stream_batches)
+    )
+    _auto_one_shot = all(
+        plan.mode == "one_shot" for plan in module_resource_plans.values()
+    )
 
     # 创建输出目录
     if native_export_v2 is None:
@@ -5288,17 +5301,15 @@ def extract_database(
         print(f"{'=' * 60}")
         print(f"📊 extract_database: {database}")
         print(f"   患者数: {num_patients:,}, 模块数: {len(modules)}")
-        if (
-            _auto_one_shot
-            and database == "eicu"
-            and num_patients > ONESHOT_MAX_PATIENTS
-        ):
-            batch_description = "eICU 自适应 1–3 个大 batch（按模块内存估算）"
-        elif _auto_one_shot:
-            batch_description = "一次性 in-process"
+        if _auto_one_shot:
+            batch_description = "全部模块一次性（逐模块隔离）"
+        elif automatic_batch:
+            batch_description = "按模块实测策略（一次性/最少安全批次）"
         else:
             batch_description = f"batch_size={batch_size}"
         print(f"   批策略: {batch_description}")
+        if resource_budget_mb is not None:
+            print(f"   资源合同: {planning_available_mb:.0f} MiB")
         if resource_plan.advisory_zh:
             print(f"   ⚠️  {resource_plan.advisory_zh}")
         print(f"   RSS: {rss:.0f}MB, 输出: {output_dir or '仅内存'}")
@@ -5310,8 +5321,13 @@ def extract_database(
         "batch_size": batch_size,
         "adaptive_stream_batches": _adaptive_stream_batches,
         "stream_retry_history": [],
-        "stream_output_batches": stream_output_batches,
+        "stream_output_batches": any_streamed_module,
         "resource_plan": resource_plan.to_dict(),
+        "module_resource_plans": {
+            module: plan.to_dict()
+            for module, plan in module_resource_plans.items()
+        },
+        "resource_budget_mb": round(planning_available_mb, 1),
         "modules": {},
         "total_elapsed": 0,
         "output_dir": output_dir,
@@ -5329,10 +5345,42 @@ def extract_database(
 
     # ---- 模块分组：组内共享源表扫描（keep_cache），组间子进程隔离 ----
     group_flag, group_reason = _resolve_extraction_grouping(
-        group_modules, stream_output_batches
+        group_modules, any_streamed_module
     )
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
+    if automatic_batch and not group_flag:
+        # The legacy ungrouped shape kept both Sepsis-3 modules in one worker.
+        # Their measured policies differ on eICU (SOFA-1 is 67k, SOFA-2 is
+        # one-shot), so split them only for automatic isolated execution.
+        isolated_groups = []
+        for group in groups:
+            if group["modules"]:
+                isolated_groups.append(
+                    {"modules": list(group["modules"]), "special": []}
+                )
+            isolated_groups.extend(
+                {"modules": [], "special": [special]}
+                for special in group["special"]
+            )
+        groups = isolated_groups
+    for group in groups:
+        group_modules_for_plan = [*group["modules"], *group["special"]]
+        group_plan = plan_extraction_resources(
+            database,
+            group_modules_for_plan,
+            num_patients,
+            None if automatic_batch else batch_size,
+            available_memory_mb=planning_available_mb,
+        )
+        group["_batch_size"] = group_plan.batch_size
+        group["_resource_plan"] = group_plan.to_dict()
+        group["_stream_output_batches"] = bool(stream_output_batches) and (
+            not automatic_batch or group_plan.mode != "one_shot"
+        )
+        group["_adaptive_stream_batches"] = bool(
+            group["_stream_output_batches"] and _adaptive_stream_batches
+        )
 
     if verbose and group_flag:
         print(
@@ -5400,6 +5448,7 @@ def extract_database(
             "initial_planned_partition_count": manifest.get(
                 "initial_planned_partition_count"
             ),
+            "resource_plan": module_resource_plans[mod_name].to_dict(),
         }
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
         # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
@@ -5527,6 +5576,7 @@ def extract_database(
                     "initial_planned_partition_count": manifest.get(
                         "initial_planned_partition_count"
                     ),
+                    "resource_plan": module_resource_plans[mod_name].to_dict(),
                 }
                 for c_name in concepts:
                     info = manifest.get("saved", {}).get(c_name)
@@ -5574,6 +5624,12 @@ def extract_database(
     while pending_groups:
         group = pending_groups.popleft()
         group_batch_size = int(group.get("_batch_size", batch_size))
+        group_stream_output_batches = bool(
+            group.get("_stream_output_batches", stream_output_batches)
+        )
+        group_adaptive_stream_batches = bool(
+            group.get("_adaptive_stream_batches", _adaptive_stream_batches)
+        )
         stream_retry_attempt = int(group.get("_stream_retry_attempt", 0))
         group_mods = [m for m in group["modules"] if EXTRACT_MODULES.get(m)]
         group_special = list(group["special"])
@@ -5602,9 +5658,9 @@ def extract_database(
                 group_batch_size,
                 tmp_root,
                 group_use_sofa2,
-                stream_output_batches,
+                group_stream_output_batches,
                 output_dir,
-                _adaptive_stream_batches,
+                group_adaptive_stream_batches,
             ),
             daemon=True,
         )
@@ -5627,8 +5683,8 @@ def extract_database(
         can_retry_smaller = (
             crashed
             and incomplete
-            and _adaptive_stream_batches
-            and stream_output_batches
+            and group_adaptive_stream_batches
+            and group_stream_output_batches
             and stream_retry_attempt < _STREAM_BATCH_MAX_RETRIES
             and group_batch_size > _STREAM_BATCH_MIN
         )
@@ -5658,6 +5714,8 @@ def extract_database(
                     "modules": retry_modules,
                     "special": retry_special,
                     "_batch_size": retry_batch_size,
+                    "_stream_output_batches": group_stream_output_batches,
+                    "_adaptive_stream_batches": group_adaptive_stream_batches,
                     "_stream_retry_attempt": stream_retry_attempt + 1,
                 }
             )
@@ -5681,6 +5739,8 @@ def extract_database(
                         "modules": [],
                         "special": group_special,
                         "_batch_size": group_batch_size,
+                        "_stream_output_batches": group_stream_output_batches,
+                        "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
                     }
                 )
@@ -5691,6 +5751,8 @@ def extract_database(
                         "modules": [m],
                         "special": [],
                         "_batch_size": group_batch_size,
+                        "_stream_output_batches": group_stream_output_batches,
+                        "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
                     }
                 )
