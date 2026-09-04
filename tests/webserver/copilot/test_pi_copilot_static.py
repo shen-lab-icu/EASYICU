@@ -71,15 +71,15 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-evidence-preview.js?v=20260830-density1" in index
     )
     assert (
-        "js/screens-guided-pi-technical-report.js?v=20260901-registered-summary2"
+        "js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"
         in index
     )
-    assert "js/screens-guided-pi-analysis-report.js?v=20260901-e1-framework3" in index
+    assert "js/screens-guided-pi-analysis-report.js?v=20260904-empty-gallery1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
     assert "js/screens-guided-pi-replay.js?v=20260901-project-restore1" in index
     assert "js/screens-guided-pi-resources.js?v=20260902-plan-flow1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260901-evidence-flow1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260904-empty-gallery1" in index
     assert "js/screens-guided-pi-activity.js?v=20260901-plan-retries2" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
@@ -6225,6 +6225,8 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "分析已完成，可以审阅结果" in owner
     assert "result_tables.json" in owner
     assert "figure_gallery.json" in owner
+    assert "latestRun.figure_count === 0" in owner
+    assert "本次分析未登记图件；请先查看结果表" in owner
     assert "manuscript_provenance.json" in owner
     assert "review_result_tables" in events
     assert "review_figures" in events
@@ -6253,6 +6255,9 @@ def test_guided_analysis_reports_fallback_to_registered_result_tables() -> None:
     analysis = _read("js/screens-guided-pi-analysis-report.js")
     technical = _read("js/screens-guided-pi-technical-report.js")
     index = _read("index.html")
+
+    assert "figureCount > 0" in analysis
+    assert "figureCount > 0" in technical
 
     assert "guidedPi.declare('resultSummary'" in summary
     assert "overall_outcome.risk_pct" in summary

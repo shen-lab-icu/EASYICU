@@ -19,13 +19,17 @@ from ..contracts.time_varying_exposure import (
     TIME_VARYING_EXPOSURE_METHOD,
     TimeVaryingExposureSpecification,
 )
+from ..planning.literature_contract import LiteratureDesignBinding
 from ..schema import AnalysisPlan, AnalysisStep
 
 
 class TimeVaryingRuntimeAuthority(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal["easyicu.time_varying_runtime_authority/1"]
+    schema_version: Literal[
+        "easyicu.time_varying_runtime_authority/1",
+        "easyicu.time_varying_runtime_authority/2",
+    ]
     authority_kind: Literal["time_varying_exposure_association"]
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -46,6 +50,8 @@ class TimeVaryingRuntimeAuthority(BaseModel):
         ],
         ...,
     ]
+    plan_literature_citation_keys: tuple[str, ...] = ()
+    plan_literature_design_bindings: tuple[LiteratureDesignBinding, ...] = ()
 
     @model_validator(mode="after")
     def _closed(self) -> "TimeVaryingRuntimeAuthority":
@@ -55,7 +61,29 @@ class TimeVaryingRuntimeAuthority(BaseModel):
             "log:time_varying_runtime_receipt",
         ):
             raise ValueError("time-varying output contract changed")
-        body = self.model_dump(mode="json", exclude={"execution_contract_sha256"})
+        binding_keys = tuple(
+            item.citation_key for item in self.plan_literature_design_bindings
+        )
+        if self.schema_version.endswith("/1"):
+            if self.plan_literature_citation_keys or binding_keys:
+                raise ValueError("time-varying v1 authority cannot bind literature")
+            digest_exclusions = {
+                "execution_contract_sha256",
+                "plan_literature_citation_keys",
+                "plan_literature_design_bindings",
+            }
+        else:
+            if (
+                not self.plan_literature_citation_keys
+                or len(self.plan_literature_citation_keys)
+                != len(set(self.plan_literature_citation_keys))
+                or binding_keys != self.plan_literature_citation_keys
+            ):
+                raise ValueError(
+                    "time-varying v2 literature bindings must exactly cover the citation roster"
+                )
+            digest_exclusions = {"execution_contract_sha256"}
+        body = self.model_dump(mode="json", exclude=digest_exclusions)
         if canonical_sha256(body) != self.execution_contract_sha256:
             raise ValueError("time-varying authority digest mismatch")
         return self
@@ -96,6 +124,9 @@ class TimeVaryingRuntimeAuthority(BaseModel):
                 "Only previously observed measurements enter each risk interval.",
                 "Cox proportional-hazards assumptions are not yet independently validated; informative measurement and residual confounding remain.",
             ],
+            "literature_citation_keys": list(
+                self.plan_literature_citation_keys
+            ),
             "novelty_positioning": "Development validation of an explicitly bound analysis; no novelty claim.",
             "figure_role": "Inspect aggregate input audit and estimate tables; no publication figure is authorized.",
             "supports": "Source-traceable, descriptive time-updated association and input accounting.",
@@ -111,6 +142,8 @@ class TimeVaryingRuntimeAuthority(BaseModel):
             "estimand": "Exposure association restricted to patients who remain observable and alive at ICU hour 24.",
             "time_zero": "ICU admission plus 24 hours",
             "primary_method": "landmark_analysis",
+            "literature_citation_keys": [],
+            "literature_design_decisions": [],
             "reviewable_plan": None,
             "decision_reason": "Conditioning on survival to hour 24 removes early events and changes the explicitly declared time-zero population.",
         }
@@ -151,6 +184,13 @@ class TimeVaryingRuntimeAuthority(BaseModel):
                         "scientific_capability": TIME_VARYING_EXPOSURE_CAPABILITY,
                         "sensitivity_spec_ids": [self.sensitivity_spec_id],
                         "icu_rule_refs": [self.plan_rule_ref],
+                        "literature_citation_keys": list(
+                            self.plan_literature_citation_keys
+                        ),
+                        "literature_design_bindings": [
+                            item.model_dump(mode="json")
+                            for item in self.plan_literature_design_bindings
+                        ],
                     },
                 ],
             }
@@ -180,6 +220,10 @@ class TimeVaryingRuntimeAuthority(BaseModel):
             or tuple(step.expected_outputs) != self.plan_outputs
             or step.inputs != ["table:analysis_cohort", *self.required_columns]
             or step.sensitivity_spec_ids != [self.sensitivity_spec_id]
+            or tuple(step.literature_citation_keys)
+            != self.plan_literature_citation_keys
+            or tuple(step.literature_design_bindings)
+            != self.plan_literature_design_bindings
             or self.plan_rule_ref not in step.icu_rule_refs
             or step.model_requirements
             or step.family_primary_result_requirement is not None

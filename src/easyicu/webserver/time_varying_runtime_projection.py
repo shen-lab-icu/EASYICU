@@ -38,6 +38,93 @@ def time_varying_specification(
     return matching[0].spec_id, matching[0].time_varying_execution
 
 
+def _time_varying_plan_literature(
+    *,
+    literature_citation_keys: Sequence[str],
+    direct_comparator_literature_keys: Sequence[str],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Bind only sealed sources whose role is mechanical for this design."""
+
+    allowed = set(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in literature_citation_keys
+            if str(value or "").strip()
+        )
+    )
+    bindings_by_key = {
+        "suissa_immortal_time_2008": {
+            "design_elements": ["time_zero", "exposure", "estimand"],
+            "application": (
+                "Align follow-up at ICU admission and update exposure only from "
+                "measurements already observed, avoiding immortal-time assignment."
+            ),
+            "divergence": None,
+        },
+        "strobe_2007": {
+            "design_elements": ["reporting", "dependence"],
+            "application": (
+                "Report the stay-level denominator and account for repeated stays "
+                "with patient-clustered uncertainty."
+            ),
+            "divergence": None,
+        },
+        "record_2015": {
+            "design_elements": ["reporting"],
+            "application": (
+                "Report the database-derived variable definitions, extraction "
+                "window and row-accounting rules used by this analysis."
+            ),
+            "divergence": None,
+        },
+        "grambsch_therneau_ph_1994": {
+            "design_elements": ["robustness", "estimand"],
+            "application": (
+                "Keep proportional-hazards diagnostics as an explicit outstanding "
+                "check before one constant hazard ratio can support a stronger claim."
+            ),
+            "divergence": (
+                "This development run does not claim that proportional hazards "
+                "has been independently validated."
+            ),
+        },
+    }
+    keys: list[str] = []
+    bindings: list[dict[str, Any]] = []
+    for key, payload in bindings_by_key.items():
+        if key not in allowed:
+            continue
+        keys.append(key)
+        bindings.append({"citation_key": key, **payload})
+
+    comparator = next(
+        (
+            str(value).strip()
+            for value in direct_comparator_literature_keys
+            if str(value).strip() in allowed and str(value).strip() not in keys
+        ),
+        None,
+    )
+    if comparator is not None:
+        keys.append(comparator)
+        bindings.append(
+            {
+                "citation_key": comparator,
+                "design_elements": ["exposure", "outcome", "estimand"],
+                "application": (
+                    "Use this screened ICU exposure-outcome study only to position "
+                    "the related clinical association and comparator literature."
+                ),
+                "divergence": (
+                    "The current estimand uses a source-bound time-updated running "
+                    "maximum with an unmeasured-state indicator; its estimates are "
+                    "not interchangeable with the comparator study."
+                ),
+            }
+        )
+    return keys, bindings
+
+
 def compile_time_varying_runtime_projection(
     *,
     study: Mapping[str, Any],
@@ -50,6 +137,8 @@ def compile_time_varying_runtime_projection(
     target_is_event_status: bool,
     universe_path: Path,
     scientific_configuration_sha256: str,
+    literature_citation_keys: Sequence[str] = (),
+    direct_comparator_literature_keys: Sequence[str] = (),
     dependence: Any = None,
 ) -> WebScientificRuntimeProjection | None:
     selected = time_varying_specification(sensitivity_specs)
@@ -82,9 +171,16 @@ def compile_time_varying_runtime_projection(
             "The time-varying contract differs from the study exposure, outcome, baseline roster or patient grouping.",
             details={"owner": "plan_agent", "human_question_required": False},
         )
-    authority = build_current_case_scientific_runtime_authority(
-        {
-            "schema_version": "easyicu.time_varying_runtime_authority/1",
+    plan_citations, plan_bindings = _time_varying_plan_literature(
+        literature_citation_keys=literature_citation_keys,
+        direct_comparator_literature_keys=direct_comparator_literature_keys,
+    )
+    authority_payload = {
+            "schema_version": (
+                "easyicu.time_varying_runtime_authority/2"
+                if plan_citations
+                else "easyicu.time_varying_runtime_authority/1"
+            ),
             "authority_kind": "time_varying_exposure_association",
             "protocol_content_sha256": scientific_configuration_sha256,
             "specification": specification.model_dump(mode="json"),
@@ -108,7 +204,14 @@ def compile_time_varying_runtime_projection(
                 "log:time_varying_runtime_receipt",
             ],
         }
-    )
+    if plan_citations:
+        authority_payload.update(
+            {
+                "plan_literature_citation_keys": plan_citations,
+                "plan_literature_design_bindings": plan_bindings,
+            }
+        )
+    authority = build_current_case_scientific_runtime_authority(authority_payload)
     payload = authority.model_dump(mode="json")
     return WebScientificRuntimeProjection(
         authority=payload,

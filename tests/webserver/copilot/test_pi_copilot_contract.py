@@ -46,6 +46,7 @@ from easyicu.webserver.pi_copilot.projections import (
     ensure_safe_projection,
     project_job,
     project_pi_replay_event,
+    project_run_outcome,
     project_run_row,
     project_study_context,
     reject_sensitive_message,
@@ -684,6 +685,38 @@ def test_completed_numeric_results_remain_visible_during_analysis_validation_rep
     assert [row["artifact"] for row in projected["artifact_refs"]] == [
         "result_tables.json",
         "figure_gallery.json",
+    ]
+
+
+def test_completed_run_does_not_offer_an_empty_figure_gallery() -> None:
+    projected = project_run_outcome(
+        {
+            "ok": True,
+            "run_id": "run-table-only",
+            "gate": {
+                "status": "blocked",
+                "checks": [
+                    {"id": "execution_complete", "passed": True},
+                    {"id": "analysis_validated", "passed": True},
+                ],
+            },
+            "artifacts": [
+                {"name": "result_tables.json", "sha256": "a" * 64, "bytes": 40},
+                {"name": "figure_gallery.json", "sha256": "b" * 64, "bytes": 50},
+            ],
+            "artifact_payloads": {
+                "figure_gallery.json": {
+                    "status": "no_primary_publication_figure",
+                    "figures": [],
+                }
+            },
+        }
+    )
+
+    assert projected["analysis_results_available"] is True
+    assert projected["figure_count"] == 0
+    assert [row["artifact"] for row in projected["artifact_refs"]] == [
+        "result_tables.json"
     ]
 
 

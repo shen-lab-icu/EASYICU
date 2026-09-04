@@ -213,7 +213,13 @@ def _materialize(source):
     )
 
 
-def _projection(path, *, cohort=None):
+def _projection(
+    path,
+    *,
+    cohort=None,
+    literature_citation_keys=(),
+    direct_comparator_literature_keys=(),
+):
     row = PrespecifiedSensitivitySpec.model_validate(
         {
             "spec_id": "time_varying_exposure",
@@ -234,12 +240,58 @@ def _projection(path, *, cohort=None):
         target_is_event_status=True,
         universe_path=path,
         scientific_configuration_sha256="a" * 64,
+        literature_citation_keys=literature_citation_keys,
+        direct_comparator_literature_keys=direct_comparator_literature_keys,
         dependence=PlannedDependenceRequirement(
             group_source="patient_stay_id",
             group_derivation="prefix_before_delimiter",
             delimiter=":s",
         ),
     )
+
+
+def test_time_varying_projection_binds_sealed_method_and_comparator_sources(source):
+    acquired = _materialize(source)
+    projection = _projection(
+        acquired.universe_path,
+        literature_citation_keys=(
+            "strobe_2007",
+            "record_2015",
+            "suissa_immortal_time_2008",
+            "grambsch_therneau_ph_1994",
+            "chebl_serum_2020_31179840",
+        ),
+        direct_comparator_literature_keys=("chebl_serum_2020_31179840",),
+    )
+    authorities = ScientificRuntimeAuthorities.load(
+        trajectory=None, current_case=projection.authority
+    )
+    plan, _ = authorities.development_execution_only_plan(
+        research_question="Time-updated lactate and hospital mortality"
+    )
+    primary = authorities.current_case.governed_step(plan)
+
+    assert primary.literature_citation_keys == [
+        "suissa_immortal_time_2008",
+        "strobe_2007",
+        "record_2015",
+        "grambsch_therneau_ph_1994",
+        "chebl_serum_2020_31179840",
+    ]
+    bindings = {
+        item.citation_key: item for item in primary.literature_design_bindings
+    }
+    assert bindings["suissa_immortal_time_2008"].design_elements == [
+        "time_zero",
+        "exposure",
+        "estimand",
+    ]
+    assert bindings["strobe_2007"].design_elements == ["reporting", "dependence"]
+    assert bindings["chebl_serum_2020_31179840"].divergence
+    selected = next(
+        item for item in plan.design_selection.candidates if item.disposition == "selected"
+    )
+    assert selected.literature_citation_keys == primary.literature_citation_keys
 
 
 def test_source_projection_preserves_early_events_unmeasured_and_private_groups(source):
