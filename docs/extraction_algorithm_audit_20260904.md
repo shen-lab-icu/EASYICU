@@ -36,9 +36,9 @@ For the eICU respiratory dependency closure at 8 GiB, the executable plan is:
 |---|---|---:|---:|---|
 | respiratory | measured batch | 50,000 | 5 | 67k crossed the 8 GiB contract |
 | sofa1_score | measured batch | 67,000 | 3 | measured full cohort batches |
-| sofa2_score | measured batch | 25,000 | 9 | complete post-IMV closure; 6,800.3 MiB internal peak |
+| sofa2_score | invalidated guarded pilot | 25,000 | 9 | old closure used host-sized lower-layer defaults; formal run blocked |
 | sepsis3_sofa1 | measured batch | 67,000 | 3 | measured dependency-complete run |
-| sepsis3_sofa2 | measured batch | 25,000 | 9 | complete post-IMV closure; 3,151.7 MiB internal peak |
+| sepsis3_sofa2 | invalidated guarded pilot | 25,000 | 9 | inherits the invalidated SOFA-2 dependency; formal run blocked |
 
 `sepsis_shared` is no longer a refreshed module in this closure. Its sealed
 Parquet is copied and SHA-verified in staging as a read-only Sepsis dependency,
@@ -216,13 +216,26 @@ production callback remains an hourly trailing-24-hour operationalisation,
 whereas the official longitudinal description is daily; that limitation stays
 explicit.
 
-The correction was also exercised against the completed AUMC diagnostic
-artifact in a bounded, read-only pass. The old strict total was non-null for
-only 2,940 of 2,587,657 rows; the corrected primary total is defined for all
-rows, ranges from 0 to 19, and retains exactly 2,940 rows in the separate
-complete-case receipt. No row contained a non-zero component disclaimed by its
-availability receipt. This check did not rewrite the candidate or the sealed
-source.
+The correction was then exercised in a hard-limited AUMC full-cohort closure.
+The old strict total was non-null for only 2,940 of 2,587,657 rows. A first
+normal-imputation pass exposed a distinct row-domain defect: 124,393 hours
+created solely by `fill_gaps` acquired zero scores. The aggregate now carries
+an internal source-assessment time marker through the rolling fast path. A
+patient-level missing domain contributes zero only at a component-owner
+assessment or where at least one component remains available in the rolling
+window; a completely synthetic empty grid hour remains missing and cannot add
+a module row.
+
+At commit `2964e85a`, the corrected AUMC package contains 2,679,032 SOFA-2
+rows. The 91,375 new keys are owner assessment times with all six domains
+unavailable, not synthetic gap rows; their total is zero and their aggregate
+availability receipt is false. Exactly 2,940 rows remain in the all-six-domain
+complete-case receipt. Every total equals the receipt-aware component sum,
+ranges from 0 to 19, and no unavailable component contributes a non-zero
+value. The experimental Sepsis-SOFA2 sensitivity output changes from 1,466 to
+6,907 positive event rows because the newly defined incomplete trajectories
+can supply baseline and change scores; it does not replace standard
+SOFA1-based Sepsis-3.
 
 ## Time and I/O review
 
@@ -264,9 +277,10 @@ source.
    under 8 GiB, so the planner conservatively chooses 20,000 stays (four
    batches). Benchmarking larger candidates under a hard process-tree stop is
    the only defensible way to reduce those batches.
-5. **Other database profiles.** AUMC, HiRID and SIC do not yet have the same
-   module-level 8 GiB evidence. Their conservative plans are not proof of a
-   fastest batch.
+5. **Other database profiles.** AUMC now has exact 8-GiB evidence only for
+   `sofa2_score` and `sepsis3_sofa2`; its other 17 modules, together with HiRID
+   and SIC modules, do not yet have equivalent evidence. Their conservative
+   plans are not proof of a fastest batch.
 6. **Hash and publication reads.** SHA-256, logical multiset QC and metadata
    binding necessarily reread published files. These passes are audit costs;
    removing them would weaken release integrity. They can be scheduled once per

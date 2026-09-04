@@ -60,7 +60,7 @@
     "production_callback": "easyicu.concept.callbacks._callback_sofa2_score",
     "runtime_inputs": {"sofa2_resp": "concept:sofa2_resp", "sofa2_coag": "concept:sofa2_coag", "sofa2_liver": "concept:sofa2_liver", "sofa2_cardio": "concept:sofa2_cardio", "sofa2_cns": "concept:sofa2_cns", "sofa2_renal": "concept:sofa2_renal"},
     "depends_on_contracts": ["sofa2_resp_2025", "sofa2_coag_2025", "sofa2_liver_2025", "sofa2_cardio_2025", "sofa2_cns_2025", "sofa2_renal_2025"],
-    "ascertainment_limitations": ["aggregate authority inherits the weakest component contract and database ascertainment level", "a database lacking an entire organ-domain owner cannot publish a total even though patient-level missing domains are imputed to zero"],
+    "ascertainment_limitations": ["aggregate authority inherits the weakest component contract and database ascertainment level", "a database lacking an entire organ-domain owner cannot publish a total even though patient-level missing domains are imputed to zero", "the hourly operationalization applies imputation only inside the component-owner assessment domain and never turns a `fill_gaps`-only empty hour into a score observation"],
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
   "sofa2_resp_2025": {
