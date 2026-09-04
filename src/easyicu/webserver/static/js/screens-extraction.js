@@ -73,7 +73,7 @@
   // [name_en, name_zh, fallbackConceptCount, selected, isCore]
   const MODS = [
     // —— recommended core ——
-    ['Demographics', '人口统计', 6, false, true],
+    ['Demographics', '人口统计', 7, false, true],
     ['Vital signs', '生命体征', 12, false, true],
     ['Lab — Chemistry', '实验室-生化', 49, false, true],
     ['SOFA-2 scores', 'SOFA-2 评分', 10, false, true],
@@ -1701,9 +1701,10 @@
     const cur = p.current || 0, tot = p.total || 0;
     const pct = tot ? Math.round((cur / tot) * 100) : 0;
     const err = !!exportErr;
-    const progressText = (p.message_zh ? t(p.message || '', p.message_zh) : p.message) || (p.module
+    const progressText = p.message || (p.module
       ? `${p.module}${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}`
       : t('selecting cohort…', '正在选择队列…'));
+    const localizedProgressText = p.message_zh ? t(progressText, p.message_zh) : progressText;
     const memoryAdvisory = exportResourcePlan && exportResourcePlan.mode === 'patient_batches'
       ? t(exportResourcePlan.advisory || '', exportResourcePlan.advisory_zh || exportResourcePlan.advisory || '')
       : '';
@@ -1718,7 +1719,7 @@
         ? `<div class="note mt-12" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);"><div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div><div class="body"><div class="d mono" style="font-size:11.5px;margin:0;">${escHtml(exportErr)}</div></div></div>
            <div class="row gap-8 mt-16"><button class="btn primary" data-ex-run="${exportRunMode}">${icon('refresh', 14)} ${t('Retry', '重试')}</button><button class="btn ghost" data-ex-reset>${t('Back', '返回')}</button></div>`
         : `<div style="height:8px;border-radius:999px;background:var(--surface-2,#eef0f4);overflow:hidden;margin:12px 0 8px;"><div style="height:100%;width:${pct}%;background:var(--accent,#2f7d6b);transition:width .25s;"></div></div>
-           <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${p.phase === 'cohort' || p.phase === 'cancel' ? `${escHtml(progressText)}` : `<span class="mono">${escHtml(progressText)}</span>`}</div>
+           <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${p.phase === 'cohort' || p.phase === 'cancel' ? `${escHtml(localizedProgressText)}` : `<span class="mono">${escHtml(localizedProgressText)}</span>`}</div>
            ${cohortScaleNote() ? `<div style="font-size:11.5px;color:var(--ink-4);margin-top:4px;">${icon('cohort', 11)} ${escHtml(cohortScaleNote())}</div>` : ''}
            ${memoryAdvisory ? `<div class="note mt-12" style="padding:10px 12px;background:color-mix(in srgb,var(--warn,#b45309) 8%,transparent);border-color:color-mix(in srgb,var(--warn,#b45309) 22%,transparent);"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d" style="font-size:11.5px;margin:0;">${escHtml(memoryAdvisory)}</div></div></div>` : ''}
            <div class="row mt-12" style="justify-content:flex-end;"><button class="btn sm ghost" data-ex-cancel ${exportCancelRequested || !exportJobId ? 'disabled' : ''}>${icon('alert', 13)} ${exportCancelRequested ? t('Cancel requested', '已请求取消') : t('Request cancel', '请求取消')}</button></div>`}
