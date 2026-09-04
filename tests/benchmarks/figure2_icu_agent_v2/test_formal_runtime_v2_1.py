@@ -743,7 +743,11 @@ def test_release_identity_owns_complete_registration_field_set() -> None:
     )
     assert {
         "review_bundle_writer_sha256",
+        "immutable_publication_sha256",
         "formal_trajectory_lifecycle_sha256",
+        "provider_hard_stop_client_sha256",
+        "provider_hard_stop_ledger_sha256",
+        "provider_hard_stop_test_sha256",
         "formal_release_identity_sha256",
         "formal_collaborator_adapter_sha256",
         "pipeline_services_sha256",

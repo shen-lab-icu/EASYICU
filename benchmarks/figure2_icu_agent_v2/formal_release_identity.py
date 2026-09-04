@@ -25,6 +25,16 @@ REGISTERED_SOURCE_PATHS: Mapping[str, Path] = MappingProxyType(
             / "tests/benchmarks/figure2_icu_agent_v2/test_formal_runtime_v2_1.py"
         ),
         "formal_provider_gate_sha256": PACKAGE_ROOT / "formal_provider_gate.py",
+        "provider_hard_stop_client_sha256": (
+            REPO_ROOT / "src/easyicu/research_agent/providers/hard_stop.py"
+        ),
+        "provider_hard_stop_ledger_sha256": (
+            REPO_ROOT / "src/easyicu/research_agent/authority/provider_hard_stop.py"
+        ),
+        "provider_hard_stop_test_sha256": (
+            REPO_ROOT
+            / "tests/research_agent/providers/test_provider_hard_stop.py"
+        ),
         "formal_collaborator_adapter_sha256": (
             PACKAGE_ROOT / "formal_collaborator_adapter.py"
         ),
@@ -42,6 +52,9 @@ REGISTERED_SOURCE_PATHS: Mapping[str, Path] = MappingProxyType(
             PACKAGE_ROOT / "easyicu_review_bundle_adapter.py"
         ),
         "review_bundle_writer_sha256": PACKAGE_ROOT / "review_bundle_writer.py",
+        "immutable_publication_sha256": (
+            PACKAGE_ROOT / "immutable_publication.py"
+        ),
         "review_bundle_normalizer_sha256": (
             PACKAGE_ROOT / "review_bundle_normalizer.py"
         ),
@@ -68,6 +81,12 @@ REGISTERED_SOURCE_PATHS: Mapping[str, Path] = MappingProxyType(
 IMPLEMENTATION_OWNER_PATHS: Mapping[str, Path] = MappingProxyType(
     {
         "provider_gate": PACKAGE_ROOT / "formal_provider_gate.py",
+        "provider_hard_stop_client": (
+            REPO_ROOT / "src/easyicu/research_agent/providers/hard_stop.py"
+        ),
+        "provider_hard_stop_ledger": (
+            REPO_ROOT / "src/easyicu/research_agent/authority/provider_hard_stop.py"
+        ),
         "formal_collaborator_adapter": (
             PACKAGE_ROOT / "formal_collaborator_adapter.py"
         ),
@@ -79,6 +98,7 @@ IMPLEMENTATION_OWNER_PATHS: Mapping[str, Path] = MappingProxyType(
         "generic_harness": PACKAGE_ROOT / "generic_code_agent_harness.py",
         "easyicu_review_adapter": PACKAGE_ROOT / "easyicu_review_bundle_adapter.py",
         "review_bundle_writer": PACKAGE_ROOT / "review_bundle_writer.py",
+        "immutable_publication": PACKAGE_ROOT / "immutable_publication.py",
         "shared_review_semantics": PACKAGE_ROOT / "review_bundle_semantics.py",
         "review_normalizer": PACKAGE_ROOT / "review_bundle_normalizer.py",
         "formal_scheduler": PACKAGE_ROOT / "formal_scheduler.py",
