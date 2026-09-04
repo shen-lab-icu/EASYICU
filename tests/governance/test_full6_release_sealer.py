@@ -428,6 +428,34 @@ def test_sealer_rejects_mismatched_embedded_module_refresh(
     assert not (run_root / "module_extraction_timing.csv").exists()
 
 
+def test_sealer_rejects_benchmark_only_module_refresh(tmp_path: Path) -> None:
+    run_root = tmp_path / "benchmark_only_module_refresh"
+    _build_synthetic_release(run_root)
+    refresh = {
+        "schema_version": "easyicu_full6_selected_module_refresh_v2",
+        "publication_easyicu_git_commit": sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT,
+        "publication_easyicu_git_dirty": False,
+        "refreshed_modules": ["sofa2_score"],
+        "resource_policy": {"formal_release_admissible": False},
+    }
+    refresh_path = run_root / "module_refresh_provenance.json"
+    refresh_path.write_text(json.dumps(refresh) + "\n", encoding="utf-8")
+    run_manifest_path = run_root / "run_manifest.json"
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    run_manifest["module_refresh"] = refresh
+    run_manifest_path.write_text(
+        json.dumps(run_manifest) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(sealer.ReleaseValidationError, match="benchmark-only"):
+        sealer.seal_release(
+            run_root=run_root,
+            execution_profile="server-adaptive",
+        )
+
+    assert not (run_root / "run_metadata.json").exists()
+
+
 def test_sealer_rejects_stale_root_module_receipt(tmp_path: Path) -> None:
     run_root = tmp_path / "stale_root_receipt"
     _build_synthetic_release(run_root)
