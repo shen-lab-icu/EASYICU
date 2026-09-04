@@ -161,12 +161,9 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
         "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
         "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
-        # ``sofa2_score`` and ``sepsis3_sofa2`` were deliberately removed
-        # after the 2026-09-04 eICU IMV ascertainment update changed their
-        # respiratory dependency.  Their pre-update 6.9/6.3-GiB measurements
-        # no longer authorise a one-shot run.  They must remain on the
-        # unmeasured guard until the revised algorithm passes a hard-limit
-        # profile and output-invariance audit.
+        # ``sofa2_score`` and ``sepsis3_sofa2`` remain excluded from the
+        # one-shot registry after the 2026-09-04 eICU IMV ascertainment update.
+        # Their replacement 25k streamed measurements live below.
     },
     "miiv": {
         "demographics": {
@@ -288,18 +285,7 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {
-    ("eicu", "sofa2_score"): {
-        "invalidated_at": "2026-09-04",
-        "reason": "eICU IMV ascertainment changed the respiratory dependency",
-        "evidence": "post-update one-shot exceeded the 8192-MiB release contract",
-    },
-    ("eicu", "sepsis3_sofa2"): {
-        "invalidated_at": "2026-09-04",
-        "reason": "depends on the revised eICU SOFA-2 respiratory pathway",
-        "evidence": "pre-update measurement is not semantically comparable",
-    },
-}
+] = {}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -338,6 +324,23 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "batch_size": 67_000,
             "peak_rss_mb": 6_294.5,
             "seconds": 586.933,
+        },
+        # Post-IMV-update closure benchmark at commit f061bcc0, with a
+        # 7,447-MiB external hard stop.  28k, 29k and 30k each crossed the
+        # limit on at least one event-dense batch.  The complete 25k run used
+        # nine batches; use the higher internal sampler peak (6,800.3 MiB)
+        # rather than its 6,750.1-MiB external process-tree receipt.
+        "sofa2_score": {
+            "cohort_stays": 200_859,
+            "batch_size": 25_000,
+            "peak_rss_mb": 6_800.3,
+            "seconds": 528.8,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 200_859,
+            "batch_size": 25_000,
+            "peak_rss_mb": 3_151.7,
+            "seconds": 22.8,
         },
     },
     "mimic": {
