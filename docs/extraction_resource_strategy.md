@@ -28,6 +28,10 @@ Patient batching is a fallback for insufficient memory, not the normal path.
 7. A measured light-module profile never authorises an unmeasured module. Mixed
    or unmeasured MIMIC-III, MIMIC-IV, and AUMC requests retain the conservative
    24 GiB full-cohort guard until their own measurements are recorded.
+8. An explicit resource budget owns the lower-layer worker configuration as
+   well as the stay batch. At 8,192 MiB this means two internal workers, two
+   Arrow/DuckDB threads, a 2,048 MiB DuckDB limit and a 512 MiB resolver cache;
+   these values are recorded in the output manifest.
 
 The machine-readable owner is `easyicu.api.extraction.plan_extraction_resources`.
 Its stable reason codes are:
@@ -155,8 +159,8 @@ successful measured batch instead:
 | other_scores | stopped at 7,797.5 MiB | 67,000 stays (3 batches) | 436.3 s | 6,512.3 MiB |
 | sofa1_score | stopped at 7,631.4 MiB | 67,000 stays (3 batches) | 512.5 s | 6,316.5 MiB |
 | sepsis3_sofa1 | stopped at 7,475.6 MiB | 67,000 stays (3 batches) | 586.9 s | 6,294.5 MiB |
-| sofa2_score | old one-shot invalidated after IMV update | 25,000 stays (9 batches) | 528.8 s | 6,800.3 MiB |
-| sepsis3_sofa2 | old one-shot invalidated after IMV update | 25,000 stays (9 batches) | 22.8 s | 3,151.7 MiB |
+| sofa2_score | old one-shot invalidated after IMV update | remeasurement required | — | — |
+| sepsis3_sofa2 | old one-shot invalidated after IMV update | remeasurement required | — | — |
 
 The pre-2026-09-04 measurements for `sofa2_score` (6,926.6 MiB) and
 `sepsis3_sofa2` (6,268.4 MiB) were quarantined because the eICU IMV
@@ -165,8 +169,10 @@ process isolation and dependency fixes, 30k, 29k and 28k candidates still
 crossed the 7,447 MiB hard stop on event-dense batches. The complete 25k
 benchmark-only closure passed: external process-tree RSS was 6,750.1 MiB,
 while the more conservative internal module sampler recorded 6,800.3 MiB.
-The registry uses that higher value and the planner now records
-`measured_profile_fastest_safe_batch` for both SOFA-2 and its Sepsis consumer.
+That run nevertheless inherited host-sized lower-layer defaults despite its
+8,192-MiB planning input. It is now diagnostic evidence only; the registry
+keeps both modules invalidated until the corrected execution envelope has a
+complete replacement receipt.
 
 At an 8 GiB planning budget, selecting any subset of the 12 unaffected
 one-shot modules runs each selected module one-shot. `respiratory` and

@@ -47,6 +47,7 @@ from easyicu.api import extract_database  # noqa: E402
 from easyicu.api.extraction import (  # noqa: E402
     EXTRACT_MODULES,
     _publish_native_export_v2,
+    _resource_budget_execution_limits,
     plan_extraction_resources,
     plan_module_extraction_resources,
 )
@@ -373,6 +374,7 @@ def _build_refresh_resource_plan(
         "read_only": True,
         "raw_database_reread": False,
         "memory_budget_mb": budget,
+        "resource_execution_limits": _resource_budget_execution_limits(budget),
         "requested_modules": list(requested),
         "dependency_closure": list(closure),
         "per_database_requested_modules": {
@@ -863,6 +865,9 @@ def _recover_native_staging_publication(
             "resource_plan": None,
             "module_resource_plans": module_resource_plans,
             "resource_budget_mb": float(resource_budget_mb),
+            "resource_execution_limits": _resource_budget_execution_limits(
+                resource_budget_mb
+            ),
         },
         require_stay_time_bounds=True,
     )
@@ -1589,6 +1594,9 @@ def _refresh_one_database(
         "num_patients": extraction.get("num_patients"),
         "batch_size": extraction.get("batch_size"),
         "resource_budget_mb": extraction.get("resource_budget_mb"),
+        "resource_execution_limits": extraction.get(
+            "resource_execution_limits"
+        ),
         "resource_plan": extraction.get("resource_plan"),
         "module_resource_plans": extraction.get("module_resource_plans"),
         "total_elapsed_seconds": extraction.get("total_elapsed"),
