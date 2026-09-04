@@ -17,7 +17,10 @@ respiratory publication invariant only.
 
 1. The release launcher obtains cohort sizes from the sealed `outcome` module
    receipt; `--plan-only` does not open raw database tables.
-2. The planner selects a mode for every database and module under 8,192 MiB.
+2. The planner selects a mode for every database and module under 8,192 MiB,
+   and installs that same contract inside every spawned worker: two internal
+   workers, two Arrow threads, two DuckDB threads, a 2,048 MiB DuckDB limit and
+   a 512 MiB resolver cache.
 3. Modules run sequentially in isolated spawned processes. A measured one-shot
    module remains one-shot even when another module in the same refresh needs
    batching.
@@ -48,14 +51,37 @@ the resource owner, caused avoidable repeated scans and made the manifest say
 strictest module batch to light modules. Both paths are now blocked or removed
 from formal release execution.
 
-The 25,000-stay entries are now measured production strategies for this exact
-database, cohort and implementation, not generic fallbacks. A complete
-benchmark-only closure at EasyICU commit `f061bcc0` finished in 619.2 seconds:
+The previous 25,000-stay entries are no longer production strategies. A
+complete benchmark-only closure at EasyICU commit `f061bcc0` finished in 619.2 seconds:
 external process-tree RSS peaked at 6,750.1 MiB and the higher internal sampler
-peak was 6,800.3 MiB. The planner records
-`measured_profile_fastest_safe_batch`. The benchmark artifact itself remains
-non-sealable; registration of its reviewed receipt authorises a fresh formal
-run, never promotion of the benchmark directory.
+peak was 6,800.3 MiB, but its child still detected the 1.5-TiB/384-core host
+and selected host-sized parallel/cache defaults. The resource planner had used
+8,192 MiB only to choose the stay batch; it had not constrained the lower
+layers. The two SOFA-2 profiles are therefore invalidated until remeasured
+under the corrected worker envelope. The benchmark artifact remains
+non-sealable and diagnostic only.
+
+## Execution-envelope finding
+
+The release API accepted `resource_budget_mb=8192` but previously used it only
+in `plan_extraction_resources`. On the shared server, a child still reported
+64 workers, eight Arrow/DuckDB threads, a 4-GiB DuckDB limit and a default
+resolver-cache ceiling derived as 25% of 1.5 TiB. This made the declared 8-GiB
+run host-dependent and allowed abrupt allocation spikes during an AUMC
+SOFA-2 boundary test.
+
+The corrected worker setup converts the available-memory contract into one
+deterministic lower-layer envelope before any loader or DuckDB connection is
+constructed. The envelope is written to producer and native manifests and to
+benchmark provenance. An existing profile without this envelope can inform
+the next candidate batch but cannot authorise a formal release. The aggregate
+request planner was also corrected to include one-shot modules when reporting
+the maximum sequential peak; per-module execution itself was already correct.
+
+The memory-evidence runner now starts the measured command in a separate
+session and records `status=interrupted`, exit code 130, after stopping its
+complete process tree. This closes the prior failure mode in which Ctrl-C left
+a checkpoint incorrectly marked `running`.
 
 ## SOFA-2 algorithm review after the failed run
 
@@ -260,6 +286,8 @@ coherent; the same output still fails for every other database.
 - `--benchmark-only` runs exactly one database closure, writes a dedicated
   non-sealable resource receipt and skips six-database republication. This
   prevents a batch-boundary experiment from reprocessing unrelated databases.
+- The 8-GiB planning budget now constrains the child worker's parallelism,
+  DuckDB buffers and resolver cache; the exact envelope is part of provenance.
 - The planner's output is copied into per-module producer manifests and
   selected-refresh provenance so the executed policy can be compared with the
   preflight plan.
@@ -282,9 +310,10 @@ coherent; the same output still fails for every other database.
 
 ## Decision
 
-The targeted rebuild remains paused while the remaining AUMC, HiRID,
-MIMIC-III and SIC score closures receive their own 8-GiB measurements. eICU is
-no longer a resource-plan blocker at 25,000 stays. A publication-only impact
+The targeted rebuild remains paused while eICU, AUMC, HiRID, MIMIC-III and SIC
+score closures receive measurements under the exact lower-layer 8-GiB
+envelope. The prior eICU 25,000-stay receipt is diagnostic but no longer
+admissible. A publication-only impact
 audit confirmed that current native-v2 republication adds only
 catalog-declared all-null placeholders to unaffected modules until it reaches
 the deliberately corrected SOFA files; existing source columns remain

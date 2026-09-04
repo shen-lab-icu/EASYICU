@@ -4,6 +4,7 @@
 实测 profile，已知重模块可以超过三份。语义或依赖改变后，旧 profile 必须显式失效，
 不能继续准入 one-shot。
 """
+import os
 import sys
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from easyicu.api.extraction import (
     _adapt_stream_batch_size_from_first_batch,
     _interleave_stream_patient_ids,
     _next_stream_retry_batch_size,
+    _extract_worker_env_setup,
+    _resource_budget_execution_limits,
     _resolve_stream_batch_size,
     plan_extraction_resources,
     plan_module_extraction_resources,
@@ -221,6 +224,33 @@ def test_explicit_stream_batch_size_always_wins():
     )
 
 
+def test_8gib_resource_budget_owns_lower_layer_worker_limits(monkeypatch):
+    limits = _resource_budget_execution_limits(8 * 1024)
+
+    assert limits == {
+        "resource_budget_mb": 8192.0,
+        "modeled_total_memory_gb": pytest.approx(11.428571),
+        "parallel_max_workers": 2,
+        "arrow_threads": 2,
+        "duckdb_threads": 2,
+        "duckdb_memory_limit_mb": 2048,
+        "resolver_cache_budget_mb": 512,
+    }
+
+    # A reproducible explicit contract replaces host-sized defaults inside the
+    # dedicated worker.  The worker process exits after extraction, so these
+    # values cannot leak back to the calling application in production.
+    monkeypatch.setenv("EASYICU_PARALLEL_MAX_WORKERS", "64")
+    monkeypatch.setenv("EASYICU_DUCKDB_MEMORY_LIMIT", "4GB")
+    _extract_worker_env_setup("/data/aumc", 8 * 1024)
+    assert os.environ["EASYICU_RESOURCE_BUDGET_MB"] == "8192.0"
+    assert os.environ["EASYICU_PARALLEL_MAX_WORKERS"] == "2"
+    assert os.environ["EASYICU_ARROW_THREADS"] == "2"
+    assert os.environ["EASYICU_DUCKDB_THREADS"] == "2"
+    assert os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] == "2048MB"
+    assert os.environ["EASYICU_CACHE_BUDGET_MB"] == "512"
+
+
 def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
     """1.66-GiB measured peak + 10% headroom fits inside 2 GiB."""
 
@@ -273,7 +303,7 @@ def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
     assert plan.advisory_zh is None
 
 
-def test_eicu_full_request_uses_slowest_measured_safe_batch():
+def test_eicu_full_request_remains_guarded_after_execution_envelope_change():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -281,11 +311,40 @@ def test_eicu_full_request_uses_slowest_measured_safe_batch():
         available_memory_mb=8 * 1024,
     )
 
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.measured_peak_rss_mb is None
+    assert plan.advisory
+
+
+def test_mixed_batch_summary_includes_larger_oneshot_peak(monkeypatch):
+    monkeypatch.setitem(
+        _MEASURED_ONESHOT_PROFILES,
+        "fixture",
+        {"light": {"cohort_stays": 10_000, "peak_rss_mb": 7_000.0}},
+    )
+    monkeypatch.setitem(
+        _MEASURED_BATCH_PROFILES,
+        "fixture",
+        {
+            "heavy": {
+                "cohort_stays": 10_000,
+                "batch_size": 5_000,
+                "peak_rss_mb": 6_000.0,
+            }
+        },
+    )
+
+    plan = plan_extraction_resources(
+        "fixture",
+        ["light", "heavy"],
+        10_000,
+        available_memory_mb=8 * 1024,
+    )
+
     assert plan.reason_code == "measured_profile_fastest_safe_batch"
-    assert plan.batch_size == 25_000
-    assert plan.measured_peak_rss_mb == pytest.approx(6_800.3)
-    assert plan.required_available_memory_mb == pytest.approx(7_480.33)
-    assert plan.advisory is None
+    assert plan.batch_size == 5_000
+    assert plan.measured_peak_rss_mb == 7_000.0
+    assert plan.required_available_memory_mb == pytest.approx(7_700.0)
 
 
 def test_invalidated_profiles_cannot_remain_in_measured_registries():
@@ -319,10 +378,10 @@ def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
     }
     assert plans["sepsis_shared"].mode == "one_shot"
     assert plans["sofa2_score"].reason_code == (
-        "measured_profile_fastest_safe_batch"
+        "invalidated_profile_memory_guard"
     )
     assert plans["sepsis3_sofa2"].reason_code == (
-        "measured_profile_fastest_safe_batch"
+        "invalidated_profile_memory_guard"
     )
     assert plans["respiratory"].reason_code == (
         "measured_profile_fastest_safe_batch"

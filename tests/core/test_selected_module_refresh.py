@@ -83,21 +83,30 @@ def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
 
     modules = plan["databases"]["eicu"]["modules"]
     assert plan["raw_database_reread"] is False
+    assert plan["resource_execution_limits"] == {
+        "resource_budget_mb": 8192.0,
+        "modeled_total_memory_gb": pytest.approx(11.428571),
+        "parallel_max_workers": 2,
+        "arrow_threads": 2,
+        "duckdb_threads": 2,
+        "duckdb_memory_limit_mb": 2048,
+        "resolver_cache_budget_mb": 512,
+    }
     assert modules["respiratory"]["batch_size"] == 50_000
     assert modules["respiratory"]["planned_batches"] == 5
     assert modules["sofa1_score"]["batch_size"] == 67_000
-    assert modules["sofa2_score"]["batch_size"] == 25_000
-    assert modules["sepsis3_sofa1"]["batch_size"] == 67_000
-    assert modules["sepsis3_sofa2"]["batch_size"] == 25_000
     assert modules["sofa2_score"]["reason_code"] == (
-        "measured_profile_fastest_safe_batch"
+        "invalidated_profile_memory_guard"
     )
+    assert modules["sepsis3_sofa1"]["batch_size"] == 67_000
     assert modules["sepsis3_sofa2"]["reason_code"] == (
-        "measured_profile_fastest_safe_batch"
+        "invalidated_profile_memory_guard"
     )
-    assert modules["sofa2_score"]["measured_peak_rss_mb"] == pytest.approx(6_800.3)
-    assert plan["formal_release_admissible"] is True
-    assert plan["unmeasured_or_overridden_modules"] == {}
+    assert modules["sofa2_score"]["measured_peak_rss_mb"] is None
+    assert plan["formal_release_admissible"] is False
+    assert plan["unmeasured_or_overridden_modules"] == {
+        "eicu": ["sofa2_score", "sepsis3_sofa2"]
+    }
 
 
 def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
@@ -252,8 +261,10 @@ def test_per_database_release_plan_uses_each_database_closure() -> None:
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     }
-    assert plan["formal_release_admissible"] is True
-    assert plan["unmeasured_or_overridden_modules"] == {}
+    assert plan["formal_release_admissible"] is False
+    assert plan["unmeasured_or_overridden_modules"] == {
+        "eicu": ["sofa2_score", "sepsis3_sofa2"]
+    }
 
 
 def test_measured_miiv_score_plan_is_formally_admissible() -> None:

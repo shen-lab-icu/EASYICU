@@ -117,6 +117,69 @@ _STREAM_BATCH_MAX = 67_000
 _STREAM_BATCH_RETRY_FACTOR = 0.75
 _STREAM_BATCH_MAX_RETRIES = 3
 
+# ``resource_budget_mb`` is an execution contract, not only a batch-planning
+# hint.  Without a worker envelope, an 8-GiB release launched on a large shared
+# server still configured the resolver from the host's 1.5-TiB RAM and 384
+# CPUs (64 workers, eight Arrow/DuckDB threads and a hundreds-of-GiB cache).
+# Keep the derived limits machine-readable and install them inside each fresh
+# extraction worker before a loader or DuckDB connection is constructed.
+_RESOURCE_BUDGET_AVAILABLE_FRACTION = 0.70
+_RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB = 512
+_RESOURCE_BUDGET_MAX_DUCKDB_MEMORY_MB = 4 * 1024
+_RESOURCE_BUDGET_MAX_ENGINE_THREADS = 8
+
+
+def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, object]:
+    """Return deterministic lower-layer limits for an available-memory budget."""
+
+    budget_mb = float(resource_budget_mb)
+    if budget_mb <= 0:
+        raise ValueError("resource_budget_mb must be positive")
+
+    available_gb = budget_mb / 1024.0
+    # ``EASYICU_OVERRIDE_MEMORY_GB`` models total memory and derives available
+    # memory as 70%.  The public resource budget is explicitly *available*
+    # memory, so invert that model rather than silently shrinking the contract.
+    modeled_total_gb = available_gb / _RESOURCE_BUDGET_AVAILABLE_FRACTION
+    if modeled_total_gb >= 128:
+        worker_cap = 64
+    elif modeled_total_gb >= 64:
+        worker_cap = 32
+    elif modeled_total_gb >= 32:
+        worker_cap = 16
+    elif modeled_total_gb > 16:
+        worker_cap = 8
+    else:
+        worker_cap = 2
+    engine_threads = max(
+        1,
+        min(_RESOURCE_BUDGET_MAX_ENGINE_THREADS, worker_cap),
+    )
+    duckdb_memory_mb = max(
+        1024,
+        min(
+            _RESOURCE_BUDGET_MAX_DUCKDB_MEMORY_MB,
+            int(budget_mb * 0.25),
+        ),
+    )
+    cache_budget_mb = (
+        _RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB
+        if modeled_total_gb <= 24
+        else max(
+            _RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB,
+            int(budget_mb * 0.25),
+        )
+    )
+    return {
+        "resource_budget_mb": round(budget_mb, 1),
+        "modeled_total_memory_gb": round(modeled_total_gb, 6),
+        "parallel_max_workers": worker_cap,
+        "arrow_threads": engine_threads,
+        "duckdb_threads": engine_threads,
+        "duckdb_memory_limit_mb": duckdb_memory_mb,
+        "resolver_cache_budget_mb": cache_budget_mb,
+    }
+
 # A full-cohort one-shot is not admitted merely because the generic
 # per-stay formula happens to cover the cohort.  The 2026-08-03 full-six run
 # showed that source-table shape and score-grid construction dominate that
@@ -285,7 +348,22 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {}
+] = {
+    (
+        "eicu",
+        "sofa2_score",
+    ): {
+        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
+        "invalidated_by": "resource_budget_execution_envelope_20260904",
+    },
+    (
+        "eicu",
+        "sepsis3_sofa2",
+    ): {
+        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
+        "invalidated_by": "resource_budget_execution_envelope_20260904",
+    },
+}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -325,23 +403,8 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 6_294.5,
             "seconds": 586.933,
         },
-        # Post-IMV-update closure benchmark at commit f061bcc0, with a
-        # 7,447-MiB external hard stop.  28k, 29k and 30k each crossed the
-        # limit on at least one event-dense batch.  The complete 25k run used
-        # nine batches; use the higher internal sampler peak (6,800.3 MiB)
-        # rather than its 6,750.1-MiB external process-tree receipt.
-        "sofa2_score": {
-            "cohort_stays": 200_859,
-            "batch_size": 25_000,
-            "peak_rss_mb": 6_800.3,
-            "seconds": 528.8,
-        },
-        "sepsis3_sofa2": {
-            "cohort_stays": 200_859,
-            "batch_size": 25_000,
-            "peak_rss_mb": 3_151.7,
-            "seconds": 22.8,
-        },
+        # Post-IMV SOFA-2 entries remain invalidated above until the exact
+        # 8-GiB lower-layer execution envelope has a complete benchmark.
     },
     "mimic": {
         "medications": {
@@ -469,6 +532,7 @@ def _measured_batch_recommendation(
     normalized_database = _normalise_stream_database(database)
     oneshot_profiles = _MEASURED_ONESHOT_PROFILES.get(normalized_database, {})
     batch_profiles = _MEASURED_BATCH_PROFILES.get(normalized_database, {})
+    selected_profiles = []
     selected_batches = []
     for module in requested_modules:
         batch_profile = batch_profiles.get(module)
@@ -476,13 +540,17 @@ def _measured_batch_recommendation(
         profile = batch_profile or oneshot_profile
         if profile is None or int(num_patients) > int(profile["cohort_stays"]):
             return None
+        selected_profiles.append(profile)
         if batch_profile is not None:
             selected_batches.append(batch_profile)
     if not selected_batches:
         return None
     batch_size = min(int(profile["batch_size"]) for profile in selected_batches)
+    # The aggregate request is only a summary, but it must still be
+    # conservative: a one-shot module executes sequentially beside the batch
+    # modules and can own the largest peak (for example eICU ventilator).
     measured_peak_mb = max(
-        float(profile["peak_rss_mb"]) for profile in selected_batches
+        float(profile["peak_rss_mb"]) for profile in selected_profiles
     )
     return (
         min(int(num_patients), batch_size),
@@ -1119,7 +1187,10 @@ def _build_default_db_paths() -> Dict[str, str]:
 _SPECIAL_OUTPUT_DIRNAME = "_special"
 
 
-def _extract_worker_env_setup(data_path: str) -> None:
+def _extract_worker_env_setup(
+    data_path: str,
+    resource_budget_mb: Optional[float] = None,
+) -> None:
     """提取子进程入口的共享环境准备。
 
     常规模块 worker 退出后由 OS 回收内存，所以 ``load_concepts`` 自身保持
@@ -1132,6 +1203,34 @@ def _extract_worker_env_setup(data_path: str) -> None:
 
     os.environ.setdefault("EASYICU_DATA_PATH", data_path)
     os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
+    if resource_budget_mb is not None:
+        limits = _resource_budget_execution_limits(resource_budget_mb)
+        os.environ["EASYICU_RESOURCE_BUDGET_MB"] = str(
+            limits["resource_budget_mb"]
+        )
+        os.environ["EASYICU_OVERRIDE_MEMORY_GB"] = str(
+            limits["modeled_total_memory_gb"]
+        )
+        os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = str(
+            limits["parallel_max_workers"]
+        )
+        os.environ["EASYICU_ARROW_THREADS"] = str(limits["arrow_threads"])
+        os.environ["EASYICU_DUCKDB_THREADS"] = str(limits["duckdb_threads"])
+        os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = (
+            f"{limits['duckdb_memory_limit_mb']}MB"
+        )
+        os.environ["EASYICU_CACHE_BUDGET_MB"] = str(
+            limits["resolver_cache_budget_mb"]
+        )
+        # A compatibility caller may invoke worker setup after importing the
+        # cached planner.  Reset it so the explicit contract, not an earlier
+        # host-sized decision, owns all subsequent loader choices.
+        try:
+            from ..runtime.parallel_config import reset_global_config
+
+            reset_global_config()
+        except Exception:
+            pass
     _src_dir = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -2888,6 +2987,7 @@ def _extract_module_group_worker(
     stream_output_batches: bool = False,
     published_output_dir: Optional[str] = None,
     adaptive_stream_batches: bool = False,
+    resource_budget_mb: Optional[float] = None,
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
 
@@ -2902,7 +3002,7 @@ def _extract_module_group_worker(
     import os
     import traceback
 
-    _extract_worker_env_setup(data_path)
+    _extract_worker_env_setup(data_path, resource_budget_mb)
     from easyicu.api import keep_cache as _keep_cache
 
     with _keep_cache(
@@ -5696,6 +5796,7 @@ def _publish_native_export_v2(
         "resource_plan": result.get("resource_plan"),
         "module_resource_plans": result.get("module_resource_plans"),
         "resource_budget_mb": result.get("resource_budget_mb"),
+        "resource_execution_limits": result.get("resource_execution_limits"),
         "time_window_authority": time_window_authority,
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
@@ -5789,7 +5890,8 @@ def extract_database(
             首批一致，同时允许后续批次继续按实测增长或收缩。
         resource_budget_mb: 资源规划可使用的内存预算（MiB）。None 使用当前
             可用内存；可复现的正式 release 应显式传入其资源合同（例如 8192），
-            避免同一任务仅因换到大内存服务器就绕过已验证的分批边界。
+            避免同一任务仅因换到大内存服务器就绕过已验证的分批边界。显式预算
+            同时限制 worker、Arrow/DuckDB 线程、DuckDB buffer 与 resolver cache。
 
     Note:
         提取 worker 在所有平台均使用 ``spawn`` 以隔离 Arrow/DuckDB 原生状态。
@@ -5899,6 +6001,11 @@ def extract_database(
         if resource_budget_mb is None
         else float(resource_budget_mb)
     )
+    resource_execution_limits = (
+        None
+        if resource_budget_mb is None
+        else _resource_budget_execution_limits(resource_budget_mb)
+    )
     resource_plan = plan_extraction_resources(
         database,
         modules,
@@ -5984,6 +6091,7 @@ def extract_database(
             for module, plan in module_resource_plans.items()
         },
         "resource_budget_mb": round(planning_available_mb, 1),
+        "resource_execution_limits": resource_execution_limits,
         "modules": {},
         "total_elapsed": 0,
         "output_dir": output_dir,
@@ -6111,6 +6219,7 @@ def extract_database(
                 "initial_planned_partition_count"
             ),
             "resource_plan": module_resource_plans[mod_name].to_dict(),
+            "resource_execution_limits": resource_execution_limits,
         }
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
         # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
@@ -6239,6 +6348,7 @@ def extract_database(
                         "initial_planned_partition_count"
                     ),
                     "resource_plan": module_resource_plans[mod_name].to_dict(),
+                    "resource_execution_limits": resource_execution_limits,
                 }
                 for c_name in concepts:
                     info = manifest.get("saved", {}).get(c_name)
@@ -6330,6 +6440,7 @@ def extract_database(
                 group_stream_output_batches,
                 output_dir,
                 group_adaptive_stream_batches,
+                resource_budget_mb,
             ),
             # A memory-heavy streamed module may create one fresh process per
             # patient batch so the OS, not allocator heuristics, owns teardown.
