@@ -128,7 +128,7 @@ storage. The one-shot admission threshold is measured process-tree RSS times
 1.10. The hard profiling stop was 7,447 MiB, which is the largest observed RSS
 that can retain 10% headroom inside 8,192 MiB currently available.
 
-Fourteen modules completed one-shot:
+Twelve currently unaffected modules retain one-shot evidence:
 
 | Module | One-shot time | Peak RSS | Automatic threshold |
 |---|---:|---:|---:|
@@ -144,8 +144,6 @@ Fourteen modules completed one-shot:
 | medications | 175.9 s | 7,320.6 MiB | 7.86 GiB |
 | neurological | 88.8 s | 5,073.9 MiB | 5.45 GiB |
 | sepsis_shared | 11.8 s | 4,977.7 MiB | 5.35 GiB |
-| sofa2_score | 558.1 s | 6,926.6 MiB | 7.44 GiB |
-| sepsis3_sofa2 | 372.8 s | 6,268.4 MiB | 6.73 GiB |
 
 Five modules crossed the one-shot contract and therefore use the fastest
 successful measured batch instead:
@@ -158,10 +156,21 @@ successful measured batch instead:
 | sofa1_score | stopped at 7,631.4 MiB | 67,000 stays (3 batches) | 512.5 s | 6,316.5 MiB |
 | sepsis3_sofa1 | stopped at 7,475.6 MiB | 67,000 stays (3 batches) | 586.9 s | 6,294.5 MiB |
 
-At an 8 GiB planning budget, selecting any subset of the 14 one-shot modules
-runs each selected module one-shot. `respiratory` and `circulatory` use
+The pre-2026-09-04 measurements for `sofa2_score` (6,926.6 MiB) and
+`sepsis3_sofa2` (6,268.4 MiB) are quarantined because the eICU IMV
+ascertainment update changed their respiratory dependency. The first revised
+SOFA-2 attempt exceeded the release contract, and controlled 67k, 50k and 40k
+batches also crossed the 7,447 MiB hard stop. A 31k attempt was interrupted
+before completion and is not evidence of safety. The planner therefore records
+`invalidated_profile_memory_guard`; its current 25k result is only a
+conservative fallback pending post-optimisation measurement, not a fixed
+production batch.
+
+At an 8 GiB planning budget, selecting any subset of the 12 unaffected
+one-shot modules runs each selected module one-shot. `respiratory` and
+`circulatory` use
 50,000-stay batches; the other three batch-only modules use 67,000-stay
-batches. Mixed and full requests preserve those per-module decisions rather
+batches. Mixed requests preserve those per-module decisions rather
 than applying the strictest 50,000-stay batch to every module. These measured
 batch paths show no cleanup warning because 8 GiB already fits their fastest
 verified peak plus headroom. A warning appears only when the planning budget is

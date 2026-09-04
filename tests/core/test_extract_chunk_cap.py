@@ -1,8 +1,8 @@
-"""提取分批的统一默认：任何库/模块，auto_batch_size 都不得切超过 MAX_EXTRACT_CHUNKS 份。
+"""提取资源策略的通用上限和逐数据库、逐模块实测覆盖。
 
-背景：ICU 队列即使 ~20 万患者（eICU 最大库），配合每模块流式落盘 + DuckDB 溢出落盘，
-至多 3 份即可提取。历史上估算高估会把队列切成很多份，重复扫共享大表、拖慢数倍。
-这是所有调用方共用的默认，不应由使用者每次手调 batch_size —— 故用测试锁死。
+通用 ``auto_batch_size`` 保留最多三份的旧交互式约束；正式 release 优先使用逐模块
+实测 profile，已知重模块可以超过三份。语义或依赖改变后，旧 profile 必须显式失效，
+不能继续准入 one-shot。
 """
 import sys
 from pathlib import Path
@@ -18,6 +18,9 @@ from easyicu.runtime.memory_manager import (
 )
 from easyicu.api import EXTRACT_MODULES
 from easyicu.api.extraction import (
+    _INVALIDATED_MEASURED_PROFILES,
+    _MEASURED_BATCH_PROFILES,
+    _MEASURED_ONESHOT_PROFILES,
     _adapt_stream_batch_size_from_first_batch,
     _interleave_stream_patient_ids,
     _next_stream_retry_batch_size,
@@ -270,7 +273,7 @@ def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
     assert plan.advisory_zh is None
 
 
-def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
+def test_eicu_full_request_summary_fails_closed_on_invalidated_profiles():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -278,10 +281,16 @@ def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
         available_memory_mb=8 * 1024,
     )
 
-    assert plan.reason_code == "measured_profile_fastest_safe_batch"
-    assert plan.batch_size == 50_000
-    assert plan.required_available_memory_mb == pytest.approx(7_163.53)
-    assert plan.advisory is None
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.batch_size == 25_000
+    assert plan.required_available_memory_mb is None
+    assert "invalidated" in plan.advisory
+
+
+def test_invalidated_profiles_cannot_remain_in_measured_registries():
+    for database, module in _INVALIDATED_MEASURED_PROFILES:
+        assert module not in _MEASURED_ONESHOT_PROFILES.get(database, {})
+        assert module not in _MEASURED_BATCH_PROFILES.get(database, {})
 
 
 def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
@@ -303,11 +312,15 @@ def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
         "respiratory": 50_000,
         "sepsis_shared": 200_859,
         "sofa1_score": 67_000,
-        "sofa2_score": 200_859,
+        "sofa2_score": 25_000,
         "sepsis3_sofa1": 67_000,
-        "sepsis3_sofa2": 200_859,
+        "sepsis3_sofa2": 25_000,
     }
     assert plans["sepsis_shared"].mode == "one_shot"
+    assert plans["sofa2_score"].reason_code == "invalidated_profile_memory_guard"
+    assert plans["sepsis3_sofa2"].reason_code == (
+        "invalidated_profile_memory_guard"
+    )
     assert plans["respiratory"].reason_code == (
         "measured_profile_fastest_safe_batch"
     )

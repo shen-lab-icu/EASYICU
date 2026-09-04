@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import easyicu.concept.callbacks as concept_callbacks
 from easyicu.callbacks import sofa2_cardio, sofa2_cns, sofa2_renal, sofa2_resp
 from easyicu.concept.callbacks import (
     ConceptCallbackContext,
@@ -16,6 +17,110 @@ from easyicu.scores.sofa2 import sofa2_cns_proxy_sensitivity
 from easyicu.scores.sofa2 import sofa2_renal as standalone_sofa2_renal
 from easyicu.scores.sofa2 import sofa2_resp as standalone_sofa2_resp
 from easyicu.table import ICUTable
+
+
+def test_sofa2_aggregate_merges_scores_and_owner_receipts_once(monkeypatch):
+    """The large score and receipt frames must share one indexed concat."""
+
+    calls = []
+    original = concept_callbacks._merge_tables
+
+    def tracked_merge(*args, **kwargs):
+        calls.append(kwargs.get("sidecar_columns"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(concept_callbacks, "_merge_tables", tracked_merge)
+    components = {
+        name: _component_table(name, [0.0])
+        for name in (
+            "sofa2_resp",
+            "sofa2_coag",
+            "sofa2_liver",
+            "sofa2_cardio",
+            "sofa2_cns",
+            "sofa2_renal",
+        )
+    }
+
+    result = _callback_sofa2_score(
+        components,
+        _component_context("sofa2", keep_components=True),
+    ).data
+
+    assert len(calls) == 1
+    assert calls[0] == {
+        name: [f"{name}_observed", f"{name}_available"]
+        for name in components
+    }
+    assert result["sofa2"].tolist() == [0]
+
+
+def test_single_pass_score_receipt_merge_matches_the_previous_two_pass_result():
+    """The memory optimisation preserves the old logical multiset exactly."""
+
+    component_names = (
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    )
+    tables = {}
+    for offset, name in enumerate(component_names):
+        times = [0.0, 2.0] if offset % 2 == 0 else [1.0, 2.0]
+        frame = pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": times,
+                name: [float(offset), float(offset + 1)],
+                f"{name}_observed": [1, 0],
+                f"{name}_available": [1, 1],
+            }
+        )
+        tables[name] = ICUTable(
+            frame,
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column=name,
+        )
+
+    score_frame, _, _ = concept_callbacks._merge_tables(tables)
+    receipt_tables = {}
+    for name, table in tables.items():
+        for suffix in ("observed", "available"):
+            receipt = f"{name}_{suffix}"
+            receipt_tables[receipt] = ICUTable(
+                table.data,
+                id_columns=["stay_id"],
+                index_column="charttime",
+                value_column=receipt,
+            )
+    receipt_frame, _, _ = concept_callbacks._merge_tables(receipt_tables)
+    previous = score_frame.merge(
+        receipt_frame,
+        on=["stay_id", "charttime"],
+        how="outer",
+    )
+
+    current, _, _ = concept_callbacks._merge_tables(
+        tables,
+        sidecar_columns={
+            name: [f"{name}_observed", f"{name}_available"]
+            for name in component_names
+        },
+    )
+
+    ordered_columns = ["stay_id", "charttime"] + [
+        column
+        for name in component_names
+        for column in (name, f"{name}_observed", f"{name}_available")
+    ]
+    pd.testing.assert_frame_equal(
+        current[ordered_columns].sort_values(["stay_id", "charttime"]).reset_index(drop=True),
+        previous[ordered_columns].sort_values(["stay_id", "charttime"]).reset_index(drop=True),
+        check_dtype=True,
+    )
 
 
 def test_sofa2_resp_uses_fractional_fio2_for_safi_fallback():

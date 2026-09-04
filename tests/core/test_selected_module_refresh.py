@@ -86,9 +86,15 @@ def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
     assert modules["sepsis_shared"]["batch_size"] == 200_859
     assert modules["sepsis_shared"]["planned_batches"] == 1
     assert modules["sofa1_score"]["batch_size"] == 67_000
-    assert modules["sofa2_score"]["batch_size"] == 200_859
+    assert modules["sofa2_score"]["batch_size"] == 25_000
     assert modules["sepsis3_sofa1"]["batch_size"] == 67_000
-    assert modules["sepsis3_sofa2"]["batch_size"] == 200_859
+    assert modules["sepsis3_sofa2"]["batch_size"] == 25_000
+    assert modules["sofa2_score"]["reason_code"] == (
+        "invalidated_profile_memory_guard"
+    )
+    assert modules["sepsis3_sofa2"]["reason_code"] == (
+        "invalidated_profile_memory_guard"
+    )
 
 
 def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
