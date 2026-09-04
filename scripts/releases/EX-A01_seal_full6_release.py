@@ -1030,6 +1030,15 @@ def validate_run_provenance(
             raise ReleaseValidationError(
                 "module-refresh publication checkout was not recorded clean"
             )
+        resource_policy = refresh.get("resource_policy")
+        if (
+            isinstance(resource_policy, dict)
+            and resource_policy.get("formal_release_admissible") is False
+        ):
+            raise ReleaseValidationError(
+                "module-refresh used an unmeasured or overridden resource "
+                "strategy and is benchmark-only, not sealable"
+            )
         if (
             publication_checkout.get("scope")
             != "publication_only_republication"

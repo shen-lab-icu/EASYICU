@@ -15,9 +15,10 @@ Only correctness modules and their declared downstream closure are allowlisted.
 owner-issued death-event time companion required by landmark analyses.
 ``respiratory`` removes
 implicit room-air FiO2 imputation and therefore expands to ``sofa1_score`` and
-``sofa2_score``, the shared infection evidence required at execution time, and
-the two Sepsis-SOFA labels that consume those scores. This is not a generic way
-to bypass the full extraction controller.
+``sofa2_score`` and the two Sepsis-SOFA labels that consume those scores. The
+sealed shared-infection timeline is staged as a hash-verified read-only
+dependency rather than reread from raw data. This is not a generic way to
+bypass the full extraction controller.
 """
 
 from __future__ import annotations
@@ -67,24 +68,26 @@ REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
 DIRECT_REFRESHABLE_MODULES = frozenset(
-    {"outcome", "renal", "respiratory", "sofa2_score"}
+    {"outcome", "renal", "respiratory", "sofa1_score", "sofa2_score"}
 )
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
     "outcome": ("outcome",),
     "renal": ("renal",),
     "respiratory": (
         "respiratory",
-        "sepsis_shared",
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     ),
+    "sofa1_score": (
+        "sofa1_score",
+        "sepsis3_sofa1",
+    ),
     # Targeted repair path for owner-issued SOFA-2 receipt companions. The
     # parent candidate must already contain a raw-refreshed respiratory input;
     # downstream M1 validates that parent provenance before using the child.
     "sofa2_score": (
-        "sepsis_shared",
         "sofa2_score",
         "sepsis3_sofa2",
     ),
@@ -93,6 +96,12 @@ SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v2"
 LEGACY_SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 RESOURCE_PLAN_SCHEMA_VERSION = "easyicu_selected_module_resource_plan_v1"
 DEFAULT_RELEASE_MEMORY_BUDGET_MB = 8 * 1024
+FORMALLY_MEASURED_RESOURCE_REASONS = frozenset(
+    {
+        "measured_profile_fast_path",
+        "measured_profile_fastest_safe_batch",
+    }
+)
 
 
 class ModuleRefreshError(ValueError):
@@ -128,6 +137,31 @@ def _parse_data_path_overrides(values: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
+def _parse_database_module_scopes(
+    values: Sequence[str],
+) -> dict[str, tuple[str, ...]]:
+    """Parse repeatable ``DATABASE=MODULE[,MODULE]`` refresh scopes."""
+
+    parsed: dict[str, tuple[str, ...]] = {}
+    for raw in values:
+        database, separator, module_text = raw.partition("=")
+        database = database.strip()
+        modules = tuple(
+            module.strip() for module in module_text.split(",") if module.strip()
+        )
+        if not separator or database not in DATABASES or not modules:
+            raise ModuleRefreshError(
+                "--database-module must be DATABASE=MODULE[,MODULE] for one of "
+                f"{', '.join(DATABASES)}; got {raw!r}"
+            )
+        if database in parsed:
+            raise ModuleRefreshError(
+                f"Duplicate --database-module scope: {database}"
+            )
+        parsed[database] = _validate_modules(modules)
+    return parsed
+
+
 def _validate_databases(databases: Sequence[str]) -> tuple[str, ...]:
     """Return a canonical non-empty subset of the six release databases."""
 
@@ -143,7 +177,7 @@ def _validate_databases(databases: Sequence[str]) -> tuple[str, ...]:
 def _resolve_data_paths(
     source_manifest: Mapping[str, Any],
     overrides: Mapping[str, str],
-    databases: Sequence[str] = DATABASES,
+    databases: Sequence[str] | None = None,
 ) -> dict[str, str]:
     recorded = source_manifest.get("data_paths")
     if not isinstance(recorded, dict):
@@ -173,7 +207,7 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     if disallowed:
         raise ModuleRefreshError(
             "This audited refresh entry point currently allows only outcome, "
-            "renal, respiratory and sofa2_score; "
+            "renal, respiratory, sofa1_score and sofa2_score; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -189,6 +223,42 @@ def _expand_module_dependency_closure(modules: Sequence[str]) -> tuple[str, ...]
         for module in MODULE_DEPENDENCY_CLOSURE[requested_module]
     }
     return tuple(module for module in MODULES if module in required)
+
+
+def _resolve_database_module_scope(
+    *,
+    modules: Sequence[str],
+    databases: Sequence[str],
+    database_module_scope: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[
+    tuple[str, ...],
+    dict[str, tuple[str, ...]],
+    dict[str, tuple[str, ...]],
+]:
+    """Resolve requested and dependency-closed modules for each database."""
+
+    if database_module_scope:
+        if modules or databases:
+            raise ModuleRefreshError(
+                "Per-database module scope cannot be combined with global "
+                "modules/databases"
+            )
+        selected_databases = _validate_databases(tuple(database_module_scope))
+        requested_by_database = {
+            database: _validate_modules(database_module_scope[database])
+            for database in selected_databases
+        }
+    else:
+        selected_databases = _validate_databases(databases)
+        requested = _validate_modules(modules)
+        requested_by_database = {
+            database: requested for database in selected_databases
+        }
+    closed_by_database = {
+        database: _expand_module_dependency_closure(requested_by_database[database])
+        for database in selected_databases
+    }
+    return selected_databases, requested_by_database, closed_by_database
 
 
 def _source_cohort_size(
@@ -221,35 +291,59 @@ def _build_refresh_resource_plan(
     databases: Sequence[str],
     memory_budget_mb: float,
     requested_batch_size: int | None = None,
+    database_module_scope: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Build a read-only database-by-module release execution plan."""
 
-    selected_databases = _validate_databases(databases)
-    requested = _validate_modules(requested_modules)
-    closure = _expand_module_dependency_closure(requested)
+    selected_databases, requested_by_database, closed_by_database = (
+        _resolve_database_module_scope(
+            modules=requested_modules,
+            databases=databases,
+            database_module_scope=database_module_scope,
+        )
+    )
+    requested = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in requested_by_database[database]
+            for database in selected_databases
+        )
+    )
+    closure = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in closed_by_database[database]
+            for database in selected_databases
+        )
+    )
     budget = float(memory_budget_mb)
     if budget <= 0:
         raise ModuleRefreshError("memory budget must be positive")
 
     database_plans: dict[str, Any] = {}
     for database in selected_databases:
+        database_closure = closed_by_database[database]
         cohort_size = _source_cohort_size(source_run_manifest, database)
         aggregate = plan_extraction_resources(
             database,
-            closure,
+            database_closure,
             cohort_size,
             requested_batch_size,
             available_memory_mb=budget,
         )
         module_plans = plan_module_extraction_resources(
             database,
-            closure,
+            database_closure,
             cohort_size,
             requested_batch_size,
             available_memory_mb=budget,
         )
         database_plans[database] = {
             "cohort_stays": cohort_size,
+            "requested_modules": list(requested_by_database[database]),
+            "dependency_closure": list(database_closure),
             "aggregate_request_plan": aggregate.to_dict(),
             "modules": {
                 module: {
@@ -259,6 +353,19 @@ def _build_refresh_resource_plan(
                 for module, plan in module_plans.items()
             },
         }
+    unmeasured_modules = {
+        database: [
+            module
+            for module, module_plan in database_plans[database]["modules"].items()
+            if module_plan["reason_code"] not in FORMALLY_MEASURED_RESOURCE_REASONS
+        ]
+        for database in selected_databases
+    }
+    unmeasured_modules = {
+        database: modules
+        for database, modules in unmeasured_modules.items()
+        if modules
+    }
     return {
         "schema_version": RESOURCE_PLAN_SCHEMA_VERSION,
         "read_only": True,
@@ -266,8 +373,18 @@ def _build_refresh_resource_plan(
         "memory_budget_mb": budget,
         "requested_modules": list(requested),
         "dependency_closure": list(closure),
+        "per_database_requested_modules": {
+            database: list(requested_by_database[database])
+            for database in selected_databases
+        },
+        "per_database_dependency_closure": {
+            database: list(closed_by_database[database])
+            for database in selected_databases
+        },
         "selected_databases": list(selected_databases),
         "explicit_batch_override": requested_batch_size,
+        "formal_release_admissible": not unmeasured_modules,
+        "unmeasured_or_overridden_modules": unmeasured_modules,
         "databases": database_plans,
     }
 
@@ -616,6 +733,84 @@ def _stage_outcome_time_bound_dependency(
     return destination
 
 
+def _stage_sepsis_shared_dependency(
+    *,
+    source_database_root: Path,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> Path | None:
+    """Stage sealed suspected-infection evidence without refreshing it.
+
+    Sepsis-3 is a derived consumer of both a refreshed SOFA trajectory and the
+    existing `sepsis_shared` timeline. The latter is independent of IMV and of
+    the native SOFA row-grain repair, so rereading its raw sources would expand
+    the mutation scope without adding information. Copy and hash-check only its
+    Parquet dependency; it is excluded from the publisher's module list and is
+    removed with staging after the derived labels are published.
+    """
+
+    needs_sepsis = any(
+        module in {"sepsis3_sofa1", "sepsis3_sofa2"} for module in modules
+    )
+    if not needs_sepsis or "sepsis_shared" in modules:
+        return None
+
+    source = source_database_root / "sepsis_shared.parquet"
+    destination = staging_root / "sepsis_shared.parquet"
+    _require_regular_file(source, label="sealed sepsis_shared dependency")
+    staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    if destination.exists() or destination.is_symlink():
+        _require_regular_file(destination, label="staged sepsis_shared dependency")
+        if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(
+            source
+        ):
+            raise ModuleRefreshError(
+                "Staged sepsis_shared dependency differs from the sealed source"
+            )
+        return destination
+
+    shutil.copy2(source, destination)
+    if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(source):
+        destination.unlink(missing_ok=True)
+        raise ModuleRefreshError(
+            "Failed to stage an exact sepsis_shared dependency"
+        )
+    return destination
+
+
+def _stage_refresh_read_dependencies(
+    *,
+    source_database_root: Path,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> dict[str, str]:
+    """Stage and receipt every sealed module used only as a read dependency."""
+
+    staged = {}
+    for name, path in (
+        (
+            "outcome",
+            _stage_outcome_time_bound_dependency(
+                source_database_root=source_database_root,
+                staging_root=staging_root,
+                modules=modules,
+            ),
+        ),
+        (
+            "sepsis_shared",
+            _stage_sepsis_shared_dependency(
+                source_database_root=source_database_root,
+                staging_root=staging_root,
+                modules=modules,
+            ),
+        ),
+    ):
+        if path is not None:
+            staged[name] = REPUBLICATION._sha256_file(path)
+    return staged
+
+
 def _recover_native_staging_publication(
     *,
     database: str,
@@ -726,7 +921,10 @@ def _validate_existing_staging_native_manifest(
 
 
 def _validate_refreshed_score_content(
-    database_root: Path, modules: Sequence[str]
+    database_root: Path,
+    modules: Sequence[str],
+    *,
+    database: str,
 ) -> None:
     """Refuse null or internally incoherent refreshed SOFA trajectories.
 
@@ -800,6 +998,8 @@ def _validate_refreshed_score_content(
         non_null = 0
         inconsistent = 0
         invalid_component = 0
+        component_non_null = {component: 0 for component in components}
+        availability_true = {component: 0 for component in components}
         consistency_columns = [score_column, *components]
         if module == "sofa2_score":
             consistency_columns.extend(
@@ -818,6 +1018,10 @@ def _validate_refreshed_score_content(
             component_frame = frame[list(components)].apply(
                 lambda column: pd.to_numeric(column, errors="coerce")
             )
+            for component in components:
+                component_non_null[component] += int(
+                    component_frame[component].notna().sum()
+                )
             invalid_component += int(
                 ((component_frame < 0) | (component_frame > 4)).any(axis=1).sum()
             )
@@ -838,6 +1042,8 @@ def _validate_refreshed_score_content(
                     .astype("boolean")
                     .fillna(False)
                 )
+                for component, receipt in zip(components, available_columns):
+                    availability_true[component] += int(available[receipt].sum())
                 observed = (
                     frame[observed_columns]
                     .astype("boolean")
@@ -864,7 +1070,20 @@ def _validate_refreshed_score_content(
                 )
             inconsistent += int((~coherent.fillna(False)).sum())
 
-        if rows == 0 or non_null == 0:
+        structurally_unavailable_sic_sofa2 = (
+            module == "sofa2_score"
+            and database == "sic"
+            and rows > 0
+            and non_null == 0
+            and all(count > 0 for count in component_non_null.values())
+            and availability_true["sofa2_cns"] == 0
+            and all(
+                availability_true[component] > 0
+                for component in components
+                if component != "sofa2_cns"
+            )
+        )
+        if rows == 0 or (non_null == 0 and not structurally_unavailable_sic_sofa2):
             raise ModuleRefreshError(
                 f"{module} refresh is unusable: {score_column} has "
                 f"{non_null} non-null values across {rows} rows"
@@ -1147,7 +1366,11 @@ def _refresh_one_database(
             source_database_root, destination_database_root, modules
         )
     ):
-        _validate_refreshed_score_content(destination_database_root, modules)
+        _validate_refreshed_score_content(
+            destination_database_root,
+            modules,
+            database=database,
+        )
         return {
             "database": database,
             "data_path": data_path,
@@ -1169,7 +1392,7 @@ def _refresh_one_database(
             modules,
         )
         if canonical_staging or producer_staging:
-            _stage_outcome_time_bound_dependency(
+            read_dependencies = _stage_refresh_read_dependencies(
                 source_database_root=source_database_root,
                 staging_root=staging_root,
                 modules=modules,
@@ -1197,7 +1420,11 @@ def _refresh_one_database(
                     raise ModuleRefreshError(
                         "Recovered native publication did not produce canonical modules"
                     )
-            _validate_refreshed_score_content(staging_root, modules)
+            _validate_refreshed_score_content(
+                staging_root,
+                modules,
+                database=database,
+            )
             _replace_selected_module_files(
                 staging_root=staging_root,
                 destination_database_root=destination_database_root,
@@ -1213,12 +1440,13 @@ def _refresh_one_database(
                 "total_elapsed_seconds": None,
                 "modules": metrics,
                 "recovery_mode": "completed_staging_promoted",
+                "read_only_dependencies": read_dependencies,
             }
         raise ModuleRefreshError(
             f"Existing refresh staging is incomplete or not canonical: {staging_root}"
         )
     staging_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    _stage_outcome_time_bound_dependency(
+    read_dependencies = _stage_refresh_read_dependencies(
         source_database_root=source_database_root,
         staging_root=staging_root,
         modules=modules,
@@ -1239,7 +1467,11 @@ def _refresh_one_database(
         verbose=True,
     )
     metrics = _module_runtime_metrics(extraction, modules)
-    _validate_refreshed_score_content(staging_root, modules)
+    _validate_refreshed_score_content(
+        staging_root,
+        modules,
+        database=database,
+    )
     _replace_selected_module_files(
         staging_root=staging_root,
         destination_database_root=destination_database_root,
@@ -1259,6 +1491,7 @@ def _refresh_one_database(
         "module_resource_plans": extraction.get("module_resource_plans"),
         "total_elapsed_seconds": extraction.get("total_elapsed"),
         "modules": metrics,
+        "read_only_dependencies": read_dependencies,
     }
 
 
@@ -1372,6 +1605,7 @@ def refresh_candidate(
     resource_budget_mb: float = DEFAULT_RELEASE_MEMORY_BUDGET_MB,
     resource_policy_override_reason: str | None = None,
     databases: Sequence[str] = DATABASES,
+    database_module_scope: Mapping[str, Sequence[str]] | None = None,
     resume: bool = False,
     repair_finalized: bool = False,
 ) -> Path:
@@ -1379,16 +1613,65 @@ def refresh_candidate(
     destination = output_root.expanduser().absolute()
     if source == destination:
         raise ModuleRefreshError("Source and destination run roots must differ")
-    selected_databases = _validate_databases(databases)
+    if batch_size is not None and not str(
+        resource_policy_override_reason or ""
+    ).strip():
+        raise ModuleRefreshError(
+            "An explicit batch size is benchmark-only and requires a recorded "
+            "resource-policy override reason"
+        )
+    resolved_databases: Sequence[str] = (
+        ()
+        if database_module_scope
+        else DATABASES if databases is None else databases
+    )
+    selected_databases, requested_by_database, selected_by_database = (
+        _resolve_database_module_scope(
+            modules=modules,
+            databases=resolved_databases,
+            database_module_scope=database_module_scope,
+        )
+    )
     if resume and set(selected_databases) != set(DATABASES):
         raise ModuleRefreshError(
             "Database-subset refreshes must use a fresh candidate; their "
             "interrupted state is not yet transaction-bound for safe resume"
         )
-    requested_modules = _validate_modules(modules)
-    selected_modules = _expand_module_dependency_closure(requested_modules)
+    requested_modules = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in requested_by_database[database]
+            for database in selected_databases
+        )
+    )
+    selected_modules = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in selected_by_database[database]
+            for database in selected_databases
+        )
+    )
     publication_commit = REPUBLICATION._require_clean_checkout()
     source_run_manifest = REPUBLICATION._validate_source(source)
+    execution_resource_plan = _build_refresh_resource_plan(
+        source_run_manifest,
+        requested_modules=modules,
+        databases=resolved_databases,
+        memory_budget_mb=resource_budget_mb,
+        requested_batch_size=batch_size,
+        database_module_scope=database_module_scope,
+    )
+    if (
+        batch_size is None
+        and not execution_resource_plan["formal_release_admissible"]
+    ):
+        raise ModuleRefreshError(
+            "Formal selected-module refresh refuses unmeasured fallback "
+            "batches; profile and register these database/modules first: "
+            f"{execution_resource_plan['unmeasured_or_overridden_modules']}"
+        )
     data_paths = _resolve_data_paths(
         source_run_manifest, data_path_overrides, selected_databases
     )
@@ -1500,7 +1783,7 @@ def refresh_candidate(
                 data_path=data_paths[database],
                 source_database_root=source / "exports" / database,
                 candidate_root=destination,
-                modules=selected_modules,
+                modules=selected_by_database[database],
                 batch_size=batch_size,
                 resource_budget_mb=resource_budget_mb,
                 reuse_completed_export=resume and not repair_finalized,
@@ -1528,7 +1811,9 @@ def refresh_candidate(
         per_database_refreshed_modules = {}
         for database in DATABASES:
             current_modules = (
-                set(selected_modules) if database in selected_databases else set()
+                set(selected_by_database[database])
+                if database in selected_databases
+                else set()
             )
             inherited_modules = set(base_scope[database])
             per_database_refreshed_modules[database] = [
@@ -1680,12 +1965,13 @@ def refresh_candidate(
             )
             _rebind_manifest_metrics(manifest, reconstructed_metrics)
             if database in selected_databases:
+                database_selected_modules = selected_by_database[database]
                 manifest["source_extraction_provenance"] = {
                     **(manifest.get("source_extraction_provenance") or {}),
                     "publication_only": False,
                     "raw_database_reread": True,
-                    "refreshed_modules": list(selected_modules),
-                    "current_refreshed_modules": list(selected_modules),
+                    "refreshed_modules": list(database_selected_modules),
+                    "current_refreshed_modules": list(database_selected_modules),
                     "inherited_refreshed_modules": list(base_scope[database]),
                     "cumulative_refreshed_modules": list(
                         per_database_refreshed_modules[database]
@@ -1693,7 +1979,7 @@ def refresh_candidate(
                     "reused_modules": [
                         module
                         for module in MODULES
-                        if module not in selected_modules
+                        if module not in database_selected_modules
                     ],
                     "latest_module_refresh_runtime": refreshed[database],
                     "cumulative_module_refresh_runtime": combined_runtime[database],
@@ -1735,6 +2021,21 @@ def refresh_candidate(
             for database in DATABASES
             if database not in selected_databases
         }
+        reused_module_semantic_audit = {}
+        for database in selected_databases:
+            reused_modules = tuple(
+                module
+                for module in MODULES
+                if module not in selected_by_database[database]
+            )
+            if reused_modules:
+                reused_module_semantic_audit[database] = (
+                    _validate_publication_only_database_semantics(
+                        source / "exports" / database,
+                        destination / "exports" / database,
+                        modules=reused_modules,
+                    )
+                )
         REPUBLICATION._rebind_extraction_timing_receipts(
             destination / "database_extraction_timing.csv", native_manifests
         )
@@ -1752,6 +2053,14 @@ def refresh_candidate(
             "dependency_closure_applied": list(all_refreshed_modules),
             "latest_requested_modules": list(requested_modules),
             "latest_dependency_closure_applied": list(selected_modules),
+            "latest_per_database_requested_modules": {
+                database: list(requested_by_database[database])
+                for database in selected_databases
+            },
+            "latest_per_database_dependency_closure": {
+                database: list(selected_by_database[database])
+                for database in selected_databases
+            },
             "inherited_requested_modules": inherited_requested_modules,
             "inherited_refreshed_modules": inherited_refreshed_modules,
             "selected_databases": list(selected_databases),
@@ -1779,12 +2088,27 @@ def refresh_candidate(
                 "override_reason": resource_policy_override_reason,
                 "execution_grain": "database_by_module",
                 "adaptive_batch_growth": False,
+                "formal_release_admissible": execution_resource_plan[
+                    "formal_release_admissible"
+                ],
             },
+            "latest_resource_plan": execution_resource_plan,
             "per_database_runtime": combined_runtime,
+            "latest_read_only_dependencies": {
+                database: dict(
+                    refreshed[database].get("read_only_dependencies") or {}
+                )
+                for database in selected_databases
+            },
             "publication_only_semantic_audit": publication_only_semantic_audit,
+            "reused_module_semantic_audit": reused_module_semantic_audit,
             "reused_module_count_per_database": {
                 database: len(MODULES)
-                - (len(selected_modules) if database in selected_databases else 0)
+                - (
+                    len(selected_by_database[database])
+                    if database in selected_databases
+                    else 0
+                )
                 for database in DATABASES
             },
             "cumulative_reused_module_count_per_database": {
@@ -1874,7 +2198,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help=(
             "Raw-derived module to refresh (outcome, renal, respiratory or "
-            "sofa2_score); repeatable."
+            "sofa1_score/sofa2_score); repeatable."
+        ),
+    )
+    parser.add_argument(
+        "--database-module",
+        action="append",
+        default=[],
+        metavar="DATABASE=MODULE[,MODULE]",
+        help=(
+            "Audited per-database module scope; repeat once per database. "
+            "Cannot be combined with --database or --module."
         ),
     )
     parser.add_argument(
@@ -1917,6 +2251,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--memory-budget-mb must be positive")
     if args.plan_output is not None and not args.plan_only:
         parser.error("--plan-output requires --plan-only")
+    if args.database_module and (args.database or args.module):
+        parser.error(
+            "--database-module cannot be combined with --database or --module"
+        )
     if not args.plan_only and args.output_root is None:
         parser.error("--output-root is required unless --plan-only is used")
     if args.batch_size is not None and not args.allow_resource_policy_override:
@@ -1935,6 +2273,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        database_module_scope = _parse_database_module_scopes(
+            args.database_module
+        )
         if args.plan_only:
             source_manifest = REPUBLICATION._validate_source(
                 args.source_run_root.resolve()
@@ -1942,9 +2283,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan = _build_refresh_resource_plan(
                 source_manifest,
                 requested_modules=args.module,
-                databases=args.database or DATABASES,
+                databases=(
+                    () if database_module_scope else args.database or DATABASES
+                ),
                 memory_budget_mb=args.memory_budget_mb,
                 requested_batch_size=args.batch_size,
+                database_module_scope=database_module_scope or None,
             )
             plan["source_run_root"] = str(args.source_run_root.resolve())
             plan["resource_policy_override_reason"] = (
@@ -1964,7 +2308,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             resource_policy_override_reason=(
                 args.resource_policy_override_reason
             ),
-            databases=args.database or DATABASES,
+            databases=(
+                () if database_module_scope else args.database or DATABASES
+            ),
+            database_module_scope=database_module_scope or None,
             resume=args.resume,
             repair_finalized=args.repair_finalized,
         )

@@ -32,11 +32,15 @@ For the eICU respiratory dependency closure at 8 GiB, the executable plan is:
 | Module | Mode | Stay batch | Planned batches | Evidence |
 |---|---|---:|---:|---|
 | respiratory | measured batch | 50,000 | 5 | 67k crossed the 8 GiB contract |
-| sepsis_shared | one-shot | 200,859 | 1 | measured full cohort |
 | sofa1_score | measured batch | 67,000 | 3 | measured full cohort batches |
 | sofa2_score | quarantined fallback | 25,000 | 9 | old profile invalid after IMV dependency change; not yet a verified final batch |
 | sepsis3_sofa1 | measured batch | 67,000 | 3 | measured dependency-complete run |
 | sepsis3_sofa2 | quarantined fallback | 25,000 | 9 | inherits the invalidated SOFA-2 dependency; not yet a verified final batch |
+
+`sepsis_shared` is no longer a refreshed module in this closure. Its sealed
+Parquet is copied and SHA-verified in staging as a read-only Sepsis dependency,
+then removed with staging. This avoids a raw reread and prevents an independent
+infection module from being mislabeled as changed by an IMV/SOFA repair.
 
 The previous launcher passed one request-wide 5,000-stay override. That bypassed
 the resource owner, caused avoidable repeated scans and made the manifest say
@@ -135,6 +139,13 @@ the same rule, and the rule is recorded in each module's row-grain manifest as
 `score_component=max_non_null_worst_state` and
 `derived_score_total=recomputed_after_component_consolidation`.
 
+The release tool accepts an audited per-database module scope so the final
+repair can refresh respiratory only in eICU and MIMIC-III while refreshing only
+SOFA/Sepsis derivatives in AUMC, HiRID, MIMIC-IV and SIC. Reused modules in
+every selected database receive the same bounded logical-multiset audit as a
+fully publication-only database; selecting a database no longer exempts its
+unrelated modules from invariance proof.
+
 The selected-refresh publisher also had an independent recovery defect: it
 could finish all expensive modules and then fail because the selected staging
 directory did not contain `outcome.los_icu`, which is required only as the
@@ -211,6 +222,16 @@ endpoint.
    removing them would weaken release integrity. They can be scheduled once per
    immutable artifact but should not be skipped.
 
+### SICDB SOFA-2 structural availability
+
+SICDB is an explicit availability exception, not an extraction failure. Its
+canonical CNS owner has no fully ascertained rows, so a six-component SOFA-2
+total is structurally unavailable even though all six component columns
+contain scored rows and the other five component owners contain available
+evidence. The refresh gate permits an all-null SICDB SOFA-2 total only when
+those exact conditions hold and the aggregate availability receipts remain
+coherent; the same output still fails for every other database.
+
 ## Memory review
 
 - The formal launcher uses a fixed 8,192 MiB planning contract rather than the
@@ -222,6 +243,10 @@ endpoint.
   a generic 5,000-stay fallback.
 - Explicit `--batch-size` is rejected by the release CLI unless accompanied by
   an override acknowledgement and a recorded reason.
+- A formal selected-module release now fails before cloning or rereading raw
+  data when any database/module would use a calibrated, invalidated or other
+  unmeasured fallback. Explicit benchmark overrides remain possible but are
+  marked non-admissible and the release sealer rejects them.
 - The planner's output is copied into per-module producer manifests and
   selected-refresh provenance so the executed policy can be compared with the
   preflight plan.

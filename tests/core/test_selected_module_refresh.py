@@ -25,6 +25,7 @@ def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
     assert refresher._validate_modules(["outcome"]) == ("outcome",)
     assert refresher._validate_modules(["renal"]) == ("renal",)
     assert refresher._validate_modules(["respiratory"]) == ("respiratory",)
+    assert refresher._validate_modules(["sofa1_score"]) == ("sofa1_score",)
     assert refresher._validate_modules(["sofa2_score"]) == ("sofa2_score",)
     assert refresher._validate_modules(["renal", "respiratory"]) == (
         "renal",
@@ -39,7 +40,6 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
     assert refresher._expand_module_dependency_closure(["outcome"]) == ("outcome",)
     assert refresher._expand_module_dependency_closure(["respiratory"]) == (
         "respiratory",
-        "sepsis_shared",
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
@@ -51,14 +51,16 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
         "outcome",
         "respiratory",
         "renal",
-        "sepsis_shared",
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     )
+    assert refresher._expand_module_dependency_closure(["sofa1_score"]) == (
+        "sofa1_score",
+        "sepsis3_sofa1",
+    )
     assert refresher._expand_module_dependency_closure(["sofa2_score"]) == (
-        "sepsis_shared",
         "sofa2_score",
         "sepsis3_sofa2",
     )
@@ -83,8 +85,6 @@ def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
     assert plan["raw_database_reread"] is False
     assert modules["respiratory"]["batch_size"] == 50_000
     assert modules["respiratory"]["planned_batches"] == 5
-    assert modules["sepsis_shared"]["batch_size"] == 200_859
-    assert modules["sepsis_shared"]["planned_batches"] == 1
     assert modules["sofa1_score"]["batch_size"] == 67_000
     assert modules["sofa2_score"]["batch_size"] == 25_000
     assert modules["sepsis3_sofa1"]["batch_size"] == 67_000
@@ -95,6 +95,10 @@ def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
     assert modules["sepsis3_sofa2"]["reason_code"] == (
         "invalidated_profile_memory_guard"
     )
+    assert plan["formal_release_admissible"] is False
+    assert plan["unmeasured_or_overridden_modules"] == {
+        "eicu": ["sofa2_score", "sepsis3_sofa2"]
+    }
 
 
 def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
@@ -158,6 +162,91 @@ def test_selected_database_scope_is_nonempty_valid_and_canonical() -> None:
         refresher._validate_databases(["not-a-database"])
 
 
+def test_per_database_module_scope_preserves_minimal_refresh_boundaries() -> None:
+    refresher = _load_refresher()
+    parsed = refresher._parse_database_module_scopes(
+        [
+            "eicu=respiratory",
+            "mimic=respiratory",
+            "miiv=sofa1_score,sofa2_score",
+        ]
+    )
+
+    databases, requested, closed = refresher._resolve_database_module_scope(
+        modules=(),
+        databases=(),
+        database_module_scope=parsed,
+    )
+
+    assert databases == ("eicu", "mimic", "miiv")
+    assert requested["eicu"] == ("respiratory",)
+    assert closed["eicu"] == (
+        "respiratory",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    )
+    assert closed["miiv"] == (
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    )
+    assert "respiratory" not in closed["miiv"]
+    assert "sepsis_shared" not in closed["miiv"]
+
+
+def test_per_database_release_plan_uses_each_database_closure() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            database: {"module_metrics": {"outcome": {"rows": rows}}}
+            for database, rows in {"eicu": 200_859, "miiv": 94_458}.items()
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=(),
+        databases=(),
+        memory_budget_mb=8 * 1024,
+        database_module_scope={
+            "eicu": ("respiratory",),
+            "miiv": ("sofa1_score", "sofa2_score"),
+        },
+    )
+
+    assert "respiratory" in plan["databases"]["eicu"]["modules"]
+    assert "respiratory" not in plan["databases"]["miiv"]["modules"]
+    assert set(plan["databases"]["miiv"]["modules"]) == {
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    }
+    assert plan["formal_release_admissible"] is False
+
+
+def test_measured_miiv_score_plan_is_formally_admissible() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "miiv": {"module_metrics": {"outcome": {"rows": 94_458}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=("sofa1_score", "sofa2_score"),
+        databases=("miiv",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
+
+
 def test_data_path_resolution_checks_only_selected_databases(tmp_path: Path) -> None:
     refresher = _load_refresher()
     eicu = tmp_path / "eicu"
@@ -188,6 +277,7 @@ def test_database_subset_resume_is_refused_without_transaction_receipt(
             modules=["respiratory"],
             data_path_overrides={},
             batch_size=1,
+            resource_policy_override_reason="unit-test benchmark override",
             databases=["eicu", "mimic"],
             resume=True,
         )
@@ -408,13 +498,14 @@ def test_targeted_refresh_extracts_only_selected_but_republishes_all_databases(
         modules=["respiratory"],
         data_path_overrides={},
         batch_size=1,
+        resource_policy_override_reason="unit-test benchmark override",
         databases=["mimic", "eicu"],
     )
 
     assert result == candidate
     assert extracted == ["eicu", "mimic"]
     assert republished == list(refresher.DATABASES)
-    assert semantic_audited == ["aumc", "hirid", "miiv", "sic"]
+    assert semantic_audited == ["aumc", "hirid", "miiv", "sic", "eicu", "mimic"]
     assert json.loads(
         (source / "exports" / "miiv" / "_manifest.json").read_text(
             encoding="utf-8"
@@ -474,6 +565,7 @@ def test_targeted_refresh_extracts_only_selected_but_republishes_all_databases(
         "miiv",
         "sic",
     }
+    assert set(provenance["reused_module_semantic_audit"]) == {"eicu", "mimic"}
     rebound_run_manifest = json.loads(
         (candidate / "run_manifest.json").read_text(encoding="utf-8")
     )
@@ -670,6 +762,35 @@ def test_selected_longitudinal_refresh_stages_exact_outcome_dependency(
     ) is None
 
 
+def test_score_refresh_stages_exact_sepsis_dependency_without_refreshing_it(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    source = tmp_path / "source"
+    staging = tmp_path / "staging"
+    source.mkdir()
+    dependency = source / "sepsis_shared.parquet"
+    dependency.write_bytes(b"sealed-sepsis-evidence")
+
+    staged = refresher._stage_sepsis_shared_dependency(
+        source_database_root=source,
+        staging_root=staging,
+        modules=("sofa1_score", "sepsis3_sofa1"),
+    )
+
+    assert staged == staging / "sepsis_shared.parquet"
+    assert staged.read_bytes() == dependency.read_bytes()
+    assert not staged.samefile(dependency)
+    assert refresher.REPUBLICATION._sha256_file(staged) == (
+        refresher.REPUBLICATION._sha256_file(dependency)
+    )
+    assert refresher._stage_sepsis_shared_dependency(
+        source_database_root=source,
+        staging_root=staging,
+        modules=("sofa1_score",),
+    ) is None
+
+
 def test_selected_longitudinal_refresh_fails_before_raw_read_without_outcome(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -713,6 +834,9 @@ def test_completed_producer_staging_is_native_published_without_reextracting(
     pd.DataFrame({"stay_id": [1], "los_icu": [24.0]}).to_parquet(
         source / "outcome.parquet", index=False
     )
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "susp_inf": [True]}
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
     pd.DataFrame(
         {"stay_id": [1], "charttime": [1.0], "sep3_sofa2": [True]}
     ).to_parquet(staging / "sepsis3_sofa2.parquet", index=False)
@@ -825,7 +949,48 @@ def test_score_content_gate_rejects_all_null_sofa_totals(tmp_path: Path) -> None
 
     with pytest.raises(refresher.ModuleRefreshError, match="0 non-null"):
         refresher._validate_refreshed_score_content(
-            tmp_path, ("sofa2_score",)
+            tmp_path, ("sofa2_score",), database="eicu"
+        )
+
+
+def test_score_content_gate_accepts_sic_sofa2_only_when_cns_is_structurally_unavailable(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    components = [
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ]
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2": [None],
+            **{component: [0.0] for component in components},
+        }
+    )
+    for component in components:
+        frame[f"{component}_observed"] = component != "sofa2_cns"
+        frame[f"{component}_available"] = component != "sofa2_cns"
+    frame["sofa2_observed"] = False
+    frame["sofa2_available"] = False
+    frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    refresher._validate_refreshed_score_content(
+        tmp_path,
+        ("sofa2_score",),
+        database="sic",
+    )
+
+    with pytest.raises(refresher.ModuleRefreshError, match="0 non-null"):
+        refresher._validate_refreshed_score_content(
+            tmp_path,
+            ("sofa2_score",),
+            database="eicu",
         )
 
 
@@ -851,7 +1016,9 @@ def test_score_content_gate_streams_non_null_sofa_totals(tmp_path: Path) -> None
         }
     ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
 
-    refresher._validate_refreshed_score_content(tmp_path, ("sofa1_score",))
+    refresher._validate_refreshed_score_content(
+        tmp_path, ("sofa1_score",), database="miiv"
+    )
 
 
 def test_score_content_gate_rejects_independently_aggregated_sofa_total(
@@ -873,7 +1040,9 @@ def test_score_content_gate_rejects_independently_aggregated_sofa_total(
     ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
 
     with pytest.raises(refresher.ModuleRefreshError, match="total/receipts"):
-        refresher._validate_refreshed_score_content(tmp_path, ("sofa1_score",))
+        refresher._validate_refreshed_score_content(
+            tmp_path, ("sofa1_score",), database="miiv"
+        )
 
 
 def test_score_content_gate_checks_sofa2_aggregate_receipts(tmp_path: Path) -> None:
@@ -905,4 +1074,6 @@ def test_score_content_gate_checks_sofa2_aggregate_receipts(tmp_path: Path) -> N
     frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
 
     with pytest.raises(refresher.ModuleRefreshError, match="total/receipts"):
-        refresher._validate_refreshed_score_content(tmp_path, ("sofa2_score",))
+        refresher._validate_refreshed_score_content(
+            tmp_path, ("sofa2_score",), database="miiv"
+        )
