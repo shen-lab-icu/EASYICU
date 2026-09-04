@@ -231,9 +231,10 @@ one-shot path instead of inheriting the generic 5,000-stay guard.
 
 Three non-SOFA owners cannot use those measurements as an 8-GiB one-shot
 authority: `respiratory` peaked at 28,893.8 MiB, `ventilator` at 14,020.3 MiB,
-and `other_scores` at 15,553.3 MiB. `ventilator` and `other_scores` retain an
-unmeasured 5,000-stay safety guard until their current hard-limited boundaries
-are recorded; that guard is not a claim that five partitions are optimal.
+and `other_scores` at 15,553.3 MiB. `respiratory` and `ventilator` now use the
+current measured batch profiles below. `other_scores` retains an unmeasured
+5,000-stay safety guard until its current hard-limited boundary is recorded;
+that guard is not a claim that five partitions are optimal.
 
 The full AUMC `respiratory` owner was measured separately because its 15
 concepts are materially heavier than the respiratory subset consumed by SOFA.
@@ -253,6 +254,24 @@ physical columns had identical logical multisets. The only change was
 explicit `ECMO - aPTT controle` source at 23.8 hours, and an independent
 single-stay extraction reproduced the same value. This is a corrected old
 source-evidence omission, not a partition-boundary artifact.
+
+The AUMC `ventilator` boundary was then measured without batch-process
+isolation because its same-process writer remained stable. The rounded
+two-partition candidate of 12,000 stays crossed the 7,447-MiB hard stop at
+7,473.0 MiB. The 8,000-stay candidate completed three partitions in 395.9
+seconds (392.6 seconds in module extraction), with a 6,025.4-MiB external
+process-tree peak and a lower 5,704.1-MiB internal module peak. Its admission
+threshold is therefore 6,627.9 MiB after 10% headroom, and three is the minimum
+verified partition count.
+
+All 1,445,236 native row keys, schema fields and 12 raw/base concept columns
+matched the sealed release. The only logical differences were 43 `vent_mode`,
+67 `vent_breath_seq`, and 36 `driving_pres_controlled` values. These are the
+expected downstream effect of commit `095159ef`, which made hourly categorical
+`first` deterministic by exact source time and canonical value instead of
+unordered Parquet scan order. An independent direct extraction of every 68
+affected stays reproduced all 108 changed keys and all three current values
+with zero mismatches, excluding the patient partition as the cause.
 
 Under the deterministic 8,192-MiB worker envelope, a first combined benchmark
 showed that AUMC SOFA-1 could finish at 8,000 stays per batch, but its later
