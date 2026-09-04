@@ -549,6 +549,21 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             },
         }
     )
+    artifact_payloads = review.get("artifact_payloads")
+    artifact_payloads = (
+        artifact_payloads if isinstance(artifact_payloads, Mapping) else {}
+    )
+    figure_gallery = artifact_payloads.get("figure_gallery.json")
+    if isinstance(figure_gallery, Mapping):
+        figures = figure_gallery.get("figures")
+        figure_count = len(figures) if isinstance(figures, list) else 0
+        projection["figure_count"] = figure_count
+        if figure_count == 0:
+            projection["artifact_refs"] = [
+                row
+                for row in list(projection.get("artifact_refs") or [])
+                if row.get("artifact") != "figure_gallery.json"
+            ]
     return ensure_safe_projection(
         {
             key: value
@@ -566,6 +581,7 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 "evidence_complete",
                 "manuscript_ready",
                 "analysis_results_available",
+                "figure_count",
                 "reportable",
             }
         }

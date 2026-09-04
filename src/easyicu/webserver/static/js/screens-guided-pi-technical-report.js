@@ -144,6 +144,8 @@
     const presentationNote = p.figure_gallery && p.figure_gallery.presentation_variant
       ? `<div class="gpi-tech-presentation-note"><strong>${esc(tr('Digest-verified presentation view', '摘要核验后的展示视图'))}</strong><span>${esc(tr('Re-rendered from registered source tables; original run figures remain unchanged.', '根据已登记源数据表重新排版；原始运行图件保持不变。'))}</span></div>`
       : '';
+    const figureCount = Array.isArray(p.figure_gallery && p.figure_gallery.figures)
+      ? p.figure_gallery.figures.length : 0;
     return `<div class="gpi-tech-report ag-artifact-readable">
       <header class="gpi-tech-hero"><div><span>${esc(tr('Technical analysis report', '技术分析报告'))}</span><h2>${esc(context.question || tr('Research question not recorded', '尚未记录研究问题'))}</h2><p>${esc(tr('A concise Web view assembled from registered run artifacts; no estimate is recalculated here.', '由已登记运行产物组合形成的简明 Web 视图；此处不重新计算任何估计值。'))}</p></div><em>${esc(status)}</em></header>
       <section class="gpi-tech-metrics" aria-label="${esc(tr('Key results', '核心结果'))}">
@@ -160,7 +162,7 @@
       <section class="gpi-tech-findings"><div><small>${esc(tr('What the run found', '本次分析发现'))}</small><h3>${esc(tr('Core findings', '核心发现'))}</h3></div><ol>${findings.map(value => `<li>${esc(value)}</li>`).join('')}</ol></section>
       ${gallery ? `<section class="gpi-tech-figures"><div><small>${esc(tr('Registered figures', '已登记图件'))}</small><h3>${esc(tr('Visual results from this run', '本次运行的可视化结果'))}</h3></div>${presentationNote}${gallery}</section>` : ''}
       <section class="gpi-tech-limit"><div><small>${esc(tr('Interpretation boundary', '解释边界'))}</small><h3>${esc(tr('Read before using the result', '使用结果前请注意'))}</h3></div><ul>${limitations.map(value => `<li>${esc(value)}</li>`).join('')}</ul></section>
-      <nav class="gpi-tech-links" aria-label="${esc(tr('Detailed run artifacts', '详细运行产物'))}"><span>${esc(tr('Continue to details', '继续查看详情'))}</span>${artifactButton('result_tables.json', tr('Result tables', '结果表'))}${artifactButton('figure_gallery.json', tr('Figures', '图件'))}${artifactButton('manuscript_provenance.json', tr('Evidence-bound article', '证据绑定文章'))}${artifactButton('quality_gate.json', tr('Validation gate', '验证闸门'))}</nav>
+      <nav class="gpi-tech-links" aria-label="${esc(tr('Detailed run artifacts', '详细运行产物'))}"><span>${esc(tr('Continue to details', '继续查看详情'))}</span>${artifactButton('result_tables.json', tr('Result tables', '结果表'))}${figureCount > 0 ? artifactButton('figure_gallery.json', tr('Figures', '图件')) : ''}${artifactButton('manuscript_provenance.json', tr('Evidence-bound article', '证据绑定文章'))}${artifactButton('quality_gate.json', tr('Validation gate', '验证闸门'))}</nav>
     </div>`;
   }
 

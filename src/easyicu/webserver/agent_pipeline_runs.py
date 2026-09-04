@@ -4422,6 +4422,7 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.contracts.dependence import (
                 PlannedDependenceRequirement,
             )
+            from easyicu.research_agent.literature import manuscript_citable_keys
 
             planning_endpoint = metadata_planning_coordinates.get("endpoint")
             runtime_primary_exposure_source = str(
@@ -4433,6 +4434,19 @@ def make_research_pipeline_run_runner(
             runtime_projection_specs = _runtime_projection_sensitivity_specs(
                 sensitivity_specs,
                 primary_exposure_source=runtime_primary_exposure_source,
+            )
+            runtime_literature_keys = manuscript_citable_keys(
+                bound_preplan_literature
+            )
+            runtime_direct_comparator_keys = tuple(
+                decision.citation_key
+                for decision in (
+                    bound_preplan_literature.screening_decisions
+                    if bound_preplan_literature is not None
+                    else ()
+                )
+                if decision.disposition == "include"
+                and decision.evidence_role == "direct_comparator"
             )
             try:
                 runtime_projection = compile_web_scientific_runtime_projection(
@@ -4467,6 +4481,10 @@ def make_research_pipeline_run_runner(
                     universe_path=Path(acquisition.universe_path),
                     scientific_configuration_sha256=(
                         study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                    literature_citation_keys=runtime_literature_keys,
+                    direct_comparator_literature_keys=(
+                        runtime_direct_comparator_keys
                     ),
                 )
             except WebScientificRuntimeProjectionError as exc:

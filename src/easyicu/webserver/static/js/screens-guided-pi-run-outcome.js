@@ -24,6 +24,7 @@
       const validated = latestRun.analysis_validated === true;
       const numericVerified = latestRun.numeric_verified === true;
       const manuscriptReady = latestRun.manuscript_ready === true;
+      const figureCount = Number.isInteger(latestRun.figure_count) ? latestRun.figure_count : null;
       const resources = Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [];
       const ledger = resources.find(row => row && row.artifact === 'evidence_ledger.json');
       const detailActions = latestRun.run_id && ledger ? [
@@ -59,6 +60,7 @@
         `<button class="btn sm primary" type="button" data-gpi-run-outcome-data>${iconHtml('chart', 13)} ${esc(tr('Open data visualization', '打开数据可视化'))}</button>`,
         ...Object.keys(labels).map(name => {
           if (!manuscriptReady && name === 'manuscript_provenance.json') return '';
+          if (name === 'figure_gallery.json' && latestRun.figure_count === 0) return '';
           const resource = resources.find(row => row && row.artifact === name);
           const label = tr(labels[name][0], labels[name][1]);
           return resource ? resourceButton({ ...resource, label }, label) : '';
@@ -74,6 +76,9 @@
         primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry>${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
       }
       if (!primaryActions.length && !detailActions.length) return '';
+      const figureNote = figureCount === 0
+        ? `<p class="gpi-run-outcome-figure-note">${esc(tr('No figure was registered for this analysis; review the result tables first.', '本次分析未登记图件；请先查看结果表。'))}</p>`
+        : '';
       return `<section class="gpi-run-outcome" role="status" aria-label="${esc(tr('Completed analysis results', '已完成的分析结果'))}">
         <div class="gpi-run-outcome-icon" aria-hidden="true">${iconHtml(validated ? 'check' : 'shield', 17)}</div>
         <div class="gpi-run-outcome-copy">
@@ -93,6 +98,7 @@
               : '执行、证据绑定和数值核验已经完成。剩余校验项修复期间，结果仍可查看。',
           ))}</p>
           <div class="gpi-run-outcome-actions" aria-label="${esc(tr('Recommended review order', '建议审阅顺序'))}">${primaryActions.join('')}</div>
+          ${figureNote}
           ${detailActions.length ? `<details class="gpi-run-outcome-more"><summary>${esc(tr(`Complete artifacts and audit (${detailActions.length})`, `完整产物与审计（${detailActions.length}）`))}</summary><div class="gpi-run-outcome-actions">${detailActions.join('')}</div></details>` : ''}
           <small>${esc(tr('Analysis-only: suitable for review, not yet authorized for publication claims.', '当前为分析级结果：可以审阅，但尚未获准作为投稿结论。'))}</small>
         </div>
