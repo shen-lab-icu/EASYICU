@@ -231,10 +231,28 @@ one-shot path instead of inheriting the generic 5,000-stay guard.
 
 Three non-SOFA owners cannot use those measurements as an 8-GiB one-shot
 authority: `respiratory` peaked at 28,893.8 MiB, `ventilator` at 14,020.3 MiB,
-and `other_scores` at 15,553.3 MiB. Until a hard-limited boundary search records
-their fastest safe current batch, 5,000 stays is explicitly an unmeasured
-safety guard for only these three modules, not the AUMC standard and not a
-claim that five partitions are optimal.
+and `other_scores` at 15,553.3 MiB. `ventilator` and `other_scores` retain an
+unmeasured 5,000-stay safety guard until their current hard-limited boundaries
+are recorded; that guard is not a claim that five partitions are optimal.
+
+The full AUMC `respiratory` owner was measured separately because its 15
+concepts are materially heavier than the respiratory subset consumed by SOFA.
+The first implementation retained Arrow/native writer pages while the next
+patient batch was running, so 8,000, 7,000 and 6,000 candidates all crossed the
+7,447-MiB hard stop late in extraction. The corrected path writes each batch in
+a fresh process, defers bounded Parquet merging until all extraction children
+have exited, and then runs native-v2 publication separately. At commit
+`0e2b2dd0`, 5,000 completed all five partitions in 836.0 seconds. The external
+whole-run peak was 6,996.6 MiB; the conservative largest internal batch sample
+was 7,254.6 MiB, so the registry threshold is 7,980.1 MiB after 10% headroom.
+Because 6,000 already failed, five is the minimum verified partition count.
+
+The final native-v2 table retained all 2,537,113 sealed row keys. Sixteen of 17
+physical columns had identical logical multisets. The only change was
+`ecmo=True` at stay 16292, hour 23: raw `procedureorderitems` contains the
+explicit `ECMO - aPTT controle` source at 23.8 hours, and an independent
+single-stay extraction reproduced the same value. This is a corrected old
+source-evidence omission, not a partition-boundary artifact.
 
 Under the deterministic 8,192-MiB worker envelope, a first combined benchmark
 showed that AUMC SOFA-1 could finish at 8,000 stays per batch, but its later
