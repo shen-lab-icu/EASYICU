@@ -1,8 +1,8 @@
 # MIMIC-IV 19-module extraction resource standard
 
-Date: 2026-08-27 EDT  
-Code baseline: `dfc1687` plus the current profile-registration patch  
-Dataset: `/Volumes/外置硬盘/databases/mimiciv`  
+Date: 2026-08-27 EDT
+Code baseline: `dfc1687` plus the current profile-registration patch
+Dataset: `/Volumes/外置硬盘/databases/mimiciv`
 New evidence root: `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/mimiciv/`
 
 ## Question and method

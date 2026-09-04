@@ -385,7 +385,7 @@ def _load_psutil(resource_policy: str):
 
     pss_supported = False
     try:
-        pss = getattr(psutil.Process(os.getpid()).memory_full_info(), "pss")
+        pss = psutil.Process(os.getpid()).memory_full_info().pss
         pss_supported = isinstance(pss, int) and pss > 0
     except (psutil.Error, AttributeError, OSError):
         pss_supported = False
@@ -604,7 +604,7 @@ def _sample_process_tree(psutil_module, process) -> tuple[float, float | None, l
             errors.append(type(exc).__name__)
             continue
         try:
-            value = getattr(candidate.memory_full_info(), "pss")
+            value = candidate.memory_full_info().pss
         except (psutil_module.Error, AttributeError, OSError) as exc:
             errors.append(type(exc).__name__)
         else:

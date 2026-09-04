@@ -1,9 +1,9 @@
 # eICU 19-module extraction resource standard
 
-Date: 2026-08-27 EDT  
-Profiling baseline: `30f5228`  
-Planner/profile integration baseline: `98e950b` plus the current owner patch  
-Dataset: `/Volumes/外置硬盘/databases/eicu`  
+Date: 2026-08-27 EDT
+Profiling baseline: `30f5228`
+Planner/profile integration baseline: `98e950b` plus the current owner patch
+Dataset: `/Volumes/外置硬盘/databases/eicu`
 Evidence root: `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/eicu/`
 
 ## Question
