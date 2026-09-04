@@ -3197,6 +3197,7 @@ def _callback_sofa2_score(
         "sofa2_n_components",
     ]
     keep_components = ctx.kwargs.get("keep_components", False)
+    source_time_marker = "_sofa2_source_assessment_time"
 
     # Component score and its two owner receipts have the same row keys.  Merge
     # all three columns per component in one indexed concat.  The previous
@@ -3286,6 +3287,21 @@ def _callback_sofa2_score(
         sort_columns = id_cols_to_group + [index_column]
         data = data.sort_values(sort_columns)
 
+        # Keep the distinction between a real component-owned assessment row
+        # and an empty row introduced only by ``fill_gaps``.  The published
+        # SOFA-2 primary policy normal-imputes a missing patient-level domain,
+        # but it does not create a score observation at an hour where no owner
+        # supplied any row.  Encoding the source time itself lets the rolling
+        # bulk path preserve that distinction with a built-in ``max`` instead
+        # of falling back to the slow per-stay Python implementation.
+        if pd.api.types.is_numeric_dtype(data[index_column]):
+            data[source_time_marker] = pd.to_numeric(
+                data[index_column], errors="coerce"
+            )
+        else:
+            source_time = pd.to_datetime(data[index_column], errors="coerce")
+            data[source_time_marker] = source_time.astype("int64") / 1_000_000_000
+
         if id_cols_to_group and len(data) > 1:
             diffs = (
                 data.groupby(id_cols_to_group, sort=False)[index_column]
@@ -3345,6 +3361,7 @@ def _callback_sofa2_score(
                 for name in observed_columns + available_columns
             }
         )
+        agg_dict[source_time_marker] = "max_or_na"
         data = slide(
             data,
             list(id_columns),
@@ -3377,9 +3394,40 @@ def _callback_sofa2_score(
         available_frame.to_numpy(),
         0,
     )
-    data["sofa2"] = (
+    primary_total = (
         effective_components.fillna(0).sum(axis=1).round().astype("Int64")
     )
+    component_support = (
+        data[required].notna().any(axis=1)
+        | available_frame.any(axis=1)
+        | data[observed_columns].fillna(0).eq(1).any(axis=1)
+    )
+    if source_time_marker in data:
+        if pd.api.types.is_numeric_dtype(data[index_column]):
+            current_time = pd.to_numeric(data[index_column], errors="coerce")
+            source_row = np.isclose(
+                pd.to_numeric(data[source_time_marker], errors="coerce"),
+                current_time,
+                rtol=0.0,
+                atol=0.01,
+                equal_nan=False,
+            )
+        else:
+            current_time = (
+                pd.to_datetime(data[index_column], errors="coerce").astype("int64")
+                / 1_000_000_000
+            )
+            source_row = np.isclose(
+                pd.to_numeric(data[source_time_marker], errors="coerce"),
+                current_time,
+                rtol=0.0,
+                atol=256.0,
+                equal_nan=False,
+            )
+        scoring_domain = component_support | source_row
+    else:
+        scoring_domain = pd.Series(True, index=data.index)
+    data["sofa2"] = primary_total.where(scoring_domain)
     database = getattr(getattr(ctx.data_source, "config", None), "name", "")
     structural_support = sofa2_total_structurally_supported(database)
     if not structural_support:
