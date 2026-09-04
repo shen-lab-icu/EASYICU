@@ -21,7 +21,10 @@ from ..base import BaseICULoader, detect_database_type, get_default_data_path
 from ..concept.catalog import CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
-from ..scores.sofa2_aggregate import SOFA2_COMPONENT_NAMES
+from ..scores.sofa2_aggregate import (
+    SOFA2_COMPONENT_NAMES,
+    sofa2_total_structurally_supported,
+)
 from .cohort import get_all_patient_ids_impl
 from .concepts import (
     _concepts_need_sofa2,
@@ -2372,6 +2375,7 @@ def _consolidate_special_score_dependency(
     score_name: str,
     id_col: str,
     time_col: str,
+    database: str = "",
 ):
     """Build one score per stay/time before applying a Sepsis delta window.
 
@@ -2421,13 +2425,23 @@ def _consolidate_special_score_dependency(
         sort=False,
         dropna=False,
     ).agg({**{component: "max" for component in components}, **{receipt: "max" for receipt in available}})
-    complete = grouped[components].notna().all(axis=1) & grouped[available].astype(
-        "boolean"
-    ).fillna(False).all(axis=1)
-    grouped[score_name] = grouped[components].sum(
-        axis=1,
-        min_count=len(components),
-    ).where(complete)
+    # The primary SOFA-2 analysis imputes a patient-level missing domain to
+    # its normal score of zero. Availability receipts are retained for
+    # complete-case sensitivity analyses and prevent a disclaimed non-zero
+    # value from entering the primary total. An entirely unsupported database
+    # domain remains a structural failure rather than patient-level missingness.
+    grouped[score_name] = (
+        grouped[components]
+        .where(grouped[available].astype("boolean").fillna(False).to_numpy(), 0)
+        .fillna(0)
+        .sum(axis=1)
+    )
+    if not sofa2_total_structurally_supported(database):
+        grouped[score_name] = pd.Series(
+            pd.NA,
+            index=grouped.index,
+            dtype="Float64",
+        )
     return grouped[[id_col, time_col, score_name]]
 
 
@@ -2706,6 +2720,7 @@ def _stream_special_extraction_batches(
                         score_name="sofa2",
                         id_col=id_col,
                         time_col=time_col,
+                        database=database,
                     )
                     susp2 = _suspicion_timeline(
                         susp,
@@ -3392,6 +3407,7 @@ def _canonicalise_native_export_frame(
         canonical,
         module=module,
         requested_concepts=requested_concepts,
+        database=normalized_database,
     )
 
 
@@ -3471,6 +3487,7 @@ def _recompute_native_sofa2_aggregate_frame(
     *,
     module: str,
     requested_concepts: Sequence[str],
+    database: str = "",
 ):
     """Rebuild a derived SOFA-2 total after row-level transformations.
 
@@ -3490,15 +3507,24 @@ def _recompute_native_sofa2_aggregate_frame(
     observed = [f"{component}_observed" for component in components]
     available = [f"{component}_available" for component in components]
     component_valid = frame[components].notna().all(axis=1)
-    all_available = frame[available].astype("boolean").fillna(False).all(axis=1)
+    available_frame = frame[available].astype("boolean").fillna(False)
+    all_available = available_frame.all(axis=1)
     all_observed = frame[observed].astype("boolean").fillna(False).all(axis=1)
     complete = component_valid & all_available
+    # Primary SOFA-2 totals use normal-value imputation for patient-level
+    # missing domains.  Complete-case status remains explicit in the aggregate
+    # receipts and therefore does not alter the score itself.
     frame["sofa2"] = (
         frame[components]
-        .sum(axis=1, min_count=len(components))
-        .where(complete)
+        .where(available_frame.to_numpy(), 0)
+        .fillna(0)
+        .sum(axis=1)
         .astype("float64")
     )
+    structural_support = sofa2_total_structurally_supported(database)
+    if not structural_support:
+        frame["sofa2"] = float("nan")
+        complete = pd.Series(False, index=frame.index)
     frame["sofa2_available"] = complete.astype("boolean")
     frame["sofa2_observed"] = (complete & all_observed).astype("boolean")
     return frame
@@ -3509,6 +3535,7 @@ def _recompute_native_sofa2_aggregate_arrow(
     *,
     module: str,
     requested_concepts: Sequence[str],
+    database: str = "",
 ):
     """Arrow-bounded counterpart of the pandas SOFA-2 aggregate rebuild."""
 
@@ -3530,15 +3557,24 @@ def _recompute_native_sofa2_aggregate_arrow(
     all_observed = pc.fill_null(
         table[f"{first_component}_observed"], False
     )
-    total = pc.fill_null(first_values, 0.0)
+    total = pc.if_else(
+        pc.fill_null(table[f"{first_component}_available"], False),
+        pc.fill_null(first_values, 0.0),
+        0.0,
+    )
     for component in remaining_components:
         values = table[component]
         available = pc.fill_null(table[f"{component}_available"], False)
         observed = pc.fill_null(table[f"{component}_observed"], False)
         complete = pc.and_(complete, pc.and_(available, pc.is_valid(values)))
         all_observed = pc.and_(all_observed, observed)
-        total = pc.add(total, pc.fill_null(values, 0.0))
-    total = pc.if_else(complete, total, pa.scalar(None, type=pa.float64()))
+        total = pc.add(
+            total,
+            pc.if_else(available, pc.fill_null(values, 0.0), 0.0),
+        )
+    if not sofa2_total_structurally_supported(database):
+        total = pa.nulls(len(table), type=pa.float64())
+        complete = pc.and_(complete, pa.scalar(False))
     replacements = {
         "sofa2": total,
         "sofa2_observed": pc.and_(complete, all_observed),
@@ -3581,6 +3617,7 @@ def _recompute_native_derived_score_aggregates_frame(
     *,
     module: str,
     requested_concepts: Sequence[str],
+    database: str = "",
 ):
     frame = _recompute_native_sofa1_aggregate_frame(
         frame,
@@ -3591,6 +3628,7 @@ def _recompute_native_derived_score_aggregates_frame(
         frame,
         module=module,
         requested_concepts=requested_concepts,
+        database=database,
     )
 
 
@@ -3599,6 +3637,7 @@ def _recompute_native_derived_score_aggregates_arrow(
     *,
     module: str,
     requested_concepts: Sequence[str],
+    database: str = "",
 ):
     table = _recompute_native_sofa1_aggregate_arrow(
         table,
@@ -3609,6 +3648,7 @@ def _recompute_native_derived_score_aggregates_arrow(
         table,
         module=module,
         requested_concepts=requested_concepts,
+        database=database,
     )
 
 
@@ -3628,6 +3668,13 @@ def _native_longitudinal_aggregation_policy(module: str) -> Dict[str, str]:
         policy["derived_score_total"] = (
             "recomputed_after_component_consolidation"
         )
+    if module == "sofa2_score":
+        policy["primary_missing_domain"] = (
+            "normal_value_zero_when_database_domain_is_structurally_supported"
+        )
+        policy["aggregate_availability_receipt"] = (
+            "all_six_owner_available_for_complete_case_sensitivity"
+        )
     return policy
 
 
@@ -3638,6 +3685,7 @@ def _consolidate_native_export_row_grain(
     requested_concepts: List[str],
     dictionary,
     source_charttime=None,
+    database: str = "",
 ):
     """Enforce one deterministic physical row per native-v2 primary key.
 
@@ -3820,18 +3868,7 @@ def _consolidate_native_export_row_grain(
             }
             for concept in _native_export_physical_value_columns(requested_concepts):
                 kind = _native_export_storage_kind(concept, dictionary)
-                available_column = f"{concept}_available"
-                if (
-                    concept in requested_concepts
-                    and concept.startswith("sofa2")
-                    and available_column in group
-                ):
-                    owner_available = (
-                        group[available_column].astype("boolean").fillna(False)
-                    )
-                    values = group.loc[owner_available, concept].dropna()
-                else:
-                    values = group[concept].dropna()
+                values = group[concept].dropna()
                 if values.empty:
                     record[concept] = pd.NA if kind in {"boolean", "string"} else np.nan
                 elif kind == "boolean":
@@ -3876,6 +3913,7 @@ def _consolidate_native_export_row_grain(
         consolidated,
         module=module,
         requested_concepts=requested_concepts,
+        database=database,
     )
     physical_values = _native_export_physical_value_columns(requested_concepts)
     consolidated = consolidated[["stay_id", "charttime", *physical_values]].reset_index(
@@ -4216,6 +4254,7 @@ def _native_export_duckdb_consolidate_row_grain(
     requested_concepts: List[str],
     dictionary,
     before_audit: Dict[str, object],
+    database: str = "",
 ) -> tuple[Dict[str, object], Dict[str, int]]:
     """Consolidate a large duplicate-bearing longitudinal parquet boundedly.
 
@@ -4278,19 +4317,11 @@ def _native_export_duckdb_consolidate_row_grain(
                 f"FILTER (WHERE {column} IS NOT NULL)::VARCHAR AS {alias}"
             )
         elif concept in SOFA2_COMPONENT_NAMES:
-            available = quote_identifier(f"{concept}_available")
-            expression = (
-                f"(max({column}) FILTER (WHERE {available} IS TRUE))"
-                f"::DOUBLE AS {alias}"
-            )
+            expression = f"max({column})::DOUBLE AS {alias}"
         elif concept in _SOFA1_COMPONENT_NAMES:
             expression = f"max({column})::DOUBLE AS {alias}"
         elif concept in requested_concepts and concept.startswith("sofa2"):
-            available = quote_identifier(f"{concept}_available")
-            expression = (
-                f"(median({column}) FILTER (WHERE {available} IS TRUE))"
-                f"::DOUBLE AS {alias}"
-            )
+            expression = f"median({column})::DOUBLE AS {alias}"
         else:
             expression = f"median({column})::DOUBLE AS {alias}"
         aggregate_expressions.append(expression)
@@ -4429,6 +4460,7 @@ def _native_export_duckdb_consolidate_row_grain(
                     table,
                     module=module,
                     requested_concepts=requested_concepts,
+                    database=database,
                 )
                 for concept in requested_concepts:
                     column = table[concept]
@@ -4893,6 +4925,7 @@ def _try_publish_native_export_arrow_fast_path(
             requested_concepts=requested_concepts,
             dictionary=dictionary,
             before_audit=row_grain_audit,
+            database=database,
         )
 
     return {
@@ -5532,6 +5565,7 @@ def _publish_native_export_v2(
                         requested_concepts=requested_concept_plan[module],
                         dictionary=dictionary,
                         source_charttime=source_charttime,
+                        database=normalized_database,
                     )
                     post_consolidation_bounds = _enforce_native_export_concept_bounds(
                         frame,
@@ -5556,6 +5590,7 @@ def _publish_native_export_v2(
                         module=module,
                         requested_concepts=requested_concept_plan[module],
                         dictionary=dictionary,
+                        database=normalized_database,
                     )
                 row_grain_audit["publication_backend"] = (
                     "pandas_bounded_row_grain_fallback"

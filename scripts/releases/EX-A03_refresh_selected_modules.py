@@ -51,6 +51,9 @@ from easyicu.api.extraction import (  # noqa: E402
     plan_extraction_resources,
     plan_module_extraction_resources,
 )
+from easyicu.scores.sofa2_aggregate import (  # noqa: E402
+    sofa2_total_structurally_supported,
+)
 
 
 def _load_republisher():
@@ -1005,6 +1008,7 @@ def _validate_refreshed_score_content(
         non_null = 0
         inconsistent = 0
         invalid_component = 0
+        disclaimed_nonzero_component = 0
         component_non_null = {component: 0 for component in components}
         availability_true = {component: 0 for component in components}
         consistency_columns = [score_column, *components]
@@ -1059,9 +1063,22 @@ def _validate_refreshed_score_content(
                 complete = component_frame.notna().all(axis=1) & available.all(
                     axis=1
                 )
-                expected = component_frame.sum(
-                    axis=1, min_count=len(components)
-                ).where(complete)
+                disclaimed_nonzero_component += int(
+                    (
+                        component_frame.fillna(0).ne(0)
+                        & ~available.set_axis(components, axis=1)
+                    )
+                    .any(axis=1)
+                    .sum()
+                )
+                expected = (
+                    component_frame
+                    .where(available.to_numpy(), 0)
+                    .fillna(0)
+                    .sum(axis=1)
+                )
+                if not sofa2_total_structurally_supported(database):
+                    expected = pd.Series(float("nan"), index=frame.index)
                 coherent = score.eq(expected) | (score.isna() & expected.isna())
                 coherent &= (
                     frame["sofa2_available"]
@@ -1099,6 +1116,11 @@ def _validate_refreshed_score_content(
             raise ModuleRefreshError(
                 f"{module} refresh has {invalid_component} rows with organ "
                 "components outside the valid 0-4 range"
+            )
+        if disclaimed_nonzero_component:
+            raise ModuleRefreshError(
+                f"{module} refresh has {disclaimed_nonzero_component} rows with "
+                "a non-zero organ score disclaimed by its availability receipt"
             )
         if inconsistent:
             raise ModuleRefreshError(
@@ -2068,6 +2090,11 @@ def refresh_candidate(
                         current.get("resource_budget_mb")
                         if current.get("resource_budget_mb") is not None
                         else previous.get("resource_budget_mb")
+                    ),
+                    "resource_execution_limits": (
+                        current.get("resource_execution_limits")
+                        if current.get("resource_execution_limits") is not None
+                        else previous.get("resource_execution_limits")
                     ),
                     "resource_plan": (
                         current.get("resource_plan")

@@ -47,6 +47,7 @@ from ..scores.sofa2 import (
     sofa2_cns_proxy_sensitivity,
     sofa2_component_evidence,
 )
+from ..scores.sofa2_aggregate import sofa2_total_structurally_supported
 from ..scores.sepsis import (
     delta_cummin,
     delta_min,
@@ -3362,15 +3363,28 @@ def _callback_sofa2_score(
         data[available_columns].fillna(0).sum(axis=1).astype(int)
     )
     data["sofa2_n_components"] = data["sofa2_n_available_components"]
-    all_available = data[available_columns].fillna(0).eq(1).all(axis=1)
+    available_frame = data[available_columns].fillna(0).eq(1)
+    all_available = available_frame.all(axis=1)
     all_observed = data[observed_columns].fillna(0).eq(1).all(axis=1)
-    # A missing component must not be silently summed as 0. When fewer than
-    # all six components are available for a row, the total is unknown (NA);
-    # n_available_components still reports how many contributed.
-    data["sofa2"] = (
-        data[required].sum(axis=1, min_count=len(required)).round().astype("Int64")
+    component_valid = data[required].notna().all(axis=1)
+    # SOFA-2's primary published missing-data policy assigns an unavailable
+    # patient-level domain its normal value (zero).  Owner receipts remain
+    # authoritative for the complete-case sensitivity flag: a non-zero value
+    # with a false receipt is ignored here rather than allowed to inflate the
+    # score.  A database lacking an entire organ-domain owner still fails
+    # closed and publishes no total.
+    effective_components = data[required].where(
+        available_frame.to_numpy(),
+        0,
     )
-    complete = all_available & data["sofa2"].notna()
+    data["sofa2"] = (
+        effective_components.fillna(0).sum(axis=1).round().astype("Int64")
+    )
+    database = getattr(getattr(ctx.data_source, "config", None), "name", "")
+    structural_support = sofa2_total_structurally_supported(database)
+    if not structural_support:
+        data["sofa2"] = pd.Series(pd.NA, index=data.index, dtype="Int64")
+    complete = all_available & component_valid & structural_support
     data["sofa2_available"] = complete.astype("int8")
     data["sofa2_observed"] = (complete & all_observed).astype("int8")
 
