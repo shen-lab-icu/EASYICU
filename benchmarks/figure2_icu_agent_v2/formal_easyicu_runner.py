@@ -17,6 +17,7 @@ from .easyicu_review_bundle_adapter import (
     EasyICUReviewMaterial,
     write_easyicu_review_bundle,
 )
+from .review_bundle_writer import terminal_failure_material
 
 from .formal_provider_gate import (
     FormalAuthorizedHardStopClient,
@@ -197,20 +198,10 @@ class FormalEasyICURunner:
         mandatory_artifacts: tuple[str, ...],
     ) -> None:
         accounting = self._provider_hard_stop.accounting_summary()
-        failed = EasyICUReviewMaterial(
+        failed = terminal_failure_material(
             plan={"available": False, "failure_category": "execution_failure"},
-            cohort={"available": False, "failure_category": "execution_failure"},
-            results={"available": False, "failure_category": "execution_failure"},
-            diagnostics={
-                "available": False,
-                "failure_category": "execution_failure",
-            },
-            report=(
-                "The task ended with the neutral terminal category "
-                "`execution_failure`."
-            ),
-            headline_evidence=(),
-            artifact_inventory={label: [] for label in mandatory_artifacts},
+            failure_category="execution_failure",
+            mandatory_artifacts=mandatory_artifacts,
         )
         write_easyicu_review_bundle(
             failed,

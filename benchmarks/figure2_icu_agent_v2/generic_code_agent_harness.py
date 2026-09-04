@@ -8,10 +8,8 @@ shared review bundle.  Formal Provider access is owned by
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,11 +22,12 @@ from easyicu.research_agent.authority.provider_hard_stop import (
 )
 from easyicu.research_agent.providers.protocol import LLMMessage
 
-from .review_bundle_semantics import (
-    CANONICAL_FILES,
-    asserted_artifact_presence,
-    normalize_artifact_inventory,
-    substantive_file_flags,
+from .review_bundle_writer import (
+    ReviewBundleMaterial,
+    ReviewBundleWriteError,
+    ReviewBundleWriter,
+    terminal_failure_material,
+    write_review_bundle,
 )
 
 
@@ -281,62 +280,6 @@ def _validate_mandatory_artifacts(values: Sequence[str]) -> tuple[str, ...]:
     return normalized
 
 
-def _canonical_json_bytes(value: Any) -> bytes:
-    try:
-        return (
-            json.dumps(
-                value,
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-                allow_nan=False,
-            )
-            + "\n"
-        ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
-        raise GenericHarnessError(
-            "GENERIC_FINAL_BUNDLE_INVALID",
-            "final scientific payload is not finite JSON",
-        ) from exc
-
-
-def _prepare_empty_output_dir(path: Path) -> Path:
-    expanded = path.expanduser()
-    if expanded.is_symlink():
-        raise GenericHarnessError(
-            "GENERIC_OUTPUT_DIRECTORY_UNSAFE",
-            "output path must not be a symlink",
-        )
-    resolved = expanded.resolve()
-    if resolved.exists():
-        if resolved.is_symlink() or not resolved.is_dir():
-            raise GenericHarnessError(
-                "GENERIC_OUTPUT_DIRECTORY_UNSAFE",
-                "output path must be a real directory",
-            )
-        if any(resolved.iterdir()):
-            raise GenericHarnessError(
-                "GENERIC_OUTPUT_DIRECTORY_NOT_EMPTY",
-                "output directory must be empty",
-            )
-    else:
-        resolved.mkdir(parents=True)
-    return resolved
-
-
-def _write_new_file(root: Path, name: str, payload: bytes) -> Path:
-    target = root / name
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    descriptor = os.open(target, flags, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-    except BaseException:
-        target.unlink(missing_ok=True)
-        raise
-    return target
-
-
 class GenericCodeAgentHarness:
     """Run one fresh generic-agent task under externally enforced budgets."""
 
@@ -376,7 +319,13 @@ class GenericCodeAgentHarness:
         if not task_prompt.strip() or not neutral_input_description.strip():
             raise ValueError("task prompt and neutral input description are required")
         required_artifacts = _validate_mandatory_artifacts(mandatory_artifacts)
-        destination = _prepare_empty_output_dir(Path(output_dir))
+        try:
+            destination = ReviewBundleWriter(Path(output_dir)).output_dir
+        except ReviewBundleWriteError as exc:
+            raise GenericHarnessError(
+                "GENERIC_OUTPUT_DIRECTORY_UNSAFE",
+                str(exc),
+            ) from exc
         started = time.monotonic()
         model_turns = 0
         tool_calls = 0
@@ -678,66 +627,34 @@ class GenericCodeAgentHarness:
                 "GENERIC_FINAL_BUNDLE_INVALID",
                 "artifact_inventory must map every frozen mandatory artifact",
             )
-        try:
-            normalized_inventory = normalize_artifact_inventory(
-                inventory,
-                mandatory_artifacts,
-            )
-        except ValueError as exc:
-            raise GenericHarnessError(
-                "GENERIC_FINAL_BUNDLE_INVALID",
-                str(exc),
-            ) from exc
-
-        payloads = {
-            "01_plan.json": _canonical_json_bytes(plan),
-            "02_cohort.json": _canonical_json_bytes(action["cohort"]),
-            "03_results.json": _canonical_json_bytes(action["results"]),
-            "04_diagnostics.json": _canonical_json_bytes(action["diagnostics"]),
-            "06_report.md": (action["report"].rstrip() + "\n").encode("utf-8"),
-        }
-        digests = {
-            name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()
-        }
-        manifest = {
-            "harness_computed_file_digests": digests,
-            "agent_asserted_headline_evidence": action["headline_evidence"],
-            "agent_asserted_mandatory_artifact_inventory": normalized_inventory,
-        }
-        payloads["05_evidence_manifest.json"] = _canonical_json_bytes(manifest)
         snapshot = dict(self._resource_snapshot())
-        for name in CANONICAL_FILES[:6]:
-            _write_new_file(destination, name, payloads[name])
-
-        agent_asserted_artifact_presence = asserted_artifact_presence(
-            normalized_inventory,
-            plan=plan,
-            cohort=action["cohort"],
-            results=action["results"],
-            diagnostics=action["diagnostics"],
-            report=action["report"],
-        )
-        substantive_output_files = substantive_file_flags(
-            plan=plan,
-            cohort=action["cohort"],
-            results=action["results"],
-            diagnostics=action["diagnostics"],
-            report=action["report"],
-        )
         receipt = {
             **snapshot,
-            "terminal_status": "completed",
-            "within_frozen_budget": bool(snapshot.pop("within_frozen_budget", False)),
-            "failure_category": None,
-            "agent_asserted_mandatory_artifact_presence": (
-                agent_asserted_artifact_presence
-            ),
-            "substantive_output_files": substantive_output_files,
             "model_turns": model_turns,
             "tool_calls": tool_calls,
             "wall_seconds": round(max(0.0, time.monotonic() - started), 6),
         }
-        _write_new_file(destination, "07_run_receipt.json", _canonical_json_bytes(receipt))
+        material = ReviewBundleMaterial(
+            plan=plan,
+            cohort=action["cohort"],
+            results=action["results"],
+            diagnostics=action["diagnostics"],
+            report=action["report"],
+            headline_evidence=action["headline_evidence"],
+            artifact_inventory=inventory,
+        )
+        try:
+            write_review_bundle(
+                material,
+                output_dir=destination,
+                mandatory_artifacts=mandatory_artifacts,
+                resource_receipt=receipt,
+            )
+        except ReviewBundleWriteError as exc:
+            raise GenericHarnessError(
+                "GENERIC_FINAL_BUNDLE_INVALID",
+                str(exc),
+            ) from exc
         return GenericHarnessResult(
             terminal_status="completed",
             failure_category=None,
@@ -757,59 +674,32 @@ class GenericCodeAgentHarness:
         tool_calls: int,
         started: float,
     ) -> GenericHarnessResult:
-        scientific_payloads = {
-            "01_plan.json": _canonical_json_bytes(plan),
-            "02_cohort.json": _canonical_json_bytes(
-                {"available": False, "failure_category": category}
-            ),
-            "03_results.json": _canonical_json_bytes(
-                {"available": False, "failure_category": category}
-            ),
-            "04_diagnostics.json": _canonical_json_bytes(
-                {"available": False, "failure_category": category}
-            ),
-            "06_report.md": (
-                f"The task ended with the neutral terminal category `{category}`.\n"
-            ).encode("utf-8"),
-        }
-        manifest = {
-            "harness_computed_file_digests": {
-                name: hashlib.sha256(payload).hexdigest()
-                for name, payload in scientific_payloads.items()
-            },
-            "agent_asserted_headline_evidence": [],
-            "agent_asserted_mandatory_artifact_inventory": {
-                label: [] for label in mandatory_artifacts
-            },
-        }
-        scientific_payloads["05_evidence_manifest.json"] = _canonical_json_bytes(
-            manifest
-        )
         snapshot = dict(self._resource_snapshot())
-        for name in CANONICAL_FILES[:6]:
-            _write_new_file(destination, name, scientific_payloads[name])
         receipt = {
             **snapshot,
-            "terminal_status": "failed",
-            "within_frozen_budget": bool(snapshot.pop("within_frozen_budget", False)),
-            "failure_category": category,
-            "agent_asserted_mandatory_artifact_presence": {
-                label: False for label in mandatory_artifacts
-            },
-            "substantive_output_files": {
-                name: False
-                for name in (
-                    "02_cohort.json",
-                    "03_results.json",
-                    "04_diagnostics.json",
-                    "06_report.md",
-                )
-            },
             "model_turns": model_turns,
             "tool_calls": tool_calls,
             "wall_seconds": round(max(0.0, time.monotonic() - started), 6),
         }
-        _write_new_file(destination, "07_run_receipt.json", _canonical_json_bytes(receipt))
+        material = terminal_failure_material(
+            plan=plan,
+            failure_category=category,
+            mandatory_artifacts=mandatory_artifacts,
+        )
+        try:
+            write_review_bundle(
+                material,
+                output_dir=destination,
+                mandatory_artifacts=mandatory_artifacts,
+                resource_receipt=receipt,
+                terminal_status="failed",
+                failure_category=category,
+            )
+        except ReviewBundleWriteError as exc:
+            raise GenericHarnessError(
+                "GENERIC_FINAL_BUNDLE_INVALID",
+                str(exc),
+            ) from exc
         return GenericHarnessResult(
             terminal_status="failed",
             failure_category=category,

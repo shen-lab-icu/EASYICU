@@ -11,13 +11,13 @@ from benchmarks.figure2_icu_agent_v2.formal_generic_runner import (
 )
 from benchmarks.figure2_icu_agent_v2.design_v2_1 import DesignContractError
 from benchmarks.figure2_icu_agent_v2.generic_code_agent_harness import (
-    CANONICAL_FILES,
     DockerRunnerBackend,
     GenericCodeAgentHarness,
     GenericExecutionResult,
     GenericBudgetExhausted,
     PlanReviewDecision,
 )
+from benchmarks.figure2_icu_agent_v2.review_bundle_semantics import CANONICAL_FILES
 from benchmarks.figure2_icu_agent_v2.formal_provider_gate import FormalCallCoordinate
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     ReviewBlindingContext,
