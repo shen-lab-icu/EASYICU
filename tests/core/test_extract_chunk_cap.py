@@ -322,21 +322,6 @@ def test_measured_aumc_light_modules_preserve_full_cohort_one_shot(
     assert plan.advisory is None
 
 
-@pytest.mark.parametrize("module", ["other_scores"])
-def test_unmeasured_heavy_aumc_modules_keep_memory_guard(module):
-    plan = plan_extraction_resources(
-        "aumc",
-        [module],
-        23_106,
-        available_memory_mb=8 * 1024,
-    )
-
-    assert plan.mode == "patient_batches"
-    assert plan.reason_code == "unmeasured_profile_memory_guard"
-    assert plan.batch_size == 5_000
-    assert plan.measured_peak_rss_mb is None
-
-
 def test_measured_aumc_ventilator_uses_minimum_verified_three_batches():
     plan = plan_extraction_resources(
         "aumc",
@@ -350,6 +335,23 @@ def test_measured_aumc_ventilator_uses_minimum_verified_three_batches():
     assert plan.batch_size == 8_000
     assert plan.measured_peak_rss_mb == pytest.approx(6_025.4)
     assert plan.required_available_memory_mb == pytest.approx(6_627.94)
+    assert _n_chunks(23_106, plan.batch_size) == 3
+    assert plan.advisory is None
+
+
+def test_measured_aumc_other_scores_uses_minimum_verified_three_batches():
+    plan = plan_extraction_resources(
+        "aumc",
+        ["other_scores"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 8_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_069.1)
+    assert plan.required_available_memory_mb == pytest.approx(7_776.01)
     assert _n_chunks(23_106, plan.batch_size) == 3
     assert plan.advisory is None
 

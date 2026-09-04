@@ -295,10 +295,11 @@ consumer changed SHA.
    `respiratory` owner has a measured five-partition boundary after process
    isolation and deferred merging removed allocator overlap; `ventilator` has
    a measured three-partition same-process boundary whose changed categorical
-   values all matched an independent 68-stay direct extraction. Only AUMC
-   `other_scores`, together with HiRID and SIC modules, still lacks a measured
-   current 8-GiB batch boundary. Conservative plans without such evidence are
-   not proof of a fastest batch.
+   values all matched an independent 68-stay direct extraction; `other_scores`
+   has a measured three-partition boundary exactly equal to its sealed logical
+   table. Thus every AUMC module now has a current or still-valid measured
+   8-GiB policy. HiRID and SIC modules remain incompletely measured, so their
+   conservative plans are not proof of a fastest batch.
 6. **Hash and publication reads.** SHA-256, logical multiset QC and metadata
    binding necessarily reread published files. These passes are audit costs;
    removing them would weaken release integrity. They can be scheduled once per

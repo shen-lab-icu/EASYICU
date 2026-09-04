@@ -232,9 +232,8 @@ one-shot path instead of inheriting the generic 5,000-stay guard.
 Three non-SOFA owners cannot use those measurements as an 8-GiB one-shot
 authority: `respiratory` peaked at 28,893.8 MiB, `ventilator` at 14,020.3 MiB,
 and `other_scores` at 15,553.3 MiB. `respiratory` and `ventilator` now use the
-current measured batch profiles below. `other_scores` retains an unmeasured
-5,000-stay safety guard until its current hard-limited boundary is recorded;
-that guard is not a claim that five partitions are optimal.
+current measured batch profiles below; `other_scores` is also measured below.
+None of these three now relies on the generic 5,000-stay safety guard.
 
 The full AUMC `respiratory` owner was measured separately because its 15
 concepts are materially heavier than the respiratory subset consumed by SOFA.
@@ -272,6 +271,17 @@ expected downstream effect of commit `095159ef`, which made hourly categorical
 unordered Parquet scan order. An independent direct extraction of every 68
 affected stays reproduced all 108 changed keys and all three current values
 with zero mismatches, excluding the patient partition as the cause.
+
+Finally, the AUMC `other_scores` rounded two-partition candidate of 12,000
+stays crossed the same hard stop at 7,576.7 MiB after 68.1 seconds. The 8,000-
+stay candidate completed three partitions in 439.1 seconds (436.3 seconds in
+module extraction), with a 7,069.1-MiB external process-tree peak and a lower
+6,738.9-MiB internal module peak. Its admission threshold is 7,776.0 MiB after
+10% headroom. The published table contained 2,580,685 unique stay-hour rows
+from all 23,106 stays; schema, keys, qSOFA, SIRS, MEWS and NEWS were exactly
+equal to the sealed release in both multiset directions. Three is therefore
+the minimum verified partition count, and no additional process-isolation
+mechanism is needed for this module.
 
 Under the deterministic 8,192-MiB worker envelope, a first combined benchmark
 showed that AUMC SOFA-1 could finish at 8,000 stays per batch, but its later
