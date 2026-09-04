@@ -14,10 +14,10 @@ from easyicu.research_agent.execution.runner import DockerRunner
 from easyicu.research_agent.providers.protocol import LLMMessage
 
 from .formal_provider_gate import (
-    FormalCallCoordinate,
+    FormalProviderSession,
     complete_formal_provider_call,
 )
-from .formal_trajectory_lifecycle import FormalTrajectoryLifecycle
+from .formal_trajectory_lifecycle import FormalExecutionSession
 from .generic_code_agent_harness import (
     DockerRunnerBackend,
     GenericCodeAgentHarness,
@@ -52,32 +52,17 @@ class FormalGenericModelGateway:
     """Route every formal generic-arm model turn through the receipt gate."""
 
     client: Any
-    receipts: Mapping[str, Any]
-    scope: str
-    task_id: str
-    execution_site: str
+    session: FormalProviderSession
     max_tokens: int
     temperature: float
-    provider_hard_stop: TaskProviderHardStop | None = None
-    _call_number: int = 0
 
     def complete(self, *, phase: str, messages: Sequence[LLMMessage]) -> str:
         del phase
-        self._call_number += 1
-        coordinate = FormalCallCoordinate(
-            scope=self.scope,
-            task_id=self.task_id,
-            arm="generic_code_agent",
-            execution_site=self.execution_site,
-            call_id=f"generic_{self._call_number:04d}",
-        )
         try:
             return complete_formal_provider_call(
                 self.client,
                 messages,
-                receipts=self.receipts,
-                coordinate=coordinate,
-                provider_hard_stop=self.provider_hard_stop,
+                session=self.session,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
             )
@@ -103,23 +88,20 @@ class FormalGenericCodeAgentRunner:
         provider_hard_stop: TaskProviderHardStop,
         resource_snapshot: Callable[[], Mapping[str, Any]],
     ) -> None:
-        trajectory = FormalTrajectoryLifecycle(
+        session = FormalExecutionSession(
             lease_path=trajectory_lease_path,
             receipts=receipts,
             scope=scope,
             task_id=task_id,
             arm="generic_code_agent",
             execution_site=execution_site,
+            provider_hard_stop=provider_hard_stop,
         )
         gateway = FormalGenericModelGateway(
             client=client,
-            receipts=receipts,
-            scope=scope,
-            task_id=task_id,
-            execution_site=execution_site,
+            session=session.provider,
             max_tokens=max_tokens,
             temperature=temperature,
-            provider_hard_stop=provider_hard_stop,
         )
 
         def validated_resource_snapshot() -> Mapping[str, Any]:
@@ -150,8 +132,8 @@ class FormalGenericCodeAgentRunner:
             return snapshot
 
         def build_harness() -> GenericCodeAgentHarness:
-            docker_runner = docker_runner_factory(trajectory.workdir)
-            trajectory.require_workdir(docker_runner.workdir)
+            docker_runner = docker_runner_factory(session.workdir)
+            session.require_workdir(docker_runner.workdir)
             executor: GenericExecutionBackend = DockerRunnerBackend(
                 docker_runner,
                 task_hard_stop=provider_hard_stop,
@@ -162,11 +144,10 @@ class FormalGenericCodeAgentRunner:
                 resource_snapshot=validated_resource_snapshot,
             )
 
-        self._harness = trajectory.initialize(
-            workdir=trajectory.workdir,
+        self._harness = session.initialize(
             factory=build_harness,
         )
-        self._trajectory = trajectory
+        self._trajectory = session
         self._provider_hard_stop = provider_hard_stop
 
     def run(

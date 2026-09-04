@@ -2,37 +2,14 @@
 
 from __future__ import annotations
 
-from threading import Lock
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator
 
-from easyicu.research_agent.authority.provider_hard_stop import TaskProviderHardStop
 from easyicu.research_agent.orchestration.services import PipelineServices
 
 from .formal_provider_gate import (
     FormalAuthorizedHardStopClient,
-    FormalCallCoordinate,
+    FormalProviderSession,
 )
-
-
-class _FormalCallSequence:
-    def __init__(self, *, scope: str, task_id: str, execution_site: str) -> None:
-        self._scope = scope
-        self._task_id = task_id
-        self._execution_site = execution_site
-        self._number = 0
-        self._lock = Lock()
-
-    def next(self) -> FormalCallCoordinate:
-        with self._lock:
-            self._number += 1
-            number = self._number
-        return FormalCallCoordinate(
-            scope=self._scope,
-            task_id=self._task_id,
-            arm="easyicu_full",
-            execution_site=self._execution_site,
-            call_id=f"easyicu_{number:04d}",
-        )
 
 
 class FormalEasyICUModelRouter:
@@ -44,24 +21,16 @@ class FormalEasyICUModelRouter:
         self,
         inner: Any,
         *,
-        receipts: Mapping[str, Any],
-        scope: str,
-        task_id: str,
-        execution_site: str,
-        provider_hard_stop: TaskProviderHardStop,
+        session: FormalProviderSession,
     ) -> None:
         if inner is None:
             raise ValueError("formal EasyICU execution requires an LLM client")
-        if not isinstance(provider_hard_stop, TaskProviderHardStop):
-            raise TypeError("provider_hard_stop must be TaskProviderHardStop")
+        if not isinstance(session, FormalProviderSession):
+            raise TypeError("session must be FormalProviderSession")
+        if session.arm != "easyicu_full":
+            raise ValueError("formal EasyICU router requires the easyicu_full arm")
         self._inner = inner
-        self._receipts = dict(receipts)
-        self._hard_stop = provider_hard_stop
-        self._sequence = _FormalCallSequence(
-            scope=scope,
-            task_id=task_id,
-            execution_site=execution_site,
-        )
+        self._session = session
         self._role_clients: dict[str, FormalAuthorizedHardStopClient] = {}
         self._iter_clients: list[FormalAuthorizedHardStopClient] | None = None
 
@@ -76,9 +45,7 @@ class FormalEasyICUModelRouter:
         return FormalAuthorizedHardStopClient(
             client,
             role=role,
-            task=self._hard_stop,
-            receipts=self._receipts,
-            coordinate_factory=self._sequence.next,
+            session=self._session,
         )
 
     def for_role(self, role: str) -> Any:
@@ -122,24 +89,18 @@ class FormalEasyICUCollaboratorAdapter:
         self,
         services: PipelineServices,
         *,
-        receipts: Mapping[str, Any],
-        scope: str,
-        task_id: str,
-        execution_site: str,
-        provider_hard_stop: TaskProviderHardStop,
+        session: FormalProviderSession,
     ) -> None:
-        if services.provider_hard_stop is not provider_hard_stop:
+        if not isinstance(session, FormalProviderSession):
+            raise TypeError("session must be FormalProviderSession")
+        if services.provider_hard_stop is not session.provider_hard_stop:
             raise ValueError(
                 "PipelineServices must carry the same formal provider hard stop"
             )
         self._services = services
         self._router = FormalEasyICUModelRouter(
             services.llm,
-            receipts=receipts,
-            scope=scope,
-            task_id=task_id,
-            execution_site=execution_site,
-            provider_hard_stop=provider_hard_stop,
+            session=session,
         )
 
     def _project_collaborator(self, name: str, collaborator: Any) -> Any:

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable, Mapping, TypeVar
+from uuid import uuid4
 
+from easyicu.research_agent.authority.provider_hard_stop import TaskProviderHardStop
+
+from .formal_provider_gate import FormalProviderSession
 from .formal_scheduler import (
     consume_trajectory_lease,
     signed_output_root,
@@ -93,13 +97,44 @@ class FormalTrajectoryLifecycle:
             self.require_workdir(validated_workdir)
             self.commit()
         except BaseException:
-            if not existed_before and validated_workdir.is_dir():
-                try:
-                    validated_workdir.rmdir()
-                except OSError:
-                    pass
+            try:
+                self._restore_retryable_workdir(
+                    validated_workdir,
+                    existed_before=existed_before,
+                )
+            except OSError as cleanup_exc:
+                raise FormalTrajectoryLifecycleError(
+                    "failed formal initialization could not be quarantined"
+                ) from cleanup_exc
             raise
         return implementation
+
+    def _restore_retryable_workdir(
+        self,
+        workdir: Path,
+        *,
+        existed_before: bool,
+    ) -> None:
+        """Preserve partial state while restoring the exact path for retry."""
+
+        if workdir.is_dir() and not workdir.is_symlink() and not any(workdir.iterdir()):
+            if not existed_before:
+                workdir.rmdir()
+            return
+        if workdir.exists() or workdir.is_symlink():
+            quarantine_root = (
+                self._output_root
+                / ".trajectory-failed"
+                / self._task_id
+                / self._arm
+            )
+            if quarantine_root.is_symlink():
+                raise OSError("formal failure quarantine may not be a symlink")
+            quarantine_root.mkdir(parents=True, exist_ok=True)
+            quarantined = quarantine_root / uuid4().hex
+            workdir.replace(quarantined)
+        if existed_before:
+            workdir.mkdir(parents=True, exist_ok=False)
 
     def commit(self) -> Mapping[str, Any]:
         """Atomically consume the lease after all local initialization passes."""
@@ -128,4 +163,57 @@ class FormalTrajectoryLifecycle:
         return self.output_dir
 
 
-__all__ = ["FormalTrajectoryLifecycle", "FormalTrajectoryLifecycleError"]
+class FormalExecutionSession:
+    """Own one runner's lifecycle, Provider session, and formal identity."""
+
+    def __init__(
+        self,
+        *,
+        lease_path: Path,
+        receipts: Mapping[str, Any],
+        scope: str,
+        task_id: str,
+        arm: str,
+        execution_site: str,
+        provider_hard_stop: TaskProviderHardStop,
+    ) -> None:
+        self.provider = FormalProviderSession(
+            receipts=receipts,
+            scope=scope,
+            task_id=task_id,
+            arm=arm,
+            execution_site=execution_site,
+            provider_hard_stop=provider_hard_stop,
+        )
+        self._trajectory = FormalTrajectoryLifecycle(
+            lease_path=lease_path,
+            receipts=receipts,
+            scope=scope,
+            task_id=task_id,
+            arm=arm,
+            execution_site=execution_site,
+        )
+
+    @property
+    def workdir(self) -> Path:
+        return self._trajectory.workdir
+
+    @property
+    def output_dir(self) -> Path:
+        return self._trajectory.output_dir
+
+    def initialize(self, *, factory: Callable[[], _T]) -> _T:
+        return self._trajectory.initialize(workdir=self.workdir, factory=factory)
+
+    def require_workdir(self, workdir: Path) -> Path:
+        return self._trajectory.require_workdir(workdir)
+
+    def require_output_dir(self, output_dir: Path) -> Path:
+        return self._trajectory.require_output_dir(output_dir)
+
+
+__all__ = [
+    "FormalExecutionSession",
+    "FormalTrajectoryLifecycle",
+    "FormalTrajectoryLifecycleError",
+]

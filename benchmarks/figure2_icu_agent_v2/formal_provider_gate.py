@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, Mapping, Sequence
+from threading import Lock
+from typing import Any, Mapping, Sequence
 
 from easyicu.research_agent.providers.client_trust import (
     authorized_complete,
@@ -56,14 +57,98 @@ class FormalProviderBudgetMissingError(RuntimeError):
 
 
 def _authorize_coordinate(
-    *, receipts: Mapping[str, Any], coordinate: FormalCallCoordinate
+    *,
+    receipts: Mapping[str, Any],
+    coordinate: FormalCallCoordinate,
+    consume: bool = True,
 ) -> None:
     authorize_formal_provider_call(
         {
             "receipts": deepcopy(dict(receipts)),
             "call_coordinate": asdict(coordinate),
-        }
+        },
+        consume=consume,
     )
+
+
+class FormalProviderSession:
+    """Own one arm's governed call sequence, receipts, and durable budget."""
+
+    def __init__(
+        self,
+        *,
+        receipts: Mapping[str, Any],
+        scope: str,
+        task_id: str,
+        arm: str,
+        execution_site: str,
+        provider_hard_stop: TaskProviderHardStop,
+    ) -> None:
+        if not isinstance(provider_hard_stop, TaskProviderHardStop):
+            raise FormalProviderBudgetMissingError(
+                "Formal Provider transport requires the shared durable hard-stop budget"
+            )
+        # Validate the static coordinate shape before any collaborator is wrapped.
+        FormalCallCoordinate(
+            scope=scope,
+            task_id=task_id,
+            arm=arm,
+            execution_site=execution_site,
+            call_id="preflight_0000",
+        )
+        self._receipts = deepcopy(dict(receipts))
+        self._scope = scope
+        self._task_id = task_id
+        self._arm = arm
+        self._execution_site = execution_site
+        self._provider_hard_stop = provider_hard_stop
+        self._call_number = 0
+        self._lock = Lock()
+
+    @property
+    def arm(self) -> str:
+        return self._arm
+
+    @property
+    def provider_hard_stop(self) -> TaskProviderHardStop:
+        return self._provider_hard_stop
+
+    def authorize_next_call(self) -> FormalCallCoordinate:
+        """Authorize and durably consume the next exact signed coordinate."""
+
+        with self._lock:
+            number = self._call_number + 1
+            prefix = "easyicu" if self._arm == "easyicu_full" else "generic"
+            coordinate = FormalCallCoordinate(
+                scope=self._scope,
+                task_id=self._task_id,
+                arm=self._arm,
+                execution_site=self._execution_site,
+                call_id=f"{prefix}_{number:04d}",
+            )
+            _authorize_coordinate(receipts=self._receipts, coordinate=coordinate)
+            self._call_number = number
+            return coordinate
+
+    def validate_next_call(self) -> FormalCallCoordinate:
+        """Validate the next coordinate without consuming it."""
+
+        with self._lock:
+            number = self._call_number + 1
+            prefix = "easyicu" if self._arm == "easyicu_full" else "generic"
+            coordinate = FormalCallCoordinate(
+                scope=self._scope,
+                task_id=self._task_id,
+                arm=self._arm,
+                execution_site=self._execution_site,
+                call_id=f"{prefix}_{number:04d}",
+            )
+            _authorize_coordinate(
+                receipts=self._receipts,
+                coordinate=coordinate,
+                consume=False,
+            )
+            return coordinate
 
 
 class FormalAuthorizedHardStopClient(HardStopClient):
@@ -76,23 +161,17 @@ class FormalAuthorizedHardStopClient(HardStopClient):
         inner: Any,
         *,
         role: str,
-        task: TaskProviderHardStop,
-        receipts: Mapping[str, Any],
-        coordinate_factory: Callable[[], FormalCallCoordinate],
+        session: FormalProviderSession,
     ) -> None:
-        super().__init__(inner, role=role, task=task)
-        self._formal_receipts = deepcopy(dict(receipts))
-        self._coordinate_factory = coordinate_factory
+        if not isinstance(session, FormalProviderSession):
+            raise TypeError("session must be FormalProviderSession")
+        super().__init__(inner, role=role, task=session.provider_hard_stop)
+        self._session = session
 
     def _authorize_next_call(self) -> None:
-        coordinate = self._coordinate_factory()
-        if not isinstance(coordinate, FormalCallCoordinate):
-            raise TypeError("coordinate_factory must return FormalCallCoordinate")
-        _authorize_coordinate(
-            receipts=self._formal_receipts,
-            coordinate=coordinate,
-        )
+        self._session.validate_next_call()
         require_provider_client_authorization(self._inner)
+        self._session.authorize_next_call()
 
     def complete_with_usage(
         self,
@@ -131,22 +210,20 @@ def complete_formal_provider_call(
     client: Any,
     messages: Sequence[LLMMessage],
     *,
-    receipts: Mapping[str, Any],
-    coordinate: FormalCallCoordinate,
-    provider_hard_stop: TaskProviderHardStop | None = None,
+    session: FormalProviderSession,
     **kwargs: Any,
 ) -> str:
     """Authorize one exact experiment call before trusted transport dispatch."""
 
-    _authorize_coordinate(receipts=receipts, coordinate=coordinate)
-    if provider_hard_stop is None:
-        raise FormalProviderBudgetMissingError(
-            "Formal Provider transport requires the shared durable hard-stop budget"
-        )
+    if not isinstance(session, FormalProviderSession):
+        raise TypeError("session must be FormalProviderSession")
+    session.validate_next_call()
+    require_provider_client_authorization(client)
+    coordinate = session.authorize_next_call()
     budgeted_client = HardStopClient(
         client,
         role=coordinate.arm,
-        task=provider_hard_stop,
+        task=session.provider_hard_stop,
     )
     return authorized_complete(budgeted_client, messages, **kwargs)
 
@@ -155,5 +232,6 @@ __all__ = [
     "FormalCallCoordinate",
     "FormalAuthorizedHardStopClient",
     "FormalProviderBudgetMissingError",
+    "FormalProviderSession",
     "complete_formal_provider_call",
 ]

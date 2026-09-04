@@ -27,6 +27,7 @@ from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
     FormalAuthorizedHardStopClient,
     FormalCallCoordinate,
     FormalProviderBudgetMissingError,
+    FormalProviderSession,
     complete_formal_provider_call,
 )
 from benchmarks.figure2_icu_agent_v2.formal_scheduler import (
@@ -91,6 +92,22 @@ class _TransportSpy:
         del messages, kwargs
         self.called = True
         return "unexpected"
+
+
+def _provider_session(
+    *,
+    receipts: dict[str, object],
+    coordinate: dict[str, str],
+    provider_hard_stop,
+) -> FormalProviderSession:
+    return FormalProviderSession(
+        receipts=receipts,
+        scope=coordinate["scope"],
+        task_id=coordinate["task_id"],
+        arm=coordinate["arm"],
+        execution_site=coordinate["execution_site"],
+        provider_hard_stop=provider_hard_stop,
+    )
 
 
 def _write_bundle(root: Path) -> None:
@@ -265,22 +282,40 @@ def _signed_qualification_authority(
     return envelope, coordinate
 
 
-def test_formal_provider_gate_denies_before_transport() -> None:
+def test_formal_provider_gate_denies_before_transport(tmp_path: Path) -> None:
     client = _TransportSpy()
-    coordinate = FormalCallCoordinate(
-        scope="qualification12",
-        task_id="qualification12_a_01",
-        arm="generic_code_agent",
-        execution_site="server",
-        call_id="call_001",
-    )
+    coordinate = {
+        "scope": "qualification12",
+        "task_id": "qualification12_a_01",
+        "arm": "generic_code_agent",
+        "execution_site": "server",
+        "call_id": "generic_0001",
+    }
+    task_budget = ProviderHardStopLedger(
+        path=tmp_path / "denied-hard-stop.json",
+        task_ids=(coordinate["task_id"],),
+        limits=ProviderHardStopLimits(
+            max_provider_attempts_per_run=1,
+            max_provider_attempts_per_batch=1,
+            max_total_tokens_per_run=100,
+            max_total_tokens_per_batch=100,
+            max_estimated_cost_usd_per_batch=1.0,
+            max_wall_clock_seconds_per_task=60.0,
+            input_cost_usd_per_million_tokens=0.1,
+            output_cost_usd_per_million_tokens=0.1,
+        ),
+        batch_id="denied-test",
+    ).start_task(coordinate["task_id"])
 
     with pytest.raises(DesignContractError) as exc_info:
         complete_formal_provider_call(
             client,
             [LLMMessage(role="user", content="do not send")],
-            receipts={},
-            coordinate=coordinate,
+            session=_provider_session(
+                receipts={},
+                coordinate=coordinate,
+                provider_hard_stop=task_budget,
+            ),
         )
 
     assert exc_info.value.reason_code == "FORMAL_AUTHORITY_SIGNER_NOT_REGISTERED"
@@ -459,9 +494,11 @@ def test_signed_authority_and_budget_gate_reach_only_offline_mock(
     response = complete_formal_provider_call(
         client,
         [LLMMessage(role="user", content="offline only")],
-        receipts=envelope,
-        coordinate=FormalCallCoordinate(**coordinate),
-        provider_hard_stop=task_budget,
+        session=_provider_session(
+            receipts=envelope,
+            coordinate=coordinate,
+            provider_hard_stop=task_budget,
+        ),
         max_tokens=16,
     )
 
@@ -497,11 +534,11 @@ def test_easyicu_router_authorizes_pipeline_role_before_offline_transport(
     client = ScriptedMockLLMClient(["authorized EasyICU offline response"])
     router = FormalEasyICUModelRouter(
         client,
-        receipts=envelope,
-        scope=coordinate["scope"],
-        task_id=coordinate["task_id"],
-        execution_site=coordinate["execution_site"],
-        provider_hard_stop=task_budget,
+        session=_provider_session(
+            receipts=envelope,
+            coordinate=coordinate,
+            provider_hard_stop=task_budget,
+        ),
     )
 
     response = router.for_role("planner").complete(
@@ -536,11 +573,14 @@ def test_easyicu_router_denies_before_transport_without_registered_signer(
     client = _TransportSpy()
     router = FormalEasyICUModelRouter(
         client,
-        receipts={},
-        scope="qualification12",
-        task_id=task_id,
-        execution_site="server",
-        provider_hard_stop=task_budget,
+        session=FormalProviderSession(
+            receipts={},
+            scope="qualification12",
+            task_id=task_id,
+            arm="easyicu_full",
+            execution_site="server",
+            provider_hard_stop=task_budget,
+        ),
     )
 
     with pytest.raises(DesignContractError) as exc_info:
@@ -586,11 +626,14 @@ def test_easyicu_formal_adapter_projects_complete_provider_surface(
 
     projected = FormalEasyICUCollaboratorAdapter(
         services,
-        receipts={},
-        scope="qualification12",
-        task_id=task_id,
-        execution_site="server",
-        provider_hard_stop=task_budget,
+        session=FormalProviderSession(
+            receipts={},
+            scope="qualification12",
+            task_id=task_id,
+            arm="easyicu_full",
+            execution_site="server",
+            provider_hard_stop=task_budget,
+        ),
     ).project()
 
     assert isinstance(projected.llm, FormalEasyICUModelRouter)
@@ -647,11 +690,14 @@ def test_easyicu_formal_adapter_rejects_opaque_visual_qa_adapter(
     with pytest.raises(ValueError, match="opaque visual QA adapter"):
         FormalEasyICUCollaboratorAdapter(
             services,
-            receipts={},
-            scope="qualification12",
-            task_id=task_id,
-            execution_site="server",
-            provider_hard_stop=task_budget,
+            session=FormalProviderSession(
+                receipts={},
+                scope="qualification12",
+                task_id=task_id,
+                arm="easyicu_full",
+                execution_site="server",
+                provider_hard_stop=task_budget,
+            ),
         ).project()
 
 
@@ -728,58 +774,59 @@ def test_formal_authority_rejects_invalid_signature(
 
 
 def test_formal_provider_gate_preserves_production_transport_trust_check(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _TransportSpy()
     monkeypatch.setattr(
         formal_provider_gate,
         "authorize_formal_provider_call",
-        lambda receipts: None,
+        lambda payload, **_kwargs: None,
     )
+    task_budget = ProviderHardStopLedger(
+        path=tmp_path / "untrusted-hard-stop.json",
+        task_ids=("icu27_t01",),
+        limits=ProviderHardStopLimits(
+            max_provider_attempts_per_run=1,
+            max_provider_attempts_per_batch=1,
+            max_total_tokens_per_run=100,
+            max_total_tokens_per_batch=100,
+            max_estimated_cost_usd_per_batch=1.0,
+            max_wall_clock_seconds_per_task=60.0,
+            input_cost_usd_per_million_tokens=0.1,
+            output_cost_usd_per_million_tokens=0.1,
+        ),
+        batch_id="untrusted-test",
+    ).start_task("icu27_t01")
 
     with pytest.raises(ProviderConfigurationError):
         complete_formal_provider_call(
             client,
             [LLMMessage(role="user", content="still do not send")],
-            receipts={"future": "registered"},
-            coordinate=FormalCallCoordinate(
+            session=FormalProviderSession(
+                receipts={"future": "registered"},
                 scope="core_wp2_wp3",
                 task_id="icu27_t01",
                 arm="easyicu_full",
                 execution_site="server",
-                call_id="call_001",
+                provider_hard_stop=task_budget,
             ),
-            provider_hard_stop=object(),  # type: ignore[arg-type]
         )
 
     assert client.called is False
 
 
-def test_formal_provider_gate_requires_shared_budget_after_authorization(
-    monkeypatch: pytest.MonkeyPatch,
+def test_formal_provider_session_requires_shared_budget(
 ) -> None:
-    client = _TransportSpy()
-    monkeypatch.setattr(
-        formal_provider_gate,
-        "authorize_formal_provider_call",
-        lambda receipts: None,
-    )
-
     with pytest.raises(FormalProviderBudgetMissingError):
-        complete_formal_provider_call(
-            client,
-            [LLMMessage(role="user", content="do not send")],
+        FormalProviderSession(
             receipts={"future": "registered"},
-            coordinate=FormalCallCoordinate(
-                scope="qualification12",
-                task_id="qualification12_a_01",
-                arm="generic_code_agent",
-                execution_site="server",
-                call_id="generic_0001",
-            ),
+            scope="qualification12",
+            task_id="qualification12_a_01",
+            arm="generic_code_agent",
+            execution_site="server",
+            provider_hard_stop=None,  # type: ignore[arg-type]
         )
-
-    assert client.called is False
 
 
 def test_formal_call_coordinate_rejects_unknown_scope_or_arm() -> None:
@@ -808,7 +855,7 @@ def test_formal_provider_gate_uses_shared_durable_hard_stop(
     monkeypatch.setattr(
         formal_provider_gate,
         "authorize_formal_provider_call",
-        lambda receipts: None,
+        lambda payload, **_kwargs: None,
     )
     limits = ProviderHardStopLimits(
         max_provider_attempts_per_run=1,
@@ -827,20 +874,19 @@ def test_formal_provider_gate_uses_shared_durable_hard_stop(
         batch_id="offline-test",
     ).start_task("qualification12_a_01")
     client = ScriptedMockLLMClient(["first", "must-not-run"])
-    coordinate = FormalCallCoordinate(
+    session = FormalProviderSession(
+        receipts={"future": "registered"},
         scope="qualification12",
         task_id="qualification12_a_01",
         arm="generic_code_agent",
         execution_site="server",
-        call_id="generic_0001",
+        provider_hard_stop=task_budget,
     )
 
     assert complete_formal_provider_call(
         client,
         [LLMMessage(role="user", content="offline")],
-        receipts={"future": "registered"},
-        coordinate=coordinate,
-        provider_hard_stop=task_budget,
+        session=session,
         max_tokens=16,
     ) == "first"
 
@@ -848,15 +894,7 @@ def test_formal_provider_gate_uses_shared_durable_hard_stop(
         complete_formal_provider_call(
             client,
             [LLMMessage(role="user", content="offline again")],
-            receipts={"future": "registered"},
-            coordinate=FormalCallCoordinate(
-                scope="qualification12",
-                task_id="qualification12_a_01",
-                arm="generic_code_agent",
-                execution_site="server",
-                call_id="generic_0002",
-            ),
-            provider_hard_stop=task_budget,
+            session=session,
             max_tokens=16,
         )
 

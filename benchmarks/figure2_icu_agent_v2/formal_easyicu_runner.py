@@ -21,7 +21,7 @@ from .formal_collaborator_adapter import (
     FormalEasyICUModelRouter,
 )
 from .review_bundle_writer import terminal_failure_material
-from .formal_trajectory_lifecycle import FormalTrajectoryLifecycle
+from .formal_trajectory_lifecycle import FormalExecutionSession
 
 
 class FormalEasyICURunner:
@@ -39,35 +39,31 @@ class FormalEasyICURunner:
         trajectory_lease_path: Path,
         provider_hard_stop: TaskProviderHardStop,
     ) -> None:
-        trajectory = FormalTrajectoryLifecycle(
+        session = FormalExecutionSession(
             lease_path=trajectory_lease_path,
             receipts=receipts,
             scope=scope,
             task_id=task_id,
             arm="easyicu_full",
             execution_site=execution_site,
+            provider_hard_stop=provider_hard_stop,
         )
         formal_services = FormalEasyICUCollaboratorAdapter(
             services,
-            receipts=receipts,
-            scope=scope,
-            task_id=task_id,
-            execution_site=execution_site,
-            provider_hard_stop=provider_hard_stop,
+            session=session.provider,
         ).project()
         formal_config = replace(
             config,
-            workdir=trajectory.workdir,
-            cache_dir=trajectory.workdir / ".cache",
+            workdir=session.workdir,
+            cache_dir=session.workdir / ".cache",
         )
-        self._pipeline = trajectory.initialize(
-            workdir=trajectory.workdir,
+        self._pipeline = session.initialize(
             factory=lambda: ResearchAgentPipeline(
                 config=formal_config,
                 services=formal_services,
             ),
         )
-        self._trajectory = trajectory
+        self._trajectory = session
         self._provider_hard_stop = provider_hard_stop
 
     def run(self, **kwargs: Any) -> Any:

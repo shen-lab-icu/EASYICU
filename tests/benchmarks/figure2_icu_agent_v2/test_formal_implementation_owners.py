@@ -380,6 +380,10 @@ def test_formal_lifecycle_does_not_consume_lease_when_initialization_fails(
 
     def fail_initialization() -> object:
         lifecycle.workdir.mkdir(parents=True)
+        (lifecycle.workdir / "partial.state").write_text(
+            "preserved failure evidence",
+            encoding="utf-8",
+        )
         raise RuntimeError("injected initialization failure")
 
     with pytest.raises(RuntimeError, match="injected initialization failure"):
@@ -390,6 +394,30 @@ def test_formal_lifecycle_does_not_consume_lease_when_initialization_fails(
 
     assert not Path(f"{lease}.started").exists()
     assert not lifecycle.workdir.exists()
+    quarantined = tuple(
+        (
+            lifecycle.workdir.parents[2]
+            / ".trajectory-failed"
+            / lifecycle.workdir.parent.name
+            / lifecycle.workdir.name
+        ).iterdir()
+    )
+    assert len(quarantined) == 1
+    assert (quarantined[0] / "partial.state").read_text(encoding="utf-8") == (
+        "preserved failure evidence"
+    )
+
+    initialized = object()
+
+    def retry_initialization() -> object:
+        lifecycle.workdir.mkdir(parents=True)
+        return initialized
+
+    assert lifecycle.initialize(
+        workdir=lifecycle.workdir,
+        factory=retry_initialization,
+    ) is initialized
+    assert Path(f"{lease}.started").is_file()
 
 
 def test_formal_lifecycle_commits_only_after_initialization_succeeds(

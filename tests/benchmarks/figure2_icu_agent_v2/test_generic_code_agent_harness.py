@@ -18,7 +18,10 @@ from benchmarks.figure2_icu_agent_v2.generic_code_agent_harness import (
     PlanReviewDecision,
 )
 from benchmarks.figure2_icu_agent_v2.review_bundle_semantics import CANONICAL_FILES
-from benchmarks.figure2_icu_agent_v2.formal_provider_gate import FormalCallCoordinate
+from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
+    FormalCallCoordinate,
+    FormalProviderSession,
+)
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     ReviewBlindingContext,
     normalize_review_bundle,
@@ -38,6 +41,10 @@ def _normalize(source_dir: Path):
     )
 from easyicu.research_agent.providers.protocol import LLMMessage
 from easyicu.research_agent.execution.runner import DockerRunner
+from easyicu.research_agent.authority.provider_hard_stop import (
+    ProviderHardStopLedger,
+    ProviderHardStopLimits,
+)
 
 
 PLAN = {
@@ -356,7 +363,7 @@ def test_docker_adapter_rejects_non_docker_backend():
         DockerRunnerBackend(object())
 
 
-def test_formal_gateway_denies_before_transport():
+def test_formal_gateway_denies_before_transport(tmp_path: Path):
     class TransportSpy:
         name = "transport-spy"
 
@@ -369,12 +376,31 @@ def test_formal_gateway_denies_before_transport():
             return "unexpected"
 
     transport = TransportSpy()
+    hard_stop = ProviderHardStopLedger(
+        path=tmp_path / "formal-gateway-hard-stop.json",
+        task_ids=("qualification12_a_01",),
+        limits=ProviderHardStopLimits(
+            max_provider_attempts_per_run=1,
+            max_provider_attempts_per_batch=1,
+            max_total_tokens_per_run=100,
+            max_total_tokens_per_batch=100,
+            max_estimated_cost_usd_per_batch=1.0,
+            max_wall_clock_seconds_per_task=60.0,
+            input_cost_usd_per_million_tokens=0.1,
+            output_cost_usd_per_million_tokens=0.1,
+        ),
+        batch_id="formal-gateway-test",
+    ).start_task("qualification12_a_01")
     gateway = FormalGenericModelGateway(
         client=transport,
-        receipts={},
-        scope="qualification12",
-        task_id="qualification12_a_01",
-        execution_site="server",
+        session=FormalProviderSession(
+            receipts={},
+            scope="qualification12",
+            task_id="qualification12_a_01",
+            arm="generic_code_agent",
+            execution_site="server",
+            provider_hard_stop=hard_stop,
+        ),
         max_tokens=100,
         temperature=0.0,
     )
