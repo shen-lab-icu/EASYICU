@@ -114,6 +114,9 @@ def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
     with pytest.raises(SystemExit):
         refresher.parse_args([*base, "--batch-size", "5000"])
 
+    with pytest.raises(SystemExit):
+        refresher.parse_args([*base, "--benchmark-only"])
+
     parsed = refresher.parse_args(
         [
             *base,
@@ -125,6 +128,31 @@ def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
         ]
     )
     assert parsed.batch_size == 5_000
+
+
+def test_release_cli_accepts_explicit_benchmark_only_scope() -> None:
+    refresher = _load_refresher()
+    args = refresher.parse_args(
+        [
+            "--source-run-root",
+            "/source",
+            "--output-root",
+            "/candidate",
+            "--module",
+            "sofa2_score",
+            "--database",
+            "eicu",
+            "--batch-size",
+            "30000",
+            "--allow-resource-policy-override",
+            "--resource-policy-override-reason",
+            "bounded profiling",
+            "--benchmark-only",
+        ]
+    )
+
+    assert args.benchmark_only is True
+    assert args.batch_size == 30_000
 
 
 def test_plan_only_does_not_require_candidate_output_root() -> None:
@@ -617,6 +645,9 @@ def test_publication_only_semantic_audit_ignores_order_but_detects_values(
     )
     frame.to_parquet(source / "respiratory.parquet", index=False)
     frame.iloc[::-1].to_parquet(candidate / "respiratory.parquet", index=False)
+    (candidate / "_manifest.json").write_text(
+        json.dumps({"unavailable_concepts": []}), encoding="utf-8"
+    )
 
     audit = refresher._validate_publication_only_database_semantics(
         source, candidate, modules=("respiratory",)
@@ -630,6 +661,60 @@ def test_publication_only_semantic_audit_ignores_order_but_detects_values(
     with pytest.raises(refresher.ModuleRefreshError, match="changed logical"):
         refresher._validate_publication_only_database_semantics(
             source, candidate, modules=("respiratory",)
+        )
+
+
+def test_publication_only_semantic_audit_accepts_only_declared_null_extensions(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    source = tmp_path / "source"
+    candidate = tmp_path / "candidate"
+    source.mkdir()
+    candidate.mkdir()
+    frame = pd.DataFrame({"stay_id": [1, 2], "age": [60.0, 70.0]})
+    frame.to_parquet(source / "demographics.parquet", index=False)
+
+    extended = frame.copy()
+    extended["icu_unit_type"] = pd.Series([None, None], dtype="string")
+    extended.to_parquet(candidate / "demographics.parquet", index=False)
+    (candidate / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "unavailable_concepts": [
+                    {
+                        "module": "demographics",
+                        "concept": "icu_unit_type",
+                        "reason": "producer_returned_no_physical_column",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = refresher._validate_publication_only_database_semantics(
+        source, candidate, modules=("demographics",)
+    )
+    assert audit["modules"]["demographics"][
+        "candidate_added_declared_all_null_columns"
+    ] == ["icu_unit_type"]
+
+    extended.loc[0, "icu_unit_type"] = "MICU"
+    extended.to_parquet(candidate / "demographics.parquet", index=False)
+    with pytest.raises(refresher.ModuleRefreshError, match="column with data"):
+        refresher._validate_publication_only_database_semantics(
+            source, candidate, modules=("demographics",)
+        )
+
+    extended["icu_unit_type"] = pd.Series([None, None], dtype="string")
+    extended.to_parquet(candidate / "demographics.parquet", index=False)
+    (candidate / "_manifest.json").write_text(
+        json.dumps({"unavailable_concepts": []}), encoding="utf-8"
+    )
+    with pytest.raises(refresher.ModuleRefreshError, match="not declared"):
+        refresher._validate_publication_only_database_semantics(
+            source, candidate, modules=("demographics",)
         )
 
 

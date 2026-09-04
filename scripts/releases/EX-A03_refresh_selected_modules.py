@@ -95,6 +95,8 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
 SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v2"
 LEGACY_SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 RESOURCE_PLAN_SCHEMA_VERSION = "easyicu_selected_module_resource_plan_v1"
+RESOURCE_BENCHMARK_SCHEMA_VERSION = "easyicu_selected_module_resource_benchmark_v1"
+RESOURCE_BENCHMARK_FILENAME = "resource_benchmark_provenance.json"
 DEFAULT_RELEASE_MEMORY_BUDGET_MB = 8 * 1024
 FORMALLY_MEASURED_RESOURCE_REASONS = frozenset(
     {
@@ -1104,8 +1106,8 @@ def _quote_identifier(value: str) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
 
-def _parquet_multiset_receipt(connection: Any, path: Path) -> dict[str, Any]:
-    """Return an order-independent logical-content receipt for one Parquet."""
+def _parquet_schema(connection: Any, path: Path) -> list[tuple[str, str]]:
+    """Return the DuckDB-visible physical schema for one Parquet."""
 
     escaped_path = str(path.resolve()).replace("'", "''")
     relation = f"read_parquet('{escaped_path}')"
@@ -1113,6 +1115,30 @@ def _parquet_multiset_receipt(connection: Any, path: Path) -> dict[str, Any]:
     schema = [(str(row[0]), str(row[1])) for row in described]
     if not schema:
         raise ModuleRefreshError(f"Cannot audit a zero-column Parquet: {path}")
+    return schema
+
+
+def _parquet_multiset_receipt(
+    connection: Any,
+    path: Path,
+    *,
+    columns: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Return an order-independent logical-content receipt for one Parquet."""
+
+    escaped_path = str(path.resolve()).replace("'", "''")
+    relation = f"read_parquet('{escaped_path}')"
+    full_schema = _parquet_schema(connection, path)
+    schema_by_name = dict(full_schema)
+    if columns is None:
+        schema = full_schema
+    else:
+        missing = [column for column in columns if column not in schema_by_name]
+        if missing:
+            raise ModuleRefreshError(
+                f"Cannot audit missing Parquet columns {missing}: {path}"
+            )
+        schema = [(column, schema_by_name[column]) for column in columns]
     columns = ", ".join(_quote_identifier(name) for name, _dtype in schema)
     row_hash = f"hash({columns})"
     row_count, hash_xor, hash_sum, hash_min, hash_max = connection.execute(
@@ -1146,7 +1172,12 @@ def _validate_publication_only_database_semantics(
     The dual commutative 64-bit row-hash aggregates, row count, extrema and
     schema digest make this insensitive to row ordering and Parquet encoding
     while still failing closed on any observed logical-content difference.
-    DuckDB is bounded to one thread and 1 GiB with spill beside the candidate.
+    A newer publisher may materialize a catalog-declared unavailable concept
+    as a typed all-null column. Such schema completion is accepted only when
+    every source column retains its type and multiset of values, the added
+    column is declared unavailable in the candidate manifest, and it contains
+    no non-null value. DuckDB is bounded to one thread and 1 GiB with spill
+    beside the candidate.
     """
 
     try:
@@ -1157,6 +1188,20 @@ def _validate_publication_only_database_semantics(
         ) from exc
 
     receipts: dict[str, dict[str, Any]] = {}
+    candidate_manifest = _read_json(
+        candidate_database_root / "_manifest.json",
+        label=f"{candidate_database_root.name} candidate native manifest",
+    )
+    raw_unavailable = candidate_manifest.get("unavailable_concepts") or []
+    if not isinstance(raw_unavailable, list):
+        raise ModuleRefreshError(
+            f"{candidate_database_root.name}: unavailable_concepts must be a list"
+        )
+    declared_unavailable = {
+        (str(entry.get("module")), str(entry.get("concept")))
+        for entry in raw_unavailable
+        if isinstance(entry, Mapping)
+    }
     audit_parent = candidate_database_root.parents[1]
     with tempfile.TemporaryDirectory(
         prefix=f".semantic-audit-{candidate_database_root.name}-",
@@ -1178,9 +1223,63 @@ def _validate_publication_only_database_semantics(
                 _require_regular_file(
                     candidate_path, label=f"{module} publication-only Parquet"
                 )
-                source_receipt = _parquet_multiset_receipt(connection, source_path)
+                source_schema = _parquet_schema(connection, source_path)
+                candidate_schema = _parquet_schema(connection, candidate_path)
+                candidate_schema_by_name = dict(candidate_schema)
+                missing_or_retyped = [
+                    (name, dtype, candidate_schema_by_name.get(name))
+                    for name, dtype in source_schema
+                    if candidate_schema_by_name.get(name) != dtype
+                ]
+                if missing_or_retyped:
+                    raise ModuleRefreshError(
+                        f"{candidate_database_root.name}/{module}: publication-only "
+                        "repackaging removed or retyped source columns; "
+                        f"differences={missing_or_retyped}"
+                    )
+                source_names = [name for name, _dtype in source_schema]
+                added_columns = [
+                    name for name, _dtype in candidate_schema if name not in source_names
+                ]
+                undeclared_additions = [
+                    name
+                    for name in added_columns
+                    if (module, name) not in declared_unavailable
+                ]
+                if undeclared_additions:
+                    raise ModuleRefreshError(
+                        f"{candidate_database_root.name}/{module}: publication-only "
+                        "repackaging added columns not declared unavailable; "
+                        f"columns={undeclared_additions}"
+                    )
+                if added_columns:
+                    quoted_added = ", ".join(
+                        f"count({_quote_identifier(name)})" for name in added_columns
+                    )
+                    escaped_candidate_path = str(candidate_path.resolve()).replace(
+                        "'", "''"
+                    )
+                    non_null_counts = connection.execute(
+                        f"SELECT {quoted_added} FROM "
+                        f"read_parquet('{escaped_candidate_path}')"
+                    ).fetchone()
+                    if non_null_counts is None or any(
+                        int(value) != 0 for value in non_null_counts
+                    ):
+                        raise ModuleRefreshError(
+                            f"{candidate_database_root.name}/{module}: publication-only "
+                            "schema completion added a column with data; "
+                            f"columns={added_columns}, counts={non_null_counts}"
+                        )
+                source_receipt = _parquet_multiset_receipt(
+                    connection,
+                    source_path,
+                    columns=source_names,
+                )
                 candidate_receipt = _parquet_multiset_receipt(
-                    connection, candidate_path
+                    connection,
+                    candidate_path,
+                    columns=source_names,
                 )
                 if source_receipt != candidate_receipt:
                     raise ModuleRefreshError(
@@ -1188,7 +1287,10 @@ def _validate_publication_only_database_semantics(
                         "repackaging changed logical table content; "
                         f"source={source_receipt}, candidate={candidate_receipt}"
                     )
-                receipts[module] = source_receipt
+                receipts[module] = {
+                    **source_receipt,
+                    "candidate_added_declared_all_null_columns": added_columns,
+                }
         finally:
             connection.close()
     return {
@@ -1608,6 +1710,7 @@ def refresh_candidate(
     database_module_scope: Mapping[str, Sequence[str]] | None = None,
     resume: bool = False,
     repair_finalized: bool = False,
+    benchmark_only: bool = False,
 ) -> Path:
     source = source_run_root.resolve()
     destination = output_root.expanduser().absolute()
@@ -1653,6 +1756,18 @@ def refresh_candidate(
             for database in selected_databases
         )
     )
+    if benchmark_only and len(selected_databases) != 1:
+        raise ModuleRefreshError(
+            "--benchmark-only requires exactly one selected database"
+        )
+    if benchmark_only and batch_size is None:
+        raise ModuleRefreshError(
+            "--benchmark-only requires an explicit measured --batch-size"
+        )
+    if benchmark_only and (resume or repair_finalized):
+        raise ModuleRefreshError(
+            "--benchmark-only cannot resume or repair a release candidate"
+        )
     publication_commit = REPUBLICATION._require_clean_checkout()
     source_run_manifest = REPUBLICATION._validate_source(source)
     execution_resource_plan = _build_refresh_resource_plan(
@@ -1788,6 +1903,67 @@ def refresh_candidate(
                 resource_budget_mb=resource_budget_mb,
                 reuse_completed_export=resume and not repair_finalized,
             )
+
+        if benchmark_only:
+            database = selected_databases[0]
+            output_receipts = {}
+            for module in selected_by_database[database]:
+                parquet = destination / "exports" / database / f"{module}.parquet"
+                manifest_path = (
+                    destination / "exports" / database / f"{module}.manifest.json"
+                )
+                _require_regular_file(parquet, label=f"{database}/{module} benchmark")
+                _require_regular_file(
+                    manifest_path,
+                    label=f"{database}/{module} benchmark producer manifest",
+                )
+                manifest = _read_json(
+                    manifest_path,
+                    label=f"{database}/{module} benchmark producer manifest",
+                )
+                saved = manifest.get("saved") or {}
+                output_receipts[module] = {
+                    "parquet_sha256": REPUBLICATION._sha256_file(parquet),
+                    "parquet_bytes": parquet.stat().st_size,
+                    "producer_manifest_sha256": REPUBLICATION._sha256_file(
+                        manifest_path
+                    ),
+                    "producer_rows": sum(
+                        int(receipt.get("rows") or 0)
+                        for receipt in saved.values()
+                        if isinstance(receipt, Mapping)
+                    ),
+                }
+            benchmark_provenance = {
+                "schema_version": RESOURCE_BENCHMARK_SCHEMA_VERSION,
+                "created_at": _utc_now(),
+                "benchmark_only": True,
+                "sealable": False,
+                "source_run_root": str(source),
+                "source_run_manifest_sha256": source_run_manifest_sha256,
+                "source_database_receipt": source_receipts[database],
+                "easyicu_git_commit": publication_commit,
+                "easyicu_git_dirty": False,
+                "database": database,
+                "requested_modules": list(requested_by_database[database]),
+                "dependency_closure": list(selected_by_database[database]),
+                "resource_policy_override_reason": (
+                    resource_policy_override_reason
+                ),
+                "resource_plan": execution_resource_plan,
+                "runtime": refreshed[database],
+                "output_receipts": output_receipts,
+                "formal_release_admissible": False,
+                "next_step": (
+                    "independently review memory evidence and register an exact "
+                    "measured profile before any formal release refresh"
+                ),
+            }
+            REPUBLICATION._atomic_write_json(
+                destination / RESOURCE_BENCHMARK_FILENAME,
+                benchmark_provenance,
+            )
+            return destination
 
         lineage_base = prior_provenance or source_refresh_provenance
         base_scope = source_refresh_scope
@@ -2174,6 +2350,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Resume an unsealed candidate after recovering canonical staged modules.",
     )
     parser.add_argument(
+        "--benchmark-only",
+        action="store_true",
+        help=(
+            "Extract and validate one database's closure, write a non-sealable "
+            "resource benchmark receipt, and skip six-database republication."
+        ),
+    )
+    parser.add_argument(
         "--repair-finalized",
         action="store_true",
         help=(
@@ -2267,6 +2451,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.resource_policy_override_reason or ""
     ).strip():
         parser.error("--batch-size requires --resource-policy-override-reason")
+    if args.benchmark_only and args.batch_size is None:
+        parser.error("--benchmark-only requires --batch-size")
+    if args.benchmark_only and (args.resume or args.repair_finalized):
+        parser.error("--benchmark-only cannot be combined with resume/repair")
     return args
 
 
@@ -2314,6 +2502,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             database_module_scope=database_module_scope or None,
             resume=args.resume,
             repair_finalized=args.repair_finalized,
+            benchmark_only=args.benchmark_only,
         )
     except (ModuleRefreshError, OSError, ValueError) as exc:
         print(f"selected-module refresh failed: {exc}", file=sys.stderr)
