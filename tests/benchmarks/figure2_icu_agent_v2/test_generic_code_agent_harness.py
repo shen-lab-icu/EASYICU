@@ -118,6 +118,7 @@ def test_offline_generic_harness_executes_and_writes_complete_bundle(tmp_path: P
     )
     executor = _OfflineExecutor()
     harness = GenericCodeAgentHarness(
+        task_id="MG01",
         model=model,
         executor=executor,
         resource_snapshot=lambda: {
@@ -142,6 +143,7 @@ def test_offline_generic_harness_executes_and_writes_complete_bundle(tmp_path: P
     assert executor.calls == [("generic_0001", "python", "print('ok')")]
     receipt = json.loads((result.output_dir / "07_run_receipt.json").read_text())
     assert receipt["model_turns"] == 3
+    assert receipt["task_id"] == "MG01"
     assert receipt["tool_calls"] == 1
     assert receipt["within_frozen_budget"] is True
     manifest = json.loads(
@@ -172,11 +174,24 @@ def test_offline_generic_harness_executes_and_writes_complete_bundle(tmp_path: P
     assert tuple(normalized.files) == CANONICAL_FILES
 
 
+def test_generic_harness_rejects_task_identity_outside_shared_vocabulary():
+    with pytest.raises(ValueError, match="stable neutral identity"):
+        GenericCodeAgentHarness(
+            task_id="invalid/task",
+            model=_OfflineModel([]),
+            executor=_OfflineExecutor(),
+        )
+
+
 def test_one_plan_revision_then_approval(tmp_path: Path):
     revised = {**PLAN, "method": "adjusted binomial regression"}
     model = _OfflineModel([PLAN, revised, _finalize_action()])
     review_calls = []
-    harness = GenericCodeAgentHarness(model=model, executor=_OfflineExecutor())
+    harness = GenericCodeAgentHarness(
+        task_id="icu27_t01",
+        model=model,
+        executor=_OfflineExecutor(),
+    )
 
     def review_once(plan):
         review_calls.append(plan)
@@ -202,6 +217,7 @@ def test_execution_timeout_is_terminal_without_model_retry(tmp_path: Path):
         [PLAN, {"action": "execute", "language": "shell", "code": "echo 1"}]
     )
     harness = GenericCodeAgentHarness(
+        task_id="icu27_t01",
         model=model,
         executor=_OfflineExecutor(timed_out=True),
     )
@@ -230,7 +246,11 @@ def test_execution_timeout_is_terminal_without_model_retry(tmp_path: Path):
 
 def test_nonfinite_or_extra_action_fields_produce_terminal_bundle(tmp_path: Path):
     model = _OfflineModel([PLAN, {**_finalize_action(), "unexpected": 1}])
-    harness = GenericCodeAgentHarness(model=model, executor=_OfflineExecutor())
+    harness = GenericCodeAgentHarness(
+        task_id="icu27_t01",
+        model=model,
+        executor=_OfflineExecutor(),
+    )
 
     result = harness.run(
         task_prompt="Estimate.",
@@ -248,7 +268,11 @@ def test_nonfinite_or_extra_action_fields_produce_terminal_bundle(tmp_path: Path
 
 def test_invalid_initial_plan_produces_terminal_bundle(tmp_path: Path):
     model = _OfflineModel([{"population": "missing all other fields"}])
-    harness = GenericCodeAgentHarness(model=model, executor=_OfflineExecutor())
+    harness = GenericCodeAgentHarness(
+        task_id="icu27_t01",
+        model=model,
+        executor=_OfflineExecutor(),
+    )
 
     result = harness.run(
         task_prompt="Estimate.",
@@ -271,6 +295,7 @@ def test_shared_budget_exhaustion_produces_terminal_bundle(tmp_path: Path):
             raise GenericBudgetExhausted
 
     harness = GenericCodeAgentHarness(
+        task_id="icu27_t01",
         model=ExhaustedModel(),
         executor=_OfflineExecutor(),
         resource_snapshot=lambda: {"within_frozen_budget": False},
@@ -299,6 +324,7 @@ def test_empty_referenced_result_is_reported_absent(tmp_path: Path):
     action = _finalize_action()
     action["results"] = {}
     harness = GenericCodeAgentHarness(
+        task_id="icu27_t01",
         model=_OfflineModel([PLAN, action]),
         executor=_OfflineExecutor(),
     )

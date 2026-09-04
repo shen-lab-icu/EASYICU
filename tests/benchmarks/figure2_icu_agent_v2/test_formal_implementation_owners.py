@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from benchmarks.figure2_icu_agent_v2 import blinded_evaluator
 from benchmarks.figure2_icu_agent_v2.blinded_evaluator import (
     BlindedReviewPackage,
     BlindedEvaluationError,
@@ -127,6 +128,7 @@ def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -
     output = write_easyicu_review_bundle(
         material,
         output_dir=tmp_path / "bundle",
+        task_id="icu27_t01",
         mandatory_artifacts=("main result",),
         resource_receipt=ReviewResourceReceipt(
             within_frozen_budget=True,
@@ -137,6 +139,7 @@ def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -
     assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
     normalized = _normalize(output)
     receipt = json.loads(normalized.files["07_run_receipt.json"])
+    assert receipt["task_id"] == "icu27_t01"
     assert receipt["substantive_output_files"]["03_results.json"] is True
     assert "provider_tokens" not in receipt
 
@@ -175,6 +178,7 @@ def test_shared_review_bundle_writer_rolls_back_partial_commit(
         write_easyicu_review_bundle(
             material,
             output_dir=output,
+            task_id="icu27_t01",
             mandatory_artifacts=("main result",),
             resource_receipt=ReviewResourceReceipt(within_frozen_budget=True),
         )
@@ -201,6 +205,7 @@ def test_shared_review_bundle_writer_serializes_competing_publishers(
             write_easyicu_review_bundle(
                 material,
                 output_dir=output,
+                task_id="icu27_t01",
                 mandatory_artifacts=("main result",),
                 resource_receipt=ReviewResourceReceipt(
                     within_frozen_budget=True
@@ -246,6 +251,7 @@ def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "review-bundle"
     runner._trajectory = _LeasedTrajectory(output)
+    runner._task_id = "icu27_t01"
 
     returned = runner.run_and_write_review_bundle(
         output_dir=output,
@@ -286,6 +292,7 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "failed-review-bundle"
     runner._trajectory = _LeasedTrajectory(output)
+    runner._task_id = "icu27_t01"
 
     with pytest.raises(RuntimeError, match="private implementation detail"):
         runner.run_and_write_review_bundle(
@@ -297,6 +304,7 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
     assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
     normalized = _normalize(output)
     receipt = json.loads(normalized.files["07_run_receipt.json"])
+    assert receipt["task_id"] == "icu27_t01"
     assert receipt["terminal_status"] == "failed"
     assert receipt["failure_category"] == "execution_failure"
     assert b"private implementation detail" not in b"".join(
@@ -622,7 +630,7 @@ def test_qualification_scheduler_is_deterministic_balanced_and_pair_local(
         "server": tmp_path / "server-qualification",
         "laptop": tmp_path / "laptop-qualification",
     }
-    task_ids = tuple(f"qualification_task_{index:02d}" for index in range(1, 13))
+    task_ids = tuple(f"MG{index:02d}" for index in range(1, 13))
 
     first = build_qualification_schedule_dry_run(task_ids, roots)
     second = build_qualification_schedule_dry_run(tuple(reversed(task_ids)), roots)
@@ -997,41 +1005,34 @@ def test_two_host_preflight_parses_raw_json_and_rejects_duplicate_keys() -> None
         )
 
 
-def _score(task_id: str, reviewer: str, bundle: str, success: bool) -> dict:
+def _score(
+    review_package: BlindedReviewPackage,
+    reviewer: str,
+    bundle: str,
+    success: bool,
+) -> dict:
+    sheet = json.loads(review_package.sheet_for_review())
+    bundle_digest = next(
+        item.normalized_bundle_sha256
+        for item in review_package.bundles
+        if item.bundle_id == bundle
+    )
     return {
         "reviewer_id": reviewer,
-        "task_id": task_id,
+        "task_id": review_package.task_id,
         "bundle_id": bundle,
+        "review_package_sha256": review_package.review_package_sha256,
+        "blinded_bundle_sha256": bundle_digest,
         "primary_success": success,
         "hard_gates_passed": {
-            f"HG{index:02d}_{suffix}": success
-            for index, suffix in (
-                (1, "TERMINAL_INTEGRITY"),
-                (2, "POPULATION_TIME_AUTHORITY"),
-                (3, "TASK_SEMANTIC_GUARDRAILS"),
-                (4, "MANDATORY_OUTPUTS"),
-                (5, "DIAGNOSTIC_AUTHORITY"),
-                (6, "EVIDENCE_BINDING"),
-                (7, "INTERPRETATION_CEILING"),
-                (8, "CONTAMINATION_AND_REPAIR"),
-                (9, "TASK_QUESTION_ANSWERED"),
-            )
+            item["gate_id"]: success for item in sheet["hard_gates"]
         },
         "dimension_scores": {
             name: 2 if success else 0
-            for name in (
-                "problem_formulation",
-                "literature_grounding",
-                "data_concept_cohort_authority",
-                "estimand_method_selection",
-                "execution_validity",
-                "diagnostics_sensitivity",
-                "evidence_artifact_binding",
-                "interpretation_safety",
-                "reproducibility_efficiency",
-            )
+            for name in sheet["secondary_dimensions"]
         },
         "arm_guess": "cannot_tell",
+        "arm_guess_confidence": 0.5,
         "rationale": "Frozen criteria were applied independently.",
     }
 
@@ -1040,15 +1041,20 @@ def _blinded_review_package(
     root: Path,
     *,
     task_id: str = "icu27_t01",
+    task_split: str = "heldout27",
+    source_task_id: str | None = None,
+    estimates: tuple[float, float] = (1.2, 1.3),
 ) -> BlindedReviewPackage:
     sources: dict[str, Path] = {}
-    for bundle_id, estimate in (("bundle_1", 1.2), ("bundle_2", 1.3)):
+    for bundle_id, estimate in zip(
+        ("bundle_1", "bundle_2"), estimates, strict=True
+    ):
         material = EasyICUReviewMaterial(
             plan={"population": "adult ICU"},
             cohort={"n": 42},
             results={"estimate": estimate},
             diagnostics={"complete": True},
-            report=f"The estimate was {estimate}.",
+            report=f"EasyICU estimate was {estimate}.",
             headline_evidence=(
                 {"claim": "estimate", "file": "03_results.json"},
             ),
@@ -1057,6 +1063,7 @@ def _blinded_review_package(
         sources[bundle_id] = write_easyicu_review_bundle(
             material,
             output_dir=root / bundle_id,
+            task_id=source_task_id or task_id,
             mandatory_artifacts=("main result",),
             resource_receipt=ReviewResourceReceipt(
                 within_frozen_budget=True,
@@ -1065,6 +1072,7 @@ def _blinded_review_package(
         )
     return prepare_blinded_review_package(
         task_id=task_id,
+        task_split=task_split,
         source_dirs=sources,
         blinding_context=_BLINDING_CONTEXT,
     )
@@ -1076,7 +1084,7 @@ def test_blinded_scores_lock_before_arm_mapping_and_cannot_overwrite(
     task_id = "icu27_t01"
     package = _blinded_review_package(tmp_path, task_id=task_id)
     reviews = [
-        _score(task_id, reviewer, bundle, True)
+        _score(package, reviewer, bundle, True)
         for reviewer in ("clinical-r1", "methods-r2")
         for bundle in ("bundle_1", "bundle_2")
     ]
@@ -1101,6 +1109,8 @@ def test_blinded_scores_lock_before_arm_mapping_and_cannot_overwrite(
             CANONICAL_FILES
         )
         assert package.files_for_review(bundle_id)
+        assert expected["redaction_log_sha256"]
+    assert all(bundle.redaction_log_for_audit() for bundle in package.bundles)
     assert receipt["adjudication_required"] == {
         "bundle_1": False,
         "bundle_2": False,
@@ -1113,6 +1123,56 @@ def test_blinded_scores_lock_before_arm_mapping_and_cannot_overwrite(
             reviewer_eligibility_receipt_sha256="a" * 64,
             destination=destination,
         )
+
+
+def test_blinded_score_lock_partial_stage_failure_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _blinded_review_package(tmp_path / "bundles")
+    reviews = [
+        _score(package, reviewer, bundle, True)
+        for reviewer in ("clinical-r1", "methods-r2")
+        for bundle in ("bundle_1", "bundle_2")
+    ]
+    destination = tmp_path / "retryable-lock.json"
+    original = blinded_evaluator._write_score_lock_stage
+
+    def fail_after_partial_stage(path: Path, payload: bytes) -> None:
+        path.write_bytes(payload[:17])
+        raise OSError("injected staging failure")
+
+    monkeypatch.setattr(
+        blinded_evaluator,
+        "_write_score_lock_stage",
+        fail_after_partial_stage,
+    )
+    with pytest.raises(OSError, match="injected staging failure"):
+        lock_blinded_scores(
+            review_package=package,
+            reviews=reviews,
+            eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+            reviewer_eligibility_receipt_sha256="a" * 64,
+            destination=destination,
+        )
+
+    assert not destination.exists()
+    assert not tuple(tmp_path.glob(".*.stage"))
+    monkeypatch.setattr(
+        blinded_evaluator,
+        "_write_score_lock_stage",
+        original,
+    )
+    receipt = lock_blinded_scores(
+        review_package=package,
+        reviews=reviews,
+        eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+        reviewer_eligibility_receipt_sha256="a" * 64,
+        destination=destination,
+    )
+    assert json.loads(destination.read_text())["score_lock_sha256"] == receipt[
+        "score_lock_sha256"
+    ]
 
 
 def test_blinded_score_lock_rejects_normalized_bytes_changed_after_seal(
@@ -1130,7 +1190,7 @@ def test_blinded_score_lock_rejects_normalized_bytes_changed_after_seal(
         bundles=(replace(first, _files=tampered_files), package.bundles[1]),
     )
     reviews = [
-        _score(task_id, reviewer, bundle, True)
+        _score(package, reviewer, bundle, True)
         for reviewer in ("clinical-r1", "methods-r2")
         for bundle in ("bundle_1", "bundle_2")
     ]
@@ -1148,11 +1208,113 @@ def test_blinded_score_lock_rejects_normalized_bytes_changed_after_seal(
         )
 
 
+def test_blinded_review_package_rejects_wrong_source_task(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        BlindedEvaluationError,
+        match="source bundle task identity mismatch",
+    ):
+        _blinded_review_package(
+            tmp_path,
+            task_id="icu27_t01",
+            source_task_id="icu27_t02",
+        )
+
+
+def test_qualification_review_package_can_lock_blinding_pilot_scores(
+    tmp_path: Path,
+) -> None:
+    package = _blinded_review_package(
+        tmp_path,
+        task_id="MG01",
+        task_split="qualification12",
+    )
+    sheet = json.loads(package.sheet_for_review())
+    reviews = [
+        _score(package, reviewer, bundle, True)
+        for reviewer in ("clinical-r1", "methods-r2")
+        for bundle in ("bundle_1", "bundle_2")
+    ]
+
+    receipt = lock_blinded_scores(
+        review_package=package,
+        reviews=reviews,
+        eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+        reviewer_eligibility_receipt_sha256="a" * 64,
+        destination=tmp_path / "qualification-lock.json",
+    )
+
+    assert package.task_split == "qualification12"
+    assert sheet["task_id"] == "MG01"
+    assert [gate["gate_id"] for gate in sheet["hard_gates"]] == [
+        "QG01_QUALIFICATION_TASK_CONTRACT"
+    ]
+    assert receipt["task_split"] == "qualification12"
+
+
+def test_blinded_score_cannot_be_reused_for_another_package(
+    tmp_path: Path,
+) -> None:
+    first = _blinded_review_package(tmp_path / "first")
+    second = _blinded_review_package(
+        tmp_path / "second",
+        estimates=(2.2, 2.3),
+    )
+    reviews = [
+        _score(first, reviewer, bundle, True)
+        for reviewer in ("clinical-r1", "methods-r2")
+        for bundle in ("bundle_1", "bundle_2")
+    ]
+
+    with pytest.raises(
+        BlindedEvaluationError,
+        match="review score package identity mismatch",
+    ):
+        lock_blinded_scores(
+            review_package=second,
+            reviews=reviews,
+            eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+            reviewer_eligibility_receipt_sha256="a" * 64,
+            destination=tmp_path / "reused-lock.json",
+        )
+
+
+def test_blinded_score_lock_rejects_redaction_log_changed_after_seal(
+    tmp_path: Path,
+) -> None:
+    package = _blinded_review_package(tmp_path)
+    first = package.bundles[0]
+    assert first._redaction_log
+    tampered_bundle = replace(
+        first,
+        _redaction_log=(*first._redaction_log, first._redaction_log[0]),
+    )
+    tampered_package = replace(
+        package,
+        bundles=(tampered_bundle, package.bundles[1]),
+    )
+    reviews = [
+        _score(package, reviewer, bundle, True)
+        for reviewer in ("clinical-r1", "methods-r2")
+        for bundle in ("bundle_1", "bundle_2")
+    ]
+
+    with pytest.raises(BlindedEvaluationError, match="bundle seal is invalid"):
+        lock_blinded_scores(
+            review_package=tampered_package,
+            reviews=reviews,
+            eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+            reviewer_eligibility_receipt_sha256="a" * 64,
+            destination=tmp_path / "tampered-redaction-lock.json",
+        )
+
+
 def test_blinded_primary_cannot_disagree_with_hard_gates(tmp_path: Path) -> None:
     task_id = "icu27_t01"
     package = _blinded_review_package(tmp_path, task_id=task_id)
     reviews = [
-        _score(task_id, reviewer, bundle, True)
+        _score(package, reviewer, bundle, True)
         for reviewer in ("clinical-r1", "methods-r2")
         for bundle in ("bundle_1", "bundle_2")
     ]
@@ -1164,4 +1326,60 @@ def test_blinded_primary_cannot_disagree_with_hard_gates(tmp_path: Path) -> None
             eligible_reviewer_ids=("clinical-r1", "methods-r2"),
             reviewer_eligibility_receipt_sha256="a" * 64,
             destination=tmp_path / "invalid.json",
+        )
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    [
+        -0.1,
+        1.1,
+        float("nan"),
+        True,
+        pytest.param(10**10000, id="huge-int"),
+    ],
+)
+def test_blinded_arm_guess_confidence_uses_frozen_scale(
+    tmp_path: Path,
+    confidence: object,
+) -> None:
+    package = _blinded_review_package(tmp_path)
+    reviews = [
+        _score(package, reviewer, bundle, True)
+        for reviewer in ("clinical-r1", "methods-r2")
+        for bundle in ("bundle_1", "bundle_2")
+    ]
+    reviews[0]["arm_guess_confidence"] = confidence
+
+    with pytest.raises(
+        BlindedEvaluationError,
+        match="arm_guess_confidence",
+    ):
+        lock_blinded_scores(
+            review_package=package,
+            reviews=reviews,
+            eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+            reviewer_eligibility_receipt_sha256="a" * 64,
+            destination=tmp_path / "invalid-confidence.json",
+        )
+
+
+def test_blinded_reviewer_locks_one_consistent_arm_guess_confidence(
+    tmp_path: Path,
+) -> None:
+    package = _blinded_review_package(tmp_path)
+    reviews = [
+        _score(package, reviewer, bundle, True)
+        for reviewer in ("clinical-r1", "methods-r2")
+        for bundle in ("bundle_1", "bundle_2")
+    ]
+    reviews[0]["arm_guess_confidence"] = 0.6
+
+    with pytest.raises(BlindedEvaluationError, match="consistent arm guess"):
+        lock_blinded_scores(
+            review_package=package,
+            reviews=reviews,
+            eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+            reviewer_eligibility_receipt_sha256="a" * 64,
+            destination=tmp_path / "inconsistent-confidence.json",
         )

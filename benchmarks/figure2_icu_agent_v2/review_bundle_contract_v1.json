@@ -43,6 +43,7 @@
     "content_preservation": "The normalizer may project and redact identifiers but may not repair, add, delete, reinterpret, or recompute scientific content.",
     "blinded_run_receipt_projection": {
       "reviewer_visible_fields": [
+        "frozen task identity shared by the review sheet and both source bundle receipts",
         "neutral terminal status",
         "within every frozen budget: yes or no",
         "neutral failure category field always present and null when not applicable",
@@ -105,7 +106,8 @@
   "outcome_review_projection": {
     "implementation_neutral": true,
     "reviewer_visibility": "The normalized scientific artifacts, their hashes, and the frozen implementation-neutral rubric only.",
-    "arm_guess_after_review": "Each reviewer records predicted arm and confidence after completing the independent scientific rating."
+    "arm_guess_after_review": "Each reviewer records predicted arm and confidence after completing the independent scientific rating.",
+    "arm_guess_confidence_scale": "finite number from 0.0 to 1.0 inclusive"
   },
   "blinding_pilot": {
     "material": "Dev9 and Qualification12 outputs not used in the paper denominator",
@@ -122,9 +124,13 @@
     "post_normalization_digest_required": true,
     "blinded_review_package_schema": "easyicu.figure2_blinded_review_package/1",
     "blinded_score_lock_schema": "easyicu.figure2_blinded_score_lock/2",
-    "score_lock_binding": "The score lock must name the exact blinded review package digest and the per-file pre- and post-normalization SHA-256 maps for bundle_1 and bundle_2. Reviewers must consume the sealed bytes from that package rather than reopen mutable source paths.",
+    "source_task_identity_required": "Each producer writes the frozen neutral task_id into 07_run_receipt.json; package preparation rejects either normalized source receipt unless its task_id equals the frozen review sheet task_id.",
+    "qualification_review_sheet_required": "The same blinded package and score-lock interface must instantiate Qualification12 sheets from the frozen meta_generalization taskbank, including the bound_result versus fail_closed task contract, so the preregistered blinding pilot and binary reliability gate are executable before core launch.",
+    "score_lock_binding": "Each review record must name the exact blinded review package digest and its exact normalized bundle digest, and must retain the frozen arm guess plus finite 0.0-to-1.0 confidence. The score lock also records the per-file pre- and post-normalization SHA-256 maps for bundle_1 and bundle_2. Reviewers must consume the sealed bytes from that package rather than reopen mutable source paths.",
+    "score_lock_publication": "The complete score-lock bytes are staged and fsynced in the destination directory, verified, then atomically linked to an absent final path without overwrite. Any pre-publication exception removes staging and leaves no final path, so the exact lock can be retried.",
     "redaction_log_required": true,
     "redaction_log_hidden_from_blinded_reviewers": true,
+    "redaction_log_binding": "The package retains each immutable redaction log outside the reviewer file surface and binds its SHA-256 digest into the normalized bundle, blinded package, and score-lock receipt.",
     "source_artifacts_retained_for_adjudication": true,
     "raw_resource_receipt_access": "restricted to the unblinded audit custodian until blinded scientific scoring and arm guesses are locked"
   }

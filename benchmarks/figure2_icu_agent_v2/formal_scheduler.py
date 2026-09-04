@@ -8,10 +8,9 @@ import json
 import os
 from pathlib import Path
 import random
-import re
 from typing import Any, Mapping, Sequence
 
-from .review_bundle_semantics import CANONICAL_FILES
+from .review_bundle_semantics import CANONICAL_FILES, validate_review_task_id
 
 
 PROTOCOL_PATH = Path(__file__).with_name("experiment_protocol_v2_1.json")
@@ -20,7 +19,6 @@ EXECUTION_CONTRACT_PATH = Path(__file__).with_name(
 )
 ARMS = ("easyicu_full", "generic_code_agent")
 FORMAL_PAIR_SCOPES = ("qualification12", "core_wp2_wp3")
-_TASK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 
 
 class FormalScheduleError(ValueError):
@@ -128,16 +126,20 @@ def expected_site_assignment(
             ),
         }
     elif scope == "qualification12":
-        if (
-            len(task_ids) != 12
-            or len(set(task_ids)) != 12
-            or any(
-                not isinstance(task_id, str) or not _TASK_ID_RE.fullmatch(task_id)
-                for task_id in task_ids
+        try:
+            normalized_task_ids = tuple(
+                validate_review_task_id(task_id) for task_id in task_ids
             )
+        except ValueError as exc:
+            raise FormalScheduleError(
+                "Qualification12 task identity is invalid"
+            ) from exc
+        if (
+            len(normalized_task_ids) != 12
+            or len(set(normalized_task_ids)) != 12
         ):
             raise FormalScheduleError("Qualification12 requires 12 unique task IDs")
-        order = sorted(task_ids)
+        order = sorted(normalized_task_ids)
         contract = _load_protocol(EXECUTION_CONTRACT_PATH)
         random.Random(
             contract["qualification12_assignment"]["randomization_seed"]

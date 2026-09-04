@@ -116,6 +116,7 @@ def write_easyicu_review_bundle(
     material: ReviewBundleMaterial,
     *,
     output_dir: Path,
+    task_id: str,
     mandatory_artifacts: Sequence[str],
     resource_receipt: ReviewResourceReceipt,
     outcome: TerminalOutcome | None = None,
@@ -125,6 +126,7 @@ def write_easyicu_review_bundle(
         return write_review_bundle(
             material,
             output_dir=output_dir,
+            task_id=task_id,
             mandatory_artifacts=mandatory_artifacts,
             resource_receipt=resource_receipt,
             outcome=outcome,

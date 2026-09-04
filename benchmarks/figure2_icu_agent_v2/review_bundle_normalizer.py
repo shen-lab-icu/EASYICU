@@ -28,6 +28,7 @@ from .review_bundle_semantics import (
 ACTION_SPACE_PATH = Path(__file__).resolve().parent / "action_space_v1.json"
 _SCIENTIFIC_JSON_FILES = frozenset(CANONICAL_FILES[:5])
 _RECEIPT_VISIBLE_FIELDS = (
+    "task_id",
     "terminal_status",
     "within_frozen_budget",
     "failure_category",
@@ -479,6 +480,7 @@ def normalize_review_bundle(
             receipt = _load_json_object(raw, name)
             expected_receipt_fields = {
                 *RESOURCE_RECEIPT_FIELDS,
+                "task_id",
                 "terminal_status",
                 "failure_category",
                 "agent_asserted_mandatory_artifact_presence",
@@ -513,6 +515,8 @@ def normalize_review_bundle(
             if (
                 receipt["resource_receipt_schema_version"]
                 != "easyicu.figure2_resource_receipt/1"
+                or not isinstance(receipt["task_id"], str)
+                or not receipt["task_id"].strip()
                 or (
                     not isinstance(artifact_presence, dict)
                 )

@@ -20,6 +20,7 @@ from .review_bundle_semantics import (
     asserted_artifact_presence,
     normalize_artifact_inventory,
     substantive_file_flags,
+    validate_review_task_id,
 )
 
 
@@ -206,6 +207,7 @@ class ReviewBundleWriter:
         self,
         material: ReviewBundleMaterial,
         *,
+        task_id: str,
         mandatory_artifacts: Sequence[str],
         resource_receipt: ReviewResourceReceipt,
         outcome: TerminalOutcome | None = None,
@@ -213,6 +215,7 @@ class ReviewBundleWriter:
         return _write_review_bundle(
             material,
             output_dir=self.output_dir,
+            task_id=task_id,
             mandatory_artifacts=mandatory_artifacts,
             resource_receipt=resource_receipt,
             outcome=outcome,
@@ -223,6 +226,7 @@ def _write_review_bundle(
     material: ReviewBundleMaterial,
     *,
     output_dir: Path,
+    task_id: str,
     mandatory_artifacts: Sequence[str],
     resource_receipt: ReviewResourceReceipt,
     outcome: TerminalOutcome | None = None,
@@ -233,6 +237,10 @@ def _write_review_bundle(
         raise ReviewBundleWriteError(
             "resource_receipt must be a ReviewResourceReceipt"
         )
+    try:
+        task_id = validate_review_task_id(task_id)
+    except ValueError as exc:
+        raise ReviewBundleWriteError(str(exc)) from exc
     terminal_outcome = outcome or TerminalOutcome.completed()
     if not isinstance(terminal_outcome, TerminalOutcome):
         raise ReviewBundleWriteError("outcome must be a TerminalOutcome")
@@ -292,6 +300,7 @@ def _write_review_bundle(
     payloads["05_evidence_manifest.json"] = _canonical_json(manifest)
 
     receipt = {
+        "task_id": task_id,
         **resource_receipt.as_dict(),
         **terminal_outcome.receipt_fields(),
         "agent_asserted_mandatory_artifact_presence": (
@@ -328,6 +337,7 @@ def write_review_bundle(
     material: ReviewBundleMaterial,
     *,
     output_dir: Path,
+    task_id: str,
     mandatory_artifacts: Sequence[str],
     resource_receipt: ReviewResourceReceipt,
     outcome: TerminalOutcome | None = None,
@@ -336,6 +346,7 @@ def write_review_bundle(
 
     return ReviewBundleWriter(output_dir).write(
         material,
+        task_id=task_id,
         mandatory_artifacts=mandatory_artifacts,
         resource_receipt=resource_receipt,
         outcome=outcome,
