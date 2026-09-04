@@ -87,12 +87,12 @@
     {
       "role": "preregistration_plan",
       "path": "benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json",
-      "sha256": "dd4d86afec381e204f59b1f4fa6bb6d053a7cbb4e2a5ad3a57f5d9fb489f0d9d"
+      "sha256": "bb991259a2fce5a3174d1e1ebd501f70ec64667c62d65b82390cd36dd1f3b663"
     },
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "fd151e587aa006cc0cbcbb86613d67321917f2271722728786478953b809aa31"
+      "sha256": "332d2510f14afd71781502a865bad3a1987f0df733d28d0c52e0a4ca50967e54"
     },
     {
       "role": "execution_acceptance_contract",

@@ -25,6 +25,16 @@ REGISTERED_SOURCE_PATHS: Mapping[str, Path] = MappingProxyType(
             / "tests/benchmarks/figure2_icu_agent_v2/test_formal_runtime_v2_1.py"
         ),
         "formal_provider_gate_sha256": PACKAGE_ROOT / "formal_provider_gate.py",
+        "formal_collaborator_adapter_sha256": (
+            PACKAGE_ROOT / "formal_collaborator_adapter.py"
+        ),
+        "pipeline_services_sha256": (
+            REPO_ROOT / "src/easyicu/research_agent/orchestration/services.py"
+        ),
+        "pipeline_services_test_sha256": (
+            REPO_ROOT
+            / "tests/research_agent/integration/test_pipeline_config_contract.py"
+        ),
         "formal_easyicu_runner_sha256": PACKAGE_ROOT / "formal_easyicu_runner.py",
         "formal_generic_runner_sha256": PACKAGE_ROOT / "formal_generic_runner.py",
         "generic_harness_sha256": PACKAGE_ROOT / "generic_code_agent_harness.py",
@@ -58,6 +68,12 @@ REGISTERED_SOURCE_PATHS: Mapping[str, Path] = MappingProxyType(
 IMPLEMENTATION_OWNER_PATHS: Mapping[str, Path] = MappingProxyType(
     {
         "provider_gate": PACKAGE_ROOT / "formal_provider_gate.py",
+        "formal_collaborator_adapter": (
+            PACKAGE_ROOT / "formal_collaborator_adapter.py"
+        ),
+        "pipeline_services": (
+            REPO_ROOT / "src/easyicu/research_agent/orchestration/services.py"
+        ),
         "easyicu_formal_runner": PACKAGE_ROOT / "formal_easyicu_runner.py",
         "generic_formal_runner": PACKAGE_ROOT / "formal_generic_runner.py",
         "generic_harness": PACKAGE_ROOT / "generic_code_agent_harness.py",
