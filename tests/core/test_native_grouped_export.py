@@ -18,6 +18,126 @@ def _completed_result(module: str = "demographics") -> dict[str, object]:
     return {"modules": {module: {"errors": []}}}
 
 
+@pytest.mark.parametrize("force_duckdb", [False, True])
+def test_native_sofa1_recomputes_total_after_hour_key_consolidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    force_duckdb: bool,
+) -> None:
+    components = [
+        "sofa_resp",
+        "sofa_coag",
+        "sofa_liver",
+        "sofa_cardio",
+        "sofa_cns",
+        "sofa_renal",
+    ]
+    requested = ["sofa", *components]
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sofa1_score": requested})
+    if force_duckdb:
+        monkeypatch.setattr(
+            api,
+            "_native_export_pandas_fallback_is_bounded",
+            lambda _size: False,
+        )
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 0.0, 0.0],
+            "sofa": [4.0, 4.0, 0.0],
+            "sofa_resp": [4.0, 0.0, 0.0],
+            "sofa_coag": [0.0, 4.0, 0.0],
+            "sofa_liver": [None, None, None],
+            "sofa_cardio": [0.0, 0.0, 0.0],
+            "sofa_cns": [0.0, 0.0, 0.0],
+            "sofa_renal": [0.0, 0.0, 0.0],
+        }
+    ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa1_score"],
+        max_patients=None,
+        result=_completed_result("sofa1_score"),
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa1_score.parquet")
+    assert len(published) == 1
+    assert published.loc[0, "sofa"] == 8.0
+    assert published.loc[0, components].fillna(0).sum() == published.loc[0, "sofa"]
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    policy = manifest["files"][0]["row_grain_audit"]["aggregation_policy"]
+    assert policy["score_component"] == "max_non_null_worst_state"
+    assert policy["derived_score_total"] == (
+        "recomputed_after_component_consolidation"
+    )
+
+
+@pytest.mark.parametrize("force_duckdb", [False, True])
+def test_native_sofa2_recomputes_total_after_hour_key_consolidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    force_duckdb: bool,
+) -> None:
+    """A median of totals must never replace a sum of merged components."""
+
+    components = [
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ]
+    requested = ["sofa2", *components]
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sofa2_score": requested})
+    if force_duckdb:
+        monkeypatch.setattr(
+            api,
+            "_native_export_pandas_fallback_is_bounded",
+            lambda _size: False,
+        )
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 0.0, 0.0],
+            # The total is derived after the worst same-hour component state
+            # is selected; it must not be the median of precomputed totals.
+            "sofa2": [4.0, 4.0, None],
+            "sofa2_resp": [4.0, 0.0, 0.0],
+            "sofa2_coag": [0.0, 4.0, 0.0],
+            "sofa2_liver": [0.0, 0.0, 0.0],
+            "sofa2_cardio": [0.0, 0.0, 0.0],
+            "sofa2_cns": [0.0, 0.0, 0.0],
+            "sofa2_renal": [0.0, 0.0, 0.0],
+        }
+    )
+    for component in components:
+        frame[f"{component}_observed"] = True
+        frame[f"{component}_available"] = True
+    frame.loc[2, "sofa2_renal_available"] = False
+    frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa2_score.parquet")
+    assert len(published) == 1
+    assert published.loc[0, "sofa2"] == 8.0
+    assert published.loc[0, "sofa2_available"]
+    assert published.loc[0, "sofa2_observed"]
+    assert published.loc[0, components].sum() == published.loc[0, "sofa2"]
+
+
 def test_native_sofa2_receipts_survive_producer_to_trajectory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

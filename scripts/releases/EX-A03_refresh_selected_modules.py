@@ -45,6 +45,7 @@ if str(SOURCE_ROOT) not in sys.path:
 from easyicu.api import extract_database  # noqa: E402
 from easyicu.api.extraction import (  # noqa: E402
     EXTRACT_MODULES,
+    _publish_native_export_v2,
     plan_extraction_resources,
     plan_module_extraction_resources,
 )
@@ -508,31 +509,272 @@ def _module_is_canonical_refresh(database_root: Path, modules: Sequence[str]) ->
     return True
 
 
+def _module_is_complete_producer_staging(
+    database_root: Path,
+    modules: Sequence[str],
+) -> bool:
+    """Recognise complete pre-native module outputs without assuming native IDs."""
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - package is release-required
+        raise ModuleRefreshError(
+            "pyarrow is required to inspect producer staging"
+        ) from exc
+
+    for module in modules:
+        manifest_path = database_root / f"{module}.manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            return False
+        try:
+            manifest = _read_json(
+                manifest_path,
+                label=f"{module} staged producer manifest",
+            )
+        except ModuleRefreshError:
+            return False
+        if manifest.get("module") != module or manifest.get("errors"):
+            return False
+        saved = manifest.get("saved")
+        if not isinstance(saved, Mapping):
+            return False
+        # An explicitly empty saved mapping is a complete structural absence;
+        # native-v2 owns creation of its typed zero-row placeholder.
+        if not saved:
+            continue
+        parquet = database_root / f"{module}.parquet"
+        if parquet.is_symlink() or not parquet.is_file():
+            return False
+        try:
+            columns = set(pq.read_schema(parquet).names)
+        except Exception:
+            return False
+        produced: set[str] = set()
+        for saved_name, record in saved.items():
+            if isinstance(saved_name, str):
+                produced.add(saved_name)
+            if isinstance(record, Mapping):
+                produced.update(
+                    str(concept)
+                    for concept in (record.get("concepts") or [])
+                    if isinstance(concept, str)
+                )
+        declared = set(EXTRACT_MODULES[module])
+        if not declared.intersection(produced) or not declared.intersection(columns):
+            return False
+    return True
+
+
+def _requires_outcome_time_bounds(modules: Sequence[str]) -> bool:
+    """Return whether native publication needs the sealed ICU-stay bounds."""
+
+    return any(module not in {"demographics", "outcome"} for module in modules)
+
+
+def _stage_outcome_time_bound_dependency(
+    *,
+    source_database_root: Path,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> Path | None:
+    """Expose sealed ``outcome.los_icu`` to a selected-module publisher.
+
+    ``outcome`` is an input authority here, not a refreshed output. Copy the
+    already-published Parquet rather than rereading raw outcome data or sharing
+    its inode with writable staging. The native publisher only reads this file
+    because ``outcome`` is absent from ``modules``; SHA-256 is checked before
+    use.
+    """
+
+    if not _requires_outcome_time_bounds(modules) or "outcome" in modules:
+        return None
+
+    source = source_database_root / "outcome.parquet"
+    destination = staging_root / "outcome.parquet"
+    _require_regular_file(source, label="sealed outcome time-bound dependency")
+    staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    if destination.exists() or destination.is_symlink():
+        _require_regular_file(
+            destination,
+            label="staged outcome time-bound dependency",
+        )
+        if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(
+            source
+        ):
+            raise ModuleRefreshError(
+                "Staged outcome time-bound dependency differs from the sealed source"
+            )
+        return destination
+
+    shutil.copy2(source, destination)
+    if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(source):
+        destination.unlink(missing_ok=True)
+        raise ModuleRefreshError(
+            "Failed to stage an exact outcome time-bound dependency"
+        )
+    return destination
+
+
+def _recover_native_staging_publication(
+    *,
+    database: str,
+    data_path: str,
+    staging_root: Path,
+    modules: Sequence[str],
+    resource_budget_mb: float,
+) -> None:
+    """Finish native-v2 publication from complete producer artifacts.
+
+    A process can finish every expensive module and then fail in the publisher.
+    Reconstruct only the small in-memory receipt needed by native-v2; never
+    reopen the raw database or recompute a module during recovery.
+    """
+
+    module_results: dict[str, dict[str, Any]] = {}
+    module_resource_plans: dict[str, Any] = {}
+    for module in modules:
+        manifest = _read_json(
+            staging_root / f"{module}.manifest.json",
+            label=f"{module} staged producer manifest",
+        )
+        errors = list(manifest.get("errors") or [])
+        if errors:
+            raise ModuleRefreshError(
+                f"Cannot recover {module} native publication: {errors}"
+            )
+        module_results[module] = {
+            "errors": [],
+            "elapsed": float(manifest.get("elapsed_sec") or 0.0),
+            "peak_rss_mb": float(manifest.get("peak_rss_mb") or 0.0),
+            "peak_working_set_mb": float(
+                manifest.get("peak_working_set_mb") or 0.0
+            ),
+        }
+        if manifest.get("resource_plan") is not None:
+            module_resource_plans[module] = manifest["resource_plan"]
+
+    _publish_native_export_v2(
+        database=database,
+        data_path=data_path,
+        output_dir=str(staging_root),
+        modules=list(modules),
+        max_patients=None,
+        result={
+            "modules": module_results,
+            "stream_retry_history": [],
+            "resource_plan": None,
+            "module_resource_plans": module_resource_plans,
+            "resource_budget_mb": float(resource_budget_mb),
+        },
+        require_stay_time_bounds=True,
+    )
+
+
+def _validate_existing_staging_native_manifest(
+    *,
+    database: str,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> None:
+    """Reject a stale or unrelated root manifest before staged promotion."""
+
+    manifest_path = staging_root / "_manifest.json"
+    _require_regular_file(manifest_path, label="staged native-v2 manifest")
+    manifest = _read_json(manifest_path, label="staged native-v2 manifest")
+    if manifest.get("schema_version") != "easyicu_native_export_v2":
+        raise ModuleRefreshError("Staged refresh lacks a native-v2 root manifest")
+    if manifest.get("database") != database:
+        raise ModuleRefreshError(
+            "Staged native-v2 manifest belongs to a different database"
+        )
+    files = manifest.get("files")
+    if not isinstance(files, list) or not all(
+        isinstance(entry, Mapping) for entry in files
+    ):
+        raise ModuleRefreshError("Staged native-v2 file receipts are invalid")
+    files_by_module = {str(entry.get("module")): entry for entry in files}
+    if set(files_by_module) != set(modules):
+        raise ModuleRefreshError(
+            "Staged native-v2 module scope differs from the requested refresh"
+        )
+    if _requires_outcome_time_bounds(modules):
+        authority = manifest.get("time_window_authority")
+        try:
+            bounded_stays = int(authority.get("bounded_stays") or 0)
+        except (AttributeError, TypeError, ValueError):
+            bounded_stays = 0
+        if not (
+            isinstance(authority, Mapping)
+            and authority.get("required") is True
+            and authority.get("source") == "outcome.los_icu"
+            and bounded_stays > 0
+        ):
+            raise ModuleRefreshError(
+                "Staged longitudinal modules lack outcome.los_icu time authority"
+            )
+    for module in modules:
+        parquet = staging_root / f"{module}.parquet"
+        _require_regular_file(parquet, label=f"{module} staged native Parquet")
+        expected_sha256 = files_by_module[module].get("parquet_sha256")
+        if not isinstance(expected_sha256, str) or (
+            REPUBLICATION._sha256_file(parquet) != expected_sha256
+        ):
+            raise ModuleRefreshError(
+                f"{module} staged Parquet differs from its native-v2 receipt"
+            )
+
+
 def _validate_refreshed_score_content(
     database_root: Path, modules: Sequence[str]
 ) -> None:
-    """Refuse a structurally valid refresh whose primary score is all null.
+    """Refuse null or internally incoherent refreshed SOFA trajectories.
 
     Schema checks alone did not catch the 2026-09 IMV regression: both SOFA
     files had the expected columns and millions of rows, but interval handling
-    had displaced their components so every total score was missing. Scan only
-    the primary score column in bounded Arrow batches before any candidate file
-    is promoted.
+    had displaced their components so every total score was missing. A later
+    audit also found totals aggregated independently from duplicate-hour organ
+    components. Scan bounded Arrow batches before any candidate file is
+    promoted and require the public score/receipt identities exactly.
     """
 
     try:
+        import pandas as pd
         import pyarrow.parquet as pq
     except ImportError as exc:  # pragma: no cover - package is release-required
         raise ModuleRefreshError(
             "pyarrow is required to validate refreshed score content"
         ) from exc
 
-    for module, score_column in (
-        ("sofa1_score", "sofa"),
-        ("sofa2_score", "sofa2"),
-    ):
+    score_specs = {
+        "sofa1_score": {
+            "score": "sofa",
+            "components": (
+                "sofa_resp",
+                "sofa_coag",
+                "sofa_liver",
+                "sofa_cardio",
+                "sofa_cns",
+                "sofa_renal",
+            ),
+        },
+        "sofa2_score": {
+            "score": "sofa2",
+            "components": (
+                "sofa2_resp",
+                "sofa2_coag",
+                "sofa2_liver",
+                "sofa2_cardio",
+                "sofa2_cns",
+                "sofa2_renal",
+            ),
+        },
+    }
+    for module, spec in score_specs.items():
         if module not in modules:
             continue
+        score_column = str(spec["score"])
+        components = tuple(spec["components"])
         path = database_root / f"{module}.parquet"
         _require_regular_file(path, label=f"{module} staged Parquet")
         parquet = pq.ParquetFile(path)
@@ -540,18 +782,102 @@ def _validate_refreshed_score_content(
             raise ModuleRefreshError(
                 f"{module} staged Parquet lacks primary score {score_column!r}"
             )
+        required = {score_column, *components}
+        if module == "sofa2_score":
+            required.update(
+                f"{component}_{suffix}"
+                for component in components
+                for suffix in ("observed", "available")
+            )
+            required.update({"sofa2_observed", "sofa2_available"})
+        missing = required.difference(parquet.schema_arrow.names)
+        if missing:
+            raise ModuleRefreshError(
+                f"{module} refresh lacks score-consistency columns: {sorted(missing)}"
+            )
+
         rows = 0
         non_null = 0
+        inconsistent = 0
+        invalid_component = 0
+        consistency_columns = [score_column, *components]
+        if module == "sofa2_score":
+            consistency_columns.extend(
+                f"{component}_{suffix}"
+                for component in components
+                for suffix in ("observed", "available")
+            )
+            consistency_columns.extend(["sofa2_observed", "sofa2_available"])
         for batch in parquet.iter_batches(
-            batch_size=262_144, columns=[score_column], use_threads=False
+            batch_size=262_144,
+            columns=consistency_columns,
+            use_threads=False,
         ):
-            column = batch.column(0)
-            rows += len(column)
-            non_null += len(column) - column.null_count
+            frame = batch.to_pandas()
+            rows += len(frame)
+            component_frame = frame[list(components)].apply(
+                lambda column: pd.to_numeric(column, errors="coerce")
+            )
+            invalid_component += int(
+                ((component_frame < 0) | (component_frame > 4)).any(axis=1).sum()
+            )
+            score = pd.to_numeric(frame[score_column], errors="coerce")
+            non_null += int(score.notna().sum())
+            if module == "sofa1_score":
+                expected = component_frame.sum(axis=1, skipna=True)
+                coherent = score.eq(expected)
+            else:
+                available_columns = [
+                    f"{component}_available" for component in components
+                ]
+                observed_columns = [
+                    f"{component}_observed" for component in components
+                ]
+                available = (
+                    frame[available_columns]
+                    .astype("boolean")
+                    .fillna(False)
+                )
+                observed = (
+                    frame[observed_columns]
+                    .astype("boolean")
+                    .fillna(False)
+                )
+                complete = component_frame.notna().all(axis=1) & available.all(
+                    axis=1
+                )
+                expected = component_frame.sum(
+                    axis=1, min_count=len(components)
+                ).where(complete)
+                coherent = score.eq(expected) | (score.isna() & expected.isna())
+                coherent &= (
+                    frame["sofa2_available"]
+                    .astype("boolean")
+                    .fillna(False)
+                    .eq(complete)
+                )
+                coherent &= (
+                    frame["sofa2_observed"]
+                    .astype("boolean")
+                    .fillna(False)
+                    .eq(complete & observed.all(axis=1))
+                )
+            inconsistent += int((~coherent.fillna(False)).sum())
+
         if rows == 0 or non_null == 0:
             raise ModuleRefreshError(
                 f"{module} refresh is unusable: {score_column} has "
                 f"{non_null} non-null values across {rows} rows"
+            )
+        if invalid_component:
+            raise ModuleRefreshError(
+                f"{module} refresh has {invalid_component} rows with organ "
+                "components outside the valid 0-4 range"
+            )
+        if inconsistent:
+            raise ModuleRefreshError(
+                f"{module} refresh has {inconsistent} rows whose total/receipts "
+                "do not match the post-consolidation organ components"
             )
 
 
@@ -836,7 +1162,41 @@ def _refresh_one_database(
             ),
         }
     if staging_root.exists() or staging_root.is_symlink():
-        if _module_is_canonical_refresh(staging_root, modules):
+        native_manifest = staging_root / "_manifest.json"
+        canonical_staging = _module_is_canonical_refresh(staging_root, modules)
+        producer_staging = _module_is_complete_producer_staging(
+            staging_root,
+            modules,
+        )
+        if canonical_staging or producer_staging:
+            _stage_outcome_time_bound_dependency(
+                source_database_root=source_database_root,
+                staging_root=staging_root,
+                modules=modules,
+            )
+            if native_manifest.exists() or native_manifest.is_symlink():
+                if not canonical_staging:
+                    raise ModuleRefreshError(
+                        "Staged root manifest exists before module files satisfy "
+                        "the native schema"
+                    )
+                _validate_existing_staging_native_manifest(
+                    database=database,
+                    staging_root=staging_root,
+                    modules=modules,
+                )
+            else:
+                _recover_native_staging_publication(
+                    database=database,
+                    data_path=data_path,
+                    staging_root=staging_root,
+                    modules=modules,
+                    resource_budget_mb=resource_budget_mb,
+                )
+                if not _module_is_canonical_refresh(staging_root, modules):
+                    raise ModuleRefreshError(
+                        "Recovered native publication did not produce canonical modules"
+                    )
             _validate_refreshed_score_content(staging_root, modules)
             _replace_selected_module_files(
                 staging_root=staging_root,
@@ -858,6 +1218,11 @@ def _refresh_one_database(
             f"Existing refresh staging is incomplete or not canonical: {staging_root}"
         )
     staging_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _stage_outcome_time_bound_dependency(
+        source_database_root=source_database_root,
+        staging_root=staging_root,
+        modules=modules,
+    )
     extraction = extract_database(
         database,
         data_path=data_path,

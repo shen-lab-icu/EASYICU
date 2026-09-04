@@ -3189,6 +3189,8 @@ def _callback_sofa2_score(
     available_columns = [f"{name}_available" for name in required]
     aggregate_columns = [
         "sofa2",
+        "sofa2_observed",
+        "sofa2_available",
         "sofa2_n_observed_components",
         "sofa2_n_available_components",
         "sofa2_n_components",
@@ -3360,12 +3362,17 @@ def _callback_sofa2_score(
         data[available_columns].fillna(0).sum(axis=1).astype(int)
     )
     data["sofa2_n_components"] = data["sofa2_n_available_components"]
+    all_available = data[available_columns].fillna(0).eq(1).all(axis=1)
+    all_observed = data[observed_columns].fillna(0).eq(1).all(axis=1)
     # A missing component must not be silently summed as 0. When fewer than
     # all six components are available for a row, the total is unknown (NA);
     # n_available_components still reports how many contributed.
     data["sofa2"] = (
         data[required].sum(axis=1, min_count=len(required)).round().astype("Int64")
     )
+    complete = all_available & data["sofa2"].notna()
+    data["sofa2_available"] = complete.astype("int8")
+    data["sofa2_observed"] = (complete & all_observed).astype("int8")
 
     cols = id_columns + ([index_column] if index_column else [])
     if keep_components:
