@@ -291,12 +291,14 @@ consumer changed SHA.
    the only defensible way to reduce those batches.
 5. **Other database profiles.** AUMC now has exact 8-GiB evidence for both
    SOFA score modules and their two Sepsis consumers. Twelve unchanged AUMC
-   modules retain their sealed full-cohort one-shot measurements. Only its
-   historically heavy `respiratory` owner now has a measured five-partition
-   boundary after batch-process isolation and deferred Parquet merging removed
-   cross-phase allocator overlap. Only `ventilator` and `other_scores`,
-   together with HiRID and SIC modules, still lack a measured current 8-GiB
-   batch boundary. Their conservative plans are not proof of a fastest batch.
+   modules retain their sealed full-cohort one-shot measurements. Its heavy
+   `respiratory` owner has a measured five-partition boundary after process
+   isolation and deferred merging removed allocator overlap; `ventilator` has
+   a measured three-partition same-process boundary whose changed categorical
+   values all matched an independent 68-stay direct extraction. Only AUMC
+   `other_scores`, together with HiRID and SIC modules, still lacks a measured
+   current 8-GiB batch boundary. Conservative plans without such evidence are
+   not proof of a fastest batch.
 6. **Hash and publication reads.** SHA-256, logical multiset QC and metadata
    binding necessarily reread published files. These passes are audit costs;
    removing them would weaken release integrity. They can be scheduled once per

@@ -219,8 +219,9 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         # extraction. These owners are outside the later IMV/SOFA semantic
         # repair; the deterministic worker envelope only reduces their lower-
         # layer concurrency/cache limits. Keep the three historically heavy
-        # owners (respiratory, ventilator and other_scores) out of this table
-        # until an 8-GiB batch boundary has been measured for each one.
+        # owners (respiratory, ventilator and other_scores) out of this table;
+        # respiratory and ventilator now have current 8-GiB batch evidence
+        # below, while other_scores remains guarded pending measurement.
         "demographics": {"cohort_stays": 23_106, "peak_rss_mb": 210.1, "seconds": 0.4},
         "outcome": {"cohort_stays": 23_106, "peak_rss_mb": 193.5, "seconds": 0.3},
         "blood_gas": {"cohort_stays": 23_106, "peak_rss_mb": 2_207.2, "seconds": 11.7},
@@ -438,6 +439,19 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "batch_size": 5_000,
             "peak_rss_mb": 7_254.6,
             "seconds": 836.0,
+        },
+        # The smallest rounded two-partition candidate (12k) crossed the
+        # 7,447-MiB hard stop. 8k completed the same-process streamed path in
+        # three partitions with a 6,025.4-MiB external process-tree peak.
+        # A fresh direct extraction of all 68 stays/108 keys changed from the
+        # sealed release matched the streamed result in all three affected
+        # fields, proving that the differences come from the existing stable
+        # categorical-first rule rather than patient partitioning.
+        "ventilator": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 6_025.4,
+            "seconds": 392.6,
         },
     },
     "eicu": {
