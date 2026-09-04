@@ -541,6 +541,12 @@ def test_batch_process_isolation_is_scoped_to_measured_target(monkeypatch) -> No
     assert api._requires_isolated_stream_batch("eicu", "sofa1_score") is False
 
 
+def test_aumc_respiratory_uses_measured_batch_process_isolation() -> None:
+    assert api._requires_isolated_stream_batch("aumc", "respiratory") is True
+    assert api._requires_isolated_stream_batch("aumc", "ventilator") is False
+    assert api._requires_isolated_stream_batch("aumc", "other_scores") is False
+
+
 def test_append_isolated_stream_batch_aligns_to_frozen_schema(tmp_path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
