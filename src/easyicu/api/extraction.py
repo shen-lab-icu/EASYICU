@@ -1118,10 +1118,10 @@ _SPECIAL_OUTPUT_DIRNAME = "_special"
 def _extract_worker_env_setup(data_path: str) -> None:
     """提取子进程入口的共享环境准备。
 
-    本 worker 已是隔离子进程：模块退出后 OS 完整回收内存，模块间无碎片累积。
-    因此模块内部应一次性 in-process 加载，绝不要让 load_concepts 再启动“每批
-    子进程 fork”——每次 fork 都会重读共享源表(chartevents/labevents…)，是数倍
-    慢的根源。强制 in-process，让模块内单次扫表。
+    常规模块 worker 退出后由 OS 回收内存，所以 ``load_concepts`` 自身保持
+    in-process，避免其旧式内部 fork 重读共享源表。只有经过实测登记的外层流式
+    模块会由导出器显式为每个患者批次创建一个全新 spawn worker；其子 worker
+    内部仍然是 in-process。这两个层级不能混淆。
     """
     import os
     import sys
@@ -1519,6 +1519,21 @@ _VITAL_STREAM_DERIVED_CONCEPTS = (
     "diastolic_shock_index",
 )
 
+# These exact database/module implementations retain large native allocator
+# arenas after a completed patient batch.  Running every batch in a fresh
+# spawned interpreter makes the process boundary, rather than allocator-
+# specific trim heuristics, the memory-release contract.  Keep the scope tied
+# to measured evidence: an eICU finding must not silently change another
+# database's execution strategy.
+_ISOLATED_STREAM_BATCH_TARGETS = frozenset({("eicu", "sofa2_score")})
+
+
+def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:
+    return (
+        _normalise_stream_database(database),
+        str(module_name),
+    ) in _ISOLATED_STREAM_BATCH_TARGETS
+
 
 def _clear_stream_loader_caches(loader) -> None:
     if loader is None:
@@ -1644,6 +1659,107 @@ def _load_stream_module_batch(
     return result
 
 
+def _write_isolated_stream_batch(
+    module_name: str,
+    concepts: List[str],
+    load_kwargs: Dict,
+    patient_ids: Dict,
+    destination: str,
+) -> None:
+    """Extract one patient batch and atomically write it from a fresh process."""
+
+    import os
+    from pathlib import Path
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from easyicu import load_concepts as _lc
+
+    data_path = str(load_kwargs.get("data_path") or "")
+    _extract_worker_env_setup(data_path)
+    target = Path(destination)
+    partial = target.with_name(f".{target.name}.partial")
+    if target.exists() or target.is_symlink() or partial.exists() or partial.is_symlink():
+        raise ValueError(f"refusing stale isolated batch output: {target}")
+
+    batch = None
+    frame = None
+    table = None
+    try:
+        batch = _load_stream_module_batch(
+            _lc,
+            module_name=module_name,
+            concepts=concepts,
+            load_kwargs=load_kwargs,
+            patient_ids=patient_ids,
+            loader=None,
+            pyarrow_module=pa,
+        )
+        frame = _normalise_module_frame_for_parquet(
+            batch,
+            concepts,
+            reorder=False,
+        )
+        if frame is None:
+            return
+        id_col, requested_ids = next(iter(patient_ids.items()))
+        if id_col in frame.columns:
+            outside_batch = frame[id_col].notna() & ~frame[id_col].isin(requested_ids)
+            if bool(outside_batch.any()):
+                outside_count = int(frame.loc[outside_batch, id_col].nunique())
+                raise ValueError(
+                    f"{module_name}: isolated streamed batch returned "
+                    f"{outside_count} {id_col} values outside the requested "
+                    "patient partition"
+                )
+        table = _module_arrow_table(
+            frame,
+            concepts,
+            pa,
+            module=module_name,
+        )
+        pq.write_table(table, partial, compression="snappy")
+        os.replace(partial, target)
+    finally:
+        partial.unlink(missing_ok=True)
+        del table, frame, batch
+        _clear_stream_loader_caches(None)
+        _release_stream_batch_memory(pa)
+
+
+def _append_isolated_stream_batch(
+    source: Path,
+    *,
+    writer,
+    schema,
+    pyarrow_module,
+    parquet_module,
+) -> int:
+    """Append one child-produced file without materialising its full table."""
+
+    parquet_file = parquet_module.ParquetFile(source)
+    output_rows = int(parquet_file.metadata.num_rows)
+    for record_batch in parquet_file.iter_batches(batch_size=64 * 1024):
+        table = pyarrow_module.Table.from_batches([record_batch])
+        # Match ``_module_arrow_table(..., schema=first_schema)`` without
+        # converting this bounded Arrow batch back to pandas.  Later source
+        # batches can omit context fields present in the first batch or expose
+        # additional context fields that are not part of the frozen output
+        # contract.
+        for field in schema:
+            if field.name not in table.column_names:
+                table = table.append_column(
+                    field,
+                    pyarrow_module.nulls(len(table), type=field.type),
+                )
+        table = table.select(schema.names)
+        if table.schema != schema:
+            table = table.cast(schema)
+        writer.write_table(table)
+        del table
+    return output_rows
+
+
 def _stream_module_batches_to_parquet(
     module_name: str,
     concepts: List[str],
@@ -1664,6 +1780,7 @@ def _stream_module_batches_to_parquet(
     their output on an external disk never use the system volume for it.
     """
     import os
+    import multiprocessing as mp
     from pathlib import Path
 
     import pyarrow as pa
@@ -1693,10 +1810,17 @@ def _stream_module_batches_to_parquet(
     current_batch_size = int(batch_size)
     batch_load_kwargs = dict(load_kwargs)
     batch_load_kwargs.pop("patient_ids", None)
+    isolate_batch_process = _requires_isolated_stream_batch(
+        str(load_kwargs.get("database") or ""),
+        module_name,
+    )
+    batch_process_context = _get_extraction_mp_context(mp) if isolate_batch_process else None
+    part_files: list[Path] = []
     try:
         start = 0
         while start < len(all_ids):
             table = None
+            batch = None
             batch_ids = all_ids[start : start + current_batch_size]
             # Keep the inner ``load_concepts`` boundary identical to the outer
             # writer boundary.  After first-batch adaptation, retaining the
@@ -1707,55 +1831,114 @@ def _stream_module_batches_to_parquet(
             batch_sampler = _RSSPeakSampler().start()
             frame = None
             output_rows = 0
+            batch_part = destination.with_name(
+                f".{module_name}.batch-{len(batch_telemetry) + 1:05d}.parquet"
+            )
             try:
-                batch = _load_stream_module_batch(
-                    _lc,
-                    module_name=module_name,
-                    concepts=concepts,
-                    load_kwargs=batch_load_kwargs,
-                    patient_ids={id_col: batch_ids},
-                    loader=loader,
-                    pyarrow_module=pa,
-                )
-                frame = _normalise_module_frame_for_parquet(
-                    batch,
-                    concepts,
-                    reorder=False,
-                )
-                if frame is not None:
-                    if id_col in frame.columns:
-                        outside_batch = frame[id_col].notna() & ~frame[id_col].isin(
-                            batch_ids
+                if isolate_batch_process:
+                    assert batch_process_context is not None
+                    if batch_part.exists() or batch_part.is_symlink():
+                        raise ValueError(
+                            f"refusing stale isolated batch output: {batch_part}"
                         )
-                        if bool(outside_batch.any()):
-                            outside_count = int(
-                                frame.loc[outside_batch, id_col].nunique()
-                            )
-                            raise ValueError(
-                                f"{module_name}: streamed batch returned "
-                                f"{outside_count} {id_col} values outside the "
-                                "requested patient partition"
-                            )
-                    produced_concepts.update(
-                        concept for concept in concepts if concept in frame.columns
+                    # Register the path before starting the child so every
+                    # failure path, including a non-zero child exit after an
+                    # atomic rename, removes it.
+                    part_files.append(batch_part)
+                    process = batch_process_context.Process(
+                        target=_write_isolated_stream_batch,
+                        args=(
+                            module_name,
+                            concepts,
+                            batch_load_kwargs,
+                            {id_col: batch_ids},
+                            str(batch_part),
+                        ),
+                        daemon=False,
                     )
-                    table = _module_arrow_table(
-                        frame,
+                    process.start()
+                    process.join()
+                    if process.exitcode != 0:
+                        raise RuntimeError(
+                            f"{module_name}: isolated batch worker exited "
+                            f"with code {process.exitcode}"
+                        )
+                    if batch_part.exists():
+                        part_schema = pq.read_schema(batch_part)
+                        if writer is None:
+                            schema = part_schema
+                            writer = pq.ParquetWriter(
+                                partial,
+                                schema,
+                                compression="snappy",
+                            )
+                        produced_concepts.update(
+                            concept
+                            for concept in concepts
+                            if concept in part_schema.names
+                        )
+                        output_rows = _append_isolated_stream_batch(
+                            batch_part,
+                            writer=writer,
+                            schema=schema,
+                            pyarrow_module=pa,
+                            parquet_module=pq,
+                        )
+                        rows += output_rows
+                        batch_part.unlink()
+                        part_files.remove(batch_part)
+                    else:
+                        # An empty source batch intentionally produces no part.
+                        part_files.remove(batch_part)
+                else:
+                    batch = _load_stream_module_batch(
+                        _lc,
+                        module_name=module_name,
+                        concepts=concepts,
+                        load_kwargs=batch_load_kwargs,
+                        patient_ids={id_col: batch_ids},
+                        loader=loader,
+                        pyarrow_module=pa,
+                    )
+                    frame = _normalise_module_frame_for_parquet(
+                        batch,
                         concepts,
-                        pa,
-                        module=module_name,
-                        schema=schema,
+                        reorder=False,
                     )
-                    if writer is None:
-                        schema = table.schema
-                        writer = pq.ParquetWriter(
-                            partial,
-                            schema,
-                            compression="snappy",
+                    if frame is not None:
+                        if id_col in frame.columns:
+                            outside_batch = frame[id_col].notna() & ~frame[id_col].isin(
+                                batch_ids
+                            )
+                            if bool(outside_batch.any()):
+                                outside_count = int(
+                                    frame.loc[outside_batch, id_col].nunique()
+                                )
+                                raise ValueError(
+                                    f"{module_name}: streamed batch returned "
+                                    f"{outside_count} {id_col} values outside the "
+                                    "requested patient partition"
+                                )
+                        produced_concepts.update(
+                            concept for concept in concepts if concept in frame.columns
                         )
-                    writer.write_table(table)
-                    output_rows = len(frame)
-                    rows += output_rows
+                        table = _module_arrow_table(
+                            frame,
+                            concepts,
+                            pa,
+                            module=module_name,
+                            schema=schema,
+                        )
+                        if writer is None:
+                            schema = table.schema
+                            writer = pq.ParquetWriter(
+                                partial,
+                                schema,
+                                compression="snappy",
+                            )
+                        writer.write_table(table)
+                        output_rows = len(frame)
+                        rows += output_rows
             finally:
                 batch_memory = batch_sampler.stop()
 
@@ -1766,6 +1949,7 @@ def _stream_module_batches_to_parquet(
                     "stays": len(batch_ids),
                     "inner_load_batch_size": int(batch_load_kwargs["batch_size"]),
                     "output_rows": output_rows,
+                    "batch_process_isolation": isolate_batch_process,
                     **batch_memory,
                 }
             )
@@ -1790,9 +1974,11 @@ def _stream_module_batches_to_parquet(
         writer.close()
         writer = None
         os.replace(partial, destination)
-    except Exception:
+    except BaseException:
         if writer is not None:
             writer.close()
+        for part_file in part_files:
+            part_file.unlink(missing_ok=True)
         partial.unlink(missing_ok=True)
         raise
 
@@ -1805,6 +1991,7 @@ def _stream_module_batches_to_parquet(
         "final_planned_batch_size": current_batch_size,
         "adaptive_batch_growth": bool(adaptive_batch_growth),
         "patient_partition_strategy": "source_order_interleaved_v1",
+        "batch_process_isolation": isolate_batch_process,
         "initial_planned_partition_count": planned_partition_count,
     }
 
@@ -1998,6 +2185,10 @@ def _run_module_extraction(
         )
         manifest["initial_planned_partition_count"] = stream_info.get(
             "initial_planned_partition_count"
+        )
+        manifest["batch_process_isolation"] = stream_info.get(
+            "batch_process_isolation",
+            False,
         )
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
@@ -5462,6 +5653,7 @@ def extract_database(
             "peak_rss_mb": 0.0,
             "peak_working_set_mb": 0.0,
             "stream_batches": [],
+            "batch_process_isolation": False,
         }
         manifest_path = os.path.join(tmp_mod_dir, "_manifest.json")
         if not os.path.exists(manifest_path):
@@ -5480,6 +5672,10 @@ def extract_database(
             0.0,
         )
         mod_result["stream_batches"] = manifest.get("stream_batches", [])
+        mod_result["batch_process_isolation"] = manifest.get(
+            "batch_process_isolation",
+            False,
+        )
         output_manifest = {
             "module": mod_name,
             "saved": {},
@@ -5495,6 +5691,7 @@ def extract_database(
                 0.0,
             ),
             "stream_batches": mod_result["stream_batches"],
+            "batch_process_isolation": mod_result["batch_process_isolation"],
             "initial_batch_size": manifest.get("initial_batch_size"),
             "final_planned_batch_size": manifest.get("final_planned_batch_size"),
             "adaptive_batch_growth": manifest.get(
@@ -5704,6 +5901,13 @@ def extract_database(
             label = " + ".join(group_mods + group_special)
             print(f"\n⏳ {label} ... RSS={rss:.0f}MB")
 
+        requires_batch_process_isolation = (
+            group_stream_output_batches
+            and any(
+                _requires_isolated_stream_batch(database, module)
+                for module in group_mods
+            )
+        )
         proc = mp_ctx.Process(
             target=_extract_module_group_worker,
             args=(
@@ -5719,7 +5923,9 @@ def extract_database(
                 output_dir,
                 group_adaptive_stream_batches,
             ),
-            daemon=True,
+            # A memory-heavy streamed module may create one fresh process per
+            # patient batch so the OS, not allocator heuristics, owns teardown.
+            daemon=not requires_batch_process_isolation,
         )
         proc.start()
         proc.join()

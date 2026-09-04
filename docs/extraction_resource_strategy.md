@@ -160,11 +160,14 @@ The pre-2026-09-04 measurements for `sofa2_score` (6,926.6 MiB) and
 `sepsis3_sofa2` (6,268.4 MiB) are quarantined because the eICU IMV
 ascertainment update changed their respiratory dependency. The first revised
 SOFA-2 attempt exceeded the release contract, and controlled 67k, 50k and 40k
-batches also crossed the 7,447 MiB hard stop. A 31k attempt was interrupted
-before completion and is not evidence of safety. The planner therefore records
+batches also crossed the 7,447 MiB hard stop. After removing redundant SOFA-2
+materialisation, a 31k batch completed once but the long-lived worker crossed
+the limit as its second batch began. The eICU SOFA-2 stream implementation now
+uses a fresh process per patient partition so allocator retention cannot
+accumulate; this lifecycle change is still awaiting a successful full-cohort
+hard-limit measurement. The planner therefore records
 `invalidated_profile_memory_guard`; its current 25k result is only a
-conservative fallback pending post-optimisation measurement, not a fixed
-production batch.
+conservative fallback pending that measurement, not a fixed production batch.
 
 At an 8 GiB planning budget, selecting any subset of the 12 unaffected
 one-shot modules runs each selected module one-shot. `respiratory` and
