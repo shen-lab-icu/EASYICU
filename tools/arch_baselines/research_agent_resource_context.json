@@ -430,9 +430,16 @@
         "src/easyicu/data/concept-dict.json"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Rebind the offline context fixture to the audited 2026-09-04 concept dictionary after main reconciliation.",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Re-adjudicate the provider-free and patient-data-free resource envelope after E1/E2 integration, Guided Copilot session ownership, and typed planning/execution owner refactors.",
+  "baseline_reason": "Rebind the offline context fixture to the audited 2026-09-04 concept dictionary after main reconciliation.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -442,7 +449,7 @@
   "schema_version": "easyicu.research_agent_resource_baseline/2",
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
-    "src/easyicu/data/concept-dict.json": "a5a5185408bd365de959963f5a894d43b325b3c01664c322a1bcb6c8696e3041",
+    "src/easyicu/data/concept-dict.json": "fd122adc01693d78e760e19e61cb415ce8aef849ff2712f747dd79c289d48313",
     "src/easyicu/data/sofa2-dict.json": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
     "src/easyicu/research_agent/agents/core.py": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
     "src/easyicu/research_agent/agents/planner.py": "eaf03b422afabec41388e0400aae7566e9b407d883a3d0551c3c54736aa7bbb7",
@@ -1040,15 +1047,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15012,
+        "approx_input_tokens": 15017,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47931,
+            "bytes": 47949,
             "included": true,
             "required": true,
-            "sha256": "10c95ec6bf63e79fa6a51820a77efb99319670b2ce2828f50b2d0a5244e220c6"
+            "sha256": "ef14aae96345cd0d22d6d0fdb4b48acc42eceabebc8762ee59510a59904bee08"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1059,27 +1066,27 @@
           }
         },
         "system_bytes": 7616,
-        "total_bytes": 60047,
+        "total_bytes": 60065,
         "truncated_strings": false,
-        "user_bytes": 52431
+        "user_bytes": 52449
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13887,
+        "approx_input_tokens": 13892,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47931,
+            "bytes": 47949,
             "included": true,
             "required": true,
-            "sha256": "10c95ec6bf63e79fa6a51820a77efb99319670b2ce2828f50b2d0a5244e220c6"
+            "sha256": "ef14aae96345cd0d22d6d0fdb4b48acc42eceabebc8762ee59510a59904bee08"
           }
         },
         "system_bytes": 7616,
-        "total_bytes": 55547,
+        "total_bytes": 55565,
         "truncated_strings": false,
-        "user_bytes": 47931
+        "user_bytes": 47949
       },
       "planning_contract_bytes": 5132,
       "planning_contract_sha256": "eddfd9900aeaa002ae98fe93b4d0f7cb95989f9c66379b81ab4f813638ef12f9",
