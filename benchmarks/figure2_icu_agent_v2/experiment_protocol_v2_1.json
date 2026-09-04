@@ -77,7 +77,7 @@
     {
       "role": "generic_code_agent_spec",
       "path": "benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json",
-      "sha256": "b733290f5396360ac0b1c9635700ad7ecd468b79f0455346053f4d41dbafe230"
+      "sha256": "808576f5a95d3d1afb7089f404b8cfc5d51e713c8787969e20581e25b5331ae4"
     },
     {
       "role": "review_bundle_contract",
