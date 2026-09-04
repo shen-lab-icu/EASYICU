@@ -286,6 +286,32 @@ def test_measured_miiv_score_plan_is_formally_admissible() -> None:
     assert plan["unmeasured_or_overridden_modules"] == {}
 
 
+def test_unmeasured_aumc_score_pilot_is_not_a_release_standard() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "aumc": {"module_metrics": {"outcome": {"rows": 23_106}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=("sofa2_score",),
+        databases=("aumc",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    modules = plan["databases"]["aumc"]["modules"]
+    assert modules["sofa2_score"]["batch_size"] == 5_000
+    assert modules["sofa2_score"]["reason_code"] == (
+        "unmeasured_profile_memory_guard"
+    )
+    assert plan["formal_release_admissible"] is False
+    assert plan["unmeasured_or_overridden_modules"] == {
+        "aumc": ["sofa2_score", "sepsis3_sofa2"]
+    }
+
+
 def test_data_path_resolution_checks_only_selected_databases(tmp_path: Path) -> None:
     refresher = _load_refresher()
     eicu = tmp_path / "eicu"
@@ -476,6 +502,10 @@ def test_targeted_refresh_extracts_only_selected_but_republishes_all_databases(
             "data_path": kwargs["data_path"],
             "num_patients": 1,
             "batch_size": 1,
+            "resource_budget_mb": 8192.0,
+            "resource_execution_limits": (
+                refresher._resource_budget_execution_limits(8192.0)
+            ),
             "total_elapsed_seconds": 1.0,
             "modules": {
                 module: {
@@ -586,6 +616,12 @@ def test_targeted_refresh_extracts_only_selected_but_republishes_all_databases(
     assert "renal" in provenance["refreshed_modules"]
     assert provenance["latest_requested_modules"] == ["respiratory"]
     assert provenance["inherited_refreshed_modules"] == ["renal"]
+    assert provenance["per_database_runtime"]["eicu"][
+        "resource_execution_limits"
+    ] == refresher._resource_budget_execution_limits(8192.0)
+    assert provenance["per_database_runtime"]["mimic"][
+        "resource_execution_limits"
+    ] == refresher._resource_budget_execution_limits(8192.0)
     assert provenance["per_database_refreshed_modules"]["miiv"] == ["renal"]
     assert provenance["per_database_refreshed_modules"]["eicu"] == [
         module
@@ -1172,4 +1208,80 @@ def test_score_content_gate_checks_sofa2_aggregate_receipts(tmp_path: Path) -> N
     with pytest.raises(refresher.ModuleRefreshError, match="total/receipts"):
         refresher._validate_refreshed_score_content(
             tmp_path, ("sofa2_score",), database="miiv"
+        )
+
+
+def test_score_content_gate_accepts_primary_normal_value_imputation(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    components = [
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ]
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2": [4.0],
+            **{
+                component: [4.0 if component == "sofa2_resp" else None]
+                for component in components
+            },
+        }
+    )
+    for component in components:
+        available = component == "sofa2_resp"
+        frame[f"{component}_observed"] = available
+        frame[f"{component}_available"] = available
+    frame["sofa2_observed"] = False
+    frame["sofa2_available"] = False
+    frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    refresher._validate_refreshed_score_content(
+        tmp_path,
+        ("sofa2_score",),
+        database="miiv",
+    )
+
+
+def test_score_content_gate_rejects_nonzero_disclaimed_component(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    components = [
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ]
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2": [0.0],
+            **{
+                component: [2.0 if component == "sofa2_resp" else 0.0]
+                for component in components
+            },
+        }
+    )
+    for component in components:
+        frame[f"{component}_observed"] = False
+        frame[f"{component}_available"] = False
+    frame["sofa2_observed"] = False
+    frame["sofa2_available"] = False
+    frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    with pytest.raises(refresher.ModuleRefreshError, match="non-zero organ score"):
+        refresher._validate_refreshed_score_content(
+            tmp_path,
+            ("sofa2_score",),
+            database="miiv",
         )

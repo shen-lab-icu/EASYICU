@@ -138,6 +138,63 @@ def test_native_sofa2_recomputes_total_after_hour_key_consolidation(
     assert published.loc[0, components].sum() == published.loc[0, "sofa2"]
 
 
+@pytest.mark.parametrize(
+    ("database", "expected_total"),
+    [("aumc", 4.0), ("sic", None)],
+)
+def test_native_sofa2_separates_primary_imputation_from_structural_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    database: str,
+    expected_total: float | None,
+) -> None:
+    components = [
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ]
+    requested = ["sofa2", *components]
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sofa2_score": requested})
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2": [99.0],
+            **{
+                component: [4.0 if component == "sofa2_resp" else None]
+                for component in components
+            },
+        }
+    )
+    for component in components:
+        available = component == "sofa2_resp"
+        frame[f"{component}_observed"] = available
+        frame[f"{component}_available"] = available
+    frame["sofa2_observed"] = False
+    frame["sofa2_available"] = False
+    frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database=database,
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa2_score.parquet")
+    if expected_total is None:
+        assert pd.isna(published.loc[0, "sofa2"])
+    else:
+        assert published.loc[0, "sofa2"] == expected_total
+    assert not published.loc[0, "sofa2_available"]
+    assert not published.loc[0, "sofa2_observed"]
+
+
 def test_native_sofa2_receipts_survive_producer_to_trajectory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

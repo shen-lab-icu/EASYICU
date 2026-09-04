@@ -160,12 +160,15 @@ The repaired algorithm is:
 1. For a duplicate ICU-hour, consolidate each SOFA organ component with
    `max(non-null)` (the worst observed state), matching the score callback's
    trailing-window maximum.
-2. For SOFA-2, only values with an owner-issued availability receipt can enter
-   that maximum.
+2. For SOFA-2, consolidate the recorded component score and its owner-issued
+   availability receipt separately; a receipt-disclaimed non-zero score is an
+   error, while a missing patient-level domain contributes the normal score of
+   zero to the primary aggregate.
 3. Recompute SOFA-1 as the sum of the six consolidated components, retaining
    the established SOFA-1 missing-as-zero policy.
-4. Recompute SOFA-2 only when all six consolidated components are available;
-   rebuild aggregate observed/available receipts from the component receipts.
+4. Recompute the primary SOFA-2 total with normal-value imputation, matching
+   the JAMA analysis; rebuild aggregate observed/available receipts as the
+   separate all-six-component complete-case indicator.
 5. Before deriving Sepsis-3, perform the same component-first consolidation on
    producer artifacts. Never compute a delta over arbitrary duplicate-row
    order or over an independently aggregated old total.
@@ -194,21 +197,32 @@ The already completed 31,000-stay candidate was recovered this way without raw
 reread, but it was produced before the SOFA consistency repair and remains an
 audit-only, unsealable candidate.
 
-## Clinical-semantics finding (not silently changed)
+## Clinical-semantics finding and versioned correction
 
 The component threshold implementations have source-bound golden tests, but
-the aggregate is explicitly registered as a non-canonical database
-operationalisation pending independent clinical review. It currently requires
-all six component availability receipts before publishing a total; official
-SOFA-2 day-1 scoring instead treats missing components as normal/zero and its
-later longitudinal policy carries the last value forward. The production
-callback also emits hourly trailing-24-hour values, whereas the official
-longitudinal description is daily.
+the aggregate remains a non-canonical database operationalisation pending
+independent clinical review. The earlier resource-repair branch temporarily
+required all six component receipts before emitting any total. A full AUMC
+comparison showed that this reduced 1,682,831 historical non-null totals to
+2,940 and therefore could not be accepted as an output-invariance repair.
 
-This is a scientific-policy difference, not a performance bug. It is preserved
-for output invariance during the resource repair and must be reviewed as a
-separate versioned semantic decision before SOFA-2 is used as a canonical
-endpoint.
+The versioned correction follows the published primary analysis: a
+patient-level missing domain contributes zero, while `sofa2_available` and
+`sofa2_observed` retain the all-six-domain complete-case status. This separates
+the primary score from the complete-case sensitivity analysis. It does not
+permit an entirely absent database domain: SICDB still publishes no aggregate
+total because its canonical CNS owner is structurally unavailable. The
+production callback remains an hourly trailing-24-hour operationalisation,
+whereas the official longitudinal description is daily; that limitation stays
+explicit.
+
+The correction was also exercised against the completed AUMC diagnostic
+artifact in a bounded, read-only pass. The old strict total was non-null for
+only 2,940 of 2,587,657 rows; the corrected primary total is defined for all
+rows, ranges from 0 to 19, and retains exactly 2,940 rows in the separate
+complete-case receipt. No row contained a non-zero component disclaimed by its
+availability receipt. This check did not rewrite the candidate or the sealed
+source.
 
 ## Time and I/O review
 
@@ -291,6 +305,9 @@ coherent; the same output still fails for every other database.
 - The planner's output is copied into per-module producer manifests and
   selected-refresh provenance so the executed policy can be compared with the
   preflight plan.
+- Cumulative selected-refresh provenance now retains the exact lower-layer
+  execution limits as well as the high-level memory budget and batch plan;
+  inherited lineage can no longer drop the DuckDB/thread/cache contract.
 
 ## Acceptance gates before promotion
 

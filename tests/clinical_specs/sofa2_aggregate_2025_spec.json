@@ -3,5 +3,11 @@
   "components": {"sofa2_resp": 1, "sofa2_coag": 2, "sofa2_liver": 3, "sofa2_cardio": 4, "sofa2_cns": 1, "sofa2_renal": 2},
   "expected_total": 13,
   "expected_observed_components": 6,
-  "expected_available_components": 6
+  "expected_available_components": 6,
+  "normal_imputation_case": {
+    "components": {"sofa2_resp": 4, "sofa2_coag": null, "sofa2_liver": null, "sofa2_cardio": null, "sofa2_cns": null, "sofa2_renal": null},
+    "expected_total": 4,
+    "expected_observed_components": 1,
+    "expected_available_components": 1
+  }
 }

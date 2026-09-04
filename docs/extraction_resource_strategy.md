@@ -198,6 +198,35 @@ safe and reduced the observed run from the production-default 512.5 seconds to
 stopped. The product does not automatically enable the 1 GiB candidate. These
 are optimisation diagnostics, not a new semantic output contract.
 
+## AUMC status under the 8 GiB contract
+
+The sealed AUMC extraction was not batched: it processed all 23,106 stays in one
+shot on a server with 385,972.7 MiB (about 377 GiB) assigned memory. Its
+process-tree peak was
+28,439.5 MiB; the in-process module sampler recorded 14,300.9 MiB for SOFA-1
+and 26,363.6 MiB for SOFA-2. It therefore proves that one-shot works on that
+large server, but it does not prove that one-shot fits a 16 GiB or 8 GiB
+machine.
+
+Under the deterministic 8,192-MiB worker envelope, the completed part of an
+8,000-stay benchmark showed that AUMC SOFA-1 can finish in three batches at a
+5,912.8-MiB internal peak. The subsequent SOFA-2 part crossed the 7,447-MiB
+hard-stop boundary, so the combined run was rejected. A separate 5,000-stay
+SOFA-2 benchmark completed five batches with a 6,982.0-MiB external
+process-tree peak. This is a safe measured point, not yet the largest safe
+batch and therefore not registered as the production standard. The planner's
+automatic 5,000 value remains an unmeasured conservative pilot; the formal
+release launcher rejects it until a larger-boundary search and output
+invariance review are complete.
+
+A read-only comparison of that diagnostic candidate against the sealed AUMC
+package found byte changes in only `sofa2_score` and its downstream
+`sepsis3_sofa2`; the other 17 module Parquets were SHA-identical. SOFA-2 row
+keys were identical (2,587,657 rows, 23,104 stays), five organ components were
+identical, and one respiratory component row changed under the corrected
+worst-state publication rule. No evidence from this benchmark authorises a
+change to any other AUMC module.
+
 ## Evidence and limits
 
 - Eight-module benchmark:

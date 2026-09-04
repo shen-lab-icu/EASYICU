@@ -1022,4 +1022,4 @@ def test_special_sofa2_dependency_respects_component_availability() -> None:
     )
 
     assert result.loc[result["charttime"].eq(0.0), "sofa2"].item() == 7.0
-    assert pd.isna(result.loc[result["charttime"].eq(1.0), "sofa2"].item())
+    assert result.loc[result["charttime"].eq(1.0), "sofa2"].item() == 0.0
