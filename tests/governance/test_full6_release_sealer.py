@@ -109,6 +109,7 @@ def test_physical_column_expansion_preserves_event_time_and_owner_receipts() -> 
 def _build_synthetic_release(run_root: Path) -> None:
     export_root = run_root / "exports"
     timing_rows = []
+    source_records = {}
     for database in sealer.DATABASES:
         database_root = export_root / database
         database_root.mkdir(parents=True)
@@ -190,9 +191,42 @@ def _build_synthetic_release(run_root: Path) -> None:
             },
             "files": entries,
         }
-        (database_root / "_manifest.json").write_text(
+        manifest_path = database_root / "_manifest.json"
+        manifest_path.write_text(
             json.dumps(manifest) + "\n", encoding="utf-8"
         )
+        source_records[database] = {
+            "native_manifest_sha256": _sha256(manifest_path),
+            "total_rows": sum(entry["rows"] for entry in entries),
+            "total_parquet_bytes": sum(
+                entry["parquet_bytes"] for entry in entries
+            ),
+            "module_metrics": {
+                module: {
+                    "rows": next(
+                        entry["rows"]
+                        for entry in entries
+                        if entry["module"] == module
+                    ),
+                    "parquet_bytes": next(
+                        entry["parquet_bytes"]
+                        for entry in entries
+                        if entry["module"] == module
+                    ),
+                    "parquet_sha256": next(
+                        entry["parquet_sha256"]
+                        for entry in entries
+                        if entry["module"] == module
+                    ),
+                    "elapsed_seconds": manifest["module_timings_seconds"][module],
+                    "peak_rss_mb": manifest["module_peak_rss_mb"][module],
+                    "peak_working_set_mb": manifest[
+                        "module_peak_working_set_mb"
+                    ][module],
+                }
+                for module in sealer.MODULES
+            },
+        }
         timing_rows.append(
             {
                 "database": database,
@@ -216,6 +250,20 @@ def _build_synthetic_release(run_root: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=list(timing_rows[0]))
         writer.writeheader()
         writer.writerows(timing_rows)
+    (run_root / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "sources": source_records,
+                "publication_checkout": {
+                    "easyicu_git_commit": sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT,
+                    "easyicu_git_dirty": False,
+                    "scope": "synthetic_full_extraction",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
@@ -295,6 +343,10 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     assert "count that elapsed time once" in module_timing["semantics"]
     assert metadata["easyicu_commit"] == sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
     assert set(metadata["source_manifest_sha256"]) == set(sealer.DATABASES)
+    assert metadata["provenance"]["run_manifest"] == {
+        "file": "run_manifest.json",
+        "sha256": _sha256(run_root / "run_manifest.json"),
+    }
     assert metadata["validation"] == {
         "audited_parquet_count": 114,
         "valid_footer_count": 114,
@@ -312,6 +364,110 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         "failures": [],
     }
     assert not list(run_root.glob(".run_metadata.json.*.tmp"))
+
+
+def test_sealer_binds_matching_module_refresh_provenance(tmp_path: Path) -> None:
+    run_root = tmp_path / "module_refresh_release"
+    _build_synthetic_release(run_root)
+    refresh = {
+        "schema_version": "easyicu_full6_selected_module_refresh_v2",
+        "publication_easyicu_git_commit": sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT,
+        "publication_easyicu_git_dirty": False,
+        "refreshed_modules": ["renal"],
+    }
+    refresh_path = run_root / "module_refresh_provenance.json"
+    refresh_path.write_text(json.dumps(refresh) + "\n", encoding="utf-8")
+    run_manifest_path = run_root / "run_manifest.json"
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    run_manifest["module_refresh"] = refresh
+    run_manifest_path.write_text(
+        json.dumps(run_manifest) + "\n", encoding="utf-8"
+    )
+
+    destination = sealer.seal_release(
+        run_root=run_root, execution_profile="server-adaptive"
+    )
+    metadata = json.loads(destination.read_text(encoding="utf-8"))
+
+    assert metadata["provenance"]["module_refresh_provenance"] == {
+        "file": "module_refresh_provenance.json",
+        "sha256": _sha256(refresh_path),
+    }
+    assert metadata["provenance"]["run_manifest"]["sha256"] == _sha256(
+        run_manifest_path
+    )
+
+
+def test_sealer_rejects_mismatched_embedded_module_refresh(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "mismatched_module_refresh"
+    _build_synthetic_release(run_root)
+    refresh = {
+        "schema_version": "easyicu_full6_selected_module_refresh_v2",
+        "publication_easyicu_git_commit": sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT,
+        "publication_easyicu_git_dirty": False,
+        "refreshed_modules": ["renal"],
+    }
+    (run_root / "module_refresh_provenance.json").write_text(
+        json.dumps(refresh) + "\n", encoding="utf-8"
+    )
+    run_manifest_path = run_root / "run_manifest.json"
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    run_manifest["module_refresh"] = {**refresh, "refreshed_modules": ["outcome"]}
+    run_manifest_path.write_text(
+        json.dumps(run_manifest) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(sealer.ReleaseValidationError, match="does not equal"):
+        sealer.seal_release(
+            run_root=run_root, execution_profile="server-adaptive"
+        )
+
+    assert not (run_root / "run_metadata.json").exists()
+    assert not (run_root / "module_extraction_timing.csv").exists()
+
+
+def test_sealer_rejects_stale_root_module_receipt(tmp_path: Path) -> None:
+    run_root = tmp_path / "stale_root_receipt"
+    _build_synthetic_release(run_root)
+    run_manifest_path = run_root / "run_manifest.json"
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    run_manifest["sources"]["eicu"]["module_metrics"]["respiratory"][
+        "parquet_sha256"
+    ] = "f" * 64
+    run_manifest_path.write_text(
+        json.dumps(run_manifest) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        sealer.ReleaseValidationError, match="eicu/respiratory/parquet_sha256"
+    ):
+        sealer.seal_release(
+            run_root=run_root, execution_profile="server-adaptive"
+        )
+
+    assert not (run_root / "run_metadata.json").exists()
+    assert not (run_root / "module_extraction_timing.csv").exists()
+
+
+def test_sealer_rejects_dirty_publication_checkout(tmp_path: Path) -> None:
+    run_root = tmp_path / "dirty_publication_checkout"
+    _build_synthetic_release(run_root)
+    run_manifest_path = run_root / "run_manifest.json"
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    run_manifest["publication_checkout"]["easyicu_git_dirty"] = True
+    run_manifest_path.write_text(
+        json.dumps(run_manifest) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(sealer.ReleaseValidationError, match="publication_checkout"):
+        sealer.seal_release(
+            run_root=run_root, execution_profile="server-adaptive"
+        )
+
+    assert not (run_root / "run_metadata.json").exists()
+    assert not (run_root / "module_extraction_timing.csv").exists()
 
 
 def test_failed_validation_preserves_existing_run_metadata(tmp_path: Path) -> None:
