@@ -209,6 +209,33 @@ and 26,363.6 MiB for SOFA-2. It therefore proves that one-shot works on that
 large server, but it does not prove that one-shot fits a 16 GiB or 8 GiB
 machine.
 
+That release also recorded each isolated module's peak. Twelve modules remain
+outside the later IMV/SOFA semantic repair and already fit the 8-GiB contract,
+including 10% launch headroom. They therefore retain the measured full-cohort
+one-shot path instead of inheriting the generic 5,000-stay guard.
+
+| Module | One-shot time | Measured peak RSS | Threshold with 10% headroom |
+|---|---:|---:|---:|
+| demographics | 0.4 s | 210.1 MiB | 231.1 MiB |
+| outcome | 0.3 s | 193.5 MiB | 212.9 MiB |
+| blood_gas | 11.7 s | 2,207.2 MiB | 2,427.9 MiB |
+| hematology | 78.9 s | 2,060.8 MiB | 2,266.9 MiB |
+| chemistry | 74.9 s | 1,665.7 MiB | 1,832.3 MiB |
+| vasopressors | 7.4 s | 2,253.5 MiB | 2,478.9 MiB |
+| vitals | 73.5 s | 4,101.1 MiB | 4,511.2 MiB |
+| renal | 67.2 s | 4,101.8 MiB | 4,512.0 MiB |
+| medications | 29.5 s | 3,782.0 MiB | 4,160.2 MiB |
+| neurological | 13.1 s | 2,035.7 MiB | 2,239.3 MiB |
+| circulatory | 29.6 s | 3,677.6 MiB | 4,045.4 MiB |
+| sepsis_shared | 1.3 s | 1,531.7 MiB | 1,684.9 MiB |
+
+Three non-SOFA owners cannot use those measurements as an 8-GiB one-shot
+authority: `respiratory` peaked at 28,893.8 MiB, `ventilator` at 14,020.3 MiB,
+and `other_scores` at 15,553.3 MiB. Until a hard-limited boundary search records
+their fastest safe current batch, 5,000 stays is explicitly an unmeasured
+safety guard for only these three modules, not the AUMC standard and not a
+claim that five partitions are optimal.
+
 Under the deterministic 8,192-MiB worker envelope, a first combined benchmark
 showed that AUMC SOFA-1 could finish at 8,000 stays per batch, but its later
 SOFA-2 step crossed the hard stop, so that partial run was not registered. A
