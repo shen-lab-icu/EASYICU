@@ -456,6 +456,22 @@ def test_sealer_rejects_benchmark_only_module_refresh(tmp_path: Path) -> None:
     assert not (run_root / "run_metadata.json").exists()
 
 
+def test_sealer_rejects_resource_benchmark_candidate(tmp_path: Path) -> None:
+    run_root = tmp_path / "resource_benchmark"
+    _build_synthetic_release(run_root)
+    (run_root / "resource_benchmark_provenance.json").write_text(
+        json.dumps({"benchmark_only": True}) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(sealer.ReleaseValidationError, match="benchmark-only"):
+        sealer.seal_release(
+            run_root=run_root,
+            execution_profile="server-adaptive",
+        )
+
+    assert not (run_root / "run_metadata.json").exists()
+
+
 def test_sealer_rejects_stale_root_module_receipt(tmp_path: Path) -> None:
     run_root = tmp_path / "stale_root_receipt"
     _build_synthetic_release(run_root)
