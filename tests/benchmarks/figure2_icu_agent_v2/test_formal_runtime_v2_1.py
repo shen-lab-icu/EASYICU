@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -322,6 +324,60 @@ def test_formal_authority_accepts_only_exact_signed_coordinate(
             }
         )
     assert site_exc_info.value.reason_code == "FORMAL_AUTHORITY_COORDINATE_NOT_DECLARED"
+
+
+def test_formal_authority_consumes_signed_coordinate_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envelope, coordinate = _signed_qualification_authority(tmp_path, monkeypatch)
+
+    first = formal_authority.authorize_formal_provider_call(
+        {"receipts": envelope, "call_coordinate": coordinate}
+    )
+
+    assert len(first["coordinate_consumption_sha256"]) == 64
+    with pytest.raises(DesignContractError) as exc_info:
+        formal_authority.authorize_formal_provider_call(
+            {"receipts": envelope, "call_coordinate": coordinate}
+        )
+    assert exc_info.value.reason_code == (
+        "FORMAL_AUTHORITY_COORDINATE_ALREADY_CONSUMED"
+    )
+
+
+def test_formal_authority_consumes_coordinate_atomically_across_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    envelope, coordinate = _signed_qualification_authority(tmp_path, monkeypatch)
+    consume = formal_authority._consume_authorized_coordinate
+    barrier = Barrier(2)
+
+    def simultaneous_consume(**kwargs):
+        barrier.wait(timeout=5)
+        return consume(**kwargs)
+
+    monkeypatch.setattr(
+        formal_authority,
+        "_consume_authorized_coordinate",
+        simultaneous_consume,
+    )
+
+    def authorize() -> str:
+        try:
+            formal_authority.authorize_formal_provider_call(
+                {"receipts": envelope, "call_coordinate": coordinate}
+            )
+        except DesignContractError as exc:
+            return exc.reason_code
+        return "authorized"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(lambda _index: authorize(), range(2)))
+
+    assert sorted(outcomes) == [
+        "FORMAL_AUTHORITY_COORDINATE_ALREADY_CONSUMED",
+        "authorized",
+    ]
 
 
 def test_formal_authority_rejects_signed_coordinate_on_wrong_frozen_site(

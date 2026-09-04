@@ -14,6 +14,7 @@ import binascii
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any, Mapping, NoReturn
@@ -322,6 +323,76 @@ def _verify_signature(
         _fail("FORMAL_AUTHORITY_PUBLIC_KEY_INVALID", str(exc))
 
 
+def _consume_authorized_coordinate(
+    *,
+    output_root: str,
+    declaration: Mapping[str, Any],
+    coordinate: Mapping[str, str],
+) -> str:
+    """Durably consume one signed call coordinate exactly once."""
+
+    root = Path(output_root)
+    if root.is_symlink():
+        _fail("FORMAL_AUTHORITY_OUTPUT_ROOT_INVALID", output_root)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_UNAVAILABLE", str(exc))
+    if root.is_symlink() or not root.is_dir():
+        _fail("FORMAL_AUTHORITY_OUTPUT_ROOT_INVALID", output_root)
+
+    ledger = root / ".formal-call-authority"
+    if ledger.is_symlink():
+        _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_INVALID", str(ledger))
+    try:
+        ledger.mkdir(mode=0o700, exist_ok=True)
+    except OSError as exc:
+        _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_UNAVAILABLE", str(exc))
+    if ledger.is_symlink() or not ledger.is_dir():
+        _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_INVALID", str(ledger))
+
+    coordinate_bytes = _canonical_json_bytes(dict(coordinate))
+    coordinate_sha256 = _sha256_bytes(coordinate_bytes)
+    marker = ledger / f"{coordinate_sha256}.json"
+    record = _canonical_json_bytes(
+        {
+            "schema_version": "easyicu.figure2_call_coordinate_consumption/1",
+            "declaration_sha256": _sha256_bytes(
+                _canonical_json_bytes(dict(declaration))
+            ),
+            "call_coordinate": dict(coordinate),
+        }
+    )
+    try:
+        descriptor = os.open(
+            marker,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError:
+        _fail(
+            "FORMAL_AUTHORITY_COORDINATE_ALREADY_CONSUMED",
+            repr(dict(coordinate)),
+        )
+    except OSError as exc:
+        _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_UNAVAILABLE", str(exc))
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(record)
+            handle.flush()
+            os.fsync(handle.fileno())
+        directory_descriptor = os.open(ledger, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OSError as exc:
+        # Keep an ambiguous marker fail-closed. Removing it could authorize a
+        # second transport after the first durable-write attempt became unclear.
+        _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_UNAVAILABLE", str(exc))
+    return _sha256_bytes(record)
+
+
 def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a signed atomic declaration for one exact formal call."""
 
@@ -501,15 +572,22 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         signature_text=envelope["atomic_declaration_signature_base64"],
         public_key_text=public_key_text,
     )
+    output_root = output_root_by_site[requested_coordinate["execution_site"]]
+    consumption_sha256 = _consume_authorized_coordinate(
+        output_root=output_root,
+        declaration=declaration,
+        coordinate=requested_coordinate,
+    )
     return {
         "authorized": True,
         "scope": scope,
         "call_coordinate": dict(requested_coordinate),
         "protocol_sha256": protocol_sha256,
         "site_assignment_sha256": site_assignment_sha256,
-        "output_root": output_root_by_site[requested_coordinate["execution_site"]],
+        "output_root": output_root,
         "signer_id": signer_id,
         "receipt_count": len(expected_receipt_ids),
+        "coordinate_consumption_sha256": consumption_sha256,
     }
 
 
