@@ -326,6 +326,29 @@ def test_measured_aumc_sofa2_uses_fastest_verified_five_batches():
     assert _n_chunks(23_106, plans["sofa2_score"].batch_size) == 5
 
 
+def test_measured_aumc_sofa1_uses_minimum_verified_three_batches():
+    plans = plan_module_extraction_resources(
+        "aumc",
+        ["sofa1_score", "sepsis3_sofa1"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert {module: plan.batch_size for module, plan in plans.items()} == {
+        "sofa1_score": 8_000,
+        "sepsis3_sofa1": 8_000,
+    }
+    assert all(
+        plan.reason_code == "measured_profile_fastest_safe_batch"
+        for plan in plans.values()
+    )
+    assert plans["sofa1_score"].measured_peak_rss_mb == pytest.approx(6_535.4)
+    assert plans["sofa1_score"].required_available_memory_mb == pytest.approx(
+        7_188.94
+    )
+    assert _n_chunks(23_106, plans["sofa1_score"].batch_size) == 3
+
+
 def test_eicu_full_request_remains_guarded_after_execution_envelope_change():
     plan = plan_extraction_resources(
         "eicu",

@@ -376,6 +376,21 @@ _INVALIDATED_MEASURED_PROFILES: Mapping[
 # while three larger batches cross the same hard RSS limit.
 _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
     "aumc": {
+        # SOFA-1: the smallest rounded two-partition candidate (12k) crossed
+        # the hard stop, while 8k completed the three-partition closure.  The
+        # external process-tree peak is the larger of the two samplers.
+        "sofa1_score": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 6_535.4,
+            "seconds": 574.9,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 857.4,
+            "seconds": 2.8,
+        },
         # Exact post-SOFA2-semantics boundary search under the deterministic
         # 8,192-MiB execution envelope.  Both 7k and 6k crossed the 7,447-MiB
         # hard stop; 5k completed all five partitions at commit 2964e85a.
