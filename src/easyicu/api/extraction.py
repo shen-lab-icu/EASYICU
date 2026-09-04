@@ -904,6 +904,42 @@ def plan_extraction_resources(
     )
 
 
+def plan_module_extraction_resources(
+    database: str,
+    modules: Sequence[str],
+    num_patients: int,
+    requested_batch_size: Optional[int] = None,
+    *,
+    available_memory_mb: Optional[float] = None,
+) -> Dict[str, ExtractionResourcePlan]:
+    """Return the authoritative resource decision for every module.
+
+    A database-level request may contain both measured one-shot modules and
+    batch-only modules.  Returning one plan per isolated execution unit keeps
+    the fast modules one-shot instead of inheriting the strictest batch in the
+    request.  An explicit override intentionally remains common to all units.
+    """
+
+    selected_modules = tuple(dict.fromkeys(str(module) for module in modules))
+    if not selected_modules:
+        raise ValueError("modules must not be empty")
+    available = (
+        _available_memory_mb()
+        if available_memory_mb is None
+        else max(0.0, float(available_memory_mb))
+    )
+    return {
+        module: plan_extraction_resources(
+            database,
+            [module],
+            num_patients,
+            requested_batch_size,
+            available_memory_mb=available,
+        )
+        for module in selected_modules
+    }
+
+
 def _next_stream_retry_batch_size(current_batch_size: int) -> int:
     """Return the next bounded batch after one adaptive worker crash."""
 
@@ -1768,42 +1804,9 @@ def _run_module_extraction(
     # load_concepts 一次拿到该模块**所有概念**（chartevents/labevents 等共享源表只扫
     # 一次；内部若按患者分批也由它自己 concat，对外仍是一次调用、一次扫描）。
     #
-    # 分批策略：**除超大队列外一律一次性**。只有患者数 > ONESHOT_MAX_PATIENTS（15万，
-    # 实际只有 eICU ~20万命中）才让 auto_batch_size 以 ≤ MAX_EXTRACT_CHUNKS（默认 3）份
-    # 启用。实测最重非 eICU 模块 miiv medications（49 概念 × 9.4万患者）merge=True 一次性
-    # 峰值仅 5.44GB，远低于预算；旧内存估算器约 3-5× 高估会把这类模块误判成要分批（见
-    # web 端 dataio.py:1657 的同款观察），故对 ≤15万 的库直接跳过估算、强制一次性。
-    _n_ids = 0
-    if patient_ids_filter:
-        try:
-            _n_ids = len(next(iter(patient_ids_filter.values())))
-        except Exception:
-            _n_ids = 0
-    if _n_ids > ONESHOT_MAX_PATIENTS and (not batch_size or batch_size >= _n_ids):
-        try:
-            from easyicu.runtime.memory_manager import auto_batch_size as _auto_bs
-
-            # 稳定预算：用物理总内存判定（而非波动的当前可用），避免后台程序临时吃内存
-            # 把本可一次性的模块误判成分批。EASYICU_ONESHOT_BUDGET_MB 可覆盖此上限(MB)。
-            _stable_avail_mb = None
-            _env_budget = os.environ.get("EASYICU_ONESHOT_BUDGET_MB")
-            if _env_budget:
-                _stable_avail_mb = float(_env_budget) / 0.6
-            else:
-                try:
-                    import psutil as _ps
-
-                    _stable_avail_mb = _ps.virtual_memory().total / (1024 * 1024)
-                except Exception:
-                    _stable_avail_mb = None
-            _safe_bs = _auto_bs(
-                list(concepts), database, _n_ids, available_memory_mb=_stable_avail_mb
-            )
-            if _safe_bs and _safe_bs < _n_ids:
-                batch_size = _safe_bs
-        except Exception:
-            pass
-
+    # 分批大小已由 ``plan_extraction_resources`` 在主进程中唯一决定。
+    # 这里不再调用旧 ``auto_batch_size`` 进行第二次改写；否则同一次
+    # release 的预检计划、manifest 和实际执行可能不一致。
     if batch_size:
         kwargs["batch_size"] = batch_size
 
@@ -3724,6 +3727,224 @@ def _native_export_duckdb_consolidate_row_grain(
     return after_audit, concept_non_null
 
 
+def _enforce_native_export_supp_o2_support(
+    path: Path,
+    *,
+    module: str,
+) -> Optional[Dict[str, int | str]]:
+    """Remove supplemental-oxygen claims orphaned by canonical time filtering.
+
+    ``supp_o2`` is derived before native-v2 applies its ICU-episode time-axis
+    guard. A ventilation point just beyond ``LOS + 24 h`` can therefore be
+    removed while its hour-bucketed ``supp_o2`` row remains inside the allowed
+    interval. Re-evaluate support against the canonical file so every true
+    claim is backed by either FiO2 > 21% at that key or a true ventilation
+    indicator in the corresponding one-hour bucket.
+
+    The global support join is spillable and bounded. Rows made completely
+    empty by clearing an orphan are removed as well; native-v2 must not publish
+    a key with no physical concept evidence.
+    """
+    if module != "respiratory":
+        return None
+
+    import tempfile
+
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    target_schema = pq.read_schema(path)
+    names = list(target_schema.names)
+    required = {"stay_id", "charttime", "fio2", "supp_o2", "vent_ind"}
+    if "supp_o2" not in names:
+        return None
+    missing_support_columns = required - set(names)
+    if missing_support_columns:
+        raise ValueError(
+            "native respiratory publication cannot validate supp_o2 without "
+            f"its support columns: {sorted(missing_support_columns)}"
+        )
+
+    def quote_identifier(value: str) -> str:
+        return '"' + str(value).replace('"', '""') + '"'
+
+    memory_mb = _native_export_duckdb_memory_mb()
+    duckdb_output = path.with_name(
+        f".{module}.native-v2-supp-support.duckdb.tmp.parquet"
+    )
+    arrow_output = path.with_name(
+        f".{module}.native-v2-supp-support.arrow.tmp.parquet"
+    )
+    for candidate in (duckdb_output, arrow_output):
+        if candidate.exists() or candidate.is_symlink():
+            raise ValueError(
+                "native_export_v2 refuses stale supplemental-oxygen support "
+                f"file: {candidate}"
+            )
+
+    value_columns = [
+        name for name in names if name not in {"stay_id", "charttime"}
+    ]
+    other_value_columns = [name for name in value_columns if name != "supp_o2"]
+    other_value_predicate = " OR ".join(
+        f"s.{quote_identifier(name)} IS NOT NULL" for name in other_value_columns
+    )
+    if not other_value_predicate:  # pragma: no cover - required columns prevent it
+        other_value_predicate = "FALSE"
+    output_columns = ",\n                            ".join(
+        (
+            "CASE WHEN _orphan_supp_o2 THEN NULL::BOOLEAN "
+            f"ELSE s.{quote_identifier(name)} END AS {quote_identifier(name)}"
+            if name == "supp_o2"
+            else f"s.{quote_identifier(name)}"
+        )
+        for name in names
+    )
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f".{module}.native-v2-supp-support-",
+            dir=path.parent,
+        ) as spill_dir:
+            connection = duckdb.connect(
+                database=":memory:",
+                config={
+                    "memory_limit": f"{memory_mb}MB",
+                    "threads": "1",
+                    "temp_directory": spill_dir,
+                    "preserve_insertion_order": "true",
+                },
+            )
+            try:
+                support_ctes = """
+                    WITH source AS (
+                        SELECT file_row_number::BIGINT AS _row_order, *
+                        FROM read_parquet(?, file_row_number=true)
+                    ), vent_support AS (
+                        SELECT DISTINCT
+                            stay_id,
+                            floor(charttime)::DOUBLE AS charttime,
+                            TRUE AS _vent_support
+                        FROM source
+                        WHERE vent_ind IS TRUE AND charttime IS NOT NULL
+                    ), marked AS (
+                        SELECT
+                            s.*,
+                            (
+                                s.supp_o2 IS TRUE
+                                AND NOT (
+                                    coalesce(s.fio2 > 21.0, FALSE)
+                                    OR coalesce(v._vent_support, FALSE)
+                                )
+                            ) AS _orphan_supp_o2,
+                            (""" + other_value_predicate + """) AS _has_other_value
+                        FROM source AS s
+                        LEFT JOIN vent_support AS v
+                          ON s.stay_id IS NOT DISTINCT FROM v.stay_id
+                         AND floor(s.charttime) IS NOT DISTINCT FROM v.charttime
+                    )
+                """
+                before = connection.execute(
+                    support_ctes
+                    + """
+                    SELECT
+                        count(*)::BIGINT,
+                        count(*) FILTER (WHERE _orphan_supp_o2)::BIGINT,
+                        count(*) FILTER (
+                            WHERE _orphan_supp_o2 AND NOT _has_other_value
+                        )::BIGINT,
+                        count(*) FILTER (
+                            WHERE _orphan_supp_o2
+                              AND NOT _has_other_value
+                              AND charttime IS NULL
+                        )::BIGINT
+                    FROM marked
+                    """,
+                    [str(path)],
+                ).fetchone()
+                if before is None:  # pragma: no cover - aggregate always returns
+                    raise RuntimeError(
+                        "native supplemental-oxygen support audit returned no row"
+                    )
+                rows_before, orphan_claims, empty_rows, empty_null_time_rows = (
+                    int(value) for value in before
+                )
+                if orphan_claims:
+                    connection.execute(
+                        f"""
+                        COPY (
+                            {support_ctes}
+                            SELECT
+                                {output_columns}
+                            FROM marked AS s
+                            WHERE NOT (
+                                _orphan_supp_o2 AND NOT _has_other_value
+                            )
+                            ORDER BY _row_order
+                        ) TO ? (
+                            FORMAT PARQUET,
+                            COMPRESSION SNAPPY,
+                            ROW_GROUP_SIZE 262144
+                        )
+                        """,
+                        # DuckDB binds COPY's destination before the CTE input.
+                        [str(duckdb_output), str(path)],
+                    )
+            finally:
+                connection.close()
+
+        if orphan_claims:
+            source_file = pq.ParquetFile(duckdb_output)
+            writer = pq.ParquetWriter(
+                arrow_output, target_schema, compression="snappy"
+            )
+            rows_after = 0
+            try:
+                for batch in source_file.iter_batches(
+                    batch_size=_native_export_arrow_batch_rows(),
+                    use_threads=False,
+                ):
+                    table = pa.Table.from_batches([batch]).cast(
+                        target_schema, safe=True
+                    )
+                    rows_after += len(table)
+                    if len(table):
+                        writer.write_table(table)
+                    del table
+                    _release_stream_batch_memory(pa, trim_native_allocator=False)
+            finally:
+                writer.close()
+            expected_rows = rows_before - empty_rows
+            if rows_after != expected_rows:
+                raise RuntimeError(
+                    "native supplemental-oxygen support repair changed the row "
+                    f"count unexpectedly ({rows_after} != {expected_rows})"
+                )
+            arrow_output.replace(path)
+        else:
+            rows_after = rows_before
+    except Exception:
+        arrow_output.unlink(missing_ok=True)
+        raise
+    finally:
+        duckdb_output.unlink(missing_ok=True)
+
+    return {
+        "policy": (
+            "true_supp_o2_requires_canonical_fio2_gt_21_or_"
+            "hour_bucketed_canonical_vent_ind"
+        ),
+        "ventilation_time_projection": "floor_to_one_hour",
+        "excluded_semantically_invalid": orphan_claims,
+        "empty_rows_removed": empty_rows,
+        "empty_null_charttime_rows_removed": empty_null_time_rows,
+        "rows_before": rows_before,
+        "rows_after": rows_after,
+        "duckdb_memory_limit_mb": memory_mb,
+    }
+
+
 def _try_publish_native_export_arrow_fast_path(
     *,
     source_parquet: Path,
@@ -4605,6 +4826,42 @@ def _publish_native_export_v2(
                 metadata_frame = arrow_result["schema_frame"]
                 published_rows = int(arrow_result["rows"])
                 concept_non_null = dict(arrow_result["concept_non_null"])
+            supp_o2_audit = _enforce_native_export_supp_o2_support(
+                temporary_parquet,
+                module=module,
+            )
+            if supp_o2_audit is not None:
+                semantic_audit["supp_o2"] = supp_o2_audit
+                removed_claims = int(
+                    supp_o2_audit["excluded_semantically_invalid"]
+                )
+                removed_rows = int(supp_o2_audit["empty_rows_removed"])
+                concept_non_null["supp_o2"] -= removed_claims
+                if concept_non_null["supp_o2"] < 0:
+                    raise RuntimeError(
+                        "native supplemental-oxygen support repair produced a "
+                        "negative non-null count"
+                    )
+                published_rows -= removed_rows
+                removed_null_time_rows = int(
+                    supp_o2_audit["empty_null_charttime_rows_removed"]
+                )
+                null_charttime_rows_after = int(
+                    row_grain_audit["null_charttime_rows_after"]
+                )
+                if (
+                    published_rows < 0
+                    or removed_null_time_rows > null_charttime_rows_after
+                ):
+                    raise RuntimeError(
+                        "native supplemental-oxygen support repair produced "
+                        "inconsistent row-grain counts"
+                    )
+                row_grain_audit["published_rows"] = published_rows
+                row_grain_audit["semantic_rows_excluded"] = removed_rows
+                row_grain_audit["null_charttime_rows_after"] = (
+                    null_charttime_rows_after - removed_null_time_rows
+                )
             binding = build_export_file_metadata_binding(
                 relative_path=relative_path,
                 module=module,
@@ -4781,6 +5038,8 @@ def _publish_native_export_v2(
         "module_peak_working_set_mb": module_peak_working_set_mb,
         "stream_retry_history": list(result.get("stream_retry_history", [])),
         "resource_plan": result.get("resource_plan"),
+        "module_resource_plans": result.get("module_resource_plans"),
+        "resource_budget_mb": result.get("resource_budget_mb"),
         "time_window_authority": time_window_authority,
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
@@ -4819,6 +5078,7 @@ def extract_database(
     stream_output_batches: bool = False,
     verbose: bool = True,
     adaptive_stream_batches: Optional[bool] = None,
+    resource_budget_mb: Optional[float] = None,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -4871,6 +5131,9 @@ def extract_database(
             会自适应，用户显式 ``batch_size`` 固定不变。六库 launcher 会同时
             显式传入有 provenance 的首批计划和 ``True``，从而保证 plan 与实际
             首批一致，同时允许后续批次继续按实测增长或收缩。
+        resource_budget_mb: 资源规划可使用的内存预算（MiB）。None 使用当前
+            可用内存；可复现的正式 release 应显式传入其资源合同（例如 8192），
+            避免同一任务仅因换到大内存服务器就绕过已验证的分批边界。
 
     Note:
         提取 worker 在所有平台均使用 ``spawn`` 以隔离 Arrow/DuckDB 原生状态。
@@ -4973,45 +5236,49 @@ def extract_database(
         raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
 
     automatic_batch = batch_size is None
+    if resource_budget_mb is not None and float(resource_budget_mb) <= 0:
+        raise ValueError("resource_budget_mb must be positive")
+    planning_available_mb = (
+        _available_memory_mb()
+        if resource_budget_mb is None
+        else float(resource_budget_mb)
+    )
     resource_plan = plan_extraction_resources(
         database,
         modules,
         num_patients,
         batch_size,
+        available_memory_mb=planning_available_mb,
     )
     batch_size = resource_plan.batch_size
-    if (
-        len(modules) > 1
-        and resource_plan.reason_code == "measured_profile_fast_path"
+    module_resource_plans = plan_module_extraction_resources(
+        database,
+        modules,
+        num_patients,
+        None if automatic_batch else batch_size,
+        available_memory_mb=planning_available_mb,
+    )
+    # A mixed request must not force light modules through the strictest
+    # module's batches.  Each module was profiled in an isolated process, so
+    # automatic release execution uses that same per-module unit of planning.
+    # Grouped execution remains available only when every selected module has
+    # the same safe one-shot mode.
+    any_streamed_module = bool(stream_output_batches) and any(
+        plan.mode != "one_shot" for plan in module_resource_plans.values()
+    )
+    if automatic_batch and (
+        any_streamed_module
+        or len({plan.batch_size for plan in module_resource_plans.values()}) > 1
     ):
-        # The profiles were measured one module per isolated worker.  Do not
-        # silently combine their working sets merely because total RAM is high.
         group_modules = False
-
-    if (
-        stream_output_batches
-        and automatic_batch
-        and resource_plan.mode == "one_shot"
-    ):
-        # A single streamed partition gives up source/cache reuse without any
-        # memory benefit.  Use the true one-shot path when the measured profile
-        # authorises it.
-        stream_output_batches = False
-        _adaptive_stream_batches = False
-        _auto_one_shot = True
-    elif stream_output_batches:
-        _adaptive_stream_batches = (
-            automatic_batch
-            if adaptive_stream_batches is None
-            else bool(adaptive_stream_batches)
-        )
-        _auto_one_shot = False
-    elif resource_plan.mode == "one_shot":
-        _adaptive_stream_batches = False
-        _auto_one_shot = True
-    else:
-        _adaptive_stream_batches = False
-        _auto_one_shot = False
+    _adaptive_stream_batches = bool(stream_output_batches) and (
+        automatic_batch
+        if adaptive_stream_batches is None
+        else bool(adaptive_stream_batches)
+    )
+    _auto_one_shot = all(
+        plan.mode == "one_shot" for plan in module_resource_plans.values()
+    )
 
     # 创建输出目录
     if native_export_v2 is None:
@@ -5034,17 +5301,15 @@ def extract_database(
         print(f"{'=' * 60}")
         print(f"📊 extract_database: {database}")
         print(f"   患者数: {num_patients:,}, 模块数: {len(modules)}")
-        if (
-            _auto_one_shot
-            and database == "eicu"
-            and num_patients > ONESHOT_MAX_PATIENTS
-        ):
-            batch_description = "eICU 自适应 1–3 个大 batch（按模块内存估算）"
-        elif _auto_one_shot:
-            batch_description = "一次性 in-process"
+        if _auto_one_shot:
+            batch_description = "全部模块一次性（逐模块隔离）"
+        elif automatic_batch:
+            batch_description = "按模块实测策略（一次性/最少安全批次）"
         else:
             batch_description = f"batch_size={batch_size}"
         print(f"   批策略: {batch_description}")
+        if resource_budget_mb is not None:
+            print(f"   资源合同: {planning_available_mb:.0f} MiB")
         if resource_plan.advisory_zh:
             print(f"   ⚠️  {resource_plan.advisory_zh}")
         print(f"   RSS: {rss:.0f}MB, 输出: {output_dir or '仅内存'}")
@@ -5056,8 +5321,13 @@ def extract_database(
         "batch_size": batch_size,
         "adaptive_stream_batches": _adaptive_stream_batches,
         "stream_retry_history": [],
-        "stream_output_batches": stream_output_batches,
+        "stream_output_batches": any_streamed_module,
         "resource_plan": resource_plan.to_dict(),
+        "module_resource_plans": {
+            module: plan.to_dict()
+            for module, plan in module_resource_plans.items()
+        },
+        "resource_budget_mb": round(planning_available_mb, 1),
         "modules": {},
         "total_elapsed": 0,
         "output_dir": output_dir,
@@ -5075,10 +5345,42 @@ def extract_database(
 
     # ---- 模块分组：组内共享源表扫描（keep_cache），组间子进程隔离 ----
     group_flag, group_reason = _resolve_extraction_grouping(
-        group_modules, stream_output_batches
+        group_modules, any_streamed_module
     )
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
+    if automatic_batch and not group_flag:
+        # The legacy ungrouped shape kept both Sepsis-3 modules in one worker.
+        # Their measured policies differ on eICU (SOFA-1 is 67k, SOFA-2 is
+        # one-shot), so split them only for automatic isolated execution.
+        isolated_groups = []
+        for group in groups:
+            if group["modules"]:
+                isolated_groups.append(
+                    {"modules": list(group["modules"]), "special": []}
+                )
+            isolated_groups.extend(
+                {"modules": [], "special": [special]}
+                for special in group["special"]
+            )
+        groups = isolated_groups
+    for group in groups:
+        group_modules_for_plan = [*group["modules"], *group["special"]]
+        group_plan = plan_extraction_resources(
+            database,
+            group_modules_for_plan,
+            num_patients,
+            None if automatic_batch else batch_size,
+            available_memory_mb=planning_available_mb,
+        )
+        group["_batch_size"] = group_plan.batch_size
+        group["_resource_plan"] = group_plan.to_dict()
+        group["_stream_output_batches"] = bool(stream_output_batches) and (
+            not automatic_batch or group_plan.mode != "one_shot"
+        )
+        group["_adaptive_stream_batches"] = bool(
+            group["_stream_output_batches"] and _adaptive_stream_batches
+        )
 
     if verbose and group_flag:
         print(
@@ -5146,6 +5448,7 @@ def extract_database(
             "initial_planned_partition_count": manifest.get(
                 "initial_planned_partition_count"
             ),
+            "resource_plan": module_resource_plans[mod_name].to_dict(),
         }
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
         # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
@@ -5273,6 +5576,7 @@ def extract_database(
                     "initial_planned_partition_count": manifest.get(
                         "initial_planned_partition_count"
                     ),
+                    "resource_plan": module_resource_plans[mod_name].to_dict(),
                 }
                 for c_name in concepts:
                     info = manifest.get("saved", {}).get(c_name)
@@ -5320,6 +5624,12 @@ def extract_database(
     while pending_groups:
         group = pending_groups.popleft()
         group_batch_size = int(group.get("_batch_size", batch_size))
+        group_stream_output_batches = bool(
+            group.get("_stream_output_batches", stream_output_batches)
+        )
+        group_adaptive_stream_batches = bool(
+            group.get("_adaptive_stream_batches", _adaptive_stream_batches)
+        )
         stream_retry_attempt = int(group.get("_stream_retry_attempt", 0))
         group_mods = [m for m in group["modules"] if EXTRACT_MODULES.get(m)]
         group_special = list(group["special"])
@@ -5348,9 +5658,9 @@ def extract_database(
                 group_batch_size,
                 tmp_root,
                 group_use_sofa2,
-                stream_output_batches,
+                group_stream_output_batches,
                 output_dir,
-                _adaptive_stream_batches,
+                group_adaptive_stream_batches,
             ),
             daemon=True,
         )
@@ -5373,8 +5683,8 @@ def extract_database(
         can_retry_smaller = (
             crashed
             and incomplete
-            and _adaptive_stream_batches
-            and stream_output_batches
+            and group_adaptive_stream_batches
+            and group_stream_output_batches
             and stream_retry_attempt < _STREAM_BATCH_MAX_RETRIES
             and group_batch_size > _STREAM_BATCH_MIN
         )
@@ -5404,6 +5714,8 @@ def extract_database(
                     "modules": retry_modules,
                     "special": retry_special,
                     "_batch_size": retry_batch_size,
+                    "_stream_output_batches": group_stream_output_batches,
+                    "_adaptive_stream_batches": group_adaptive_stream_batches,
                     "_stream_retry_attempt": stream_retry_attempt + 1,
                 }
             )
@@ -5427,6 +5739,8 @@ def extract_database(
                         "modules": [],
                         "special": group_special,
                         "_batch_size": group_batch_size,
+                        "_stream_output_batches": group_stream_output_batches,
+                        "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
                     }
                 )
@@ -5437,6 +5751,8 @@ def extract_database(
                         "modules": [m],
                         "special": [],
                         "_batch_size": group_batch_size,
+                        "_stream_output_batches": group_stream_output_batches,
+                        "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
                     }
                 )
