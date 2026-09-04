@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, TypeVar
 from uuid import uuid4
 
-from easyicu.research_agent.authority.provider_hard_stop import TaskProviderHardStop
+from easyicu.research_agent.authority.provider_hard_stop import (
+    ProviderHardStopExceeded,
+    TaskProviderHardStop,
+)
 
 from .formal_provider_gate import FormalProviderSession
 from .formal_scheduler import (
@@ -15,6 +18,12 @@ from .formal_scheduler import (
     signed_site_assignment,
     validate_trajectory_lease,
 )
+from .review_bundle_semantics import (
+    FailureCategory,
+    ReviewResourceReceipt,
+    TerminalOutcome,
+)
+from .review_bundle_writer import terminal_failure_material, write_review_bundle
 
 
 _T = TypeVar("_T")
@@ -24,6 +33,13 @@ class FormalTrajectoryLifecycleError(ValueError):
     """A formal trajectory cannot be prepared within its signed writable root."""
 
     reason_code = "FORMAL_TRAJECTORY_LIFECYCLE_INVALID"
+
+
+class FormalTrajectoryTerminalizationError(RuntimeError):
+    """A started trajectory could not publish its neutral terminal evidence."""
+
+    reason_code = "FORMAL_TRAJECTORY_TERMINALIZATION_FAILED"
+    owner = "figure2.formal_execution_session_v1"
 
 
 class FormalTrajectoryLifecycle:
@@ -199,6 +215,8 @@ class FormalExecutionSession:
             arm=arm,
             execution_site=execution_site,
         )
+        self._task_id = task_id
+        self._provider_hard_stop = provider_hard_stop
 
     @property
     def workdir(self) -> Path:
@@ -217,9 +235,73 @@ class FormalExecutionSession:
     def require_output_dir(self, output_dir: Path) -> Path:
         return self._trajectory.require_output_dir(output_dir)
 
+    @staticmethod
+    def _failure_category(exc: Exception) -> FailureCategory:
+        if isinstance(exc, ProviderHardStopExceeded) or getattr(
+            exc, "reason_code", None
+        ) == "GENERIC_BUDGET_EXHAUSTED":
+            return FailureCategory.BUDGET_EXHAUSTED
+        return FailureCategory.EXECUTION_FAILURE
+
+    def _publish_terminal_failure(
+        self,
+        *,
+        output_dir: Path,
+        mandatory_artifacts: tuple[str, ...],
+        category: FailureCategory,
+    ) -> None:
+        accounting = self._provider_hard_stop.accounting_summary()
+        resource_receipt = ReviewResourceReceipt.from_provider_accounting(
+            accounting,
+            within_frozen_budget=False,
+        )
+        material = terminal_failure_material(
+            plan={
+                "available": False,
+                "failure_category": category.value,
+            },
+            failure_category=category,
+            mandatory_artifacts=mandatory_artifacts,
+        )
+        write_review_bundle(
+            material,
+            output_dir=output_dir,
+            task_id=self._task_id,
+            mandatory_artifacts=mandatory_artifacts,
+            resource_receipt=resource_receipt,
+            outcome=TerminalOutcome.failed(category),
+        )
+
+    def run_to_terminal(
+        self,
+        *,
+        operation: Callable[[], _T],
+        output_dir: Path,
+        mandatory_artifacts: tuple[str, ...],
+    ) -> _T:
+        """Run a committed trajectory and publish neutral evidence on failure."""
+
+        destination = self.require_output_dir(output_dir)
+        try:
+            return operation()
+        except Exception as exc:
+            try:
+                self._publish_terminal_failure(
+                    output_dir=destination,
+                    mandatory_artifacts=mandatory_artifacts,
+                    category=self._failure_category(exc),
+                )
+            except Exception as publication_exc:
+                raise FormalTrajectoryTerminalizationError(
+                    "started trajectory failed and its terminal bundle could not "
+                    "be published"
+                ) from publication_exc
+            raise
+
 
 __all__ = [
     "FormalExecutionSession",
     "FormalTrajectoryLifecycle",
     "FormalTrajectoryLifecycleError",
+    "FormalTrajectoryTerminalizationError",
 ]

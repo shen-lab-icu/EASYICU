@@ -33,7 +33,12 @@ from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import FormalEasyICUR
 from benchmarks.figure2_icu_agent_v2.formal_generic_runner import (
     FormalGenericCodeAgentRunner,
 )
+from benchmarks.figure2_icu_agent_v2.generic_code_agent_harness import (
+    GenericCodeAgentHarness,
+    PlanReviewDecision,
+)
 from benchmarks.figure2_icu_agent_v2.formal_trajectory_lifecycle import (
+    FormalExecutionSession,
     FormalTrajectoryLifecycle,
     FormalTrajectoryLifecycleError,
 )
@@ -113,6 +118,24 @@ class _LeasedTrajectory:
                 "formal output directory does not match the committed lease"
             )
         return self.output_dir
+
+    def run_to_terminal(self, *, operation, output_dir, mandatory_artifacts):
+        del mandatory_artifacts
+        self.require_output_dir(output_dir)
+        return operation()
+
+
+def _terminalizing_session(
+    *,
+    output_dir: Path,
+    task_id: str,
+    provider_hard_stop,
+) -> FormalExecutionSession:
+    session = object.__new__(FormalExecutionSession)
+    session._trajectory = _LeasedTrajectory(output_dir)
+    session._task_id = task_id
+    session._provider_hard_stop = provider_hard_stop
+    return session
 
 
 def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -> None:
@@ -250,7 +273,11 @@ def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
     runner._pipeline = _Pipeline()
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "review-bundle"
-    runner._trajectory = _LeasedTrajectory(output)
+    runner._trajectory = _terminalizing_session(
+        output_dir=output,
+        task_id="icu27_t01",
+        provider_hard_stop=runner._provider_hard_stop,
+    )
     runner._task_id = "icu27_t01"
 
     returned = runner.run_and_write_review_bundle(
@@ -291,7 +318,11 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
     runner._pipeline = _Pipeline()
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "failed-review-bundle"
-    runner._trajectory = _LeasedTrajectory(output)
+    runner._trajectory = _terminalizing_session(
+        output_dir=output,
+        task_id="icu27_t01",
+        provider_hard_stop=runner._provider_hard_stop,
+    )
     runner._task_id = "icu27_t01"
 
     with pytest.raises(RuntimeError, match="private implementation detail"):
@@ -310,6 +341,118 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
     assert b"private implementation detail" not in b"".join(
         normalized.files.values()
     )
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ("plan_review", "executor", "resource_snapshot"),
+)
+def test_generic_formal_runner_terminalizes_unexpected_callback_failures(
+    tmp_path: Path,
+    failure_point: str,
+) -> None:
+    plan = {
+        "population": "adult ICU stays",
+        "eligibility": "first eligible stay",
+        "exposure_or_index": "baseline exposure",
+        "outcome": "mortality",
+        "time_origin": "ICU admission",
+        "estimand": "risk difference",
+        "method": "binomial regression",
+        "missing_data": "report missingness",
+        "diagnostics": ["calibration"],
+        "artifacts": ["result"],
+        "limitations": ["observational"],
+    }
+    execute = {"action": "execute", "language": "python", "code": "pass"}
+    finalize = {
+        "action": "finalize",
+        "cohort": {"n": 1},
+        "results": {"estimate": 0.0},
+        "diagnostics": {"status": "ok"},
+        "report": "Neutral result.",
+        "headline_evidence": [],
+        "artifact_inventory": {"result": ["03_results.json"]},
+    }
+
+    class _Model:
+        def __init__(self, responses) -> None:
+            self._responses = iter(responses)
+
+        def complete(self, *, phase, messages):
+            del phase, messages
+            return json.dumps(next(self._responses))
+
+    class _Executor:
+        def execute(self, **kwargs):
+            del kwargs
+            raise RuntimeError("executor callback failed")
+
+    class _HardStop:
+        def pause(self):
+            pass
+
+        def resume(self):
+            pass
+
+        def accounting_summary(self):
+            return {
+                "conservative_upper_bound": {
+                    "n_calls": 1,
+                    "total_tokens": 40,
+                    "estimated_cost_usd": 0.005,
+                }
+            }
+
+    def fail_resource_snapshot():
+        raise RuntimeError("resource snapshot callback failed")
+
+    def valid_resource_snapshot():
+        return {"within_frozen_budget": True}
+
+    responses = [plan]
+    resource_snapshot = valid_resource_snapshot
+    if failure_point == "executor":
+        responses.append(execute)
+    elif failure_point == "resource_snapshot":
+        responses.append(finalize)
+        resource_snapshot = fail_resource_snapshot
+
+    harness = GenericCodeAgentHarness(
+        task_id="icu27_t01",
+        model=_Model(responses),
+        executor=_Executor(),
+        resource_snapshot=resource_snapshot,
+    )
+    hard_stop = _HardStop()
+    output = tmp_path / f"generic-{failure_point}-bundle"
+    runner = object.__new__(FormalGenericCodeAgentRunner)
+    runner._harness = harness
+    runner._provider_hard_stop = hard_stop
+    runner._trajectory = _terminalizing_session(
+        output_dir=output,
+        task_id="icu27_t01",
+        provider_hard_stop=hard_stop,
+    )
+
+    def review_plan(_plan):
+        if failure_point == "plan_review":
+            raise RuntimeError("plan review callback failed")
+        return PlanReviewDecision("approve")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        runner.run(
+            task_prompt="offline",
+            neutral_input_description="offline",
+            mandatory_artifacts=("result",),
+            output_dir=output,
+            review_plan=review_plan,
+        )
+
+    assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
+    receipt = json.loads(_normalize(output).files["07_run_receipt.json"])
+    assert receipt["terminal_status"] == "failed"
+    assert receipt["failure_category"] == "execution_failure"
 
 
 def test_formal_runners_reject_output_directory_outside_consumed_lease(
