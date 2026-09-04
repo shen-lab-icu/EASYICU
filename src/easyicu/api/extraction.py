@@ -1685,7 +1685,18 @@ _VITAL_STREAM_DERIVED_CONCEPTS = (
 # specific trim heuristics, the memory-release contract.  Keep the scope tied
 # to measured evidence: an eICU finding must not silently change another
 # database's execution strategy.
-_ISOLATED_STREAM_BATCH_TARGETS = frozenset({("eicu", "sofa2_score")})
+_ISOLATED_STREAM_BATCH_TARGETS = frozenset(
+    {
+        ("eicu", "sofa2_score"),
+        # Full-cohort AUMC respiratory boundary runs retained Arrow/native
+        # allocator pages across successive batches: 8k, 7k and 6k all crossed
+        # the same 7,447-MiB process-tree stop late in the run even though their
+        # first-batch peaks fell from 5.43 GiB to 3.84 GiB. A fresh interpreter
+        # per batch makes the measured batch boundary real instead of allowing
+        # cumulative allocator residency to dominate it.
+        ("aumc", "respiratory"),
+    }
+)
 
 
 def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:
