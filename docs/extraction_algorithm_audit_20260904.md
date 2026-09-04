@@ -4,9 +4,8 @@
 
 This audit covers the EasyICU selected-module refresh used to repair invasive
 ventilation evidence in eICU and MIMIC-III and its downstream SOFA/Sepsis
-closure. The implementation is now evidence-directed and bounded under a fixed
-8 GiB release contract. It is not globally time-optimal: several remaining
-full-table scans can be removed only after output-invariance benchmarks.
+closure. Extraction is paused: the post-IMV eICU SOFA-2 path disproved the old
+resource profile, so no new release is authorised by this document yet.
 
 No result in this audit authorises changing an AKI definition, cohort, time
 window, or analysis endpoint. It changes extraction scheduling and closes one
@@ -33,15 +32,70 @@ For the eICU respiratory dependency closure at 8 GiB, the executable plan is:
 | respiratory | measured batch | 50,000 | 5 | 67k crossed the 8 GiB contract |
 | sepsis_shared | one-shot | 200,859 | 1 | measured full cohort |
 | sofa1_score | measured batch | 67,000 | 3 | measured full cohort batches |
-| sofa2_score | one-shot | 200,859 | 1 | measured full cohort |
+| sofa2_score | quarantined fallback | 25,000 | 9 | old profile invalid after IMV dependency change; not yet a verified final batch |
 | sepsis3_sofa1 | measured batch | 67,000 | 3 | measured dependency-complete run |
-| sepsis3_sofa2 | one-shot | 200,859 | 1 | measured full cohort |
+| sepsis3_sofa2 | quarantined fallback | 25,000 | 9 | inherits the invalidated SOFA-2 dependency; not yet a verified final batch |
 
 The previous launcher passed one request-wide 5,000-stay override. That bypassed
 the resource owner, caused avoidable repeated scans and made the manifest say
 `explicit_batch_size`. The request-wide automatic path also applied the
 strictest module batch to light modules. Both paths are now blocked or removed
 from formal release execution.
+
+The 25,000-stay entries above are conservative planner fallbacks, not a new
+fixed production standard. The final value must be the largest candidate that
+completes under the 7,447 MiB process-tree hard stop after the algorithm fixes
+below. Until then, the executable reason code is
+`invalidated_profile_memory_guard` and the candidate must remain unsealed.
+
+## SOFA-2 algorithm review after the failed run
+
+The old eICU measurements (`sofa2_score` 6,926.6 MiB and
+`sepsis3_sofa2` 6,268.4 MiB) predated the IMV ascertainment change. They are no
+longer present in the measured-profile registry. Controlled post-update runs
+at 67,000, 50,000 and 40,000 stays crossed the 7,447 MiB hard stop; the 31,000
+run was stopped at the user's request before completion. None of those runs
+authorises a production batch size.
+
+The code review found three algorithmic peak owners:
+
+1. `sofa2_score` requests the aggregate and its six component outputs. The
+   aggregate recursively computes those components, but the 512 MiB reusable
+   cache can correctly reject the large frames. The export loop then computed
+   them again. A top-level request-owned, zero-copy result map now reuses only
+   components that must already remain alive for final output; it does not
+   enlarge the reusable cache.
+2. The aggregate callback built a six-score wide frame, independently rebuilt
+   a 12-receipt wide frame and then outer-joined both. It now carries each
+   component's two owner receipts through one indexed concat.
+3. The dense hourly gap grid represented ordinal scores and binary receipts as
+   float64. The SOFA-2 owner now requests exact float32 storage for this grid.
+
+Batch patient identifiers are passed through the recursive component loader
+and into the DuckDB/Arrow source predicates. The partition boundary is not
+silently dropped. The near-flat peaks across the failed 67k/50k/40k attempts
+therefore pointed to redundant materialisation and allocator lifecycle, not a
+justification for an arbitrary 5,000-stay split.
+
+These changes deliberately do not alter thresholds, time windows, missing-data
+policy, public columns or row-grain semantics. Focused regression tests must
+pass before a hard-limited performance run is allowed.
+
+## Clinical-semantics finding (not silently changed)
+
+The component threshold implementations have source-bound golden tests, but
+the aggregate is explicitly registered as a non-canonical database
+operationalisation pending independent clinical review. It currently requires
+all six component availability receipts before publishing a total; official
+SOFA-2 day-1 scoring instead treats missing components as normal/zero and its
+later longitudinal policy carries the last value forward. The production
+callback also emits hourly trailing-24-hour values, whereas the official
+longitudinal description is daily.
+
+This is a scientific-policy difference, not a performance bug. It is preserved
+for output invariance during the resource repair and must be reviewed as a
+separate versioned semantic decision before SOFA-2 is used as a canonical
+endpoint.
 
 ## Time and I/O review
 
@@ -119,8 +173,9 @@ from formal release execution.
 
 ## Decision
 
-The current algorithm is suitable for the targeted rebuild after the above
-tests, but “optimal” is claimed only where a measured fastest-safe profile
-exists. The next performance experiment should profile the five MIMIC-III
-score modules, then test a fused read-only SOFA/Sepsis dependency worker against
-the isolated reference using bidirectional `EXCEPT ALL` and process-tree RSS.
+The targeted rebuild remains paused. First run the focused and full relevant
+test suites, then prove output invariance, then repeat the same 40,000-stay eICU
+SOFA-2 experiment under the 7,447 MiB process-tree stop. Only after a candidate
+completes may larger batches be tested to find the fewest safe partitions and a
+new profile be promoted. MIMIC-III profiling and any broader release rebuild
+come afterwards.

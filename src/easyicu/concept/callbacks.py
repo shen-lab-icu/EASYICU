@@ -1036,8 +1036,15 @@ def _merge_tables(
     *,
     how: str = "outer",
     ctx: Optional[ConceptCallbackContext] = None,  # Add ctx parameter
+    sidecar_columns: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> tuple[pd.DataFrame, list[str], Optional[str]]:
-    """Merge component tables into a single DataFrame."""
+    """Merge component tables into a single DataFrame.
+
+    ``sidecar_columns`` lets a concept owner carry a small, explicitly named
+    set of columns through the same indexed concat as its public value.  This
+    avoids rebuilding and joining a second wide frame for provenance columns
+    such as the SOFA-2 observed/available receipts.
+    """
 
     # Enable ID conversion for _merge_tables
     id_columns, index_column, converted_tables = _assert_shared_schema(
@@ -1140,8 +1147,12 @@ def _merge_tables(
             # 对于重复列，只保留第一个
             frame = frame.loc[:, ~frame.columns.duplicated()]
         
-        # 只保留键列和值列,避免合并时的列冲突
-        cols_to_keep = key_cols + [name]
+        # 只保留键列、值列和调用方显式声明的 owner sidecars，避免合并时
+        # 的列冲突。Sidecars 与其值共享同一索引，只应在这一趟 concat 中
+        # 物化一次。
+        owner_sidecars = list((sidecar_columns or {}).get(name, ()))
+        value_columns = list(dict.fromkeys([name, *owner_sidecars]))
+        cols_to_keep = key_cols + value_columns
         # 确保所有列都存在
         cols_to_keep = [c for c in cols_to_keep if c in frame.columns]
         frame = frame[cols_to_keep]
@@ -1206,9 +1217,17 @@ def _merge_tables(
                                     exc_info=True,
                                 )
             indexed = frame.set_index(key_cols, drop=True)
-            # Only keep the value column (concept name)
-            if name in indexed.columns:
-                indexed = indexed[[name]]
+            # Keep the value and its explicitly authorised owner sidecars.
+            selected = [
+                column
+                for column in [
+                    name,
+                    *(sidecar_columns or {}).get(name, ()),
+                ]
+                if column in indexed.columns
+            ]
+            if selected:
+                indexed = indexed[selected]
             indexed_frames.append(indexed)
         
         if indexed_frames:
@@ -3176,12 +3195,12 @@ def _callback_sofa2_score(
     ]
     keep_components = ctx.kwargs.get("keep_components", False)
 
-    data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
-
-    # _merge_tables intentionally retains only each ICUTable's declared value
-    # column. Re-project the sidecar receipts through the same schema-normalizing
-    # merger instead of teaching that generic boundary about SOFA-2 internals.
-    receipt_tables: dict[str, ICUTable] = {}
+    # Component score and its two owner receipts have the same row keys.  Merge
+    # all three columns per component in one indexed concat.  The previous
+    # implementation first built the six-score wide frame, then independently
+    # rebuilt a 12-receipt wide frame, and finally outer-joined both.  At eICU
+    # scale those simultaneously live frames were a primary peak-memory owner.
+    sidecars: dict[str, list[str]] = {}
     issued_observed_receipts: set[str] = set()
     issued_available_receipts: set[str] = set()
     for name, table in tables.items():
@@ -3195,17 +3214,14 @@ def _callback_sofa2_score(
                 issued_observed_receipts.add(receipt_name)
             else:
                 issued_available_receipts.add(receipt_name)
-            receipt_tables[receipt_name] = ICUTable(
-                table.data,
-                id_columns=list(table.id_columns),
-                index_column=table.index_column,
-                value_column=receipt_name,
-            )
-    if receipt_tables:
-        receipt_data, _, _ = _merge_tables(receipt_tables, ctx=ctx, how="outer")
-        if not receipt_data.empty:
-            key_columns = id_columns + ([index_column] if index_column else [])
-            data = data.merge(receipt_data, on=key_columns, how="outer")
+            sidecars.setdefault(name, []).append(receipt_name)
+
+    data, id_columns, index_column = _merge_tables(
+        tables,
+        ctx=ctx,
+        how="outer",
+        sidecar_columns=sidecars,
+    )
 
     if data.empty:
         cols = id_columns + ([index_column] if index_column else [])
@@ -3300,6 +3316,10 @@ def _callback_sofa2_score(
                         ctx,
                     ),
                     method="none",
+                    # SOFA-2 components and binary evidence receipts are small
+                    # ordinals.  A float32 gap grid represents them exactly and
+                    # avoids doubling this callback's largest dense frame.
+                    value_dtype="float32",
                 )
 
         # Observation is a per-window event. Availability follows the score's

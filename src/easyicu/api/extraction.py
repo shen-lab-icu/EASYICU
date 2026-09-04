@@ -160,8 +160,12 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
         "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
         "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
-        "sofa2_score": {"cohort_stays": 200_859, "peak_rss_mb": 6_926.6, "seconds": 558.108},
-        "sepsis3_sofa2": {"cohort_stays": 200_859, "peak_rss_mb": 6_268.4, "seconds": 372.807},
+        # ``sofa2_score`` and ``sepsis3_sofa2`` were deliberately removed
+        # after the 2026-09-04 eICU IMV ascertainment update changed their
+        # respiratory dependency.  Their pre-update 6.9/6.3-GiB measurements
+        # no longer authorise a one-shot run.  They must remain on the
+        # unmeasured guard until the revised algorithm passes a hard-limit
+        # profile and output-invariance audit.
     },
     "miiv": {
         "demographics": {
@@ -277,6 +281,25 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
     }
 }
 
+# A profile is evidence for the exact dependency/semantic implementation that
+# produced it, not a permanent property of a module name.  Keep invalidations
+# executable and testable instead of leaving a warning only in release notes.
+# A key listed here must not also appear in either measured profile registry.
+_INVALIDATED_MEASURED_PROFILES: Mapping[
+    tuple[str, str], Mapping[str, str]
+] = {
+    ("eicu", "sofa2_score"): {
+        "invalidated_at": "2026-09-04",
+        "reason": "eICU IMV ascertainment changed the respiratory dependency",
+        "evidence": "post-update one-shot exceeded the 8192-MiB release contract",
+    },
+    ("eicu", "sepsis3_sofa2"): {
+        "invalidated_at": "2026-09-04",
+        "reason": "depends on the revised eICU SOFA-2 respiratory pathway",
+        "evidence": "pre-update measurement is not semantically comparable",
+    },
+}
+
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
 # recorded batch size (or a smaller one), never an unmeasured one-shot. This is
@@ -373,6 +396,20 @@ def _normalise_stream_database(database: str) -> str:
         "mimiciv": "miiv",
         "mimic-iv": "miiv",
     }.get(normalized, normalized)
+
+
+def _invalidated_profile_modules(
+    database: str,
+    modules: Optional[Sequence[str]],
+) -> tuple[str, ...]:
+    """Return requested modules whose old resource evidence is quarantined."""
+
+    normalized = _normalise_stream_database(database)
+    return tuple(
+        module
+        for module in dict.fromkeys(str(module) for module in modules or ())
+        if (normalized, module) in _INVALIDATED_MEASURED_PROFILES
+    )
 
 
 def _stream_calibration(database: str) -> Optional[tuple[int, float]]:
@@ -882,9 +919,27 @@ def plan_extraction_resources(
     threshold_text_zh = (
         f"{required_mb / 1024.0:.0f} GiB" if required_mb is not None else "安全门槛"
     )
+    invalidated_modules = _invalidated_profile_modules(
+        database,
+        selected_modules,
+    )
+    reason_code = (
+        "invalidated_profile_memory_guard"
+        if invalidated_modules
+        else "unmeasured_profile_memory_guard"
+    )
+    invalidation_text = (
+        " Previous measurements were invalidated after a dependency or "
+        "semantic change."
+        if invalidated_modules
+        else ""
+    )
+    invalidation_text_zh = (
+        " 旧实测已因依赖或语义变更而失效。" if invalidated_modules else ""
+    )
     return ExtractionResourcePlan(
         mode=mode,
-        reason_code="unmeasured_profile_memory_guard",
+        reason_code=reason_code,
         batch_size=batch_size,
         available_memory_mb=available,
         required_available_memory_mb=required_mb,
@@ -893,12 +948,14 @@ def plan_extraction_resources(
         advisory=(
             f"Available memory is {available_gib:.2f} GiB; this module set has no "
             f"full-cohort measurement below {threshold_text}. EasyICU will use "
-            "patient batches, which is slower. Close memory-heavy apps or free "
+            f"patient batches, which is slower.{invalidation_text} Close "
+            "memory-heavy apps or free "
             "memory before retrying the fastest mode."
         ),
         advisory_zh=(
             f"当前可用内存为 {available_gib:.2f} GiB；这组模块在 {threshold_text_zh} "
             "以下还没有全队列实测依据。EasyICU 将按患者分批，速度会变慢；"
+            f"{invalidation_text_zh}"
             "关闭占内存程序或清理内存后可再尝试最快模式。"
         ),
     )
