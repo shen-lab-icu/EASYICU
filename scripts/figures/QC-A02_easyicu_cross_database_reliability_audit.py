@@ -1013,6 +1013,40 @@ def _row_grain_contract_checks(
     published_rows = audit.get("published_rows")
     duplicate_excess_before = audit.get("duplicate_excess_rows_before")
     rows_consolidated = audit.get("rows_consolidated")
+    semantic_rows_excluded = audit.get("semantic_rows_excluded", 0)
+    semantic_audit = entry.get("semantic_audit")
+    semantic_audit = semantic_audit if isinstance(semantic_audit, dict) else {}
+    supp_o2_audit = semantic_audit.get("supp_o2")
+    if isinstance(supp_o2_audit, dict):
+        supp_rows_before = supp_o2_audit.get("rows_before")
+        supp_rows_after = supp_o2_audit.get("rows_after")
+        supp_empty_rows = supp_o2_audit.get("empty_rows_removed")
+        supp_excluded_claims = supp_o2_audit.get("excluded_semantically_invalid")
+        supp_o2_receipt_valid = bool(
+            module == "respiratory"
+            and all(
+                isinstance(value, int)
+                for value in (
+                    supp_rows_before,
+                    supp_rows_after,
+                    supp_empty_rows,
+                    supp_excluded_claims,
+                    source_rows,
+                    published_rows,
+                    rows_consolidated,
+                    semantic_rows_excluded,
+                )
+            )
+            and supp_rows_before >= supp_rows_after >= 0
+            and supp_empty_rows >= 0
+            and supp_excluded_claims >= supp_empty_rows
+            and supp_rows_before - supp_rows_after == supp_empty_rows
+            and supp_rows_before == source_rows - rows_consolidated
+            and supp_rows_after == published_rows
+            and semantic_rows_excluded == supp_empty_rows
+        )
+    else:
+        supp_o2_receipt_valid = semantic_rows_excluded == 0
     recorded_sha256 = entry.get("parquet_sha256")
     actual_sha256 = _sha256(parquet_path) if parquet_path.is_file() else None
     recorded_bytes = entry.get("parquet_bytes")
@@ -1060,16 +1094,21 @@ def _row_grain_contract_checks(
                     published_rows,
                     duplicate_excess_before,
                     rows_consolidated,
+                    semantic_rows_excluded,
                 )
             )
             and source_rows >= published_rows >= 0
+            and semantic_rows_excluded >= 0
             and duplicate_excess_before == rows_consolidated
-            and source_rows - published_rows == rows_consolidated
+            and source_rows - published_rows
+            == rows_consolidated + semantic_rows_excluded
         ),
         "row_grain_audit_duplicate_excess_rows_before": audit.get(
             "duplicate_excess_rows_before"
         ),
         "row_grain_audit_rows_consolidated": audit.get("rows_consolidated"),
+        "row_grain_audit_semantic_rows_excluded": semantic_rows_excluded,
+        "row_grain_audit_semantic_receipt_valid": supp_o2_receipt_valid,
         "row_grain_audit_null_charttime_rows_after": audit.get(
             "null_charttime_rows_after"
         ),
@@ -1098,6 +1137,7 @@ def _row_grain_contract_checks(
         "row_grain_audit_rows_match_parquet",
         "row_grain_audit_unique_after",
         "row_grain_audit_consolidation_accounting_valid",
+        "row_grain_audit_semantic_receipt_valid",
         "row_grain_audit_null_time_contract",
     ]
     checks["row_grain_contract_valid"] = all(
@@ -1386,6 +1426,7 @@ def _raise_for_row_grain_gaps(manifests: pd.DataFrame) -> None:
             "row_grain_audit_present",
             "row_grain_audit_unique_after",
             "row_grain_audit_consolidation_accounting_valid",
+            "row_grain_audit_semantic_receipt_valid",
             "row_grain_audit_null_time_contract",
         ],
     ]

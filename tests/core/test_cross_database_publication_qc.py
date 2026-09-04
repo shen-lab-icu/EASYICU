@@ -384,6 +384,62 @@ def test_row_grain_receipt_binds_primary_key_audit_and_parquet_bytes(
     assert not tampered["row_grain_contract_valid"]
 
 
+def test_row_grain_accounting_includes_post_consolidation_semantic_removals(
+    tmp_path: Path,
+) -> None:
+    module = _load_script(AUDIT_SCRIPT, "easyicu_qc_a02_semantic_rows")
+    parquet = tmp_path / "respiratory.parquet"
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "supp_o2": [True]}
+    ).to_parquet(parquet, index=False)
+    entry = {
+        "rows": 1,
+        "primary_key": ["stay_id", "charttime"],
+        "row_grain": "one_row_per_icu_stay_relative_hour",
+        "parquet_sha256": hashlib.sha256(parquet.read_bytes()).hexdigest(),
+        "parquet_bytes": parquet.stat().st_size,
+        "row_grain_audit": {
+            "row_grain": "one_row_per_icu_stay_relative_hour",
+            "primary_key": ["stay_id", "charttime"],
+            "null_key_equality": "nulls_equal",
+            "source_rows": 3,
+            "published_rows": 1,
+            "null_charttime_rows_after": 0,
+            "duplicate_excess_rows_before": 1,
+            "rows_consolidated": 1,
+            "semantic_rows_excluded": 1,
+            "duplicate_excess_rows_after": 0,
+        },
+        "semantic_audit": {
+            "supp_o2": {
+                "excluded_semantically_invalid": 1,
+                "empty_rows_removed": 1,
+                "rows_before": 2,
+                "rows_after": 1,
+            }
+        },
+    }
+
+    checks = module._row_grain_contract_checks(
+        module="respiratory",
+        entry=entry,
+        parquet_path=parquet,
+        actual_row_count=1,
+    )
+    assert checks["row_grain_contract_valid"]
+    assert checks["row_grain_audit_semantic_rows_excluded"] == 1
+    assert checks["row_grain_audit_semantic_receipt_valid"]
+
+    entry["semantic_audit"]["supp_o2"]["empty_rows_removed"] = 0
+    invalid = module._row_grain_contract_checks(
+        module="respiratory",
+        entry=entry,
+        parquet_path=parquet,
+        actual_row_count=1,
+    )
+    assert not invalid["row_grain_audit_semantic_receipt_valid"]
+
+
 def test_null_time_contract_allows_only_declared_admission_level_static_values(
     tmp_path: Path,
 ) -> None:
