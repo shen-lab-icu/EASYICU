@@ -33,6 +33,8 @@ _FORMAL_SITES = frozenset({"server", "laptop"})
 
 @dataclass(frozen=True)
 class FormalCallCoordinate:
+    """Signed identity for one logical model turn, not one transport attempt."""
+
     scope: str
     task_id: str
     arm: str
@@ -114,7 +116,7 @@ class FormalProviderSession:
         return self._provider_hard_stop
 
     def authorize_next_call(self) -> FormalCallCoordinate:
-        """Authorize and durably consume the next exact signed coordinate."""
+        """Consume the signed logical-turn coordinate before its first attempt."""
 
         with self._lock:
             number = self._call_number + 1
@@ -168,10 +170,10 @@ class FormalAuthorizedHardStopClient(HardStopClient):
         super().__init__(inner, role=role, task=session.provider_hard_stop)
         self._session = session
 
-    def _authorize_next_call(self) -> None:
+    def _authorize_next_call(self) -> FormalCallCoordinate:
         self._session.validate_next_call()
         require_provider_client_authorization(self._inner)
-        self._session.authorize_next_call()
+        return self._session.authorize_next_call()
 
     def complete_with_usage(
         self,
@@ -181,8 +183,14 @@ class FormalAuthorizedHardStopClient(HardStopClient):
         temperature: float = 0.2,
         structured_output: Any = None,
     ) -> tuple[str, Mapping[str, Any] | None]:
-        self._authorize_next_call()
-        return super().complete_with_usage(
+        coordinate = self._authorize_next_call()
+        budgeted_client = HardStopClient(
+            self._inner,
+            role=self._role,
+            task=self._task,
+            logical_call_id=coordinate.call_id,
+        )
+        return budgeted_client.complete_with_usage(
             messages,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -197,8 +205,14 @@ class FormalAuthorizedHardStopClient(HardStopClient):
         max_tokens: int = 1024,
         temperature: float = 0.0,
     ) -> str:
-        self._authorize_next_call()
-        return super().complete_with_images(
+        coordinate = self._authorize_next_call()
+        budgeted_client = HardStopClient(
+            self._inner,
+            role=self._role,
+            task=self._task,
+            logical_call_id=coordinate.call_id,
+        )
+        return budgeted_client.complete_with_images(
             prompt=prompt,
             image_paths=image_paths,
             max_tokens=max_tokens,
@@ -224,6 +238,7 @@ def complete_formal_provider_call(
         client,
         role=coordinate.arm,
         task=session.provider_hard_stop,
+        logical_call_id=coordinate.call_id,
     )
     return authorized_complete(budgeted_client, messages, **kwargs)
 
