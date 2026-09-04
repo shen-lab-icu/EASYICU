@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 import random
 from typing import Any, Mapping, Sequence
 
 from .review_bundle_semantics import CANONICAL_FILES, validate_review_task_id
+from .immutable_publication import publish_immutable_bytes
 
 
 PROTOCOL_PATH = Path(__file__).with_name("experiment_protocol_v2_1.json")
@@ -591,18 +591,10 @@ def claim_trajectory_lease(
         "execution_site": trajectory.execution_site,
         "output_dir": trajectory.output_dir,
     }
-    descriptor = os.open(
-        lease_path,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
-        handle.write("\n")
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    publish_immutable_bytes(encoded, lease_path)
     return lease_path
 
 
@@ -761,18 +753,10 @@ def consume_trajectory_lease(
         "arm": payload["arm"],
         "execution_site": payload["execution_site"],
     }
-    descriptor = os.open(
-        started_path,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(started_payload, handle, ensure_ascii=False, sort_keys=True)
-        handle.write("\n")
+    encoded = (
+        json.dumps(started_payload, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    publish_immutable_bytes(encoded, started_path)
     return payload
 
 

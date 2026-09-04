@@ -6,11 +6,11 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
-from uuid import uuid4
+
+from .immutable_publication import publish_immutable_bytes
 
 from .review_bundle_normalizer import (
     CANONICAL_FILES,
@@ -131,49 +131,12 @@ def _source_task_id(files: Mapping[str, bytes]) -> str:
     return task_id
 
 
-def _write_score_lock_stage(path: Path, payload: bytes) -> None:
-    descriptor = os.open(
-        path,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
-
-
 def _publish_score_lock(payload: bytes, destination: Path) -> None:
     """Publish complete bytes once; failures never expose a partial target."""
 
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists() or target.is_symlink():
-        raise FileExistsError(target)
-    staging = target.parent / f".{target.name}.{uuid4().hex}.stage"
-    try:
-        _write_score_lock_stage(staging, payload)
-        if staging.read_bytes() != payload:
-            raise BlindedEvaluationError("score-lock staging verification failed")
-        os.link(staging, target, follow_symlinks=False)
-        if target.read_bytes() != payload:
-            raise BlindedEvaluationError("score-lock publication verification failed")
-        staging.unlink()
-        parent_descriptor = os.open(target.parent, os.O_RDONLY)
-        try:
-            os.fsync(parent_descriptor)
-        finally:
-            os.close(parent_descriptor)
-    finally:
-        staging.unlink(missing_ok=True)
+    publish_immutable_bytes(payload, target)
 
 
 def _bundle_identity_payload(bundle: BlindedReviewBundle) -> dict[str, Any]:
