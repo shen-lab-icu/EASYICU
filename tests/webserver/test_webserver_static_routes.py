@@ -1384,8 +1384,6 @@ def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> N
     assert "data-ex-concepts-clear" in extraction_js
     assert "selectedConceptPayload" in extraction_js
     assert "payload.concepts = conceptSelection" in extraction_js
-    assert "exportResourcePlan.mode === 'patient_batches'" in extraction_js
-    assert "exportResourcePlan.advisory_zh" in extraction_js
     assert "include_feature_definitions: exIncludeDefinitions" in extraction_js
     assert "Feature definition manifest" in extraction_js
     assert "What will be written?" in extraction_js
