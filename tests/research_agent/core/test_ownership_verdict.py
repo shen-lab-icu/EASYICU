@@ -32,7 +32,7 @@ from easyicu.research_agent.execution.runners.adjusted_association_executor impo
 )
 from easyicu.research_agent.schema import AnalysisStep
 
-from .test_adjusted_association_executor import _model_terms, _real_step_payload
+from tests.research_agent.core.test_adjusted_association_executor import _model_terms, _real_step_payload
 
 
 # ---------------------------------------------------------------------------

@@ -108,6 +108,10 @@ from .reporting.reporting_checklist import (
     build_tripod_ai_checklist,
     choose_checklist,
 )
+from .reporting.manuscript_state import (
+    ManuscriptState,
+    render_not_generated,
+)
 from .reporting.reviewer import run_reviewer_round
 from .authority.provenance import (
     ProvenanceBundle,
@@ -475,7 +479,6 @@ from .authority.runtime_artifacts import (
 )
 from .authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
-    RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
     build_environment_identity,
     build_scientific_identity,
@@ -484,6 +487,7 @@ from .authority.run_input import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
+from .orchestration.resume import align_resume_scientific_identity_from_capsule
 from .authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from .canonical_json import canonical_sha256
 from .authority.run_lock import (
@@ -999,6 +1003,7 @@ def _run_preplan_literature_and_hypothesis(
                 reuse_bound_seed_exact=(
                     self._development_resume_reuse_bound_literature
                 ),
+                reuse_registered_exact=resume_state is not None,
             )
             if self._config.require_literature_design_authority:
                 _literature_design.validate_preplan_literature_design_authority(
@@ -2606,6 +2611,7 @@ class ResearchAgentPipeline:
                 self._scientific_runtime_authorities.bind_plan(plan)
             )
             findings.extend(scientific_runtime_compile_findings)
+            plan = _figure_plan.apply_runtime_bound_figure_contracts(plan, findings)
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
@@ -4362,9 +4368,7 @@ class ResearchAgentPipeline:
         )
         progress_channel = ResumableProgressChannel(progress_callback)
         _emit_progress = progress_channel.emit
-
         _emit_progress("run", "Starting research-agent run.")
-
         spec_obj: Optional[ExperimentSpec] = None
         if experiment_spec is not None:
             spec_obj = (
@@ -4375,6 +4379,7 @@ class ResearchAgentPipeline:
         llm = self._llm
         if llm is None:
             raise RuntimeError("LLM client is unexpectedly missing after validation.")
+        run_id = current_locked_run_id()
         run_scientific_identity = build_scientific_identity(
             cohort=cohort,
             question=question,
@@ -4427,6 +4432,8 @@ class ResearchAgentPipeline:
             ),
             capability_workflow=self._capability_runtime.scientific_coordinate(),
         )
+        run_scientific_identity = align_resume_scientific_identity_from_capsule(
+            run_scientific_identity, self.workdir / run_id if resume_run_id else None)
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
         )
@@ -4436,7 +4443,6 @@ class ResearchAgentPipeline:
         resume_input_verified = False
         resume_trajectory_binding: Optional[StagedTrajectoryBinding] = None
         experiment_spec_path: Optional[Path] = None
-        run_id = current_locked_run_id()
         if resume_run_id:
             run_dir = self.workdir / run_id
             if run_dir.exists():
@@ -5710,6 +5716,7 @@ class ResearchAgentPipeline:
 # ---------------------------------------------------------------------------
 
 
+from .reporting.figure_bundle_registry import FIGURE_BUNDLES
 from .reporting.publication_bundles import (  # noqa: F401 — owner module
     _AMBIGUOUS_FIGURE_DATA_FAMILY,
     _BINARY_GROUP_EXCLUDED_TOKENS,
@@ -5754,25 +5761,7 @@ from .reporting.publication_bundles import (  # noqa: F401 — owner module
 def _renderer_for_upstream_family(family: Optional[str]):
     """Map a parent ``analysis_family`` to its deterministic figure renderer."""
 
-    key = _UPSTREAM_FAMILY_TO_RENDERER_KEY.get(str(family or "").strip().lower())
-    if key is None:
-        return None
-    if key == "survival":
-        from .figures.survival import (
-            render_survival_bundle_from_prior_outputs as _render_survival_bundle,
-        )
-
-        return _render_survival_bundle
-    return {
-        "association": _render_association_publication_bundle_from_prior_outputs,
-        "prediction": _render_prediction_publication_bundle_from_prior_outputs,
-        "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
-        "cohort": _render_cohort_overlap_publication_bundle_from_prior_outputs,
-        "missingness": _render_missingness_publication_bundle_from_prior_outputs,
-        "absolute_risk": _render_absolute_risk_publication_bundle_from_prior_outputs,
-        "phenotype": _render_phenotype_publication_bundle_from_prior_outputs,
-        "descriptive": _render_descriptive_publication_bundle_from_prior_outputs,
-    }.get(key)
+    return FIGURE_BUNDLES.renderer_for_analysis_family(family)
 
 
 def _render_publication_bundle_from_prior_outputs_for_step(
@@ -5807,27 +5796,13 @@ def _render_publication_bundle_from_prior_outputs_for_step(
     # mis-routed step still reaches the correct renderer rather than the coder).
     _upstream_family = _resolve_upstream_analysis_family(run_dir, current_step_id)
     _upstream_renderer = _renderer_for_upstream_family(_upstream_family)
-    _upstream_fallback = (_upstream_renderer,) if _upstream_renderer is not None else ()
-    # Cohort sensitivity, overlap, and attrition/flow are sibling renderings of
-    # one closed cohort-definition family.  A direct-parent family declaration
-    # should outrank stochastic step text, but a sensitivity/overlap renderer
-    # that rejects an attrition-shaped parent must still hand off to the flow
-    # renderer in the same family.  Keep this as an exact-family fallback; do
-    # not reintroduce token routing for unrelated methods.
-    if _upstream_family == "cohort_definition_sensitivity":
-        _upstream_fallback = (
-            _render_sensitivity_publication_bundle_from_prior_outputs,
-            _render_cohort_overlap_publication_bundle_from_prior_outputs,
-            _render_cohort_flow_publication_bundle_from_prior_outputs,
-        )
-    elif _upstream_family == "cohort_definition":
-        # The automatic path admits this family only when the current direct
-        # parent has digest-bound cohort_flow.csv + attrition.csv.  Render that
-        # exact closed product; never probe an overlap renderer first and let a
-        # schema coincidence choose a different scientific display.
-        _upstream_fallback = (
-            _render_cohort_flow_publication_bundle_from_prior_outputs,
-        )
+    # The in-family fallback chain is declared in the registry, not restated
+    # here: cohort sensitivity, overlap and attrition/flow are three displays
+    # of one closed cohort-definition family, and a renderer that rejects a
+    # parent of the wrong shape hands off to its sibling rather than falling
+    # through to the coder. Ownership stays inside the declared family; this
+    # is not token routing.
+    _upstream_fallback = FIGURE_BUNDLES.fallback_renderers_for_family(_upstream_family)
 
     if _upstream_artifact_family is not None:
         if _upstream_artifact_renderer is None:
@@ -7610,23 +7585,7 @@ def deterministic_figure_family_supported_for_upstream(
 def _renderer_for_upstream_method(method: Optional[str]):
     """Map an exact controlled parent method to a deterministic renderer."""
 
-    key = _UPSTREAM_METHOD_TO_RENDERER_KEY.get(str(method or "").strip().lower())
-    if key == "ordered_distribution":
-        from .figures.ordered_distribution import (
-            render_ordered_distribution_bundle_from_prior_outputs,
-        )
-
-        return render_ordered_distribution_bundle_from_prior_outputs
-    if key == "distribution_availability":
-        from .figures.distribution_availability import (
-            render_distribution_availability_bundle_from_prior_outputs,
-        )
-
-        return render_distribution_availability_bundle_from_prior_outputs
-    return {
-        "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
-        "missingness": _render_missingness_publication_bundle_from_prior_outputs,
-    }.get(key)
+    return FIGURE_BUNDLES.renderer_for_method(method)
 
 
 def _render_authorized_sealed_publication_bundle(
@@ -8256,9 +8215,11 @@ def _pipeline_run___write_invoker(
         )
         bound_path = run_dir / "manuscript_scaffold_bound.md"
         bound_path.write_text(
-            "# Manuscript scaffold not generated\n\n"
-            "STRICT evidence enforcement failed before final binding.\n\n"
-            f"Error: {exc}\n",
+            render_not_generated(
+                ManuscriptState.blocked("strict_evidence_enforcement_failed"),
+                "STRICT evidence enforcement failed before final binding.\n\n"
+                f"Error: {exc}",
+            ),
             encoding="utf-8",
         )
         _emit_progress(
@@ -8456,3 +8417,28 @@ def _pipeline_run___commit_human_review_finalize_start(
     path = checkpoint_commit.get("path")
     if path is not None:
         mark_human_review_execution_phase(Path(path), "finalize_in_progress")
+
+
+# Every renderer reachable as an attribute of this module registers as a
+# provider, which the registry re-reads on each resolution. Two of them
+# (association, sensitivity) still live here and a lower layer must not import
+# the pipeline to find them; the rest are re-exported here, and the routing
+# they replaced looked them up in these globals at call time — so a caller
+# that substitutes one still sees its substitution. Renderers this module
+# never names (survival, the two distribution bundles) stay on the registry's
+# own lazy loaders.
+for _bundle_key, _bundle_attr in (
+    ("association", "_render_association_publication_bundle_from_prior_outputs"),
+    ("sensitivity", "_render_sensitivity_publication_bundle_from_prior_outputs"),
+    ("prediction", "_render_prediction_publication_bundle_from_prior_outputs"),
+    ("cohort", "_render_cohort_overlap_publication_bundle_from_prior_outputs"),
+    ("cohort_flow", "_render_cohort_flow_publication_bundle_from_prior_outputs"),
+    ("missingness", "_render_missingness_publication_bundle_from_prior_outputs"),
+    ("absolute_risk", "_render_absolute_risk_publication_bundle_from_prior_outputs"),
+    ("phenotype", "_render_phenotype_publication_bundle_from_prior_outputs"),
+    ("descriptive", "_render_descriptive_publication_bundle_from_prior_outputs"),
+):
+    FIGURE_BUNDLES.bind_provider(
+        _bundle_key, functools.partial(globals().get, _bundle_attr)
+    )
+del _bundle_key, _bundle_attr

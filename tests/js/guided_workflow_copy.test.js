@@ -19,7 +19,7 @@ global.document = {
 for (const modulePath of process.argv.slice(2)) require(path.resolve(modulePath));
 
 let workflow = null;
-const owner = global.EU_GUIDED_PI_ASIDE.create({
+const owner = global.EasyICU.guidedPi.require('aside').create({
   tr: en => en,
   esc: value => String(value == null ? '' : value),
   iconHtml: () => '',

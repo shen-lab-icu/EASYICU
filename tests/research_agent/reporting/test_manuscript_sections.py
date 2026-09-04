@@ -327,6 +327,78 @@ def test_reader_quality_fails_closed_when_targeted_retry_still_leaks_internal_te
         render_manuscript_sections(call_section=call_section, common={})
 
 
+def test_reader_quality_final_bounded_repair_closes_repeated_internal_term() -> None:
+    discussion_calls = 0
+
+    def call_section(**kwargs: object) -> str:
+        nonlocal discussion_calls
+        section_name = str(kwargs["section_name"])
+        if section_name != "Discussion":
+            return _minimal_valid_section(section_name)
+        discussion_calls += 1
+        if discussion_calls < 3:
+            return "## Discussion\n\nThe result remained host-bound at 1.234567."
+        assert "final bounded repair attempt" in str(kwargs["instruction"])
+        return "## Discussion\n\nThe descriptive result requires cautious interpretation."
+
+    rendered = render_manuscript_sections(call_section=call_section, common={})
+
+    assert discussion_calls == 3
+    assert "host-bound" not in rendered
+    assert "1.234567" not in rendered
+
+
+def test_reader_quality_mechanically_rephrases_closed_internal_vocabulary() -> None:
+    results_calls = 0
+
+    def call_section(**kwargs: object) -> str:
+        nonlocal results_calls
+        section_name = str(kwargs["section_name"])
+        section = _minimal_valid_section(section_name)
+        if section_name == "Results":
+            results_calls += 1
+            return section.replace(
+                "Evidence-bound association prose.",
+                "The machine digest supported an evidence-bound description.",
+            )
+        return section
+
+    rendered = render_manuscript_sections(call_section=call_section, common={})
+
+    assert results_calls == 1
+    assert "machine digest" not in rendered.casefold()
+    assert "registered evidence supported" in rendered.casefold()
+
+
+def test_reader_quality_applies_planner_display_labels_without_retry() -> None:
+    results_calls = 0
+
+    def call_section(**kwargs: object) -> str:
+        nonlocal results_calls
+        section_name = str(kwargs["section_name"])
+        section = _minimal_valid_section(section_name)
+        if section_name == "Results":
+            results_calls += 1
+            return section.replace(
+                "Evidence-bound association prose.",
+                "The sep3_sofa1_max=1 group had the registered outcome.",
+            )
+        return section
+
+    rendered = render_manuscript_sections(
+        call_section=call_section,
+        common={
+            "reader_display_labels": {
+                "sep3_sofa1_max=1": "patients meeting Sepsis-3 criteria"
+            }
+        },
+    )
+
+    assert results_calls == 1
+    assert "sep3_sofa1_max" not in rendered
+    assert "patients meeting Sepsis-3 criteria" in rendered
+
+
 def test_existing_manuscript_migration_repairs_only_error_owners() -> None:
     manuscript = "\n\n".join(
         _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS

@@ -124,6 +124,8 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     extraction = _read("js/screens-extraction.js")
     extraction_owner = _read("js/screens-extraction-study-context.js")
     viz = _read("js/screens-viz.js")
+    patient = _read("js/screens-viz-patient.js")
+    cohort = _read("js/screens-viz-cohort.js")
     viz_owner = _read("js/screens-viz-study-context.js")
     shell = _read("js/app.js")
     assert "syncExtractionToCopilot" in extraction
@@ -144,8 +146,8 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     # crossdb moved out of screens-viz.js into its own owner files; its handoff
     # marker moved with it. Assert per-owner rather than in the shell file, or
     # the test drifts into demanding a layering violation.
-    for route in ("patient", "cohort"):
-        assert f'data-study-source="{route}" data-study-target="guided"' in viz
+    assert 'data-study-source="patient" data-study-target="guided"' in patient
+    assert 'data-study-source="cohort" data-study-target="guided"' in cohort
     assert (
         'data-study-source="crossdb" data-study-target="guided"'
         in _read("js/screens-viz-crossdb-results.js")

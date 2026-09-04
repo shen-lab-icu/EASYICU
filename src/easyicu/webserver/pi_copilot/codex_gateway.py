@@ -102,5 +102,16 @@ class CodexPiGatewayPool:
         for gateway in gateways:
             gateway.close()
 
+    def memory_statuses(self) -> list[dict[str, Any]]:
+        with self._lock:
+            gateways = list(self._gateways.values())
+        return [gateway.memory_status() for gateway in gateways]
+
+    def maintain_sessions(self, *, exclude_session_id: str = "") -> None:
+        with self._lock:
+            gateways = list(self._gateways.values())
+        for gateway in gateways:
+            gateway.maintain_sessions(exclude_session_id=exclude_session_id)
+
 
 __all__ = ["CodexPiGatewayPool"]

@@ -324,8 +324,8 @@ def test_data_mode_switch_is_weighted_when_downstream_work_exists() -> None:
 
 def test_shell_states_the_two_entry_paths_are_one_pipeline() -> None:
     shell = (STATIC_JS / "app.js").read_text(encoding="utf-8")
-    assert "All three feed one pipeline" in shell
-    assert "三者进入同一条流水线" in shell
+    assert "A topic, clinical observation, paper URL, or PDF all start in Copilot" in shell
+    assert "研究主题、临床现象、文章链接或 PDF 都从 Copilot 开始" in shell
 
 
 def test_a_refusal_names_what_would_clear_it() -> None:
@@ -381,6 +381,9 @@ def test_execution_gate_ships_codes_beside_the_sentences() -> None:
         "export_not_real",
         "prior_art_not_reviewed",
         "idea_not_recommended",
+        "prior_art_not_differentiated",
+        "source_feasibility_not_ready",
+        "study_definition_not_confirmed",
     ]
     # The sentences stay for seeds already on disk, and must agree with codes.
     assert len(blocked["blockers"]) == len(blocked["blocker_codes"])
@@ -390,6 +393,11 @@ def test_execution_gate_ships_codes_beside_the_sentences() -> None:
         {"go_no_go": "recommend"},
         {"status": "ready"},
         {"prior_art": {"search_performed": True, "status": "ok"}},
+        {
+            "prior_art_decision": "differentiated",
+            "source_feasibility_status": "ready",
+            "idea_definition_sha256": "a" * 64,
+        },
     )
     assert clear["blocker_codes"] == []
     assert clear["agent_run_ready_after_human_confirmation"] is True

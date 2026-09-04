@@ -75,6 +75,13 @@ class ScientificConfiguration:
         value = _clean(execution.get("outcome") or self.study.get("outcome"), 160)
         return None if value.casefold() in _NOT_APPLICABLE_OUTCOMES else value or None
 
+    def executable_target_outcome(self) -> Optional[str]:
+        """Return only the typed source concept, never its reader-facing label."""
+
+        execution = _mapping(self.study.get("execution_concepts"))
+        value = _clean(execution.get("outcome"), 160)
+        return None if value.casefold() in _NOT_APPLICABLE_OUTCOMES else value or None
+
     def primary_exposure(self) -> Optional[str]:
         execution = _mapping(self.study.get("execution_concepts"))
         return (
@@ -84,6 +91,12 @@ class ScientificConfiguration:
             )
             or None
         )
+
+    def executable_primary_exposure(self) -> Optional[str]:
+        """Return only the typed source concept, never its reader-facing label."""
+
+        execution = _mapping(self.study.get("execution_concepts"))
+        return _clean(execution.get("primary_exposure"), 160) or None
 
     def primary_exposure_aggregation(self) -> Optional[str]:
         execution = _mapping(self.study.get("execution_concepts"))
@@ -220,16 +233,53 @@ class ScientificConfiguration:
     def decision_is_resolved(self, decision_code: str) -> bool:
         confirmations = _mapping(self.study.get("confirmations"))
         code = str(decision_code or "").strip()
+        if code == "REPEATED_STAY_IDENTITY_UNAVAILABLE":
+            design = _mapping(self.study.get("analysis_design"))
+            cohort = _mapping(self.study.get("cohort"))
+            clustered = (
+                confirmations.get("plan_repeated_stays_clustered") is True
+                and design.get("variance_estimator") == "cluster_robust"
+                and design.get("cluster_unit") == "patient"
+            )
+            first_stay = (
+                confirmations.get("plan_repeated_stays_first") is True
+                and cohort.get("exclude_readmissions") is True
+            )
+            return clustered or first_stay
+        if code == "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED":
+            # A completion flag alone is not authority for a temporal design:
+            # the persisted, executable sensitivity must agree with exactly
+            # one selected route.  This also reopens a review when a stale
+            # action has left mutually incompatible timing confirmations.
+            selected_routes = tuple(
+                key
+                for key in (
+                    "plan_timing_landmark_24h",
+                    "plan_timing_descriptive_only",
+                    "plan_timing_time_varying",
+                )
+                if confirmations.get(key) is True
+            )
+            if len(selected_routes) != 1:
+                return False
+            specs = self.study.get("sensitivity_specs")
+            timing_strategies = {
+                str(spec.get("strategy") or "").strip()
+                for spec in specs
+                if isinstance(spec, Mapping)
+                and str(spec.get("axis") or "").strip() == "timing"
+            } if isinstance(specs, Sequence) and not isinstance(specs, (str, bytes)) else set()
+            route = selected_routes[0]
+            if route == "plan_timing_landmark_24h":
+                return timing_strategies == {"landmark"}
+            if route == "plan_timing_time_varying":
+                return timing_strategies == {"time_varying"}
+            return (
+                not timing_strategies
+                and _mapping(self.study.get("analysis_design")).get("analysis_family")
+                == "descriptive_epidemiology"
+            )
         keys = {
-            "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED": (
-                "plan_timing_landmark_24h",
-                "plan_timing_descriptive_only",
-                "plan_timing_time_varying",
-            ),
-            "REPEATED_STAY_IDENTITY_UNAVAILABLE": (
-                "plan_repeated_stays_clustered",
-                "plan_repeated_stays_first",
-            ),
             "ADJUSTMENT_SET_NOT_USER_CONFIRMED": ("plan_adjustment_set_confirmed",),
             "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY": (
                 "plan_required_sensitivities_executable",

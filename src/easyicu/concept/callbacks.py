@@ -718,13 +718,13 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
                 return mapping
         else:
             if os.environ.get('DEBUG'):
-                print("   ⚠️  icustays 表为空或未加载")
+                logger.warning("icustays 表为空或未加载")
     except Exception as e:
         # Mapping table not available - this is OK, not all concepts need it
         # Only print error in debug mode to avoid spam
         if os.environ.get('DEBUG'):
             import traceback
-            print(f"   ⚠️  无法加载 icustays 进行 ID 转换 ({from_col} → {to_col}): {e}")
+            logger.warning(f"无法加载 icustays 进行 ID 转换 ({from_col} → {to_col}): {e}")
             traceback.print_exc()
     return None
 
@@ -941,7 +941,7 @@ def _assert_shared_schema(
                         # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
                             if os.environ.get('DEBUG'):
-                                print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
+                                logger.warning(f"跳过空表 '{name}'（ID 转换后无匹配数据）")
                             # 标记要从原始tables中移除
                             tables_to_remove.append(name)
                             continue
@@ -965,7 +965,7 @@ def _assert_shared_schema(
                 id_columns = ['stay_id']
             else:
                 if os.environ.get('DEBUG'):
-                    print("   ⚠️  ID映射表加载失败: hadm_id → stay_id")
+                    logger.warning("ID映射表加载失败: hadm_id → stay_id")
         
         # Handle subject_id ↔ stay_id conversion
         if 'subject_id' in all_id_types and 'stay_id' in all_id_types:
@@ -992,7 +992,7 @@ def _assert_shared_schema(
                         # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
                             if os.environ.get('DEBUG'):
-                                print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
+                                logger.warning(f"跳过空表 '{name}'（ID 转换后无匹配数据）")
                             # 标记要从原始tables中移除
                             tables_to_remove.append(name)
                             continue
@@ -1023,7 +1023,7 @@ def _assert_shared_schema(
         if ids != id_columns:
             # 如果还有 ID 不匹配的表，说明转换失败
             if os.environ.get('DEBUG'):
-                print(f"   ⚠️  表 '{name}' ID 不匹配: {ids} vs {id_columns}")
+                logger.warning(f"表 '{name}' ID 不匹配: {ids} vs {id_columns}")
             raise ValueError(
                 f"Concept component '{name}' has identifier columns {ids}, "
                 f"expected {id_columns}. Automatic ID conversion failed."
@@ -1267,7 +1267,7 @@ def _merge_tables(
 
                     merged = merged.merge(frame, on=actual_key_cols, how=how)
                 except (ValueError, KeyError) as e:
-                    print(f"   ⚠️  跳过 '{name}': merge失败 - {e}")
+                    logger.warning(f"跳过 '{name}': merge失败 - {e}")
                 continue
 
     if merged is None:
@@ -4880,6 +4880,46 @@ def _callback_vent_ind(
             return None
         return result
 
+    database_name = str(
+        getattr(getattr(ctx.data_source, "config", None), "name", "") or ""
+    ).lower()
+
+    # eICU's three mech_vent sources are deliberately point evidence only:
+    # an invasive-airway start, a device charting row, or a treatment row.  None
+    # has an auditable stop time.  The generic R-compatible WinTbl path below
+    # fills a missing duration with ``match_win`` (six hours by default), which
+    # would silently turn each observed point into a made-up ventilation spell.
+    # Keep those rows as ICUTable points so downstream callbacks may use only a
+    # contemporaneous observation and can never infer continuity from it.
+    if database_name in {"eicu", "eicu_demo"}:
+        # Do not let the result depend on which stays happen to share a batch.
+        # A missing dependency means the catalog/loader contract is broken; an
+        # observed-but-empty dependency simply means that batch has no evidence.
+        # In neither case may eICU fall back to the legacy vent_start/end path.
+        if mech_tbl is None:
+            raise ValueError(
+                "eICU vent_ind requires the point-evidence mech_vent dependency"
+            )
+        if mech_tbl.data.empty:
+            return _empty_result()
+        eicu_duration_columns = {
+            "dur_var",
+            "mech_vent_dur",
+            "duration",
+            "dur",
+            "endtime",
+            "end_time",
+            "stop",
+            "end",
+        }.intersection(mech_tbl.data.columns)
+        if isinstance(mech_tbl, WinTbl) or eicu_duration_columns:
+            raise ValueError(
+                "eICU mech_vent point-evidence contract received an interval; "
+                "review the source semantics before deriving vent_ind"
+            )
+        eicu_point_result = _normalize_result(_windows_from_mech(mech_tbl))
+        return eicu_point_result if eicu_point_result is not None else _empty_result()
+
     # 🔥 R ricu vent_ind 逻辑:
     # 如果 mech_vent 有数据 → 只使用 mech_vent，返回 win_tbl 格式
     # 否则 → 使用 vent_start + vent_end 匹配，返回 win_tbl 格式
@@ -6015,7 +6055,7 @@ def _callback_vaso60(
         # Duration column is datetime type (probably a bug from calc_dur)
         # This shouldn't happen, but if it does, try to detect if it's actually timedelta stored as datetime
         # For now, skip conversion and let it fail gracefully
-        print(f"⚠️  Warning: {dur_col} has datetime dtype instead of timedelta, attempting conversion...")
+        logger.warning(f"{dur_col} has datetime dtype instead of timedelta, attempting conversion...")
         # Just set durations to NaN to avoid crash
         durations = pd.Series([pd.NaT] * len(durations), index=durations.index, dtype='timedelta64[ns]')
     else:
@@ -6846,7 +6886,7 @@ def _callback_rrt_criteria(
                 tables[missing_direct[0]] = loaded
         except (KeyError, ValueError) as e:
             if os.environ.get('DEBUG'):
-                print(f"   ⚠️  无法加载部分RRT依赖概念: {e}")
+                logger.warning(f"无法加载部分RRT依赖概念: {e}")
     
     # 手动计算缺失的 UO 概念，避免递归调用 load_concepts
     if missing_uo and "urine" in tables and "weight" in tables:
@@ -7425,28 +7465,16 @@ def _callback_kdigo_aki(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """Calculate KDIGO AKI staging based on creatinine and urine output.
-    
-    KDIGO stages:
-    - Stage 0: No AKI
-    - Stage 1: Creatinine >=0.3 mg/dL increase in 48h OR >=1.5x baseline, or UO <0.5 mL/kg/h for 6-12h
-    - Stage 2: Creatinine >=2x baseline, or UO <0.5 mL/kg/h for >=12h  
-    - Stage 3: Creatinine >=3x baseline OR >=4.0 mg/dL OR RRT, or UO <0.3 mL/kg/h for >=24h or anuria
-    
-    Args:
-        tables: Dictionary containing phenotype-specific KDIGO inputs and weight
-        ctx: Callback context
-        
-    Returns:
-        ICUTable with aki_stage column (0-3)
-    """
-    from easyicu.scores.kdigo_aki import kdigo_stages, _detect_id_col, _detect_time_col
+    """Build public-reference and source-native AKI layers for renal export."""
+    from easyicu.scores.aki_profiles import build_renal_aki_bundle
+    from easyicu.scores.kdigo_aki import _detect_id_col, _detect_time_col
     
     # Extract DataFrames from tables
     crea_tbl = tables.get('kdigo_creatinine_input')
     urine_tbl = tables.get('kdigo_urine_input')
     weight_tbl = tables.get('weight')
     rrt_tbl = tables.get('acute_rrt_input')
+    crrt_tbl = tables.get('crrt_mode_input')
     
     # Convert to DataFrames
     def to_df(tbl):
@@ -7462,6 +7490,7 @@ def _callback_kdigo_aki(
     urine_df = to_df(urine_tbl)
     weight_df = to_df(weight_tbl)
     rrt_df = to_df(rrt_tbl)
+    crrt_df = to_df(crrt_tbl)
 
     def rename_value(frame, source_name, target_name):
         if frame is None or target_name in frame.columns:
@@ -7473,25 +7502,41 @@ def _callback_kdigo_aki(
     crea_df = rename_value(crea_df, 'kdigo_creatinine_input', 'crea')
     urine_df = rename_value(urine_df, 'kdigo_urine_input', 'urine')
     rrt_df = rename_value(rrt_df, 'acute_rrt_input', 'rrt')
-    
-    if crea_df is None or crea_df.empty:
+    crrt_df = rename_value(crrt_df, 'crrt_mode_input', 'rrt')
+
+    component_frames = (crea_df, urine_df, rrt_df)
+    if not any(
+        isinstance(frame, pd.DataFrame) and not frame.empty
+        for frame in component_frames
+    ):
         return ICUTable(
-            data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage', 'aki']),
+            data=pd.DataFrame(
+                columns=['stay_id', 'charttime', 'aki_stage_reference']
+            ),
             id_columns=['stay_id'],
             index_column='charttime',
-            value_column='aki_stage'
+            value_column='aki_stage_reference'
         )
-    
+
     # Detect ID and time columns using the same helpers as kdigo_aki.py
-    id_col = _detect_id_col(crea_df) or 'stay_id'
-    time_col = _detect_time_col(crea_df) or 'charttime'
-    
-    # Calculate KDIGO stages
-    result = kdigo_stages(
+    anchor = next(
+        frame
+        for frame in component_frames
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    )
+    id_col = _detect_id_col(anchor) or 'stay_id'
+    time_col = _detect_time_col(anchor) or 'charttime'
+    database = getattr(
+        getattr(ctx.data_source, "config", None), "name", ""
+    )
+
+    result = build_renal_aki_bundle(
+        database=database,
         crea_df=crea_df,
         urine_df=urine_df,
         weight_df=weight_df,
         rrt_df=rrt_df,
+        crrt_df=crrt_df,
         id_col=id_col,
         time_col=time_col,
         urine_source_is_rate=(
@@ -7509,17 +7554,19 @@ def _callback_kdigo_aki(
     
     if result.empty:
         return ICUTable(
-            data=pd.DataFrame(columns=[id_col, time_col, 'aki_stage', 'aki']),
+            data=pd.DataFrame(
+                columns=[id_col, time_col, 'aki_stage_reference']
+            ),
             id_columns=[id_col],
             index_column=time_col,
-            value_column='aki_stage'
+            value_column='aki_stage_reference'
         )
-    
+
     return ICUTable(
         data=result,
         id_columns=[id_col],
         index_column=time_col,
-        value_column='aki_stage'
+        value_column='aki_stage_reference'
     )
 
 
@@ -8324,7 +8371,8 @@ def _load_vent_mode_map():
         import json as _json
         from pathlib import Path as _Path
         _p = _Path(__file__).resolve().parents[1] / "data" / "vent_mode_map.json"
-        _VENT_MODE_MAP_CACHE = _json.load(open(_p, encoding="utf-8"))
+        with _p.open(encoding="utf-8") as _handle:
+            _VENT_MODE_MAP_CACHE = _json.load(_handle)
     return _VENT_MODE_MAP_CACHE
 
 

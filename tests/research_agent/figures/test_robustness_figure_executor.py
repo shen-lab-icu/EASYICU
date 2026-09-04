@@ -76,6 +76,18 @@ _CODER_HEADER = [
     "note",
 ]
 
+_LANDMARK_ODDS_RATIO_COLUMNS = [
+    "spec_id",
+    "axis",
+    "n",
+    "events",
+    "odds_ratio",
+    "ci_low",
+    "ci_high",
+    "converged",
+    "fit_method",
+]
+
 
 def _step(**overrides) -> AnalysisStep:
     payload = {
@@ -192,6 +204,55 @@ def test_it_claims_the_normalized_primary_effect_input():
     }
 
     assert robustness_figure_executor_owns_step(step, resolved_bindings=bindings)
+
+
+def test_it_claims_and_renders_signed_landmark_odds_ratio_projection(tmp_path):
+    rows = [
+        {
+            "spec_id": "complete_case_primary_variables",
+            "axis": "missing",
+            "n": 900,
+            "events": 140,
+            "odds_ratio": 1.42,
+            "ci_low": 1.18,
+            "ci_high": 1.71,
+            "converged": True,
+            "fit_method": "verified_upstream_landmark_rcs_product",
+        },
+        {
+            "spec_id": "landmark_24h",
+            "axis": "timing",
+            "n": 820,
+            "events": 112,
+            "odds_ratio": 1.36,
+            "ci_low": 1.11,
+            "ci_high": 1.66,
+            "converged": True,
+            "fit_method": "verified_upstream_linear_sensitivity_product",
+        },
+    ]
+    bindings = _producer_bindings(columns=_LANDMARK_ODDS_RATIO_COLUMNS)
+    assert robustness_figure_executor_owns_step(
+        _step(), resolved_bindings=bindings
+    )
+    run_dir, manifest = _write_bound_matrix(
+        tmp_path,
+        rows,
+        columns=_LANDMARK_ODDS_RATIO_COLUMNS,
+    )
+
+    summary = run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["effect_scale"] == "odds_ratio"
+    source = pd.read_csv(tmp_path / "out" / "robustness_plot_source_data.csv")
+    assert source["point_estimate"].tolist() == [1.42, 1.36]
 
 
 def test_the_figure_product_name_does_not_decide_ownership():

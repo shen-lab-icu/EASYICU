@@ -55,3 +55,28 @@ def test_memory_evidence_runner_records_child_failure(tmp_path: Path) -> None:
     assert evidence["status"] == "failed"
     assert evidence["process_exit_code"] == 7
     assert evidence["ended_at_utc"] is not None
+
+
+def test_memory_evidence_runner_stops_process_tree_at_rss_limit(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "memory.json"
+
+    exit_code = runner.run(
+        [
+            sys.executable,
+            "-c",
+            "import time; x = bytearray(64 * 1024 * 1024); time.sleep(30)",
+        ],
+        output=output,
+        interval=0.05,
+        rss_limit_mb=32,
+    )
+
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 137
+    assert evidence["status"] == "rss_limit_exceeded"
+    assert evidence["process_exit_code"] == 137
+    assert evidence["rss_limit_mb"] == 32
+    assert evidence["stopped_for_rss"] is True
+    assert evidence["peak_process_tree_rss_mb"] >= 32

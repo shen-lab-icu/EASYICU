@@ -229,8 +229,43 @@ def _message_explicitly_selects_all_stays(message: str) -> bool:
     )
 
 
-def _message_explicitly_selects_primary_outcome(message: str) -> bool:
-    """Return whether this turn chooses, rather than merely mentions, an outcome."""
+def _message_directly_names_label(message: str, proposed: Any) -> bool:
+    """Return whether the user's own wording contains one proposed display label.
+
+    These are reader-facing StudyContext labels, not executable concept ids.
+    Keeping an exact label stated in the research question gives Planner the
+    user's actual intent while the later digest-bound plan review still owns
+    executable semantics and approval.
+    """
+
+    raw_message = str(message or "").casefold()
+    raw_proposed = str(proposed or "").casefold()
+    if re.search(r"[\u4e00-\u9fff]", raw_proposed):
+        normalized_message = re.sub(
+            r"[^a-z0-9\u4e00-\u9fff]+", "", raw_message
+        )
+        normalized_proposed = re.sub(
+            r"[^a-z0-9\u4e00-\u9fff]+", "", raw_proposed
+        )
+        return (
+            len(normalized_proposed) >= 2
+            and normalized_proposed in normalized_message
+        )
+    normalized_message = re.sub(r"[^a-z0-9]+", " ", raw_message).strip()
+    normalized_proposed = re.sub(r"[^a-z0-9]+", " ", raw_proposed).strip()
+    return (
+        len(normalized_proposed) >= 3
+        and f" {normalized_proposed} " in f" {normalized_message} "
+    )
+
+
+def _message_explicitly_selects_primary_outcome(
+    message: str, proposed: Any = ""
+) -> bool:
+    """Return whether this turn chooses a candidate outcome label."""
+
+    if _message_directly_names_label(message, proposed):
+        return True
 
     normalized = str(message or "").casefold()
     return any(
@@ -259,8 +294,13 @@ def _message_explicitly_selects_primary_outcome(message: str) -> bool:
     )
 
 
-def _message_explicitly_selects_primary_exposure(message: str) -> bool:
-    """Return whether this turn chooses a primary exposure definition."""
+def _message_explicitly_selects_primary_exposure(
+    message: str, proposed: Any = ""
+) -> bool:
+    """Return whether this turn chooses a candidate exposure label."""
+
+    if _message_directly_names_label(message, proposed):
+        return True
 
     normalized = str(message or "").casefold()
     return any(
@@ -315,7 +355,9 @@ def _message_explicitly_changes_variance_estimator(message: str) -> bool:
     )
 
 
-def _message_explicitly_selects_analysis_goal(message: str) -> bool:
+def _message_explicitly_selects_analysis_goal(
+    message: str, proposed: Any = ""
+) -> bool:
     """Return whether this turn directly chooses the scientific analysis goal."""
 
     normalized = str(message or "").casefold()
@@ -324,6 +366,7 @@ def _message_explicitly_selects_analysis_goal(message: str) -> bool:
         for pattern in (
             r"(?:分析目标|研究目标).*?(?:患病率|关联|因果|预测|描述)",
             r"(?:分析目标|研究目标).*?(?:同步|替换|改为|更新).*?(?:死亡|mortality|患病率|关联)",
+            r"(?:估计|报告|计算).*?(?:患病率|比例|分布).*?(?:并|以及|同时).*?(?:描述|比较|展示).*?(?:关系|关联|死亡|结局)",
             r"先报告.*?患病率.*?(?:关联|关系)",
             r"(?:观察性关联|非因果|不要写成因果|不作因果解释|不.*?因果效应)",
             r"^(?:描述|报告).*?患病率.*?(?:未调整|协变量调整|调整后).*?关联(?:分析)?(?:\s*[（(]推荐[）)])?$",
@@ -331,6 +374,31 @@ def _message_explicitly_selects_analysis_goal(message: str) -> bool:
             r"\b(?:analysis|study)[\s_-]+goal\b",
             r"\b(?:observational[\s_-]+association|non[\s_-]*causal)\b",
             r"\bfirst[\s_-]+report[\s_-]+.+?prevalence\b",
+        )
+    )
+
+
+def _message_requests_descriptive_plan_default(message: str) -> bool:
+    """Return whether a conservative counts-only plan follows from the question.
+
+    This deliberately recognizes only a narrow prevalence-plus-description
+    construction and rejects wording that requests an inferential, predictive,
+    or causal estimate. The result is still a candidate plan setting: the user
+    reviews the final digest-bound plan before any analysis starts.
+    """
+
+    normalized = str(message or "").casefold()
+    if re.search(
+        r"(?:调整后|校正后|回归|风险比|优势比|因果|效应|预测|"
+        r"adjusted|regression|hazard|odds|causal|effect|predict)",
+        normalized,
+    ):
+        return False
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"(?:估计|报告|计算).*?(?:患病率|比例|分布).*?(?:并|以及|同时).*?(?:描述|比较|展示).*?(?:关系|死亡|结局|分布)",
+            r"\b(?:estimate|report|calculate).+?(?:prevalence|proportion|distribution).+?(?:and|then).+?(?:describe|summari[sz]e|compare).+?(?:relationship|mortality|outcome|distribution)\b",
         )
     )
 
@@ -508,7 +576,7 @@ def _unconfirmed_gated_slots(
         proposed = str(params.get(slot) or "").strip()
         if not proposed or proposed == str(current.get(slot) or "").strip():
             continue
-        if not selects_explicitly(message):
+        if not selects_explicitly(message, proposed):
             unconfirmed.add(slot)
 
     return frozenset(unconfirmed)
@@ -577,7 +645,10 @@ def update_study_context(
 ) -> Dict[str, Any]:
     """Persist conversational setup through the existing typed owner."""
 
-    _require_args(params, allowed=_STUDY_SETUP_FIELDS)
+    # Argument names are the catalog's to declare; execute_tool has already
+    # enforced them for this tool. _STUDY_SETUP_FIELDS below stays as the
+    # *patch* vocabulary, which is a different question from what the
+    # model may send.
     binding = context.session.binding
     current = load_context(binding)
     if binding.study_context_id and current is None:
@@ -779,7 +850,9 @@ def update_study_context(
         and str(context.user_message or "").strip()
         and str(params.get("outcome") or "").strip()
         != str((current or {}).get("outcome") or "").strip()
-        and not _message_explicitly_selects_primary_outcome(context.user_message)
+        and not _message_explicitly_selects_primary_outcome(
+            context.user_message, params.get("outcome")
+        )
     ):
         other_confirmed_change = _has_other_confirmed_change(
             params,
@@ -811,7 +884,9 @@ def update_study_context(
         and str(context.user_message or "").strip()
         and str(params.get("primary_exposure") or "").strip()
         != str((current or {}).get("primary_exposure") or "").strip()
-        and not _message_explicitly_selects_primary_exposure(context.user_message)
+        and not _message_explicitly_selects_primary_exposure(
+            context.user_message, params.get("primary_exposure")
+        )
     ):
         other_confirmed_change = _has_other_confirmed_change(
             params,
@@ -869,6 +944,31 @@ def update_study_context(
                 owner="easyicu.webserver.study_contexts",
                 details={"field": "analysis_goal"},
             )
+    current_design = (current or {}).get("analysis_design")
+    if (
+        "analysis_design" not in params
+        and (not isinstance(current_design, Mapping) or not current_design)
+        and _message_requests_descriptive_plan_default(context.user_message)
+    ):
+        # A question that explicitly asks for prevalence plus description has
+        # already chosen the conservative scientific ceiling. Persist that
+        # owner-interpreted default in the candidate setup so Planner does not
+        # manufacture an association study and then ask the user to undo it.
+        patch["analysis_design"] = {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        }
+        confirmations = dict(((current or {}).get("confirmations") or {}))
+        confirmations.update(dict(patch.get("confirmations") or {}))
+        confirmations.update(
+            {
+                "plan_timing_landmark_24h": False,
+                "plan_timing_descriptive_only": True,
+                "plan_timing_time_varying": False,
+            }
+        )
+        patch["confirmations"] = confirmations
     proposed_covariates = list(params.get("covariates") or [])
     explicitly_clears_covariates = (
         "covariates" in params
@@ -1404,14 +1504,16 @@ def update_study_context(
         "and projected the post-update workflow for the next scientific decision."
     )
     if omitted_unconfirmed_fields:
-        # A dropped scientific slot must never read as a clean success.  The
-        # model can only explain the gap to the user when the omission and its
-        # reason code travel in the same receipt as the write.
+        # Preserve the omission and reason, but let the workflow decide when
+        # a choice is needed. Execution requirements must not become an
+        # opening questionnaire ahead of the candidate Planner.
         summary += (
             " NOT saved this turn: "
             + ", ".join(omitted_unconfirmed_fields)
             + ". Those slots stay unset because the turn only mentions them as "
-            "candidate intent; ask the user to select each one explicitly."
+            "candidate intent, not approved design. Follow the returned "
+            "workflow next action: unresolved design belongs in the candidate "
+            "plan for review, not a pre-plan confirmation questionnaire."
         )
     result = _result(
         context,

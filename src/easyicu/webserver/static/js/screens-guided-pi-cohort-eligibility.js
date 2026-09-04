@@ -59,8 +59,6 @@
       const actionCode = String(workflow().next_action_code || '');
       const planNeedsThisDecision = [
         'cohort_eligibility_confirmation_required',
-        'plan_scientific_changes_required',
-        'failed_pipeline_requires_fresh_plan',
         'planner_checkpoint_resume_available',
       ].includes(actionCode);
       if (!value || value.stated || value.blocker_code !== 'cohort_eligibility_confirmation_required'
@@ -164,5 +162,5 @@
     return { render, actionFromEvent, repeatedStayDecisionHtml };
   }
 
-  window.EU_GUIDED_PI_COHORT_ELIGIBILITY = { create };
+  window.EasyICU.guidedPi.declare('cohortEligibility', { create });
 })();

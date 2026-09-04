@@ -50,6 +50,10 @@ from ..audits.manuscript_claims import (  # noqa: E402,F401
 
 _audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
 
+from .figure_bundle_registry import (
+    AMBIGUOUS_FIGURE_DATA_FAMILY,
+    INCOMPATIBLE_FIGURE_DATA_FAMILY,
+)
 from ..figures.prior_output_support import (
     figure_parent_candidate_step_dirs as _figure_parent_candidate_step_dirs,
     publication_label as _publication_label,
@@ -2657,6 +2661,9 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
     return "absolute_risk_publication_bundle_from_parent_outputs_v1"
 
 
+# Routing now lives in `figure_bundle_registry`, where each renderer declares
+# what it owns. These three tables are kept as read-only projections of that
+# registry so existing importers keep working and the two cannot drift.
 _UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
     "association": "association",
     "dose_response": "association",
@@ -2688,8 +2695,8 @@ _UPSTREAM_METHOD_TO_RENDERER_KEY: dict[str, str] = {
 _UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
     "ordered_category_distribution": "ordered_distribution",
 }
-_AMBIGUOUS_FIGURE_DATA_FAMILY = "__ambiguous_figure_data_family__"
-_INCOMPATIBLE_FIGURE_DATA_FAMILY = "__incompatible_figure_data_family__"
+_AMBIGUOUS_FIGURE_DATA_FAMILY = AMBIGUOUS_FIGURE_DATA_FAMILY
+_INCOMPATIBLE_FIGURE_DATA_FAMILY = INCOMPATIBLE_FIGURE_DATA_FAMILY
 
 
 def _resolve_upstream_analysis_family(
@@ -2711,16 +2718,9 @@ def _resolve_upstream_analysis_family(
 def _renderer_for_upstream_figure_data_family(family: Optional[str]):
     """Map an explicit step-level figure-data contract to its renderer."""
 
-    key = _UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY.get(
-        str(family or "").strip().lower()
-    )
-    if key == "ordered_distribution":
-        from ..figures.ordered_distribution import (
-            render_ordered_distribution_bundle_from_prior_outputs,
-        )
+    from .figure_bundle_registry import FIGURE_BUNDLES
 
-        return render_ordered_distribution_bundle_from_prior_outputs
-    return None
+    return FIGURE_BUNDLES.renderer_for_figure_data_family(family)
 
 
 def deterministic_figure_family_supported(step_id: str) -> bool:

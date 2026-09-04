@@ -386,6 +386,38 @@ def test_host_exposure_outcome_distribution_covers_descriptive_result(ra):
     assert "descriptive_result" in roles_covered_by_plan(plan, contract)
 
 
+def test_host_exposure_outcome_distribution_covers_descriptive_distribution(ra):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+
+    context = _context(
+        ra,
+        "Estimate exposure prevalence and describe mortality by exposure.",
+        exposure="exposure",
+    )
+    contract = build_article_analysis_contract(
+        context,
+        analysis_type="descriptive_epidemiology",
+    )
+    plan = ra.schema.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_epidemiology",
+        steps=[
+            ra.schema.AnalysisStep(
+                step_id="primary_descriptive_distribution",
+                intent="Report exposure prevalence and mortality by exposure.",
+                method="descriptive",
+                planned_analysis_role="primary",
+                expected_outputs=["table:exposure_outcome_distribution"],
+            )
+        ],
+    )
+
+    assert "distribution" in roles_covered_by_plan(plan, contract)
+
+
 def test_article_contract_ignores_role_words_in_step_prose_and_wrong_kinds(ra):
     from easyicu.research_agent.reporting.article_contract import (
         build_article_analysis_contract,

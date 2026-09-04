@@ -177,5 +177,5 @@
     return `<div class="gpi-evidence-view">${isStatistic ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${isStatistic ? '' : body}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and absolute host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机绝对路径不会进入浏览器边界。'))}</p></div>`;
   }
 
-  window.EU_GUIDED_PI_EVIDENCE_PREVIEW = { render, title, kindLabel };
+  window.EasyICU.guidedPi.declare('evidencePreview', { render, title, kindLabel });
 })();

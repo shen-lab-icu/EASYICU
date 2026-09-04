@@ -32,12 +32,58 @@ from .scientific_action_catalog import scientific_action_for_id
 _MODULE_DESIGN_ELEMENTS: Mapping[str, tuple[str, ...]] = {
     "cohort_definition": ("population", "time_zero", "reporting"),
     "table_one": ("population", "reporting"),
-    "exposure_outcome_distribution": ("exposure", "outcome", "reporting"),
+    "exposure_outcome_distribution": (
+        "exposure",
+        "outcome",
+        "dependence",
+        "reporting",
+    ),
     "measurement_audit": ("missing_data", "reporting"),
+    "adjusted_association": (
+        "adjustment",
+        "dependence",
+        "estimand",
+        "exposure",
+        "functional_form",
+        "interpretation",
+        "missing_data",
+        "outcome",
+        "reporting",
+        "robustness",
+        "time_zero",
+    ),
+    "absolute_risk_context": ("estimand", "outcome", "reporting"),
     "robustness_replay": ("robustness", "missing_data"),
     "visualization": ("reporting",),
     "report": ("reporting",),
 }
+
+
+def progressive_module_method_source_keys(
+    module_id: str,
+    allowed_keys: Sequence[str],
+) -> tuple[str, ...]:
+    """Return sealed method sources applicable to one progressive module.
+
+    The mapping is the same typed design-element authority used when the host
+    materializes low-entropy steps. It may wire an already sealed method card
+    to a step, but it cannot invent a citation or a question-specific design
+    decision.
+    """
+
+    desired = set(_MODULE_DESIGN_ELEMENTS.get(str(module_id or ""), ()))
+    if not desired:
+        return ()
+    allowed = tuple(dict.fromkeys(str(key or "").strip() for key in allowed_keys))
+    return tuple(
+        key
+        for key in allowed
+        if key
+        and any(
+            card.source_key == key and desired & set(card.design_elements)
+            for card in METHOD_CARDS
+        )
+    )
 
 
 def _bindings(step: ProgressiveOutlineStep) -> list[ProgressiveLiteratureBinding]:
@@ -408,4 +454,8 @@ def host_materialize_progressive_step(
     )
 
 
-__all__ = ["host_materialize_progressive_step"]
+__all__ = [
+    "host_materialize_progressive_step",
+    "normalize_progressive_cohort_identity",
+    "progressive_module_method_source_keys",
+]

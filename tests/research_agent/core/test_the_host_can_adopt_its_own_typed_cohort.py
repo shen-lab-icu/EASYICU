@@ -68,7 +68,7 @@ from easyicu.research_agent.schema import (
     AnalysisStep,
 )
 
-from .test_materialized_column_metadata import _typed_export
+from tests.research_agent.core.test_materialized_column_metadata import _typed_export
 
 
 def _definition() -> CohortDefinition:

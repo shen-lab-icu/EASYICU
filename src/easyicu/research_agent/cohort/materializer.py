@@ -45,7 +45,6 @@ import inspect
 import json
 import os
 import re
-import stat
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -80,6 +79,11 @@ from ..intake.materialized_metadata import (
 )
 from ..intake.materialized_trajectory import (
     publish_materialized_trajectory_authority,
+)
+from ..acquisition.patient_grouping import (
+    PatientGroupingBinding,
+    PatientGroupingError,
+    load_verified_patient_grouping,
 )
 from ..trajectory.panel import FixedWindowGrid, fixed_window_panel
 from easyicu.concept.loader import _get_concept_bounds
@@ -1826,18 +1830,6 @@ def _trajectory_with_open_export_package(
     )
 
 
-def _exact_int_series(values: pd.Series, *, label: str) -> pd.Series:
-    """Decode a structural identifier without lossy numeric coercion."""
-
-    parsed = _coerce_int_stay(pd.DataFrame({ID_COL: values.reset_index(drop=True)}))[
-        ID_COL
-    ]
-    parsed.name = values.name
-    if parsed.isna().any():  # pragma: no cover - _coerce_int_stay rejects nulls
-        raise MaterializedMetadataError(f"{label} contains a null identifier")
-    return parsed
-
-
 def _replace_row_identity_from_mapping(
     cohort: pd.DataFrame,
     *,
@@ -1858,109 +1850,28 @@ def _replace_row_identity_from_mapping(
     context or Provider prompts.
     """
 
-    if (
-        not mapping_path.is_absolute()
-        or mapping_path.is_symlink()
-        or mapping_path.suffix.lower() != ".parquet"
-    ):
-        raise MaterializedMetadataError(
-            "replacement identity mapping must be an absolute regular Parquet file"
+    try:
+        binding = PatientGroupingBinding(
+            mapping_path=mapping_path,
+            mapping_sha256=mapping_sha256,
+            mapping_stay_column=mapping_stay_column,
+            mapping_patient_column=mapping_patient_column,
+            output_identity_column=output_identity_column,
+            authority_coordinates=dict(authority_coordinates or {}),
         )
-    if (
-        not isinstance(mapping_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", mapping_sha256) is None
-    ):
-        raise MaterializedMetadataError(
-            "replacement identity mapping requires an exact sha256"
-        )
-    for label, value in (
-        ("mapping stay column", mapping_stay_column),
-        ("mapping patient column", mapping_patient_column),
-        ("output identity column", output_identity_column),
-    ):
-        if (
-            not isinstance(value, str)
-            or not value
-            or value != value.strip()
-            or "/" in value
-            or "\\" in value
-        ):
-            raise MaterializedMetadataError(f"{label} is not canonical")
-    if mapping_stay_column == mapping_patient_column:
-        raise MaterializedMetadataError(
-            "replacement identity mapping columns must be distinct"
-        )
+    except ValueError as exc:
+        raise MaterializedMetadataError(str(exc)) from exc
     if output_identity_column in cohort.columns and output_identity_column != ID_COL:
         raise MaterializedMetadataError(
             "replacement identity would overwrite an existing cohort column"
         )
-
-    descriptor: Optional[int] = None
     try:
-        descriptor = os.open(
-            mapping_path,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-        )
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise MaterializedMetadataError(
-                "replacement identity mapping must be a regular file"
-            )
-        with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            digest = hashlib.sha256()
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-            if digest.hexdigest() != mapping_sha256:
-                raise MaterializedMetadataError(
-                    "replacement identity mapping digest mismatch"
-                )
-            handle.seek(0)
-            table = pd.read_parquet(
-                handle,
-                columns=[mapping_stay_column, mapping_patient_column],
-                engine="pyarrow",
-            )
-            after = os.fstat(descriptor)
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-        ) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ):
-            raise MaterializedMetadataError(
-                "replacement identity mapping changed while being read"
-            )
-    except MaterializedMetadataError:
-        raise
-    except (OSError, ValueError) as exc:
-        raise MaterializedMetadataError(
-            "cannot read replacement identity mapping"
-        ) from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-    mapping = table.rename(
-        columns={
-            mapping_stay_column: ID_COL,
-            mapping_patient_column: output_identity_column,
-        }
+        verified = load_verified_patient_grouping(binding)
+    except PatientGroupingError as exc:
+        raise MaterializedMetadataError(str(exc)) from exc
+    mapping = verified.frame.rename(
+        columns={"__private_patient_group": output_identity_column}
     )
-    mapping[ID_COL] = _exact_int_series(
-        mapping[ID_COL], label="replacement stay identity"
-    )
-    mapping[output_identity_column] = _exact_int_series(
-        mapping[output_identity_column], label="replacement patient identity"
-    )
-    if mapping[ID_COL].duplicated().any():
-        raise MaterializedMetadataError(
-            "replacement identity mapping contains duplicate stay identifiers"
-        )
     joined = cohort.merge(
         mapping,
         on=ID_COL,
@@ -1988,7 +1899,7 @@ def _replace_row_identity_from_mapping(
     coordinates = dict(authority_coordinates or {})
     return result, {
         "mapping_file_sha256": mapping_sha256,
-        "mapping_file_size": int(before.st_size),
+        "mapping_file_size": verified.file_size,
         "mapping_rows": int(len(mapping)),
         "mapping_stay_column": mapping_stay_column,
         "mapping_patient_column": mapping_patient_column,

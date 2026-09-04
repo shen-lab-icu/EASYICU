@@ -783,10 +783,13 @@ def test_resume_from_checkpoint_selectors_preserve_agent_owned_step_ids():
     assert resolve_resume_from_step_selector(plan, "@index:2") == (
         "agent_generated_second"
     )
-    assert resolve_resume_from_step_selector(
-        plan,
-        "@product:table:summary",
-    ) == "agent_generated_second"
+    assert (
+        resolve_resume_from_step_selector(
+            plan,
+            "@product:table:summary",
+        )
+        == "agent_generated_second"
+    )
     with pytest.raises(ValueError, match="resume_from_step_id"):
         resolve_resume_from_step_selector(plan, "@index:3")
 
@@ -1027,11 +1030,11 @@ def test_locked_measurement_preflight_runs_before_every_coder_repair():
 def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
     """A selected failed figure capsule cannot inherit a new renderer id."""
 
-    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
-
-    source = inspect.getsource(
-        pipeline_execute_support._step_resolve_initial_code
+    from easyicu.research_agent.execution import (
+        phase_support as pipeline_execute_support,
     )
+
+    source = inspect.getsource(pipeline_execute_support._step_resolve_initial_code)
     standard_branch = source.index("if preflight_standard_code is not None:")
     figure_branch = source.index("elif preflight_figure_code is not None:")
     resumed_branch = source.index(
@@ -1047,14 +1050,12 @@ def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
 
 
 def test_authorized_resume_repair_supersedes_failed_candidate_capsule():
-    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
+    from easyicu.research_agent.execution import (
+        phase_support as pipeline_execute_support,
+    )
 
-    source = inspect.getsource(
-        pipeline_execute_support._step_resolve_initial_code
-    )
-    repair_branch = source.index(
-        "elif resume_deterministic_repair_code is not None:"
-    )
+    source = inspect.getsource(pipeline_execute_support._step_resolve_initial_code)
+    repair_branch = source.index("elif resume_deterministic_repair_code is not None:")
     capsule_branch = source.index(
         "elif step_attempt_state.selected_resume_capsule is not None:"
     )
@@ -1073,10 +1074,14 @@ def test_stability_standard_executor_supersedes_stale_resume_capsule():
     )
     assignment = source[source.index("standard_executor = select_standard_executor(") :]
     assignment = assignment[: assignment.index("preflight_figure_code =")]
-    selector_source = inspect.getsource(selection.select_standard_executor)
+    stability_executor = next(
+        executor
+        for executor in selection.STANDARD_EXECUTORS.executors
+        if executor.key == "trajectory_cluster_stability"
+    )
 
-    assert "trajectory_stability_executor_owns_step(" in selector_source
-    assert "trajectory_stability_executor_code(" in selector_source
+    assert callable(stability_executor.owns)
+    assert callable(stability_executor.render)
     assert "preflight_standard_code = standard_executor.code" in assignment
     assert "plausibility_scope=plausibility_authority.scope" in assignment
     assert "selected_resume_capsule" not in assignment
@@ -1269,7 +1274,9 @@ def test_run_execute_phase_does_not_mutate_pipeline_state():
 def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
     """Every LLM mutation must outrank pure resume/runner provenance labels."""
     from easyicu.research_agent.execution import phase as pipeline_execute
-    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
+    from easyicu.research_agent.execution import (
+        phase_support as pipeline_execute_support,
+    )
     from easyicu.research_agent.execution.concept_repair import (
         run_concept_repair_loop,
     )
@@ -1288,9 +1295,7 @@ def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
             )
         )
         + "\n"
-        + inspect.getsource(
-            pipeline_execute_support._step_register_run_artifacts
-        )
+        + inspect.getsource(pipeline_execute_support._step_register_run_artifacts)
     )
     concept_source = inspect.getsource(run_concept_repair_loop)
 
@@ -1370,7 +1375,9 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     # keep the caller-side ordering: figure repair -> output-artifact registration
     # (aliases deferred) -> status resolution -> the commit boundary.
     from easyicu.research_agent.execution import phase as pipeline_execute
-    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
+    from easyicu.research_agent.execution import (
+        phase_support as pipeline_execute_support,
+    )
 
     source = (
         inspect.getsource(pipeline_execute._step_prepare_post_candidate_figures)
@@ -2137,7 +2144,9 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
 
 def test_every_runner_build_receives_the_selected_trajectory_authority():
     from easyicu.research_agent.execution import phase as pipeline_execute
-    from easyicu.research_agent.execution import phase_support as pipeline_execute_support
+    from easyicu.research_agent.execution import (
+        phase_support as pipeline_execute_support,
+    )
 
     tree = ast.parse(
         inspect.getsource(pipeline_execute.run_execute_phase)

@@ -43,7 +43,7 @@ from easyicu.research_agent.execution.runners.adjusted_association_figure_execut
     run_adjusted_association_figure,
 )
 
-from .test_adjusted_association_figure_executor import (
+from tests.research_agent.figures.test_adjusted_association_figure_executor import (
     _REAL_ROW,
     _write_bound_table,
 )

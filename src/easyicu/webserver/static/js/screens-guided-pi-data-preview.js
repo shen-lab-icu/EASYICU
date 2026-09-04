@@ -22,5 +22,5 @@
     if (host) host.innerHTML = render(payload, view);
   }
 
-  window.EU_GUIDED_PI_DATA_PREVIEW = { mount, render };
+  window.EasyICU.guidedPi.declare('dataPreview', { mount, render });
 })();

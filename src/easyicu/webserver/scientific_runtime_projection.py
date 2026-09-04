@@ -45,6 +45,15 @@ class WebScientificRuntimeProjectionError(ValueError):
 class WebScientificRuntimeProjection:
     authority: dict[str, Any]
     projection_sha256: str
+    analysis_only_execution: bool = False
+
+
+def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientificRuntimeProjection | None:
+    """Route only explicit typed specifications to their execution owner."""
+    from .time_varying_runtime_projection import compile_time_varying_runtime_projection
+
+    projection = compile_time_varying_runtime_projection(**coordinates)
+    return projection if projection is not None else compile_landmark_spline_runtime_projection(**coordinates)
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -222,12 +231,6 @@ def compile_landmark_spline_runtime_projection(
             "web_landmark_spline_landmark_unsupported",
             "The verified Web landmark spline adapter currently supports a 24-hour landmark.",
             details={"landmark_hours": landmark.landmark_hours},
-        )
-    if landmark.observation_duration_unit != "days":
-        raise WebScientificRuntimeProjectionError(
-            "web_landmark_spline_duration_unit_unsupported",
-            "The verified Web landmark spline adapter currently expects ICU observation duration in days.",
-            details={"observation_duration_unit": landmark.observation_duration_unit},
         )
     spline_sources = set(spline.execution_variables)
     if primary_exposure_source not in spline_sources and primary_exposure not in spline_sources:

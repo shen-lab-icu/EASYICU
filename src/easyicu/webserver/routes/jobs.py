@@ -32,7 +32,7 @@ def _launch_local_path(path: Path) -> str:
     if sys.platform == "darwin":
         command = ["/usr/bin/open", str(path)]
     elif os.name == "nt":  # pragma: no cover - exercised on Windows builds
-        os.startfile(str(path))  # type: ignore[attr-defined]
+        os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606 - server-authorized path
         return "application"
     else:  # pragma: no cover - exercised on Linux builds
         command = ["xdg-open", str(path)]

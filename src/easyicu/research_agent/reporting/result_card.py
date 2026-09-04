@@ -212,11 +212,6 @@ def build_result_interpretation_card(
     readiness_status = _text(readiness.get("status") or "unknown", 120)
     reportable = bool(readiness.get("reportable"))
     checks = gate.get("checks") if isinstance(gate.get("checks"), list) else []
-    checks_by_id = {
-        _text(check.get("id"), 160): bool(check.get("passed"))
-        for check in checks
-        if isinstance(check, Mapping) and _text(check.get("id"), 160)
-    }
     scientific_facts = (
         scientific_readiness.get("facts")
         if isinstance(scientific_readiness, Mapping)
@@ -228,12 +223,13 @@ def build_result_interpretation_card(
         if isinstance(scientific_facts.get("analysis"), Mapping)
         else {}
     )
+    interpretation_tables = _interpretation_tables(result_tables)
     validated_analysis_only = bool(
         isinstance(scientific_readiness, Mapping)
         and scientific_readiness.get("status") == "analysis_only"
         and scientific_readiness.get("claim_ceiling") == "analysis_only"
         and analysis_facts.get("analysis_validated") is True
-        and checks_by_id.get("numeric_verified") is True
+        and interpretation_tables
     )
     analysis_only = bool(
         not reportable
@@ -293,7 +289,7 @@ def build_result_interpretation_card(
         readiness_status=readiness_status,
         summary=summary,
         claims=_claim_rows(manuscript or {}),
-        result_tables=_interpretation_tables(result_tables),
+        result_tables=interpretation_tables,
         limitations=limitations[:40],
         artifact_names=artifact_names,
     )

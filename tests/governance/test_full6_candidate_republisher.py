@@ -100,6 +100,15 @@ def test_republisher_preserves_source_and_requires_fresh_release_seal(
         assert source_receipt["easyicu_git_commit"] == "1" * 40
         assert publication_commit == "2" * 40
         return {
+            "module_timings_seconds": {
+                name: 1.0 for name in module.MODULES
+            },
+            "module_peak_rss_mb": {
+                name: 2.0 for name in module.MODULES
+            },
+            "module_peak_working_set_mb": {
+                name: 3.0 for name in module.MODULES
+            },
             "files": [
                 {
                     "module": name,
@@ -127,6 +136,18 @@ def test_republisher_preserves_source_and_requires_fresh_release_seal(
     assert provenance["timing_package_receipts_rebound"] is True
     assert provenance["publication_easyicu_git_commit"] == "2" * 40
     assert provenance["source_run_manifest_sha256"]
+    assert run_manifest["publication_checkout"]["scope"] == (
+        "publication_only_republication"
+    )
+    for database in module.DATABASES:
+        source_record = run_manifest["sources"][database]
+        assert source_record["total_rows"] == 190
+        assert source_record["total_parquet_bytes"] == 209
+        for name in module.MODULES:
+            assert source_record["module_metrics"][name]["peak_rss_mb"] == 2.0
+            assert source_record["module_metrics"][name][
+                "peak_working_set_mb"
+            ] == 3.0
     timing = (destination / "database_extraction_timing.csv").read_text()
     assert ",190,209\n" in timing
 
@@ -138,3 +159,56 @@ def test_republisher_refuses_incomplete_source(tmp_path: Path) -> None:
 
     with pytest.raises(module.RepublicationError, match="Missing regular source file"):
         module._validate_source(source)
+
+
+def test_republisher_preserves_measured_module_runtime_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    database_root = tmp_path / "eicu"
+    database_root.mkdir()
+    expected = {
+        "module_timings_seconds": {
+            name: float(index + 1) for index, name in enumerate(module.MODULES)
+        },
+        "module_peak_rss_mb": {
+            name: float(index + 101) for index, name in enumerate(module.MODULES)
+        },
+        "module_peak_working_set_mb": {
+            name: float(index + 201) for index, name in enumerate(module.MODULES)
+        },
+    }
+    (database_root / "_manifest.json").write_text(
+        json.dumps({**expected, "column_metadata": {}}), encoding="utf-8"
+    )
+
+    def fake_publish(**_kwargs) -> None:
+        (database_root / "_manifest.json").write_text(
+            json.dumps(
+                {
+                    "module_timings_seconds": {
+                        name: 0.0 for name in module.MODULES
+                    },
+                    "module_peak_rss_mb": {
+                        name: 0.0 for name in module.MODULES
+                    },
+                    "module_peak_working_set_mb": {
+                        name: 0.0 for name in module.MODULES
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        module.extraction_api, "_publish_native_export_v2", fake_publish
+    )
+    manifest = module._republish_database(
+        database_root,
+        database="eicu",
+        source_receipt={},
+        publication_commit="2" * 40,
+    )
+
+    for field, values in expected.items():
+        assert manifest[field] == values

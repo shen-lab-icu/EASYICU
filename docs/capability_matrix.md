@@ -6,6 +6,7 @@ _Generated from `easyicu.research_agent.planning.capability_registry`. Do not ed
 
 | Study-design family | Primary analysis | Primary estimand | Runner | Figure | Fail-closed when contract unmet |
 | --- | --- | --- | --- | --- | --- |
+| Association — source-bound time-updated Cox | deterministic ✅ | Descriptive counting-process Cox association under an explicit early running-maximum and unmeasured-state specification | `signed_time_varying_exposure_cox` | LLM-coded ⚠️ | Reject source/specification/population drift, missing R survival, invalid intervals, separation or fit warnings. |
 | Survival / time-to-event | deterministic ✅ | Host-computed Cox hazard ratio under an exact Planner-owned, digest-bound survival contract | `survival_primary_cox` | deterministic ✅ (`time_to_event`) | Plan validation refuses any primary survival contract the sealed Cox owner cannot execute; digest, fit, PH or evidence mismatch fails closed. |
 | Causal inference / target-trial emulation | LLM-coded ⚠️ | Agent-coded causal contrast under a declared target-trial/identification strategy; assumptions and balance checked | — | deterministic ✅ (`causal_emulation`) | The agent step fails when its declared exposure, outcome, time zero, or adjustment inputs cannot be resolved; balance, positivity, and causal-language gates reject unsupported claims. |
 | Causal feasibility — verified non-use unavailable | deterministic ✅ | Host-validated source-feasibility refusal with no treatment contrast or effect estimate | — | LLM-coded ⚠️ | Any plan, authority digest, receipt or table mismatch remains diagnostic; the capability never authorizes a causal contrast. |
@@ -26,6 +27,7 @@ A capability can execute an analysis without having a sufficient scientific vali
 
 | Capability | Result contract | Validator owner | Required diagnostics | Claim ceiling |
 | --- | --- | --- | --- | --- |
+| `association_time_varying_exposure_v1` | TimeVaryingRuntimeAuthority + easyicu.time_varying_runtime_receipt/1 | `contracts.time_varying_validation` / `easyicu.time_varying_runtime_receipt/1` | retained early events and unmeasured states; patient-cluster count; convergence and finite clustered covariance | analysis_only ⚠️ |
 | `survival_time_to_event_v1` | host-issued digest-bound survival receipt + primary CSV + PH table | `execution.runners.survival_primary_executor` / `SurvivalPrimaryResultReceipt` | event/censoring closure; time-origin binding; proportional-hazards diagnostic when Cox is declared | reportable ✅ |
 | `causal_target_trial_v1` | family_primary_result_requirement + registered primary CSV | — | target-trial time-zero and treatment-strategy protocol; identification/refutation; positivity and balance | analysis_only ⚠️ |
 | `source_feasibility_non_use_v1` | easyicu.source_feasibility_runtime_receipt/1 + refusal table | `contracts.source_feasibility_validation` / `easyicu.source_feasibility_runtime_receipt/1` | source-capture boundary; verified non-use availability; control-arm and causal-contrast prohibition | reportable ✅ |

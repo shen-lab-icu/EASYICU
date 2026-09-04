@@ -13,21 +13,16 @@
     'manuscript_provenance.json',
     'quality_gate.json',
     'figure_gallery.json',
+    'result_tables.json',
   ];
 
-  async function load(api, projectId, runId) {
+  async function load(api, projectId, runId, resource) {
     if (!api || typeof api.loadPiCopilotResearchArtifact !== 'function') {
       throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
     }
-    const loaded = await Promise.all(SOURCE_ARTIFACTS.map(async name => {
-      try {
-        return [name, await api.loadPiCopilotResearchArtifact(projectId, runId, name)];
-      } catch (error) {
-        if (name === 'figure_gallery.json') return [name, null];
-        throw error;
-      }
-    }));
-    const rows = Object.fromEntries(loaded);
+    const loader = window.EasyICU.guidedPi.require('reportArtifacts');
+    if (!loader || typeof loader.load !== 'function') throw new Error('The report artifact loader is unavailable.');
+    const rows = await loader.load(api, projectId, runId, SOURCE_ARTIFACTS, resource, ['figure_gallery.json']);
     const provenance = rows['manuscript_provenance.json'];
     return {
       payload: {
@@ -37,6 +32,7 @@
         manuscript_provenance: (provenance && provenance.payload) || {},
         quality_gate: (rows['quality_gate.json'] && rows['quality_gate.json'].payload) || {},
         figure_gallery: (rows['figure_gallery.json'] && rows['figure_gallery.json'].payload) || {},
+        result_tables: (rows['result_tables.json'] && rows['result_tables.json'].payload) || {},
       },
       governance: (provenance && provenance.governance) || null,
     };
@@ -51,6 +47,7 @@
     return claims.find(row => rules.some(rule => rule.test(String(row && row.source_field || '')))) || null;
   }
   function numeric(row) {
+    if (!row || row.canonical_value == null) return null;
     const value = Number(row && row.canonical_value);
     return Number.isFinite(value) ? value : null;
   }
@@ -104,9 +101,13 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     const context = p.run_context && typeof p.run_context === 'object' ? p.run_context : {};
     const manifest = p.source_manifest && typeof p.source_manifest === 'object' ? p.source_manifest : {};
-    const claims = claimRows(p);
+    const resultSummary = window.EasyICU.guidedPi.optional('resultSummary');
+    const registeredSummary = resultSummary
+      ? resultSummary.summarize(p.result_tables || {})
+      : { claims: [], exposureLevels: [] };
+    const claims = claimRows(p).concat(registeredSummary.claims || []);
     const total = claimByField(claims, [/^cohort\.n_stays$/, /^n_total$/]);
-    const measured = claimByField(claims, [/plausibility_audit\..*\.compared_n$/, /input_bindings\[0\]\.row_count$/]);
+    const measured = claimByField(claims, [/plausibility_audit\..*\.compared_n$/, /input_bindings\[0\]\.row_count$/, /^exposure_distribution\.n_total$/]);
     const complete = claimByField(claims, [/^n_complete_case$/, /complete_case_n$/]);
     const risk = claimByField(claims, [/overall_outcome\.risk_pct$/]);
     const effect = claimByField(claims, [/^primary_or$/]);
@@ -114,6 +115,8 @@
     const effectHigh = claimByField(claims, [/^primary_or_ci\[1\]$/, /^primary_or_ci_high$/]);
     const measuredRisk = claimByField(claims, [/exposures\[0\]\.groups\[0\]\.outcome_risk_pct$/]);
     const unmeasuredRisk = claimByField(claims, [/exposures\[0\]\.groups\[1\]\.outcome_risk_pct$/]);
+    const registeredLevels = Array.isArray(registeredSummary.exposureLevels)
+      ? registeredSummary.exposureLevels : [];
     const totalN = numeric(total);
     const maxRisk = Math.max(numeric(measuredRisk) || 0, numeric(unmeasuredRisk) || 0, 1);
     const readiness = manifest.readiness && typeof manifest.readiness === 'object' ? manifest.readiness : {};
@@ -129,8 +132,12 @@
       effect
         ? tr('The registered association does not establish causation.', '已登记的关联不能据此认定因果关系。')
         : tr('This report summarizes registered outputs and does not establish causation or clinical validity.', '本报告汇总已登记产物，不能据此认定因果关系或临床有效性。'),
-      measuredRisk && unmeasuredRisk ? tr('Outcome risk differs between measured and unmeasured source states; selective measurement matters for interpretation.', '有测量记录与无测量记录的结局风险不同，选择性测量会影响解释。') : '',
-      complete && total ? tr(`The primary model uses ${display(complete)} complete cases from the registered cohort.`, `主要模型使用已登记队列中的 ${display(complete)} 个完整病例。`) : '',
+      measuredRisk && unmeasuredRisk ? (registeredLevels.length
+        ? tr('Differences across registered exposure levels are descriptive and do not establish a causal effect.', '登记暴露层级之间的差异仅为描述性结果，不能据此认定因果效应。')
+        : tr('Outcome risk differs between measured and unmeasured source states; selective measurement matters for interpretation.', '有测量记录与无测量记录的结局风险不同，选择性测量会影响解释。')) : '',
+      complete && total ? (effect
+        ? tr(`The primary model uses ${display(complete)} complete cases from the registered cohort.`, `主要模型使用已登记队列中的 ${display(complete)} 个完整病例。`)
+        : tr(`${display(complete)} rows are complete for every requested variable; this is a data-completeness count, not a fitted-model sample.`, `${display(complete)} 条记录的所有请求变量完整；这是数据完整性计数，不是拟合模型样本。`)) : '',
     ].filter(Boolean);
     const gallery = window.AGENT_RENDER && typeof window.AGENT_RENDER.figureGallery === 'function'
       ? window.AGENT_RENDER.figureGallery(p.figure_gallery || {}) : '';
@@ -141,13 +148,13 @@
       <header class="gpi-tech-hero"><div><span>${esc(tr('Technical analysis report', '技术分析报告'))}</span><h2>${esc(context.question || tr('Research question not recorded', '尚未记录研究问题'))}</h2><p>${esc(tr('A concise Web view assembled from registered run artifacts; no estimate is recalculated here.', '由已登记运行产物组合形成的简明 Web 视图；此处不重新计算任何估计值。'))}</p></div><em>${esc(status)}</em></header>
       <section class="gpi-tech-metrics" aria-label="${esc(tr('Key results', '核心结果'))}">
         ${metric(tr('Cohort', '研究队列'), display(total), tr('ICU stays', '次 ICU 住院'), total)}
-        ${metric(tr('Model sample', '模型样本'), display(complete), tr('Complete cases', '完整病例'), complete)}
+        ${metric(tr('Complete-data rows', '完整变量行'), display(complete), tr('All requested variables complete', '所有请求变量完整'), complete)}
         ${metric(tr('Overall outcome risk', '总体结局风险'), display(risk), tr('Registered descriptive result', '已登记描述性结果'), risk)}
-        ${metric(tr('Primary association', '主要关联'), effect ? `OR ${display(effect)}` : '—', effectLow && effectHigh ? `95% CI ${display(effectLow)}–${display(effectHigh)}` : tr('Not available', '暂无'), effect)}
+        ${metric(tr('Primary association', '主要关联'), effect ? `OR ${display(effect)}` : tr('Descriptive only', '仅描述性'), effectLow && effectHigh ? `95% CI ${display(effectLow)}–${display(effectHigh)}` : tr('No adjusted effect was authorized', '未授权调整后效应估计'), effect)}
       </section>
       <div class="gpi-tech-grid">
-        <section class="gpi-tech-panel"><div class="gpi-tech-section-head"><span>01</span><div><small>${esc(tr('Population', '样本构成'))}</small><h3>${esc(tr('How the analysis denominator narrows', '分析分母如何收窄'))}</h3></div></div>${bar(tr('Registered cohort', '登记队列'), total, totalN)}${bar(tr('Exposure measured', '具有暴露测量'), measured, totalN)}${bar(tr('Complete-case model', '完整病例模型'), complete, totalN)}</section>
-        <section class="gpi-tech-panel"><div class="gpi-tech-section-head"><span>02</span><div><small>${esc(tr('Outcome context', '结局背景'))}</small><h3>${esc(tr('Measured versus unmeasured source states', '有测量与无测量记录比较'))}</h3></div></div>${measuredRisk && unmeasuredRisk ? `${riskBar(tr('Measured', '有测量记录'), measuredRisk, maxRisk)}${riskBar(tr('Not measured', '无测量记录'), unmeasuredRisk, maxRisk)}` : `<p class="gpi-tech-empty">${esc(tr('This run did not register a two-state outcome comparison.', '本次运行未登记两种测量状态的结局比较。'))}</p>`}</section>
+        <section class="gpi-tech-panel"><div class="gpi-tech-section-head"><span>01</span><div><small>${esc(tr('Population', '样本构成'))}</small><h3>${esc(tr('How the analysis denominator narrows', '分析分母如何收窄'))}</h3></div></div>${bar(tr('Registered cohort', '登记队列'), total, totalN)}${bar(registeredLevels.length ? tr('Rows in registered distribution', '进入登记分布表的记录') : tr('Exposure measured', '具有暴露测量'), measured, totalN)}${bar(effect ? tr('Complete-case model', '完整病例模型') : tr('Complete-data rows', '完整变量行'), complete, totalN)}</section>
+        <section class="gpi-tech-panel"><div class="gpi-tech-section-head"><span>02</span><div><small>${esc(tr('Outcome context', '结局背景'))}</small><h3>${esc(registeredLevels.length ? tr('Outcome rates by registered exposure level', '按登记暴露层级展示结局率') : tr('Measured versus unmeasured source states', '有测量与无测量记录比较'))}</h3></div></div>${measuredRisk && unmeasuredRisk ? `${riskBar(registeredLevels[0] ? tr(`Exposure level ${registeredLevels[0].level}`, `暴露层级 ${registeredLevels[0].level}`) : tr('Measured', '有测量记录'), measuredRisk, maxRisk)}${riskBar(registeredLevels[1] ? tr(`Exposure level ${registeredLevels[1].level}`, `暴露层级 ${registeredLevels[1].level}`) : tr('Not measured', '无测量记录'), unmeasuredRisk, maxRisk)}` : `<p class="gpi-tech-empty">${esc(tr('This run did not register a two-state outcome comparison.', '本次运行未登记两种状态的结局比较。'))}</p>`}</section>
       </div>
       <section class="gpi-tech-panel is-effect"><div class="gpi-tech-section-head"><span>03</span><div><small>${esc(tr('Primary estimate', '主要估计'))}</small><h3>${esc(tr('Association and uncertainty', '关联强度及不确定性'))}</h3></div></div>${effectPlot(effect, effectLow, effectHigh) || `<p class="gpi-tech-empty">${esc(tr('A bounded primary effect was not available.', '没有可展示的有界主要效应估计。'))}</p>`}</section>
       <section class="gpi-tech-findings"><div><small>${esc(tr('What the run found', '本次分析发现'))}</small><h3>${esc(tr('Core findings', '核心发现'))}</h3></div><ol>${findings.map(value => `<li>${esc(value)}</li>`).join('')}</ol></section>
@@ -157,5 +164,5 @@
     </div>`;
   }
 
-  window.EU_GUIDED_PI_TECHNICAL_REPORT = { load, render };
+  window.EasyICU.guidedPi.declare('technicalReport', { load, render });
 })();

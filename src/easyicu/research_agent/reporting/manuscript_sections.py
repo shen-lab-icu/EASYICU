@@ -2,7 +2,7 @@
 
 The writer agent owns one model call per section.  This module owns which
 manuscript sections are requested, their bounded instructions, budget-safe
-dispatch, required-subsection validation, one targeted structural retry, and
+dispatch, required-subsection validation, bounded targeted repair, and
 fixed-order assembly.  Keeping that contract outside the agent prevents the
 model-facing class from also becoming a manuscript workflow coordinator.
 """
@@ -45,7 +45,7 @@ class ManuscriptSectionContractError(RuntimeError):
 
 
 class ManuscriptReaderQualityContractError(RuntimeError):
-    """A targeted section retry did not close deterministic reader errors."""
+    """Bounded section repairs did not close deterministic reader errors."""
 
     def __init__(self, *, findings: tuple[tuple[str, str, str], ...]):
         self.findings = findings
@@ -54,7 +54,7 @@ class ManuscriptReaderQualityContractError(RuntimeError):
         )
         super().__init__(
             "Writer sections still fail deterministic reader-quality checks "
-            f"after one targeted retry: {detail}"
+            f"after bounded targeted repairs: {detail}"
         )
 
 
@@ -177,8 +177,12 @@ MANUSCRIPT_SECTION_SPECS = (
             "### Primary outcome\n"
             "  Incidence, cite {evidence:outcome_rate}.\n"
             "### Primary association\n"
-            "  Effect size, 95% CI, p-value, cite "
+            "  Effect size and 95% CI, cite "
             "{evidence:primary_association} or {evidence:model_performance}.\n"
+            "  Report a p-value only when the machine digest names the exact "
+            "test and its scientific role. Never relabel a non-linearity, "
+            "functional-form, calibration, or goodness-of-fit p-value as the "
+            "primary association test.\n"
             "  Name the exact metric and contrast for every reported value; "
             "never use an unlabelled `point estimate`, `score`, or `range`.\n"
             "  When the machine digest supplies a host-authorized scientific "
@@ -308,7 +312,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "8"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "12"
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -486,7 +490,16 @@ def _remaining_quality_errors(
     from .manuscript_quality import audit_manuscript_quality
 
     return tuple(
-        (finding.code, finding.section, finding.message)
+        (
+            finding.code,
+            finding.section,
+            finding.message
+            + (
+                " Offending text: " + "; ".join(finding.excerpts)
+                if finding.excerpts
+                else ""
+            ),
+        )
         for finding in audit_manuscript_quality(
             scientific,
             expected_display_labels=expected_display_labels,
@@ -530,12 +543,18 @@ def repair_existing_manuscript_sections(
     """Regenerate only section owners named by deterministic quality errors."""
 
     from .manuscript_quality import (
+        repair_reader_internal_phrases,
         repair_reader_structure_from_existing_prose,
         repair_registered_display_callouts,
     )
 
     manuscript, _structural_repairs = repair_reader_structure_from_existing_prose(
         manuscript
+    )
+    manuscript, _phrase_repairs = repair_reader_internal_phrases(
+        manuscript,
+        reader_display_labels=common.get("reader_display_labels", {}),
+        manuscript_language=str(common.get("language") or "en"),
     )
     sections = _existing_scientific_sections(manuscript)
     from .manuscript_quality import expected_manuscript_display_labels
@@ -600,6 +619,12 @@ def repair_existing_manuscript_sections(
             if spec.key not in repaired_keys:
                 repaired_keys.append(spec.key)
         scientific = _assemble_scientific_sections(sections)
+        scientific, _phrase_repairs = repair_reader_internal_phrases(
+            scientific,
+            reader_display_labels=common.get("reader_display_labels", {}),
+            manuscript_language=str(common.get("language") or "en"),
+        )
+        sections = _existing_scientific_sections(scientific)
 
     remaining = _remaining_quality_errors(
         scientific,
@@ -672,6 +697,7 @@ def repair_named_manuscript_sections(
     scientific = _assemble_scientific_sections(sections)
     from .manuscript_quality import (
         expected_manuscript_display_labels,
+        repair_reader_internal_phrases,
         repair_registered_display_callouts,
     )
 
@@ -681,6 +707,11 @@ def repair_named_manuscript_sections(
     scientific, _display_repairs = repair_registered_display_callouts(
         scientific,
         expected_display_labels=display_labels,
+    )
+    scientific, _phrase_repairs = repair_reader_internal_phrases(
+        scientific,
+        reader_display_labels=common.get("reader_display_labels", {}),
+        manuscript_language=str(common.get("language") or "en"),
     )
     remaining = _remaining_quality_errors(
         scientific,
@@ -762,6 +793,7 @@ def render_manuscript_sections(
 
     scientific = _assemble_scientific_sections(sections)
     from .manuscript_quality import (
+        repair_reader_internal_phrases,
         repair_reader_structure_from_existing_prose,
         repair_registered_display_callouts,
     )
@@ -773,39 +805,67 @@ def render_manuscript_sections(
         scientific,
         expected_display_labels=display_labels,
     )
-    sections = _existing_scientific_sections(scientific)
-    for spec, error_detail in _quality_repair_specs(
+    scientific, _phrase_repairs = repair_reader_internal_phrases(
         scientific,
-        expected_display_labels=display_labels,
-    ):
-        repair_instruction = (
-            spec.instruction
-            + "\n\nREADER-QUALITY CONTRACT REPAIR:\n"
-            + "The assembled draft failed these deterministic checks owned by "
-            + f"this section:\n{error_detail}\n"
-            + "Regenerate the complete section from the same machine evidence. "
-            + "Resolve every listed error without adding an unsupported result, "
-            + "changing the executed method, exposing runtime identifiers, or "
-            + "mentioning this repair. Preserve all required headings and labels."
+        reader_display_labels=common.get("reader_display_labels", {}),
+        manuscript_language=str(common.get("language") or "en"),
+    )
+    sections = _existing_scientific_sections(scientific)
+    # Small-model output can repeat one offending runtime phrase even after a
+    # targeted rewrite.  Give only the still-failing section one final bounded
+    # attempt, and reapply deterministic display rounding after every rewrite.
+    # The quality gate remains fail-closed if either attempt leaves an error.
+    for attempt in range(2):
+        repair_specs = _quality_repair_specs(
+            scientific,
+            expected_display_labels=display_labels,
         )
-        repaired = _ensure_section_heading(
-            spec,
-            call_section(
-                section_name=spec.section_name,
-                instruction=repair_instruction,
-                max_tokens=spec.max_tokens,
-                **common,
-            ),
-        )
-        missing_subsections = _missing_required_subsections(spec, repaired)
-        if missing_subsections:
-            raise ManuscriptSectionContractError(
-                section_name=spec.section_name,
-                missing_subsections=missing_subsections,
+        if not repair_specs:
+            break
+        for spec, error_detail in repair_specs:
+            repair_instruction = (
+                spec.instruction
+                + "\n\nREADER-QUALITY CONTRACT REPAIR:\n"
+                + "The assembled draft failed these deterministic checks owned by "
+                + f"this section:\n{error_detail}\n"
+                + "Regenerate the complete section from the same machine evidence. "
+                + "Resolve every listed error without adding an unsupported result, "
+                + "changing the executed method, exposing runtime identifiers, or "
+                + "mentioning this repair. Preserve all required headings and labels."
+                + (
+                    " This is the final bounded repair attempt; verify every "
+                    "offending excerpt is absent before returning."
+                    if attempt == 1
+                    else ""
+                )
             )
-        sections[spec.key] = repaired
+            repaired = _ensure_section_heading(
+                spec,
+                call_section(
+                    section_name=spec.section_name,
+                    instruction=repair_instruction,
+                    max_tokens=spec.max_tokens,
+                    **common,
+                ),
+            )
+            missing_subsections = _missing_required_subsections(spec, repaired)
+            if missing_subsections:
+                raise ManuscriptSectionContractError(
+                    section_name=spec.section_name,
+                    missing_subsections=missing_subsections,
+                )
+            sections[spec.key] = repaired
+        scientific = _assemble_scientific_sections(sections)
+        scientific, _repair_rounding = repair_reader_structure_from_existing_prose(
+            scientific
+        )
+        scientific, _phrase_repairs = repair_reader_internal_phrases(
+            scientific,
+            reader_display_labels=common.get("reader_display_labels", {}),
+            manuscript_language=str(common.get("language") or "en"),
+        )
+        sections = _existing_scientific_sections(scientific)
 
-    scientific = _assemble_scientific_sections(sections)
     remaining = _remaining_quality_errors(
         scientific,
         expected_display_labels=display_labels,

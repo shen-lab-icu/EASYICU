@@ -9,6 +9,9 @@ def test_literature_reader_deduplicates_sources_across_semantic_decisions() -> N
     renderer = Path(
         "src/easyicu/webserver/static/js/screens-guided-pi-literature.js"
     ).resolve()
+    modules = Path(
+        "src/easyicu/webserver/static/js/screens-guided-pi-modules.js"
+    ).resolve()
     payload = {
         "research_question": "Does exposure relate to mortality?",
         "direct_comparator_count": 1,
@@ -53,8 +56,9 @@ global.window = {{
   EU_HTML: {{ esc: value => String(value ?? '').replace(/[&<>\"']/g, ch => ({{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}}[ch])) }},
   EU_LANG: 'en'
 }};
+require({json.dumps(str(modules))});
 require({json.dumps(str(renderer))});
-const html = window.EU_GUIDED_PI_LITERATURE.renderArtifact({json.dumps(payload)}, {{}});
+const html = window.EasyICU.guidedPi.require('literature').renderArtifact({json.dumps(payload)}, {{}});
 process.stdout.write(html);
 """
     html = subprocess.run(

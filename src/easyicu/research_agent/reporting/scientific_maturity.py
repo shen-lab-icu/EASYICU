@@ -31,6 +31,7 @@ from ..planning.scientific_review import (
     scientific_steps as _plan_scientific_steps,
     timing_design_closed as _plan_timing_design_closed,
 )
+from ..planning.adjustment_authority import AdjustmentSetAuthority
 from ..planning.novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from ..figures.contracts import figure_contract_paths, figure_contract_tier
 from ..research_context.temporal_semantics import (
@@ -958,6 +959,21 @@ def build_scientific_maturity_audit(
     manuscript = _manuscript_facts(run_dir)
     primary_figure = _primary_figure_facts(run_dir, plan)
     covariates = tuple(primary_figure["adjustment_covariates"])
+    if not covariates and plan is not None and any(
+        step.planned_analysis_role == "primary"
+        and step.method in {
+            "signed_landmark_restricted_cubic_spline",
+            "time_varying_exposure_model",
+        }
+        for step in plan.steps
+    ):
+        # These methods can only enter the plan through a digest-bound runtime
+        # owner. Mirror the pre-execution scientific review: the exact context
+        # adjustment authority is the model roster even when no publication
+        # figure exists in an analysis-only run.
+        covariates = AdjustmentSetAuthority.from_context(
+            context
+        ).operational_covariates
 
     if not searched or not sources_returning:
         findings.append(

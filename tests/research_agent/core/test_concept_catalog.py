@@ -9,6 +9,10 @@ from easyicu.research_agent.concept_catalog import (
     ConceptCatalog,
     load_concept_catalog,
 )
+from easyicu.research_agent.research_context.typed import (
+    declared_domain_for_variable,
+)
+from easyicu.research_agent.schema import ConceptDescriptor
 
 
 def test_aliases_map_concept_keys_to_literature_phrasing() -> None:
@@ -38,6 +42,20 @@ def test_binary_outcomes_are_declared_known_0_1() -> None:
     cat = load_concept_catalog()
     for key in ("death", "susp_inf", "sep3"):
         assert cat.outcome_determinability[key]["status"] == "known_0_1"
+
+
+def test_sepsis3_publishes_its_binary_domain_for_metadata_only_planning() -> None:
+    descriptor = ConceptDescriptor(
+        name="sep3",
+        description="canonical Sepsis-3 criterion",
+        dtype="float64",
+        source_concept="sep3",
+    )
+
+    levels, basis = declared_domain_for_variable(descriptor)
+
+    assert levels == [0, 1]
+    assert basis == "declared_concept_dictionary_levels"
 
 
 def test_indication_flag_concepts_are_not_default_outcomes() -> None:

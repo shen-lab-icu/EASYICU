@@ -19,6 +19,8 @@ from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from .time_varying_runtime import TimeVaryingRuntimeAuthority
+
 from ..contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     association_execution_verdict,
@@ -600,7 +602,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     outcome_column: str
     outcome_time_column: str
     observation_duration_column: str
-    observation_duration_unit: Literal["days"]
+    observation_duration_unit: Literal["hours", "days"]
     landmark_hours: Literal[24]
     required_adjustment_columns: tuple[str, ...]
     categorical_adjustment_columns: tuple[str, ...]
@@ -615,6 +617,11 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     curve_points: int = Field(ge=5, le=201)
     linear_sensitivity_per_unit: Literal[1.0]
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
+
+    @property
+    def observation_threshold(self) -> float:
+        """Landmark threshold in the explicitly bound follow-up column's unit."""
+        return float(self.landmark_hours) / (24.0 if self.observation_duration_unit == "days" else 1.0)
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkSplineRuntimeAuthority":
@@ -843,13 +850,14 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         ]
         composite_inputs: tuple[str, ...] | None = None
         if (
-            "table:absolute_risk_context" in declared_products
+            self.adjusted_absolute_risk_product is not None
+            and self.adjusted_absolute_risk_product in declared_products
             and "table:robustness_summary" in declared_products
             and len(measurement_products) == 1
         ):
             composite_inputs = (
                 self.curve_product,
-                "table:absolute_risk_context",
+                self.adjusted_absolute_risk_product,
                 "table:robustness_summary",
                 measurement_products[0],
             )
@@ -887,9 +895,10 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         # Prefer the broad article display over a dedicated robustness figure.
         # Both consume ``table:robustness_summary`` and therefore used to make
         # the candidate set ambiguous.  The article display is the unique
-        # figure that also consumes the generic primary result and absolute-risk
+        # figure that also consumes the generic primary result and descriptive
         # context; after authority binding it can be mechanically upgraded to
-        # the exact four-panel signed renderer.  Preserve the historical
+        # the exact signed renderer with the model-standardised risk curve.
+        # Preserve the historical
         # single-figure fallback when no article display exists.
         composite_candidates = (
             exact_composite_candidates
@@ -1621,6 +1630,7 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
         LandmarkSplineRuntimeAuthority,
         LandmarkSurvivalRuntimeAuthority,
         SourceFeasibilityRuntimeAuthority,
+        TimeVaryingRuntimeAuthority,
     ],
     Field(discriminator="authority_kind"),
 ]
@@ -1637,6 +1647,7 @@ def load_current_case_scientific_runtime_authority(
             LandmarkSplineRuntimeAuthority,
             LandmarkSurvivalRuntimeAuthority,
             SourceFeasibilityRuntimeAuthority,
+            TimeVaryingRuntimeAuthority,
         ),
     ):
         return value

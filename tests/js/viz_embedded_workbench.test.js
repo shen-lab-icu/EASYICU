@@ -18,6 +18,7 @@ global.EU_HTML = { esc: value => String(value == null ? '' : value).replaceAll('
 global.t = (en) => en;
 global.icon = name => `<i>${name}</i>`;
 
+load('src/easyicu/webserver/static/js/screens-guided-pi-modules.js');
 load('src/easyicu/webserver/static/js/screens-viz-context.js');
 
 test('visualization context keeps snapshot and hydration behind one explicit contract', () => {
@@ -99,7 +100,7 @@ test('embedded preview delegates patient, cohort, and cross-db bodies to native 
 
 test('guided preview delegates to the embedded native-workbench owner', () => {
   load('src/easyicu/webserver/static/js/screens-guided-pi-data-preview.js');
-  const html = global.EU_GUIDED_PI_DATA_PREVIEW.render({
+  const html = global.EasyICU.guidedPi.require('dataPreview').render({
     source_count: 2, sources: [{ label: 'MIMIC-IV' }, { label: 'eICU' }],
   }, 'crossdb_comparison');
   assert.match(html, /data-native-crossdb/);

@@ -883,7 +883,11 @@ def test_loader_rejects_internally_inconsistent_envelope(tmp_path: Path) -> None
 
 
 def _load_trajectory_fixture() -> ModuleType:
-    path = Path(__file__).with_name("test_trajectory_stability_pipeline_success.py")
+    path = (
+        Path(__file__).parents[1]
+        / "integration"
+        / "test_trajectory_stability_pipeline_success.py"
+    )
     spec = importlib.util.spec_from_file_location(
         "_easyicu_sidecar_trajectory_fixture", path
     )

@@ -68,6 +68,22 @@ COPY src/easyicu/research_agent/runner_image/requirements.lock /opt/easyicu-runn
 RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
         -r /opt/easyicu-runner/requirements.lock
 
+# Planner-owned display labels may be multilingual. Keep the font layer after
+# the expensive scientific dependency layer so adding or updating glyph
+# coverage does not invalidate the locked Python-package cache.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+# The counting-process adapter requires the established R survival clustered
+# covariance implementation. Pin Debian versions and probe them at build time;
+# analysis containers remain network-disabled and never install dependencies.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        r-base-core=4.5.0-3 r-cran-survival=3.8-3-1 \
+    && Rscript --vanilla -e 'stopifnot(as.character(getRversion()) == "4.5.0", as.character(packageVersion("survival")) == "3.8.3")' \
+    && rm -rf /var/lib/apt/lists/*
+
 # Generated analysis imports EasyICU's publication-figure and audit helpers.
 # Install the repository package itself without resolving dependencies again;
 # the complete runtime set is pinned above and is captured by DockerRunner. The

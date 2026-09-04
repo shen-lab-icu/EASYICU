@@ -453,7 +453,7 @@ def is_loopback_openai_base_url(base_url: Optional[str]) -> bool:
         hostname = parsed.hostname
         # Accessing ``port`` also rejects malformed ports rather than treating
         # an invalid endpoint with a loopback-looking hostname as trusted.
-        parsed.port
+        parsed.port  # noqa: B018 - the access is the check; the value is unused
     except (TypeError, ValueError):
         return False
     if parsed.scheme.lower() not in {"http", "https"} or not hostname:
@@ -1190,7 +1190,7 @@ def _attach_provider_authorization(
             authorization.provider,
         )
     try:
-        setattr(client, "__easyicu_provider_authorization__", authorization)
+        client.__easyicu_provider_authorization__ = authorization
     except Exception as exc:  # pragma: no cover - custom-client boundary
         raise ProviderConfigurationError(
             UNSUPPORTED_PROVIDER,

@@ -36,7 +36,7 @@ _VOLATILE_FIELD_ALLOWLIST = frozenset(
         "pid",
     }
 )
-_GOLDEN_PATH = Path(__file__).with_name("fixtures") / "char_golden_run_bundle.json"
+_GOLDEN_PATH = Path(__file__).parents[1] / "fixtures" / "char_golden_run_bundle.json"
 _PLAN_STEP_IDS = {
     "01_representation",
     "02_candidates",
@@ -140,7 +140,11 @@ def _normalize(value: Any) -> Any:
 
 
 def _load_typed_pipeline_fixture() -> ModuleType:
-    path = Path(__file__).with_name("test_trajectory_stability_pipeline_success.py")
+    path = (
+        Path(__file__).parents[1]
+        / "integration"
+        / "test_trajectory_stability_pipeline_success.py"
+    )
     spec = importlib.util.spec_from_file_location(
         "_easyicu_char_trajectory_fixture",
         path,

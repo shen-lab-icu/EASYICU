@@ -107,7 +107,7 @@
     return targetIndex < 0 ? source : source.slice(0, targetIndex + 1);
   }
 
-  window.EU_GUIDED_PI_REGENERATION = Object.freeze({
+  window.EasyICU.guidedPi.declare('regeneration', {
     create, project, visibleRows, isPlanActionText, latestPlanRequest,
   });
 })();

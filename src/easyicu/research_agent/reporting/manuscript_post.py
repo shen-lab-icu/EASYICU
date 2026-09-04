@@ -33,6 +33,7 @@ from ..authority.evidence_store import (
     _NUMERIC_IN_PROSE_RE,
 )
 from ..schema import ResearchContext
+from .writer_repair_decision import coerce_writer_repair_decisions
 from .side_findings import (
     SideFinding,
     annotate_side_finding_leaks,
@@ -409,11 +410,18 @@ def _apply_writer_evidence_repair_decisions(
     scaffold: str,
     *,
     missing_sentences: Sequence[str],
-    decisions: Sequence[Mapping[str, object]],
+    decisions: Sequence[Any],
     allowed_evidence_ids: Sequence[str] = (),
     allowed_claim_refs: Sequence[str] = (),
 ) -> tuple[str, List[Dict[str, object]]]:
     """Apply a validated writer citation/drop/claim decision without rewriting.
+
+    ``decisions`` are :class:`WriterRepairDecision` values, which have already
+    checked their own shape at construction; a mapping is accepted and coerced
+    through the same constructor, so a decision is still validated exactly
+    once. What is checked here is only what depends on *this* manuscript:
+    whether the named ids are registered for this run, and whether the target
+    sentence is still in this draft.
 
     The LLM chooses only among registered citations, one exact registered host
     claim, and deletion. This host function preserves every cited sentence
@@ -437,18 +445,13 @@ def _apply_writer_evidence_repair_decisions(
     }
     if len(decisions) != len(sentences):
         raise ValueError("writer evidence repair must decide every missing sentence")
+    validated = coerce_writer_repair_decisions(decisions)
     rewritten = scaffold
     applied: List[Dict[str, object]] = []
     seen: set[int] = set()
-    for decision in decisions:
-        index = decision.get("index")
-        if (
-            not isinstance(index, int)
-            or isinstance(index, bool)
-            or index < 0
-            or index >= len(sentences)
-            or index in seen
-        ):
+    for decision in validated:
+        index = decision.index
+        if index >= len(sentences) or index in seen:
             raise ValueError("writer evidence repair index is invalid or duplicated")
         target = sentences[index]
         target_span = _writer_repair_target_span(rewritten, target)
@@ -458,18 +461,9 @@ def _apply_writer_evidence_repair_decisions(
             )
         target_start, target_end = target_span
         matched_target = rewritten[target_start:target_end]
-        action = str(decision.get("action") or "").strip().lower()
-        raw_ids = decision.get("evidence_ids", [])
-        if not isinstance(raw_ids, (list, tuple)):
-            raise ValueError("writer evidence repair evidence_ids must be a sequence")
-        evidence_ids = [
-            str(evidence_id).strip()
-            for evidence_id in raw_ids
-            if str(evidence_id).strip()
-        ]
+        action = decision.action
+        evidence_ids = list(decision.evidence_ids)
         if action == "cite":
-            if not evidence_ids:
-                raise ValueError("cite decision requires at least one evidence id")
             if allowed_evidence and any(
                 evidence_id not in allowed_evidence for evidence_id in evidence_ids
             ):
@@ -488,9 +482,7 @@ def _apply_writer_evidence_repair_decisions(
                 if token not in replacement:
                     replacement = _append_evidence_citation(replacement, evidence_id)
         elif action == "claim":
-            if evidence_ids:
-                raise ValueError("claim decision cannot include evidence ids")
-            claim_ref = str(decision.get("claim_ref") or "").strip()
+            claim_ref = decision.claim_ref
             if claim_ref not in allowed_claims:
                 raise ValueError("claim decision requires an allowed claim_ref")
             token = "{claim:" + claim_ref + "}"
@@ -512,27 +504,19 @@ def _apply_writer_evidence_repair_decisions(
                     if labelled is not None
                     else token
                 )
-        elif action == "drop":
-            if evidence_ids:
-                raise ValueError("drop decision cannot include evidence ids")
+        else:  # "drop" — the only remaining legal action
             replacement = ""
-        else:
-            raise ValueError(
-                "writer evidence repair action must be cite, claim, or drop"
-            )
         rewritten = rewritten[:target_start] + replacement + rewritten[target_end:]
         seen.add(index)
         applied.append(
             {
-                "index": index,
+                # ``action`` is read back from the local name, not the
+                # decision: a claim landing in a heading is demoted to a drop
+                # above, and the receipt must record what was actually done.
+                **decision.as_dict(),
                 "action": action,
                 "evidence_ids": evidence_ids,
                 "sentence": target[:500],
-                **(
-                    {"claim_ref": str(decision.get("claim_ref") or "").strip()}
-                    if str(decision.get("claim_ref") or "").strip()
-                    else {}
-                ),
             }
         )
     return rewritten, sorted(applied, key=lambda item: int(item["index"]))

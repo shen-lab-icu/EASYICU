@@ -135,8 +135,8 @@ from .reporting import (  # noqa: F401 — re-export facade
     _ANALYZER_PROMPT_BYTE_LIMIT,
     _WRITER_PROMPT_BYTE_LIMIT,
     _enforce_reporting_prompt_budget,
-    _writer_language_instruction,
 )
+from .writer_display_labels import writer_language_instruction as _writer_language_instruction  # noqa: F401, E501
 
 # Compatibility alias for callers/tests that imported the former local helper.
 _format_observed_domain = format_observed_domain

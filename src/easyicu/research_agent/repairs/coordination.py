@@ -652,7 +652,7 @@ class RepairCoordinator:
                     result.code.encode("utf-8")
                 ).hexdigest(),
                 after_code_size_bytes=(
-                    int(getattr(persisted_result, "size_bytes"))
+                    int(persisted_result.size_bytes)
                     if getattr(persisted_result, "size_bytes", None) is not None
                     else None
                 ),

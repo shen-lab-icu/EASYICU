@@ -15,6 +15,9 @@ def _read(relative: str) -> str:
     return (STATIC / relative).read_text(encoding="utf-8")
 
 
+MODULES_SOURCE = _read("js/screens-guided-pi-modules.js")
+
+
 def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> None:
     node = shutil.which("node")
     if node is None:
@@ -23,6 +26,7 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -34,7 +38,7 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
         session: () => ({{ archived_child_jobs: [] }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       const spec = confirmation.workflowConfirmation();
       process.stdout.write(JSON.stringify({{
         title: spec.title,
@@ -71,13 +75,15 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
 
 def test_plan_first_copy_stays_in_the_guided_copilot_owner() -> None:
     confirmation = _read("js/screens-guided-pi-confirmation.js")
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
     shell = _read("js/screens-guided-pi.js")
     regeneration = _read("js/screens-guided-pi-regeneration.js")
     child_job = _read("js/screens-guided-pi-childjob.js")
     css = _read("css/guided-pi.css")
 
     assert "计划与分析前数据检查已准备好" in confirmation
-    assert "生成候选研究计划" in shell
+    assert "生成候选研究计划" in plan_actions
+    assert "生成候选研究计划" not in shell
     # Legacy persisted action text remains replayable in the dedicated branch
     # classifier rather than inflating the main Copilot screen owner.
     assert "生成正式研究计划" in regeneration
@@ -89,7 +95,7 @@ def test_plan_first_copy_stays_in_the_guided_copilot_owner() -> None:
     assert ".gpi-confirmation-more" in css
     assert ".gpi-plan-conversation" in css
     assert ".gpi-plan-conversation-more" in css
-    assert "正在复用已有计划并准备分析数据" in child_job
+    assert "按计划准备或复用数据" in confirmation
     for non_owner in ("css/agent.css", "css/agent-plan.css", "css/guided.css"):
         assert ".gpi-confirmation-flow" not in _read(non_owner)
         assert ".gpi-confirmation-more" not in _read(non_owner)
@@ -105,6 +111,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -112,7 +119,10 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
         iconHtml: () => '',
         resourceButton: resource => `<button class="gpi-resource-link">${{resource.label}}</button>`,
         sessionIsStale: () => false,
-        workflow: () => ({{ next_action_code: 'operator_plan_approval_required' }}),
+        workflow: () => ({{
+          next_action_code: 'operator_plan_approval_required',
+          plan_review_summary: {{ run_id: 'run-test' }},
+        }}),
         session: () => ({{
           archived_child_jobs: [],
           binding: {{ run_id: 'run-test' }},
@@ -123,7 +133,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
         }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     completed = subprocess.run(
@@ -153,6 +163,7 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'operator_plan_approval_required',
@@ -183,7 +194,7 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
         }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     completed = subprocess.run(
@@ -212,10 +223,11 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
-        plan_review_summary: {{ authorization_questions: [], remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }} }},
+        plan_review_summary: {{ run_id: 'run-test', authorization_questions: [], remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }} }},
         plan_conversation_preview: {{ items: [{{ key: 'population_and_unit', text: '纳入符合条件的 ICU 住院。' }}] }},
       }};
       const host = {{
@@ -228,7 +240,7 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
         session: () => ({{ archived_child_jobs: [], binding: {{ run_id: 'run-test' }} }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     rendered = subprocess.run(
@@ -251,10 +263,12 @@ def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> Non
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
         plan_review_summary: {{
+          run_id: 'run-test',
           authorization_questions: [{{ code: 'REPEATED_STAY_IDENTITY_UNAVAILABLE' }}],
           remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }},
         }},
@@ -270,7 +284,7 @@ def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> Non
         session: () => ({{ archived_child_jobs: [], binding: {{ run_id: 'run-test' }} }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     rendered = subprocess.run(

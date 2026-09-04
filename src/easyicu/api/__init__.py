@@ -76,8 +76,10 @@ from .cohort import (
 from .extraction import (
     EXTRACT_MODULES,
     EXTRACT_MODULE_ORDER,
+    ExtractionResourcePlan,
     extract_all_databases,
     extract_database,
+    plan_extraction_resources,
 )
 from .medications import (
     MedicationLoadError,
@@ -173,6 +175,8 @@ __all__ = [
     "extract_all_databases",
     "EXTRACT_MODULES",
     "EXTRACT_MODULE_ORDER",
+    "ExtractionResourcePlan",
+    "plan_extraction_resources",
 ]
 
 

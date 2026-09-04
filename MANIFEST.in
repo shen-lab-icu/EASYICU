@@ -35,7 +35,9 @@ include src/easyicu/webserver/pi_copilot/node_app/README.md
 include src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
 include src/easyicu/webserver/pi_copilot/node_app/src/main.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs
+include src/easyicu/webserver/pi_copilot/node_app/src/post-tool-finalization.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs
+include src/easyicu/webserver/pi_copilot/node_app/src/session-lifecycle.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/skills/web-prototype/SKILL.md
 prune src/easyicu/webserver/pi_copilot/node_app/node_modules
 

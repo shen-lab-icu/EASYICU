@@ -14,6 +14,7 @@ plan cannot be approved first and downgraded only after provider work has run.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
@@ -23,6 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..canonical_json import canonical_sha256
 from ..concept_availability import normalize_database_name
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+)
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
@@ -42,13 +46,17 @@ from .dependence_authority import (
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from .publication_readiness import build_publication_readiness_facts
-from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
+from .sensitivity_authority import (
+    EXECUTABLE_METHODS_BY_STRATEGY,
+    FUNCTIONAL_FORM_EXECUTABLE_METHODS,
+)
 from .capability_registry import assess_scientific_capability
 
 
 ScientificReviewSeverity = Literal["blocker", "major", "minor"]
 ScientificRemediationRoute = Literal[
     "agent_plan_revision",
+    "runtime_capability",
     "study_authority_change",
     "external_evidence",
     "independent_review",
@@ -76,8 +84,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/2"] = (
-        "easyicu.plan_scientific_review/2"
+    schema_version: Literal["easyicu.plan_scientific_review/4"] = (
+        "easyicu.plan_scientific_review/4"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -139,14 +147,55 @@ def model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
 
 
 def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str]]:
+    """Classify post-zero exposure opportunity from owner-issued coordinates.
+
+    A concept's clinical definition window remains the first authority.  The
+    Web host may also bind an exact physical feature-materialization window in
+    ``data_constraints`` before a concrete wide-column descriptor exists (for
+    example while candidate planning is metadata-only).  That outer window is
+    *not* promoted to a clinical-definition anchor; it only establishes that
+    a primary feature can be observed after ICU admission, so association
+    plans must close early-event/exposure opportunity.
+    """
+
     exposure = str(context.primary_exposure or "").strip()
     if not exposure:
         return False, None
     descriptor = context.variable(exposure)
     window = str(getattr(descriptor, "analysis_window", "") or "").strip()
-    if not window:
+    if window:
+        return window_extends_after_anchor(window), window
+
+    preferences = context.user_preferences
+    raw_constraints = getattr(preferences, "data_constraints", None)
+    if not isinstance(raw_constraints, str) or not raw_constraints.strip():
         return False, None
-    return window_extends_after_anchor(window), window
+    try:
+        constraints = json.loads(raw_constraints)
+    except json.JSONDecodeError:
+        return False, None
+    if not isinstance(constraints, Mapping):
+        return False, None
+    confirmations = constraints.get("confirmations")
+    materialization = constraints.get("materialization_window")
+    if (
+        not isinstance(confirmations, Mapping)
+        or confirmations.get("feature_time_window") is not True
+        or not isinstance(materialization, Mapping)
+        or materialization.get("role") != "outer_observation_window"
+        or str(materialization.get("anchor") or "").strip().casefold()
+        != "icu admission"
+    ):
+        return False, None
+    try:
+        hours = float(materialization["hours"])
+    except (KeyError, TypeError, ValueError):
+        return False, None
+    if hours <= 0:
+        return False, None
+    # This label deliberately names the physical coordinate, rather than
+    # implying a phenotype definition or a follow-up horizon.
+    return True, f"outer_materialization:icu_admission[0,{hours:g}]h"
 
 
 def repeat_units_possible(context: ResearchContext) -> bool:
@@ -218,9 +267,8 @@ _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
         "signed_landmark_survival_suite",
-        "landmark_analysis",
         "time_varying_exposure_model",
-        "clone_censor_weight",
+        "landmark_analysis",
     }
 )
 _EXECUTABLE_DEPENDENCE_METHODS = frozenset(
@@ -361,7 +409,11 @@ def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
         and not _signed_temporal_result_projection(step, plan)
     ]
     return bool(applicable) and all(
-        _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS for step in applicable
+        _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS
+        and (_method_head(step) != "time_varying_exposure_model" or (
+            step.scientific_capability == "association_time_varying_exposure_v1"
+            and any(str(ref).startswith("scientific_runtime_contract:") for ref in step.icu_rule_refs)
+        )) for step in applicable
     )
 
 
@@ -409,7 +461,7 @@ def repeated_unit_design_closed(
         distribution = step.exposure_outcome_distribution_spec
         patient_group = context_patient_group_authority(context)
         signed_landmark_dependence = bool(
-            method == "signed_landmark_restricted_cubic_spline"
+            method in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
             and patient_group is not None
             and patient_group.group_source in step.inputs
             and any(
@@ -426,6 +478,7 @@ def repeated_unit_design_closed(
             model_requirements
             or distribution is not None
             or method in _EXECUTABLE_DEPENDENCE_METHODS
+            or method == "signed_landmark_restricted_cubic_spline"
             or signed_landmark_dependence
             or method == "non_readmission_restriction"
         ):
@@ -780,6 +833,29 @@ def _sensitivity_facts(
 ) -> dict[str, Any]:
     requested = _requested_sensitivity_axes(context)
     typed_specs = {spec.spec_id: spec for spec in _sensitivity_specs(context)}
+    unsupported_spec_ids = {
+        spec_id
+        for spec_id, spec in typed_specs.items()
+        if (not EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
+            or (spec.strategy == "time_varying" and spec.time_varying_execution is None))
+    }
+
+    def review_axis(spec: Any) -> str:
+        return {
+            "repeated_stays": "readmission",
+            "missing_data": "missing",
+        }.get(spec.axis, spec.axis)
+
+    supported_axes = {
+        review_axis(spec)
+        for spec_id, spec in typed_specs.items()
+        if spec_id not in unsupported_spec_ids
+    }
+    unsupported_only_axes = {
+        review_axis(spec)
+        for spec_id, spec in typed_specs.items()
+        if spec_id in unsupported_spec_ids
+    } - supported_axes
     executed_spec_ids: set[str] = set()
     executable: set[str] = set()
     typed_executable: set[str] = set()
@@ -804,6 +880,21 @@ def _sensitivity_facts(
         if executable_scientific_step(step):
             executable.update(axes)
             method = _method_head(step)
+            if (
+                step.planned_analysis_role == "sensitivity"
+                and method in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+                and step.scientific_capability
+                == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and step.sensitivity_spec_ids
+                and len(step.expected_outputs) == 1
+                and str(step.expected_outputs[0]).startswith("table:")
+            ):
+                # The progressive compiler signs this exact custom-sensitivity
+                # shape against the primary adjusted-association product. It is
+                # plan-owned typed authority awaiting whole-plan approval, not
+                # a prose mention or an unregistered robustness-axis alias.
+                executable.add("functional_form")
+                typed_executable.add("functional_form")
             for spec_id in step.sensitivity_spec_ids:
                 spec = typed_specs.get(spec_id)
                 if (
@@ -886,7 +977,9 @@ def _sensitivity_facts(
     if "readmission" in executable and not repeated_unit_design_closed(context, plan):
         executable.discard("readmission")
         protocol_only.add("readmission")
-    missing_spec_ids = sorted(set(typed_specs) - executed_spec_ids)
+    missing_spec_ids = sorted(
+        (set(typed_specs) - executed_spec_ids) - unsupported_spec_ids
+    )
     typed_axes = {
         {
             "repeated_stays": "readmission",
@@ -902,10 +995,19 @@ def _sensitivity_facts(
         "executable": sorted(executable),
         "typed_executable": sorted(typed_executable),
         "protocol_only": sorted(protocol_only - executable),
-        "missing_required": sorted(requested - executable),
+        "missing_required": sorted(
+            requested - executable - unsupported_only_axes
+        ),
         "typed_spec_ids": sorted(typed_specs),
         "executed_spec_ids": sorted(executed_spec_ids),
         "missing_spec_ids": missing_spec_ids,
+        "unsupported_spec_ids": sorted(unsupported_spec_ids),
+        "unsupported_strategies": sorted(
+            {
+                typed_specs[spec_id].strategy
+                for spec_id in unsupported_spec_ids
+            }
+        ),
         "plan_robustness_spec_ids": sorted(
             spec.spec_id for spec in plan.robustness_specs
         ),
@@ -924,9 +1026,22 @@ def _continuous_linearity_facts(plan: AnalysisPlan) -> dict[str, Any]:
                     identity_terms.append(term.name)
     has_functional_form_sensitivity = any(
         executable_scientific_step(step)
-        and any(
-            token in " ".join([step.step_id, step.intent, step.method or "", *step.expected_outputs]).casefold()
-            for token in ("spline", "nonlinear", "non-linear", "functional form", "fractional polynomial")
+        and (
+            _method_head(step) in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+            or any(
+                token
+                in " ".join(
+                    [step.step_id, step.intent, step.method or "", *step.expected_outputs]
+                ).casefold()
+                for token in (
+                    "spline",
+                    "nonlinear",
+                    "non-linear",
+                    "functional form",
+                    "functional_form",
+                    "fractional polynomial",
+                )
+            )
         )
         for step in scientific_steps(plan)
     )
@@ -1153,6 +1268,7 @@ _INDEPENDENT_REVIEW_FINDINGS = frozenset(
         "CLINICAL_DEFINITION_DATABASE_CONFORMANCE_NOT_ESTABLISHED",
     }
 )
+_RUNTIME_CAPABILITY_FINDINGS = frozenset({"TIME_VARYING_RUNTIME_UNAVAILABLE"})
 
 
 def remediation_route_for_finding(
@@ -1162,6 +1278,8 @@ def remediation_route_for_finding(
 
     if finding.requires_user_authorization:
         return "study_authority_change"
+    if finding.code in _RUNTIME_CAPABILITY_FINDINGS:
+        return "runtime_capability"
     if finding.code in _EXTERNAL_EVIDENCE_FINDINGS:
         return "external_evidence"
     if finding.code in _INDEPENDENT_REVIEW_FINDINGS:
@@ -1238,7 +1356,7 @@ def build_plan_scientific_review(
     adjustment_authority = AdjustmentSetAuthority.from_context(context)
     if not covariates and any(
         step.planned_analysis_role == "primary"
-        and _method_head(step) == "signed_landmark_restricted_cubic_spline"
+        and _method_head(step) in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
         for step in plan.steps
     ):
         # This method can appear only after the digest-bound runtime owner has
@@ -1582,19 +1700,51 @@ def build_plan_scientific_review(
             )
         )
     needs_temporal_inference = temporal_inference_required(plan)
+    unsupported_timing_spec_ids = [
+        spec.spec_id
+        for spec in _sensitivity_specs(context)
+        if spec.axis == "timing"
+        and (not EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
+             or (spec.strategy == "time_varying" and spec.time_varying_execution is None))
+    ]
     if post_baseline and needs_temporal_inference and not timing_design_closed(plan):
-        findings.append(
-            PlanScientificFinding(
-                code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
-                severity="blocker",
-                dimension="icu_clinical_design",
-                message="Exposure is classified after ICU time zero, but no executable temporal estimator closes exposure opportunity and early events.",
-                evidence_refs=["research_context.json", "analysis_plan.json"],
-                remediation="Create a new, user-authorized landmark/time-varying study version or keep this version descriptive; a protocol-only step cannot close the bias.",
-                requires_user_authorization=True,
-                authorization_question="Should a new study version use a prespecified landmark/time-varying design, or should the current question remain descriptive?",
+        if unsupported_timing_spec_ids:
+            findings.append(
+                PlanScientificFinding(
+                    code="TIME_VARYING_RUNTIME_UNAVAILABLE",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message=(
+                        "The requested time-varying sensitivity has no registered "
+                        "deterministic runtime: "
+                        + ", ".join(sorted(unsupported_timing_spec_ids))
+                        + "."
+                    ),
+                    evidence_refs=[
+                        "research_context.json.user_preferences",
+                        "analysis_plan.json",
+                    ],
+                    remediation=(
+                        "Build and verify a source-bound longitudinal outcome "
+                        "follow-up contract and deterministic time-varying runtime. "
+                        "Preserve the current StudyContext; do not rerun Planner or "
+                        "ask the researcher to choose the same design again."
+                    ),
+                )
             )
-        )
+        else:
+            findings.append(
+                PlanScientificFinding(
+                    code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message="Exposure is classified after ICU time zero, but no executable temporal estimator closes exposure opportunity and early events.",
+                    evidence_refs=["research_context.json", "analysis_plan.json"],
+                    remediation="Create a new, user-authorized landmark/time-varying study version or keep this version descriptive; a protocol-only step cannot close the bias.",
+                    requires_user_authorization=True,
+                    authorization_question="Should a new study version use a prespecified landmark/time-varying design, or should the current question remain descriptive?",
+                )
+            )
     if repeats and not patient_identity and not repeated_unit_design_closed(context, plan):
         findings.append(
             PlanScientificFinding(
@@ -1907,6 +2057,7 @@ def build_plan_scientific_review(
         ]
         for route in (
             "agent_plan_revision",
+            "runtime_capability",
             "study_authority_change",
             "external_evidence",
             "independent_review",
@@ -2021,8 +2172,10 @@ def build_plan_scientific_review(
             "remediation_buckets": remediation_buckets,
             "remediation_boundary": (
                 "Only agent_plan_revision findings may be fed to a fresh Planner "
-                "without changing StudyContext authority. The other lanes require "
-                "user authorization, new external evidence, or independent review."
+                "without changing StudyContext authority. Runtime-capability "
+                "findings require a host implementation receipt; the other lanes "
+                "require user authorization, new external evidence, or independent "
+                "review."
             ),
         },
         context_sha256=canonical_sha256(context_payload),

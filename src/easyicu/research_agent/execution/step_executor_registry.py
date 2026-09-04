@@ -1,0 +1,179 @@
+"""One typed interface and registry for deterministic plan-step executors."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Optional, Sequence, Union
+
+from ..authority.plausibility import FlagOnlyPlausibilityScope
+from ..contracts.ownership_verdict import OwnershipVerdict
+from ..schema import AnalysisPlan, AnalysisStep
+
+
+@dataclass(frozen=True, slots=True)
+class StandardExecutorSelection:
+    """One deterministic implementation of already-fixed Planner science."""
+
+    analysis_kind: str
+    selection_reason: str
+    progress_message: str
+    code: str
+    consumed_input_keys: tuple[str, ...]
+    host_sealed_renderer: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StandardExecutorCandidate:
+    """One executor's own recorded answer to an ownership query."""
+
+    analysis_kind: str
+    contract_matches: bool
+    outcome: str
+    missing_declarations: tuple[str, ...] = ()
+    decline_reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class StepExecutorContext:
+    """The single render shape presented to every deterministic executor."""
+
+    step: AnalysisStep
+    plan: AnalysisPlan
+    plausibility_scope: Optional[FlagOnlyPlausibilityScope] = None
+    resolved_bindings: Optional[Mapping[str, Any]] = None
+    trajectory_scientific_runtime_authority: Optional[Mapping[str, Any]] = None
+    current_case_scientific_runtime_authority: Any = None
+    scientific_runtime_projection_sha256: str = ""
+
+    @property
+    def receipt_required(self) -> bool:
+        return bool(
+            self.plausibility_scope is not None
+            and self.plausibility_scope.expected_columns
+        )
+
+    def typed_cohort_inputs(self) -> tuple[str, ...]:
+        from .runners.typed_input_binding import sole_typed_cohort_input
+
+        value = sole_typed_cohort_input(self.step)
+        return (value,) if value else ()
+
+
+TextValue = Union[str, Callable[[StepExecutorContext], str]]
+InputKeys = Callable[[StepExecutorContext], Sequence[str]]
+Ownership = Callable[[StepExecutorContext], Union[bool, OwnershipVerdict]]
+Renderer = Callable[[StepExecutorContext], str]
+Applicability = Callable[[StepExecutorContext], bool]
+DeclarationVerdict = Callable[[StepExecutorContext], OwnershipVerdict]
+
+
+def _text(value: TextValue, context: StepExecutorContext) -> str:
+    return value(context) if callable(value) else value
+
+
+@dataclass(frozen=True)
+class StepExecutor:
+    """One runner-owned declaration behind a uniform context-to-code seam."""
+
+    key: str
+    owns: Ownership
+    render: Renderer
+    analysis_kind: TextValue
+    selection_reason: TextValue
+    progress_message: TextValue
+    consumed_input_keys: InputKeys
+    host_sealed_renderer: bool = False
+    blocks_on_plausibility_receipt: bool = False
+    applicable: Optional[Applicability] = None
+    declaration_verdict: Optional[DeclarationVerdict] = None
+
+    def resolve(self, context: StepExecutorContext) -> "StepExecutorResolution":
+        if self.applicable is not None and not self.applicable(context):
+            return StepExecutorResolution()
+        answer = self.owns(context)
+        verdict = answer if isinstance(answer, OwnershipVerdict) else None
+        claimed = verdict.claimed if verdict is not None else bool(answer)
+        if not claimed:
+            if verdict is None and self.declaration_verdict is not None:
+                verdict = self.declaration_verdict(context)
+            return StepExecutorResolution(
+                candidate=StandardExecutorCandidate(
+                    analysis_kind=(
+                        verdict.analysis_kind if verdict is not None else self.key
+                    ),
+                    contract_matches=False,
+                    outcome="contract_declined",
+                    missing_declarations=(
+                        verdict.missing_declarations if verdict is not None else ()
+                    ),
+                    decline_reason=verdict.reason if verdict is not None else "",
+                )
+            )
+        if self.blocks_on_plausibility_receipt and context.receipt_required:
+            return StepExecutorResolution(
+                candidate=StandardExecutorCandidate(
+                    analysis_kind=self.key,
+                    contract_matches=True,
+                    outcome="declined_receipt_required",
+                ),
+                terminal=True,
+            )
+        selection = StandardExecutorSelection(
+            analysis_kind=_text(self.analysis_kind, context),
+            selection_reason=_text(self.selection_reason, context),
+            progress_message=_text(self.progress_message, context),
+            code=self.render(context),
+            consumed_input_keys=tuple(self.consumed_input_keys(context)),
+            host_sealed_renderer=self.host_sealed_renderer,
+        )
+        return StepExecutorResolution(
+            selection=selection,
+            candidate=StandardExecutorCandidate(
+                analysis_kind=self.key,
+                contract_matches=True,
+                outcome="selected",
+            ),
+            terminal=True,
+        )
+
+
+@dataclass(frozen=True)
+class StepExecutorResolution:
+    selection: Optional[StandardExecutorSelection] = None
+    candidate: Optional[StandardExecutorCandidate] = None
+    terminal: bool = False
+
+
+class StepExecutorRegistry:
+    """Ordered, duplicate-refusing registry for deterministic step owners."""
+
+    def __init__(self) -> None:
+        self._executors: list[StepExecutor] = []
+        self._keys: set[str] = set()
+
+    @property
+    def executors(self) -> tuple[StepExecutor, ...]:
+        return tuple(self._executors)
+
+    def declare(self, executor: StepExecutor) -> None:
+        key = executor.key.strip()
+        if not key:
+            raise ValueError("step executor key is required")
+        if key in self._keys:
+            raise ValueError(f"step executor already declared: {key}")
+        self._keys.add(key)
+        self._executors.append(executor)
+
+    def select(
+        self,
+        context: StepExecutorContext,
+        *,
+        trace: Optional[list[StandardExecutorCandidate]] = None,
+    ) -> Optional[StandardExecutorSelection]:
+        for executor in self._executors:
+            resolution = executor.resolve(context)
+            if resolution.candidate is not None and trace is not None:
+                trace.append(resolution.candidate)
+            if resolution.terminal:
+                return resolution.selection
+        return None

@@ -5,6 +5,7 @@ This module provides memory-efficient alternatives for common operations,
 specifically designed for systems with limited memory (16GB).
 """
 
+import logging
 import gc
 import os
 import psutil
@@ -12,6 +13,9 @@ from typing import List, Optional, Dict, Any, Callable
 import pandas as pd
 from dataclasses import dataclass
 import warnings
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class MemoryConfig:
@@ -90,7 +94,7 @@ class MemoryMonitor:
             if new_pressure != pressure:
                 print(f"✅ Memory cleanup successful: {pressure} → {new_pressure}")
             else:
-                print(f"⚠️  Memory cleanup limited effect: {pressure}")
+                logger.warning(f"Memory cleanup limited effect: {pressure}")
 
             return True
         return False
@@ -341,7 +345,7 @@ class MemoryOptimizedCallbacks:
 
                 return None  # Placeholder
             except Exception as e:
-                print(f"Error processing patient chunk: {e}")
+                logger.error(f"Error processing patient chunk: {e}")
                 return None
 
         # Create a DataFrame with all patients and process in chunks
@@ -396,4 +400,4 @@ if os.getenv('EASYICU_AUTO_OPTIMIZE_16GB', 'false').lower() in ('true', '1', 'ye
     try:
         _config = optimize_for_16gb()
     except Exception as e:
-        print(f"⚠️  Auto-optimization failed: {e}")
+        logger.warning(f"Auto-optimization failed: {e}")

@@ -58,6 +58,8 @@ from ..contracts.phenotyping_validation import (
 from ..contracts.source_feasibility_validation import (
     source_feasibility_runtime_bundle_errors,
 )
+from ..contracts.time_varying_exposure import TIME_VARYING_EXPOSURE_CAPABILITY
+from ..contracts.time_varying_validation import time_varying_runtime_bundle_errors
 from ..trajectory.runtime_validation import signed_trajectory_runtime_bundle_errors
 
 from .article_contract import (
@@ -78,6 +80,10 @@ from .completion import (
     publication_authorized,
     run_completion_axes,
     step_completion_projection,
+)
+from .manuscript_gate_state import (
+    GATE_STATE_SUPERSESSION_PATTERNS,
+    current_manuscript_completion_state,
 )
 from ..authority.evidence_store import (
     EvidenceStore,
@@ -147,6 +153,12 @@ from ..authority.runtime_artifacts import (
     load_run_artifact_authority,
     verified_run_evidence_path,
     write_json_artifact,
+)
+from .manuscript_state import (
+    MANIFEST_COMMENT_RE,
+    NOT_GENERATED_HEAD_CHARS,
+    is_not_generated,
+    read_manuscript_state,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
@@ -1026,71 +1038,6 @@ def _step_ids_in_records(per_step_records: Sequence[Dict[str, Any]]) -> set:
     }
 
 
-_GATE_STATE_SUPERSESSION_PATTERNS = (
-    # Common "we skipped X because gate Y did not pass" / "X was not
-    # produced because Y failed" findings emitted when a gate was
-    # transiently False during the run. If the gate is now True at
-    # report time, the finding is stale and should not count.
-    (
-        "manuscript_gate",
-        "execution gate did not pass",
-        "execution_complete",
-    ),
-    (
-        "manuscript_gate",
-        "manuscript generation skipped",
-        "execution_complete",
-    ),
-    (
-        "robustness_panel",
-        "locked robustness specifications that no step estimated",
-        "robustness_panel_complete",
-    ),
-    (
-        "evidence_bound_writer",
-        "strict evidence enforcement blocked manuscript generation",
-        "manuscript_bound_clean",
-    ),
-    (
-        "evidence_bound_writer",
-        "bound manuscript is empty or non-substantive",
-        "manuscript_bound_clean",
-    ),
-    (
-        "writer_agent",
-        "failed before producing a manuscript scaffold",
-        "manuscript_bound_clean",
-    ),
-    (
-        "manuscript_literature",
-        "manuscript literature authority is incomplete",
-        "manuscript_literature_complete",
-    ),
-    (
-        "manuscript_numeric_auditor",
-        "strict evidence enforcement blocked manuscript generation",
-        "manuscript_numeric_bound_clean",
-    ),
-    (
-        "critic_agent",
-        "criticagent marked manuscript",
-        "manuscript_critique_passed",
-    ),
-    # A caveat-count finding cannot tell which writer pass it came
-    # from, so an earlier pass's "cites records with unresolved
-    # manifest caveats" error survives a later clean rewrite (e.g. a
-    # resume whose new draft cites only caveat-free records). Gate it
-    # on the CURRENT bound text: if the latest manuscript carries no
-    # `<!-- warning|error: see manifest -->` comments, the finding is
-    # stale; if the latest text still has caveats, it stays active.
-    (
-        "evidence_bound_writer",
-        "unresolved manifest caveats",
-        "manuscript_manifest_caveats_clean",
-    ),
-)
-
-
 def _is_gate_state_superseded(
     finding: ValidationFinding,
     *,
@@ -1113,7 +1060,7 @@ def _is_gate_state_superseded(
         and gate_state.get("manuscript_numeric_audit_clean")
     ):
         return True
-    for v_match, msg_substr, gate_key in _GATE_STATE_SUPERSESSION_PATTERNS:
+    for v_match, msg_substr, gate_key in GATE_STATE_SUPERSESSION_PATTERNS:
         if v_match == validator and msg_substr.lower() in message:
             if gate_state.get(gate_key):
                 return True
@@ -1124,12 +1071,12 @@ def _manuscript_numeric_bound_clean(manuscript_text: str) -> bool:
     """Return true when the latest bound manuscript has no numeric gap markers."""
     if not manuscript_text:
         return False
-    if "Manuscript scaffold not generated" in manuscript_text[:300]:
+    if is_not_generated(manuscript_text):
         return False
     return (
         "<!-- UNTRACED:" not in manuscript_text
         and "<!-- AMBIGUOUS:" not in manuscript_text
-        and not _MANIFEST_COMMENT_RE.search(manuscript_text)
+        and not MANIFEST_COMMENT_RE.search(manuscript_text)
     )
 
 
@@ -1138,12 +1085,6 @@ _WRITER_FAILURE_RE = re.compile(
     r"connection error|rate limit|authentication)\b",
     flags=re.IGNORECASE,
 )
-
-_MANIFEST_COMMENT_RE = re.compile(
-    r"<!--\s*(?P<level>warning|error)\s*:\s*see manifest\s*-->",
-    flags=re.IGNORECASE,
-)
-
 
 def _manuscript_text_status(manuscript_text: str) -> Dict[str, Any]:
     """Validate that a manuscript file contains a real evidence-bound draft.
@@ -1160,9 +1101,16 @@ def _manuscript_text_status(manuscript_text: str) -> Dict[str, Any]:
     errors: List[str] = []
     if not stripped:
         errors.append("manuscript draft is empty")
-    head = stripped[:600]
-    if "Manuscript scaffold not generated" in head:
-        errors.append("manuscript scaffold was not generated")
+    head = stripped[:NOT_GENERATED_HEAD_CHARS]
+    state = read_manuscript_state(stripped)
+    if state is not None:
+        # The reason code is what the write phase actually decided; the prose
+        # beside it is for the author and may be reworded without changing
+        # what this gate concludes.
+        errors.append(
+            "manuscript scaffold was not generated "
+            f"({state.kind}: {state.reason_code})"
+        )
     if _WRITER_FAILURE_RE.search(head):
         errors.append("manuscript draft contains a writer/runtime failure message")
     word_count = len(re.findall(r"[A-Za-z][A-Za-z0-9-]*", stripped))
@@ -1171,7 +1119,7 @@ def _manuscript_text_status(manuscript_text: str) -> Dict[str, Any]:
     if not re.search(r"(?:\]\(evidence/|\{evidence:|\[\^claim_)", stripped):
         errors.append("manuscript draft has no evidence-bound claim links")
     manifest_comment_counts = {"warning": 0, "error": 0}
-    for match in _MANIFEST_COMMENT_RE.finditer(stripped):
+    for match in MANIFEST_COMMENT_RE.finditer(stripped):
         level = match.group("level").lower()
         manifest_comment_counts[level] = manifest_comment_counts.get(level, 0) + 1
     if manifest_comment_counts["error"]:
@@ -1507,6 +1455,7 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
         PREDICTION_MODEL_ANALYSIS_KIND,
         LANDMARK_SPLINE_ANALYSIS_KIND,
+        "signed_time_varying_exposure_cox",
         PHENOTYPING_ANALYSIS_KIND,
         SURVIVAL_PRIMARY_ANALYSIS_KIND,
     }
@@ -1828,7 +1777,7 @@ def _compute_readiness_gates(
         "execution_complete": bool(execution.get("execution_complete")),
         "manuscript_bound_clean": bool(
             manuscript_text
-            and "Manuscript scaffold not generated" not in manuscript_text[:300]
+            and not is_not_generated(manuscript_text)
             and missing_evidence_count == 0
             and not stop_after_analysis
             and not writer_probe_mode
@@ -1842,18 +1791,20 @@ def _compute_readiness_gates(
         "manuscript_numeric_audit_clean": False,
         "manuscript_manifest_caveats_clean": bool(
             manuscript_text
-            and "Manuscript scaffold not generated" not in manuscript_text[:300]
-            and not _MANIFEST_COMMENT_RE.search(manuscript_text)
+            and not is_not_generated(manuscript_text)
+            and not MANIFEST_COMMENT_RE.search(manuscript_text)
             and not stop_after_analysis
             and not writer_probe_mode
         ),
         "manuscript_critique_passed": False,
         "manuscript_literature_complete": False,
+        "manuscript_quality_complete": False,
+        "manuscript_result_claims_complete": False,
         "robustness_panel_complete": False,
     }
     if (
         manuscript_text
-        and "Manuscript scaffold not generated" not in manuscript_text[:300]
+        and not is_not_generated(manuscript_text)
         and not writer_probe_mode
         and not stop_after_analysis
     ):
@@ -1872,6 +1823,16 @@ def _compute_readiness_gates(
     current_gate_state["robustness_panel_complete"] = bool(
         current_robustness_panel is not None
         and not unexecuted_locked_spec_ids(current_robustness_panel)
+    )
+    current_gate_state.update(
+        current_manuscript_completion_state(
+            run_dir=Path(run_dir),
+            manuscript_text=manuscript_text,
+            evidence=evidence,
+            per_step_records=per_step_records,
+            stop_after_analysis=stop_after_analysis,
+            writer_probe_mode=writer_probe_mode,
+        )
     )
     critique_path = run_dir / "manuscript_critique.json"
     if critique_path.exists():
@@ -2003,7 +1964,7 @@ def _compute_readiness_gates(
     )
     scientific_capability_errors = (
         []
-        if plan is None or capability_assessment.claim_ceiling_allows_reportable
+        if plan is None or capability_assessment.scientific_validator_available
         else [
             f"{capability_assessment.issue_code or 'scientific_capability_unavailable'}: "
             f"{capability_assessment.reason}"
@@ -2037,6 +1998,17 @@ def _compute_readiness_gates(
         == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID
         else []
     )
+    time_varying_validation_errors = (
+        time_varying_runtime_bundle_errors(
+            plan=plan,
+            records=per_step_records or [],
+            run_dir=run_dir,
+        )
+        if plan is not None
+        and capability_assessment.capability_id
+        == TIME_VARYING_EXPOSURE_CAPABILITY
+        else []
+    )
     base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
@@ -2046,6 +2018,7 @@ def _compute_readiness_gates(
         + phenotyping_validation_errors
         + source_feasibility_validation_errors
         + signed_trajectory_validation_errors
+        + time_varying_validation_errors
     )
     selected_capability = get_capability_by_id(capability_assessment.capability_id)
     _no_det_primary_expected = bool(
@@ -2722,14 +2695,18 @@ def _extract_claim_ledger_rows(
             }
         ]
     text = manuscript_path.read_text(encoding="utf-8", errors="replace")
-    if "Manuscript scaffold not generated" in text[:300]:
+    not_generated = read_manuscript_state(text)
+    if not_generated is not None:
         return [
             {
                 "claim_id": "claim_000",
                 "claim_text": "Formal manuscript was not generated.",
                 "evidence_refs": "",
                 "status": "diagnostic_only",
-                "note": "Strict fail-closed gate blocked writer output.",
+                "note": (
+                    "Manuscript was not generated "
+                    f"({not_generated.kind}: {not_generated.reason_code})."
+                ),
             }
         ]
     href_owners = _current_evidence_href_owners(

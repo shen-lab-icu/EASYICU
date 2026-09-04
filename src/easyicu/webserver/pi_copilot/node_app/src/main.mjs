@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -34,6 +35,10 @@ import {
   ShellBudgetGuard,
 } from "./shell-budget.mjs";
 import { hostPostToolFinalization } from "./post-tool-finalization.mjs";
+import {
+  HotSessionLifecycle,
+  sessionLifecycleConfig,
+} from "./session-lifecycle.mjs";
 
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -47,16 +52,29 @@ const SESSION_DIR = resolve(
 const CWD = resolve(process.env.EASYICU_PI_CWD || process.cwd());
 const TOOL_CATALOG_FIELDS = new Set([
   "name", "surface", "policy_group", "execution_mode",
-  "host_mutating", "data_source_required",
+  "host_mutating", "data_source_required", "arguments",
 ]);
+const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"]);
 const TOOL_CATALOG = (() => {
   let payload;
   try {
-    payload = JSON.parse(readFileSync(new URL("../../tool_catalog.json", import.meta.url), "utf8"));
+    const catalogUrl = [
+      // Installed private runtime: <revision>/src/main.mjs.
+      new URL("../tool_catalog.json", import.meta.url),
+      // Packaged development tree: pi_copilot/node_app/src/main.mjs.
+      new URL("../../tool_catalog.json", import.meta.url),
+    ].find((candidate) => existsSync(candidate));
+    if (!catalogUrl) throw new Error("tool_catalog.json is missing");
+    payload = JSON.parse(readFileSync(catalogUrl, "utf8"));
   } catch (error) {
     throw Object.assign(new Error("Pi tool catalog is unreadable"), { code: "pi_tool_catalog_unreadable", cause: error });
   }
-  if (payload?.schema_version !== "easyicu.pi-tool-catalog/1" || !Array.isArray(payload?.tools)) {
+  const rootFields = Object.keys(payload || {});
+  if (payload?.schema_version !== "easyicu.pi-tool-catalog/2"
+    || rootFields.length !== 3
+    || !rootFields.every((field) => ["schema_version", "_arguments", "tools"].includes(field))
+    || !Array.isArray(payload?._arguments)
+    || !Array.isArray(payload?.tools)) {
     throw Object.assign(new Error("Pi tool catalog schema is invalid"), { code: "pi_tool_catalog_schema_invalid" });
   }
   const names = new Set();
@@ -76,12 +94,37 @@ const TOOL_CATALOG = (() => {
       || typeof entry.data_source_required !== 'boolean') {
       throw Object.assign(new Error("Pi tool catalog policy is invalid"), { code: "pi_tool_catalog_policy_invalid" });
     }
+    const argumentFields = Object.keys(entry.arguments || {});
+    const argumentsValid = argumentFields.length === TOOL_ARGUMENT_FIELDS.size
+      && argumentFields.every((field) => TOOL_ARGUMENT_FIELDS.has(field))
+      && ["model", "host", "required"].every((field) => {
+        const values = entry.arguments[field];
+        return Array.isArray(values)
+          && values.every((value) => typeof value === "string" && value.trim())
+          && new Set(values).size === values.length;
+      });
+    if (!argumentsValid) {
+      throw Object.assign(new Error("Pi tool catalog arguments are invalid"), { code: "pi_tool_catalog_arguments_invalid" });
+    }
+    const modelArguments = new Set(entry.arguments.model);
+    const hostArguments = new Set(entry.arguments.host);
+    if ([...modelArguments].some((name) => hostArguments.has(name))
+      || entry.arguments.required.some((name) => !modelArguments.has(name) && !hostArguments.has(name))) {
+      throw Object.assign(new Error("Pi tool catalog arguments are inconsistent"), { code: "pi_tool_catalog_arguments_invalid" });
+    }
     names.add(entry.name);
   }
   if (!payload.tools.length) {
     throw Object.assign(new Error("Pi tool catalog is empty"), { code: "pi_tool_catalog_empty" });
   }
-  return Object.freeze(payload.tools.map((entry) => Object.freeze({ ...entry })));
+  return Object.freeze(payload.tools.map((entry) => Object.freeze({
+    ...entry,
+    arguments: Object.freeze({
+      model: Object.freeze([...entry.arguments.model]),
+      host: Object.freeze([...entry.arguments.host]),
+      required: Object.freeze([...entry.arguments.required]),
+    }),
+  })));
 })();
 const TOOL_CATALOG_BY_NAME = new Map(TOOL_CATALOG.map((entry) => [entry.name, entry]));
 const RESEARCH_TOOL_NAMES = Object.freeze(
@@ -91,6 +134,11 @@ const ALL_TOOL_NAMES = Object.freeze(TOOL_CATALOG.map((entry) => entry.name));
 
 const sessions = new Map();
 const activeRequestBySession = new Map();
+const sessionLifecycle = new HotSessionLifecycle({
+  sessions,
+  activeRequests: activeRequestBySession,
+  config: sessionLifecycleConfig(),
+});
 const pendingToolResponses = new Map();
 const HOST_LANGUAGE_MARKER = "\n\n[EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1]\n";
 const OWNER_CONTEXT_MARKER = "\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n";
@@ -216,7 +264,10 @@ function createPersistedSessionManager() {
   const sessionFile = join(SESSION_DIR, `${timestamp}_${randomUUID()}.jsonl`);
   writeFileSync(sessionFile, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
-    return SessionManager.open(sessionFile, SESSION_DIR, CWD);
+    return {
+      manager: SessionManager.open(sessionFile, SESSION_DIR, CWD),
+      sessionFile,
+    };
   } catch (error) {
     rmSync(sessionFile, { force: true });
     throw error;
@@ -487,7 +538,7 @@ const PLAN_LIFECYCLE_WORKFLOW_CODES = new Set([
   "operator_plan_approval_required",
 ]);
 
-function modelPrompt(message, language, ownerContext = [], turnIntent = "") {
+function modelPrompt(message, language, ownerContext = [], turnIntent = "", ideaSource = undefined) {
   const explicitChinese = /(?:请|用|改用|使用|以)\s*(?:中文|汉语)(?:回答|回复|说明|输出|翻译)/.test(message)
     || /\b(?:respond|reply|answer|write|translate)(?:\s+\w+){0,6}\s+(?:in|into)\s+(?:simplified\s+)?chinese\b/i.test(message);
   const explicitEnglish = /(?:请|用|改用|使用|以)\s*(?:英文|英语)(?:回答|回复|说明|输出|翻译)/.test(message)
@@ -500,6 +551,9 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "") {
   const receipts = Array.isArray(ownerContext) ? ownerContext : [];
   const currentContext = receipts.length
     ? `\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n${boundedText(JSON.stringify(receipts), 24000)}`
+    : "";
+  const sourceContext = ideaSource && typeof ideaSource === "object" && !Array.isArray(ideaSource)
+    ? `\n\n[EASYICU_IDEA_SOURCE_V1]\n${boundedText(JSON.stringify(ideaSource), 6000)}\nThis bounded source receipt was produced by the existing EasyICU Idea source owner. Treat it as the source for easyicu_mine_ideas; do not ask the researcher to paste the PDF or article metadata again.`
     : "";
   // The host, not the model, selects this branch: it already holds the owner
   // workflow receipt.  Leaving both branches in one prompt let the model drift
@@ -519,9 +573,21 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "") {
     : turnIntent === "advance_after_data_source_confirmation"
     ? (sourcePreparationAlreadyPassed
       ? `\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has confirmed the study's data source outside the model transcript, and the authoritative workflow has already advanced to ${transitionWorkflowCode}. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. Acknowledge the current plan-stage readiness in at most two short sentences and stop so the host can show the workflow-owned action. Do not ask a setup question, do not start a sequential questionnaire, and do not propose cohort, exposure, outcome, window, module or export values yourself. Do not call a tool during this transition.`
-      : "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has just confirmed the study's data source outside the model transcript. Treat the current owner workflow receipt as authoritative. Do not ask the user to choose, confirm, download, or inspect a data source again. Otherwise the confirmed source is a raw database directory rather than a prepared EasyICU data package: do not ask the next setup question and do not start a sequential questionnaire. Replace the earlier answer with one concise data-preparation confirmation, not a study plan. Include only the minimum user-owned inputs needed to prepare data: population and analysis unit, target exposure or phenotype, target outcome semantics, and outer feature window. You MUST infer and propose one concrete recommended value for every one of those four inputs from the user's research question and current owner context; none may be omitted, described as unresolved, or deferred to the formal plan. EasyICU owns implementation modules, executable concept identifiers, and export format. Do not propose or discuss dependence handling, adjustment variables, statistical models, sensitivity analyses, literature rationale, or other formal-plan content. Use the bold localized title '数据准备确认（不是正式研究计划）' or 'Data preparation confirmation (not the formal research plan)'. Add one short sentence explaining that the later formal research plan covers methods and evidence, is generated separately after the data package and local preflight are ready, and requires its own review; never say that the formal plan will determine or complete any of the four data-preparation inputs. Use ordinary bullets; do not emit Markdown heading markers such as #, ##, or ###. Finish with a standalone bold localized Next step heading, one short prompt, and exactly two hyphen-prefixed Markdown bullets; never use a numbered list. The first bullet must be one complete acceptance sentence that restates all four concrete data-preparation inputs and authorizes preparing the data. The second bullet must offer changing one data-preparation requirement. Neither choice may offer generating, starting, or deferring anything to the formal plan. Nothing may follow those two bullets. Do not call a tool during this transition and do not offer an individual outcome, cohort, or time-window question.")
+      : "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has confirmed the study data source. Follow the authoritative workflow receipt, including any blocker. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. A raw identified database supports metadata-only candidate planning: extraction is not a prerequisite for generating a candidate plan. Acknowledge the saved source briefly and stop for the host-owned next action. Do not invent data-preparation inputs, ask exposure/outcome/goal confirmations, or authorize extraction. If the question is missing, ask only for the research question. Do not call a tool during this transition.")
+    : turnIntent === "idea_discovery_entry"
+    ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\n[EASYICU_ZERO_DIRECTION_ENTRY_V1]\nThe researcher explicitly says they do not yet have a research direction. Do not call any tool, do not invent candidate ideas, and do not start a study-design questionnaire. The host owns the exact localized routing reply for this marker."
+    : turnIntent === "idea_mining_entry"
+    ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\nThe researcher explicitly chose Idea Mining. Do not ask whether they instead want implementation and do not start a design questionnaire. Inspect the workflow, call easyicu_mine_ideas, then call easyicu_search_literature once with the exact returned run_id and idea_id before answering. If the literature gate blocks, continue with an honest source-grounded candidate map and name the missing search. Present candidate innovation directions and evidence boundaries in the ordinary conversation; do not construct or persist a scientific question in this turn."
+    : turnIntent === "idea_mining_candidate_selection"
+    ? "\n\n[EASYICU_IDEA_SELECTION_V1]\nThe researcher clicked one displayed Idea Mining direction. This is a one-way candidate formalization transition, not another exploration turn. Call easyicu_mine_ideas exactly once with the full selected direction as its topic so the chosen direction receives a formal run_id and idea_id. Select the single returned idea that most closely matches the clicked direction, then call easyicu_search_literature exactly once for that exact identity. Do not display, compare, recommend, or ask the researcher to choose any sibling ideas returned by the owner. Do not use the four-leadin candidate-synthesis format. Instead, present one concise proposed definition in ordinary Chinese with exactly these six plain-language fields: 最终想研究的问题, 研究人群, 主要比较因素, 主要结局, 从什么时点开始观察, 观察多长时间. Mark every field that remains unresolved as 待确认 rather than inventing it. Explain in one sentence that this formal Idea is still awaiting literature adjudication and real-data feasibility. End with **下一步：** and exactly two hyphen-prefixed choices: '确认这一定义，进入文献裁决' and '我要修改其中一项'. Nothing may follow. Do not adjudicate literature, assess data, prepare the plan, accept handoff, or enter ordinary study setup in this turn. Never expose run_id, idea_id, or internal concept identifiers."
+    : turnIntent === "implement_scientific_question"
+    ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\nThe researcher explicitly said the scientific question is already decided. Do not call easyicu_mine_ideas and do not reopen divergent exploration. Inspect the workflow and persist only the explicit, owner-ready facts in the user's question through the existing StudyContext owner when authorized. Then continue the governed scientific-question, candidate-plan, and data-preparation workflow without claiming that analysis started."
+    : turnIntent === "data_first_entry"
+    ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\nThe researcher explicitly chose to start from existing ICU data. Do not call easyicu_mine_ideas. Ask only what data they have and what they want to accomplish; do not bind, read, extract, or analyze data until the existing host-owned source and extraction confirmations authorize it."
+    : turnIntent === "clarify_research_entry"
+    ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\nThe researcher bypassed the four explicit starting choices, and this first sentence does not establish whether they want Idea Mining or implementation. Do not call any tool and do not infer intent from how detailed the sentence sounds. In Chinese, reply with '我先确认一下你的目标', then ask exactly one question: '你是想先发掘或评估这个方向，还是已经决定研究它并准备往下做？' End with this exact clickable block: '**下一步：**' followed by exactly three hyphen-prefixed choices: '先发掘或评估可能方向', '按当前问题进入研究方案', and '我还不确定，先帮我判断'. Nothing else may follow."
     : "";
-  return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${transition}`;
+  return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${sourceContext}${transition}`;
 }
 
 function userVisiblePromptText(value) {
@@ -642,8 +708,13 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "Configuration validation rule: a rejected typed proposal does not spend the one-use Configure grant. If the owner returns a field-specific schema reason, correct only a mechanical representation error with exact already-bound identifiers. If the owner reports that the selected source or runner cannot execute the user's scientific choice, do not silently substitute a weaker design; explain the stable capability code and ask one direct alternative-choice question.",
       "Typed time-window rule: StudyContext time_window is the bounded outer feature-materialization window, currently expressed as numeric hours from ICU admission. When the user explicitly selects its exact numeric duration, save hours, set time_window.anchor to the exact canonical value 'ICU admission', and set confirmations.feature_time_window=true in the same update. Words such as first belong in the cohort definition, not this physical coordinate. It is not a phenotype's clinical definition anchor and not an outcome follow-up horizon. Keep those three roles separate: concept clinical contracts own phenotype time zero, the exact outcome concept owns whole-stay outcome semantics, and time_window owns only the physical feature window. Never propose an unbounded discharge/death endpoint for time_window, never save suspected-infection onset as its physical anchor, and never imply that a 24-hour feature window censors later in-hospital deaths.",
       "When plan review asks the user to choose a timing, repeated-stay, functional-form, missing-data, cohort, or outcome-definition sensitivity, save only an explicit positive choice of one executable sensitivity in typed sensitivity_specs. Use only exact source concept identifiers returned by EasyICU in execution_variables. If an approval-allowed review asks whether to add an optional sensitivity and the user declines, that is not a sensitivity spec or a StudyContext change: preserve the finding as a limitation and call easyicu_resume with decision='approved' plus a bounded review note for the exact current plan. Prose in analysis_goal is not sensitivity execution authority, and you must not invent a scientific choice the user has not made.",
-      "Tool-first Idea Mining rule: when the user asks to discover, mine, compare, or propose research ideas, do not author a candidate from general model knowledge. If the one-turn idea grant is present, call easyicu_mine_ideas before writing the answer and ground the answer only in that EasyICU receipt. If the grant is absent, ask the user to enable it. Never imply that Idea Mining ran when no Idea Mining receipt exists.",
-      "Tool-first literature rule: when the user asks to search papers, prior art, or supporting literature, call easyicu_search_literature and let the host-held one-turn gate authoritatively allow or block it. The grant is intentionally not exposed in the conversation, so never infer or claim that it is absent before the tool returns a typed gate receipt. Report the exact receipt status and never call curated references a completed search. easyicu_search_literature returns unreviewed retrieval candidates, not verified evidence or direct comparators: never say the papers support the question or have been retained as evidence until Research Agent screening against the sealed context says so. You may quote the bounded extractive excerpt as candidate metadata while naming this boundary. If the receipt says idea_handoff_refresh_required, explain that the exact searched candidates are not Plan authority until easyicu_accept_idea_handoff succeeds again with the same run_id/idea_id; do not run analysis first. If it binds study_literature_authority, report the receipt and stop the turn because the host must rebind the changed StudyContext before any plan or run tool. For an existing Research Agent plan, call easyicu_inspect_literature and distinguish screened design support from patient/result evidence. Never invent a paper or a plan-to-paper mapping.",
+      "Tool-first Idea Mining rule: when the user asks to discover, mine, compare, propose, or evaluate a research idea or candidate, or explicitly names Idea Mining, do not route the request into ordinary study setup and do not author a candidate from general model knowledge. If the one-turn idea grant is present, call easyicu_mine_ideas before writing the answer and ground the answer only in that EasyICU receipt. If the grant is absent, ask the user to enable it. Never imply that Idea Mining ran when no Idea Mining receipt exists.",
+      "Idea Mining conversational discovery rule: accept one informal sentence, a PDF, or an article URL as the normal starting point. Never require a complete PICO, time window, outcome definition, or analysis plan before producing value. The first successful easyicu_mine_ideas receipt is an exploration seed, not a finished scientific question. In the same turn, immediately attempt easyicu_search_literature with its exact run_id and idea_id; do not make the researcher choose abstract research axes or expand search terms before seeing candidates. Present everything in the ordinary assistant reply, never a separate candidate card or questionnaire.",
+      "Idea Mining candidate synthesis rule: after the owner receipts, use four short Chinese lead-ins in this order: 我理解的起点, 值得继续验证的创新方向, 证据与数据边界, 建议先做什么. Under 我理解的起点, begin with one evidence verdict: preserve, narrow or reframe, or deprioritize the original observation, using only projected owner metadata and excerpts. Review direct retrieval candidates before adjacent candidates. When a direct retrieval candidate includes an abstract excerpt, summarize only findings explicitly present in that excerpt; if it already studies the original contrast, reports a null or contradictory result, or points to a narrower contrast, say so and reframe or deprioritize the original direction instead of relabeling it as innovation. Preserve every reported contrast, timing stratum, and subgroup exactly. Never merge weekday night with weekend, or any null subgroup with a positive subgroup. State a reported null result separately; it blocks presenting that same contrast as new unless the candidate explicitly changes the question to replication or external validation. Under 值得继续验证的创新方向, list two or three genuinely different candidate directions grounded only in the source, mapped concepts, reviewed design support, construct_answerability, and retrieved article metadata. If two directions keep the same population, exposure, and outcome and differ only by wording, time label, subgroup label, or organizational framing, merge them. Every surviving direction must change at least one primary scientific axis: target contrast or exposure, population, outcome or estimand, or replication/design question. For every direction state: the possible innovation point, the closest retrieved literature signal with title when available, the owner-projected Chinese construct answerability label and explanation, and the main fatal risk. Never replace an available construct_answerability verdict with the word unknown. Directly observed, validated-derived, event-reconstructable, and proxy-only are not interchangeable: last medication record is not a stop decision, ventilator-record disappearance is not extubation, and total input is not fluid balance. These are candidate innovations, never confirmed novelty. If retrieval returned zero results, say only that the exact search returned none and derive refinement candidates from the source/owner receipt without pretending that no literature exists. Under 证据与数据边界, explicitly separate retrieved metadata, unscreened articles, construct-level preflight, and real project-data feasibility. When feasibility has no active export for this candidate, say that the current candidate is not yet bound to a project data export; never say the whole project has no data unless an owner receipt explicitly proves that. Under 建议先做什么, recommend one highest-information-value direction and offer direct follow-up choices; ask at most one plain-language preference after the candidate map. Every clickable choice that selects a candidate must begin exactly with 选择方向 1：, 选择方向 2：, or 选择方向 3： so the host can formalize it instead of rerunning exploration. Never expose raw owner codes or internal concept identifiers unless asked.",
+      "Idea Mining handoff rule: remain in discovery while candidates are being compared. When the researcher selects a displayed candidate, refine it through the same easyicu_mine_ideas owner if needed, reuse the existing literature receipt/search owner, and then call easyicu_prepare_idea_handoff with only researcher-confirmed fields. Only easyicu_accept_idea_handoff may bind the exact digest into StudyContext. Never recreate PICO, candidate ledger, source parsing, evidence review, or StudyContext logic inside Copilot.",
+      "Idea Mining completion rule: a selected conversational direction is not executable until it has its own exact run_id and idea_id, a complete researcher-confirmed definition, a current typed prior-art decision, a source-bound feasibility receipt, and ready construct_answerability for every required clinical construct. Use easyicu_adjudicate_idea_literature only after the researcher confirms research question, population, exposure, outcome, time zero, and window. already_answered returns to reframing; uncertain stays blocked; only differentiated may continue. Then recommend the most complete registered real export, obtain the existing source confirmation, list exact source concepts, and call easyicu_assess_idea_feasibility. An event_reconstructable or proxy_only construct remains needs_review until the host materializes the reviewed definition and returns its receipt. Never call a retrieval candidate supporting evidence, and never call needs_review or blocked feasibility executable.",
+      "Tool-first literature rule: when the user asks to search papers, prior art, or supporting literature, call easyicu_search_literature and let the host-held one-turn gate authoritatively allow or block it. The grant is intentionally not exposed in the conversation, so never infer or claim that it is absent before the tool returns a typed gate receipt. Report the exact receipt status and never call curated references a completed search. easyicu_search_literature returns unreviewed retrieval candidates, not verified evidence or direct comparators: never say the papers support the question or have been retained as evidence until Research Agent screening against the sealed context says so. You may quote the bounded extractive excerpt as candidate metadata while naming this boundary. If the receipt says idea_plan_refresh_required, explain that the searched definitions and prior-art candidates must now be incorporated into an Idea Plan. If it also says idea_handoff_refresh_required, the exact searched candidates are not Plan authority until easyicu_accept_idea_handoff succeeds again with the same run_id/idea_id; do not run analysis first. If it binds study_literature_authority, report the receipt and stop the turn because the host must rebind the changed StudyContext before any plan or run tool. For an existing Research Agent plan, call easyicu_inspect_literature and distinguish screened design support from patient/result evidence. Never invent a paper or a plan-to-paper mapping.",
+      "Idea Plan preview rule: after typed literature adjudication and source-bound feasibility are current, call easyicu_prepare_idea_handoff with the exact run_id and idea_id, the user's bounded plan_edits, and plan_fields for every field the researcher has actually confirmed (research_question, population, exposure, outcome, time_zero, time_window). Never infer a confirmed field from mere EasyICU measurability. Present the returned research question, variable roles, literature decision, data feasibility facts, confirmations, and execution blockers in the ordinary reply. The returned Idea Mining plan resource is the single reopenable visual preview; do not create a parallel plan, duplicate ledger, or claim that preparing or opening it accepted the handoff or started analysis. Only describe it as execution-ready when execution_ready_for_confirmation is true.",
       "When the user explicitly selects a mined candidate, use easyicu_accept_idea_handoff with its exact run_id and idea_id if the one-turn idea grant is present. Do not manually copy or silently reinterpret the selected idea, and do not claim it is bound until the digest-bound acceptance receipt succeeds.",
       "When the user explicitly asks to run, rerun, execute, or analyze the already-configured current study, treat that as execution intent rather than a request to inspect an older run. Inspect the workflow only as needed to choose the next governed action, then call easyicu_run: use a full run when the provider-run grant is present and the required setup, export, and preflight are ready; otherwise start the required preflight or state the exact missing authority. Use easyicu_inspect_run only when the user asks for status, prior results, or failure diagnosis.",
       "Data-package review rule: after extraction completes or a validated registered export is reused, and before proposing or running a scientific Plan, call easyicu_inspect_data_package when the user asks to review denominator, concept availability, or missingness. Treat legacy positive-only event absence according to the returned owner semantics, never as missing measurement. Do not substitute run-artifact inspection for this pre-Plan data review, and do not report event rates or associations from it because the review intentionally withholds analysis results.",
@@ -906,10 +977,12 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       bind_active_export: Type.Optional(Type.Boolean()),
       bind_source_id: optionalText(80),
     }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_mine_ideas", label: "Mine research ideas", description: "Create one local, metadata-only Idea Mining candidate from the bound question or a bounded source seed. Requires the one-use Idea Mining grant and never produces a novelty or scientific result claim.", parameters: Type.Object({ topic: optionalText(1200), title: optionalText(220), excerpt: optionalText(1200), journal: optionalText(160), year: Type.Optional(Type.Integer({ minimum: 1800, maximum: 2200 })), doi: optionalText(240), pmid: optionalText(80) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_search_literature", label: "Search PubMed literature", description: "Run the Idea Mining PubMed metadata and bounded-abstract owner. Returned rows are unreviewed retrieval candidates, never verified evidence or direct comparators until Research Agent screens them against the sealed study. With an accepted idea it persists a digest-bound prior-art receipt and requires that exact idea handoff to be accepted again before Plan/run. Otherwise, a completed search binds an exact digest receipt to StudyContext, invalidates the current turn, and must be followed by host rebind before planning. Report the receipt and stop after either authority mutation. Requires the separate one-turn literature-network grant; no full text, patient rows, or external LLM is used.", parameters: Type.Object({ topic: optionalText(1200), journal: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_prepare_idea_handoff", label: "Prepare idea plan", description: "Create the canonical metadata-only Idea Mining plan/handoff for conversational review. Requires the one-use Idea Mining grant; it does not start analysis or make reportable claims.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: optionalText(160), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_accept_idea_handoff", label: "Accept selected idea", description: "After the user explicitly selects an idea, bind its canonical digest and agreed fields to the current StudyContext. Requires the one-use Idea Mining grant and stops the turn for an authority rebind.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_mine_ideas", label: "Mine research ideas", description: "Create one local, metadata-only Idea Mining candidate from the bound question or a bounded source seed. The receipt includes typed construct answerability that distinguishes direct concepts, registered derivations, reconstructable events, non-equivalent proxies, and unavailable constructs before real data is selected. Requires the one-use Idea Mining grant and never produces a novelty or scientific result claim.", parameters: Type.Object({ topic: optionalText(1200), title: optionalText(220), excerpt: optionalText(1200), journal: optionalText(160), year: Type.Optional(Type.Integer({ minimum: 1800, maximum: 2200 })), doi: optionalText(240), pmid: optionalText(80) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_search_literature", label: "Search PubMed literature", description: "Run the existing Idea Mining stratified PubMed metadata and bounded-abstract owner. Pass run_id and idea_id together to search the latest mined candidate before handoff; one authorized call automatically covers the owner-prespecified clinical landscape, candidate topic, observational candidates, review/guideline, and critical-care-database strata. The exact receipt is persisted on that run and feeds its Idea Plan. Returned rows and per-stratum counts are unreviewed retrieval signals, never verified evidence, crowding, novelty, or direct comparators until Research Agent screens them against the sealed study. With an accepted idea it requires that exact handoff to be accepted again before Plan/run. Without a candidate identity, a completed search binds an exact digest receipt to StudyContext and requires host rebind. Requires the separate one-turn literature-network grant; no full text, patient rows, or external LLM is used.", parameters: Type.Object({ topic: optionalText(1200), journal: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })), run_id: optionalText(160), idea_id: optionalText(160) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_adjudicate_idea_literature", label: "Adjudicate idea literature", description: "Record the researcher's typed already_answered, differentiated, or uncertain decision against the exact Idea Mining literature receipt and complete confirmed definition. This is a human-confirmed prior-art gate, not an automatic novelty claim. Requires the one-use Idea Mining grant.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), decision: Type.Union([Type.Literal("already_answered"), Type.Literal("differentiated"), Type.Literal("uncertain")]), rationale: Type.String({ minLength: 1, maxLength: 1200 }), plan_fields: Type.Object({ research_question: optionalText(1200), population: optionalText(500), exposure: optionalText(500), outcome: optionalText(800), time_zero: optionalText(500), time_window: optionalText(500) }, { additionalProperties: false }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_assess_idea_feasibility", label: "Assess idea feasibility", description: "Run the existing bounded Idea feasibility owner against the exact real export already confirmed in this Copilot project. It validates exact source concepts, typed construct answerability, temporal ordering, joint coverage and aggregate missingness. Reconstructable events and proxies remain needs_review until a reviewed materialization receipt exists. It accepts no path, returns no patient rows or effect estimates, and requires a differentiated literature adjudication plus the one-use Idea Mining grant.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), concept_bindings: Type.Object({ primary_exposure: Type.String({ minLength: 1, maxLength: 80 }), outcome: Type.String({ minLength: 1, maxLength: 80 }), time_zero: Type.String({ minLength: 1, maxLength: 80 }), covariates: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { maxItems: 32 })) }, { additionalProperties: false }), max_records: Type.Optional(Type.Integer({ minimum: 100, maximum: 250000 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_prepare_idea_handoff", label: "Prepare idea plan", description: "Create the single canonical Idea Mining plan preview after literature adjudication and source feasibility. Pass only researcher-confirmed plan fields; requires the one-use Idea Mining grant and does not start analysis or make reportable claims.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: optionalText(160), plan_edits: optionalText(1200), plan_fields: Type.Optional(Type.Object({ research_question: optionalText(1200), population: optionalText(500), exposure: optionalText(500), outcome: optionalText(800), time_zero: optionalText(500), time_window: optionalText(500) }, { additionalProperties: false })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_accept_idea_handoff", label: "Accept execution-ready idea", description: "After the user explicitly accepts the final Idea Plan, revalidate its differentiated literature decision, ready real-source feasibility, confirmed definition and exact digests, then bind the agreed fields to StudyContext. It never starts analysis. Requires the one-use Idea Mining grant and stops the turn for an authority rebind.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_prepare_demo_source", label: "Download and prepare official demo data", description: "Submit the allowlisted official demo-source owner to download, validate, convert, export, and register MIMIC-IV or eICU demo data locally. Requires the one-use Extraction grant; URLs and paths are never accepted from the model.", parameters: Type.Object({ source_id: Type.String({ minLength: 1, maxLength: 80 }) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_start_extraction", label: "Open or start feature extraction", description: "Open the native EasyICU Data Extraction workspace for an explicit local database choice, or submit the existing configured extraction owner when it is ready. Use source_mode='local' plus an exact supported database key to override a currently bound demo or older export and open the folder picker. Requires the one-use Extraction grant; raw paths never come from the model.", parameters: Type.Object({ source_mode: Type.Optional(Type.Literal("local")), database: Type.Optional(Type.Union([Type.Literal("miiv"), Type.Literal("mimic"), Type.Literal("eicu"), Type.Literal("aumc"), Type.Literal("hirid"), Type.Literal("sic")])) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_run", label: "Start EasyICU run", description: "Submit an EasyICU preflight or the real ResearchAgentPipeline Plan -> Execute -> Validate -> Write workflow. Preflight requires the local-run grant. Full analysis requires the separate provider-run grant and the existing scientific provider gates. The host, not the model, selects the already verified provider configuration. Submission invalidates this turn's authority: report the receipt and stop until host rebind.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])) }, { additionalProperties: false }) }),
@@ -1110,12 +1183,20 @@ async function createSession(params) {
     if (existing.extensionActivationSha256 !== extensionSnapshot.activation_sha256) {
       throw Object.assign(new Error("Copilot session extension activation cannot change"), { code: "pi_session_extension_scope_mismatch" });
     }
+    sessionLifecycle.touch(externalId);
     return sessionState(existing);
   }
+  sessionLifecycle.admit({ incoming: 1 });
   const { runtime, selected, config } = await getModelRuntime();
-  const manager = params.session_file
-    ? SessionManager.open(safeSessionFile(params.session_file), SESSION_DIR, CWD)
-    : createPersistedSessionManager();
+  let manager;
+  let createdSessionFile = "";
+  if (params.session_file) {
+    manager = SessionManager.open(safeSessionFile(params.session_file), SESSION_DIR, CWD);
+  } else {
+    const persisted = createPersistedSessionManager();
+    manager = persisted.manager;
+    createdSessionFile = persisted.sessionFile;
+  }
   const thinkingLevel = "off";
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },
@@ -1123,74 +1204,91 @@ async function createSession(params) {
     // disables them and lets every outbound call cross ShellBudgetGuard once.
     retry: { enabled: false, maxRetries: 0 },
   });
-  const { session } = await createAgentSession({
-    cwd: CWD,
-    agentDir: dirname(SESSION_DIR),
-    model: selected,
-    thinkingLevel,
-    modelRuntime: runtime,
-    resourceLoader: resourceLoader(agentMode, extensionSnapshot, language),
-    sessionManager: manager,
-    settingsManager,
-    noTools: "builtin",
-    tools: agentMode === "workspace" ? ALL_TOOL_NAMES : RESEARCH_TOOL_NAMES,
-    customTools: customTools(externalId, agentMode, extensionSnapshot),
-  });
-  const unsubscribe = session.subscribe((event) => {
-    const requestId = activeRequestBySession.get(externalId);
-    if (!requestId) return;
-    const normalized = normalizePiEvent(event);
-    if (normalized) emit({ kind: "event", request_id: requestId, session_id: externalId, event: normalized });
-  });
-  const record = {
-    externalId,
-    agentMode,
-    language,
-    extensionActivationSha256: extensionSnapshot.activation_sha256,
-    session,
-    sessionManager: manager,
-    unsubscribe,
-    sessionTokenBudget: config.sessionTokenBudget,
-    maxTokens: config.maxTokens,
-  };
-  const originalStreamFunction = session.agent.streamFunction;
-  record.budgetGuard = new ShellBudgetGuard({
-    tokenBudget: config.sessionTokenBudget,
-    maxOutputTokens: config.maxTokens,
-    maxProviderCallsPerMessage: config.maxProviderCallsPerMessage,
-    maxProviderCallsPerSession: config.maxProviderCallsPerSession,
-    consumedTokens: () => session.getSessionStats().tokens.total,
-    initialProviderCalls: session.getSessionStats().assistantMessages,
-    persistedEntries: typeof manager?.getEntries === "function" ? manager.getEntries() : [],
-    pricing: config.pricing,
-  });
-  session.agent.streamFunction = (model, context, options = {}) => lazyStream(
-    model,
-    async () => {
-      const hostFinalization = hostPostToolFinalization(model, context, record.language);
-      if (hostFinalization) return hostFinalization;
-      record.budgetGuard.authorize(context, options);
-      const budgetReceipt = record.budgetGuard.receipt();
-      manager.appendCustomEntry(
-        budgetReceipt.schema_version,
-        budgetReceipt,
-      );
-      return await originalStreamFunction(model, context, {
-        ...options,
-        maxRetries: 0,
-      });
-    },
-  );
-  sessions.set(externalId, record);
-  return sessionState(record);
+  let session;
+  try {
+    ({ session } = await createAgentSession({
+      cwd: CWD,
+      agentDir: dirname(SESSION_DIR),
+      model: selected,
+      thinkingLevel,
+      modelRuntime: runtime,
+      resourceLoader: resourceLoader(agentMode, extensionSnapshot, language),
+      sessionManager: manager,
+      settingsManager,
+      noTools: "builtin",
+      tools: agentMode === "workspace" ? ALL_TOOL_NAMES : RESEARCH_TOOL_NAMES,
+      customTools: customTools(externalId, agentMode, extensionSnapshot),
+    }));
+  } catch (error) {
+    if (createdSessionFile) rmSync(createdSessionFile, { force: true });
+    throw error;
+  }
+  let unsubscribe = null;
+  try {
+    unsubscribe = session.subscribe((event) => {
+      const requestId = activeRequestBySession.get(externalId);
+      if (!requestId) return;
+      const normalized = normalizePiEvent(event);
+      if (normalized) emit({ kind: "event", request_id: requestId, session_id: externalId, event: normalized });
+    });
+    const record = {
+      externalId,
+      agentMode,
+      language,
+      extensionActivationSha256: extensionSnapshot.activation_sha256,
+      session,
+      sessionManager: manager,
+      unsubscribe,
+      sessionTokenBudget: config.sessionTokenBudget,
+      maxTokens: config.maxTokens,
+      lastAccessedAt: Date.now(),
+    };
+    const originalStreamFunction = session.agent.streamFunction;
+    record.budgetGuard = new ShellBudgetGuard({
+      tokenBudget: config.sessionTokenBudget,
+      maxOutputTokens: config.maxTokens,
+      maxProviderCallsPerMessage: config.maxProviderCallsPerMessage,
+      maxProviderCallsPerSession: config.maxProviderCallsPerSession,
+      consumedTokens: () => session.getSessionStats().tokens.total,
+      initialProviderCalls: session.getSessionStats().assistantMessages,
+      persistedEntries: typeof manager?.getEntries === "function" ? manager.getEntries() : [],
+      pricing: config.pricing,
+    });
+    session.agent.streamFunction = (model, context, options = {}) => lazyStream(
+      model,
+      async () => {
+        const hostFinalization = hostPostToolFinalization(model, context, record.language);
+        if (hostFinalization) return hostFinalization;
+        record.budgetGuard.authorize(context, options);
+        const budgetReceipt = record.budgetGuard.receipt();
+        manager.appendCustomEntry(
+          budgetReceipt.schema_version,
+          budgetReceipt,
+        );
+        return await originalStreamFunction(model, context, {
+          ...options,
+          maxRetries: 0,
+        });
+      },
+    );
+    sessions.set(externalId, record);
+    sessionLifecycle.enforceHotLimit({ excludeSessionId: externalId });
+    return sessionState(record);
+  } catch (error) {
+    try { unsubscribe?.(); } catch {}
+    try { session.dispose(); } catch {}
+    sessions.delete(externalId);
+    if (createdSessionFile) rmSync(createdSessionFile, { force: true });
+    throw error;
+  }
 }
 
 async function promptSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "message", "streaming_behavior", "intent"]), "pi_prompt_invalid");
+  assertExactKeys(params, new Set(["session_id", "message", "streaming_behavior", "intent", "idea_source"]), "pi_prompt_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
-  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation") {
+  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== "idea_discovery_entry" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
     throw Object.assign(new Error("unsupported message intent"), { code: "pi_message_intent_invalid" });
   }
   const record = sessions.get(sessionId);
@@ -1199,6 +1297,8 @@ async function promptSession(requestId, params) {
   if (activeRequestBySession.has(sessionId)) {
     throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
   }
+  sessionLifecycle.admit({ excludeSessionId: sessionId });
+  sessionLifecycle.touch(sessionId);
   record.budgetGuard.beginMessage();
   activeRequestBySession.set(sessionId, requestId);
   const activeTools = record.session.getActiveToolNames();
@@ -1211,9 +1311,11 @@ async function promptSession(requestId, params) {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);
     } else if (intent === "advance_after_data_source_confirmation") {
       record.session.setActiveToolsByName([]);
+    } else if (intent === "clarify_research_entry" || intent === "idea_discovery_entry") {
+      record.session.setActiveToolsByName([]);
     }
     const ownerContext = await currentTurnOwnerContext(sessionId);
-    const prompt = modelPrompt(message, record.language, ownerContext, intent);
+    const prompt = modelPrompt(message, record.language, ownerContext, intent, params.idea_source);
     if (intent === "advance_after_data_source_confirmation") {
       await record.session.sendCustomMessage({
         customType: "easyicu_host_transition",
@@ -1261,13 +1363,15 @@ function regenerateTarget(record, userEntryId) {
 }
 
 async function regenerateSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent", "turn_intent"]), "pi_regenerate_invalid");
+  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent", "turn_intent", "idea_source"]), "pi_regenerate_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const record = sessions.get(sessionId);
   if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
   if (activeRequestBySession.has(sessionId) || record.session.isStreaming) {
     throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
   }
+  sessionLifecycle.admit({ excludeSessionId: sessionId });
+  sessionLifecycle.touch(sessionId);
   const target = regenerateTarget(record, params.user_entry_id);
   const supplied = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
@@ -1279,7 +1383,7 @@ async function regenerateSession(requestId, params) {
   ) {
     throw Object.assign(new Error("unsupported regenerate intent"), { code: "pi_regenerate_intent_invalid" });
   }
-  if (turnIntent && turnIntent !== "confirm_formal_plan_generation" && turnIntent !== "confirm_fresh_plan_generation" && turnIntent !== "confirm_planner_checkpoint_resume") {
+  if (turnIntent && turnIntent !== "confirm_formal_plan_generation" && turnIntent !== "confirm_fresh_plan_generation" && turnIntent !== "confirm_planner_checkpoint_resume" && turnIntent !== "idea_discovery_entry" && turnIntent !== "idea_mining_entry" && turnIntent !== "idea_mining_candidate_selection" && turnIntent !== "implement_scientific_question" && turnIntent !== "data_first_entry" && turnIntent !== "clarify_research_entry") {
     throw Object.assign(new Error("unsupported regenerate turn intent"), { code: "pi_message_intent_invalid" });
   }
   if (
@@ -1306,6 +1410,8 @@ async function regenerateSession(requestId, params) {
       record.session.setActiveToolsByName(["easyicu_run"]);
     } else if (turnIntent === "confirm_fresh_plan_generation" || turnIntent === "confirm_planner_checkpoint_resume") {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);
+    } else if (turnIntent === "clarify_research_entry" || turnIntent === "idea_discovery_entry") {
+      record.session.setActiveToolsByName([]);
     }
     const navigation = await record.session.navigateTree(target.entryId, { summarize: false });
     if (navigation.cancelled) {
@@ -1317,6 +1423,7 @@ async function regenerateSession(requestId, params) {
       record.language,
       ownerContext,
       turnIntent,
+      params.idea_source,
     ));
     return { ...sessionState(record), replaced_turn_index: target.turnIndex };
   } finally {
@@ -1354,6 +1461,17 @@ async function handleRequest(request) {
           workspace: [...ALL_TOOL_NAMES],
         },
       };
+    case "runtime.memory":
+      assertExactKeys(params, new Set(), "pi_runtime_memory_invalid");
+      return { pid: process.pid, ...sessionLifecycle.status() };
+    case "runtime.maintain": {
+      assertExactKeys(params, new Set(["exclude_session_id"]), "pi_runtime_maintain_invalid");
+      const excludeSessionId = boundedText(params.exclude_session_id, 160).trim();
+      sessionLifecycle.suspendIdle({ excludeSessionId });
+      sessionLifecycle.enforceHotLimit({ excludeSessionId });
+      sessionLifecycle.relieveMemoryPressure({ excludeSessionId });
+      return { pid: process.pid, ...sessionLifecycle.status() };
+    }
     case "session.create":
       return await createSession(params);
     case "session.prompt":
@@ -1362,6 +1480,7 @@ async function handleRequest(request) {
       assertExactKeys(params, new Set(["session_id", "user_entry_id"]), "pi_regenerate_inspect_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
       if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+      sessionLifecycle.touch(record.externalId);
       const target = regenerateTarget(record, params.user_entry_id);
       return {
         message: target.message,
@@ -1375,6 +1494,7 @@ async function handleRequest(request) {
       assertExactKeys(params, new Set(["session_id", "transcript_cursor", "transcript_limit"]), "pi_session_state_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
       if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+      sessionLifecycle.touch(record.externalId);
       const transcriptLimit = params.transcript_limit === undefined
         ? 100 : Number(params.transcript_limit);
       if (!Number.isInteger(transcriptLimit) || transcriptLimit < 1 || transcriptLimit > 200) {
@@ -1395,13 +1515,8 @@ async function handleRequest(request) {
     case "session.dispose": {
       assertExactKeys(params, new Set(["session_id"]), "pi_session_dispose_invalid");
       const sessionId = boundedText(params.session_id, 160).trim();
-      const record = sessions.get(sessionId);
-      if (record) {
-        record.unsubscribe?.();
-        record.session.dispose();
-        sessions.delete(sessionId);
-      }
-      return { disposed: Boolean(record), session_id: sessionId };
+      const disposed = sessionLifecycle.dispose(sessionId, { suspension: false });
+      return { disposed, session_id: sessionId };
     }
     default:
       throw Object.assign(new Error(`unknown method: ${boundedText(request.method, 160)}`), { code: "pi_method_unknown", requestId });
@@ -1448,11 +1563,7 @@ async function handleLine(line) {
 }
 
 async function shutdown() {
-  for (const record of sessions.values()) {
-    try { record.unsubscribe?.(); } catch {}
-    try { record.session.dispose(); } catch {}
-  }
-  sessions.clear();
+  sessionLifecycle.shutdown();
   try { rmSync(temporaryModelDir, { recursive: true, force: true }); } catch {}
 }
 

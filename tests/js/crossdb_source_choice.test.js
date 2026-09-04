@@ -63,7 +63,11 @@ global.EU_OFFICIAL_DEMO_SOURCES = {
   },
 };
 
-require(path.resolve(process.argv[2]));
+// Load the real escaping owner rather than stubbing it: a stub here would be
+// one more copy of the contract this module was just made to stop re-rolling.
+const moduleUnderTest = path.resolve(process.argv[2]);
+require(path.join(path.dirname(moduleUnderTest), 'html-escape.js'));
+require(moduleUnderTest);
 
 function fakeButton(disabled) {
   const handlers = {};

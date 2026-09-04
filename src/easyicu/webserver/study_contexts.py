@@ -218,6 +218,14 @@ _IDEA_HANDOFF_SCHEMA = {
     "prior_art_status": "text",
     "prior_art_result_count": "number",
     "prior_art_searched_at": "text",
+    "prior_art_adjudication_schema_version": "text",
+    "prior_art_adjudication_sha256": "text",
+    "prior_art_decision": "text",
+    "source_feasibility_schema_version": "text",
+    "source_feasibility_sha256": "text",
+    "source_feasibility_status": "text",
+    "idea_definition_sha256": "text",
+    "source_path_hash": "text",
 }
 _LITERATURE_AUTHORITY_SCHEMA = {
     "schema_version": "text",
@@ -1398,6 +1406,27 @@ def _sanitize_patch(
                 {
                     "error": "invalid_prior_art_handoff_count",
                     "field": "idea_handoff.prior_art_result_count",
+                }
+            )
+        for field in (
+            "prior_art_adjudication_sha256",
+            "source_feasibility_sha256",
+            "idea_definition_sha256",
+        ):
+            value = str(handoff.get(field) or "")
+            if value and not re.fullmatch(r"[a-f0-9]{64}", value):
+                raise StudyContextError(
+                    {
+                        "error": "invalid_idea_handoff_digest",
+                        "field": f"idea_handoff.{field}",
+                    }
+                )
+        source_path_hash = str(handoff.get("source_path_hash") or "")
+        if source_path_hash and not re.fullmatch(r"[a-f0-9]{16}", source_path_hash):
+            raise StudyContextError(
+                {
+                    "error": "invalid_idea_handoff_source_hash",
+                    "field": "idea_handoff.source_path_hash",
                 }
             )
         patch["idea_handoff"] = handoff

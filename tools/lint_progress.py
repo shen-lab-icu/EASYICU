@@ -11,6 +11,8 @@ row count; this one guards the middle layer so it does not rot —
 - every current ``task_logs/*.md`` evidence pointer resolves in its declared
   workspace or ``EASYICU/`` owner;
 - every page keeps the 7 required sections (🎯 📍 🔨 ✅ ⏭️ ⚠️ 📚);
+- no module root contains a second ``CURRENT*.md`` that can be mistaken for
+  current truth (dated snapshots belong under ``history/``);
 - **no page outgrows the one thing it exists to do** (see below);
 - the README index lists every module directory that actually has a CURRENT.md.
 
@@ -190,6 +192,15 @@ def lint_root(
 
     errors: list[str] = []
     warnings: list[str] = []
+    duplicate_currents = sorted(
+        path for path in root.glob("*/CURRENT*.md") if path.name != "CURRENT.md"
+    )
+    for path in duplicate_currents:
+        errors.append(
+            f"{path.relative_to(root)}: 模块根目录存在非标准 CURRENT 副本 —— "
+            "当前真相只能叫 CURRENT.md；历史快照移入 history/"
+        )
+
     workspace_root = root.resolve().parent
     for path in currents:
         e, w = lint_current(

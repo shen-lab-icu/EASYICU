@@ -25,12 +25,13 @@ global.EU_VIZ_EMBEDDED_WORKBENCH = {
   mount(host, payload, view) { host.innerHTML = this.render(payload, view); },
 };
 
+load('src/easyicu/webserver/static/js/screens-guided-pi-modules.js');
 load('src/easyicu/webserver/static/js/screens-guided-pi-resources.js');
 load('src/easyicu/webserver/static/js/screens-guided-pi-data-preview.js');
 load('src/easyicu/webserver/static/js/screens-guided-pi-workbench-preview.js');
 
 test('data workbench resource keeps only immutable coordinates in the button', () => {
-  const owner = global.EU_GUIDED_PI_RESOURCES.create({ esc: global.EU_HTML.esc });
+  const owner = global.EasyICU.guidedPi.require('resources').create({ esc: global.EU_HTML.esc });
   const resource = {
     kind: 'data_workbench_snapshot',
     view: 'cohort_summary',
@@ -45,7 +46,7 @@ test('data workbench resource keeps only immutable coordinates in the button', (
 });
 
 test('cohort preview delegates to the native embedded workbench', () => {
-  const html = global.EU_GUIDED_PI_DATA_PREVIEW.render({
+  const html = global.EasyICU.guidedPi.require('dataPreview').render({
     source: { label: 'MIMIC-IV export' },
     summary: { cohort_size: 120, modules: 2, mortality_pct: 12.5 },
     quality: { median_coverage_pct: 91.7 },
@@ -68,7 +69,7 @@ test('cohort preview delegates to the native embedded workbench', () => {
 });
 
 test('patient preview delegates without exposing direct identifier labels', () => {
-  const html = global.EU_GUIDED_PI_DATA_PREVIEW.render({
+  const html = global.EasyICU.guidedPi.require('dataPreview').render({
     selected: { label: 'Entity 3', outcome: 'Survived' },
     time_lanes: [{
       label: 'Vitals', status: 'ready', signals: [{
@@ -85,7 +86,7 @@ test('patient preview delegates without exposing direct identifier labels', () =
 test('pre-analysis readiness view distinguishes source coverage from executed analysis', () => {
   global.EU_LANG = 'zh';
   const host = { innerHTML: '', querySelector() { return null; } };
-  global.EU_GUIDED_PI_WORKBENCH_PREVIEW.mount(host, {
+  global.EasyICU.guidedPi.require('workbenchPreview').mount(host, {
     review_stage: 'post_plan',
     status: 'ready_for_analysis',
     denominator: { count: 94458, analysis_unit: 'ICU stay' },

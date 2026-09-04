@@ -88,15 +88,9 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert "easyicu.pi-turn-study-snapshot/1" in entrypoint
     assert 'turnIntent === "advance_after_data_source_confirmation"' in entrypoint
     assert 'customType: "easyicu_host_transition"' in entrypoint
-    assert "do not ask the next setup question" in entrypoint
-    assert "one concise data-preparation confirmation, not a study plan" in entrypoint
-    assert "MUST infer and propose one concrete recommended value" in entrypoint
-    assert "none may be omitted, described as unresolved, or deferred" in entrypoint
-    assert "Do not propose or discuss dependence handling" in entrypoint
-    assert "数据准备确认（不是正式研究计划）" in entrypoint
-    assert "do not offer an individual outcome, cohort, or time-window question" in entrypoint
-    assert "do not emit Markdown heading markers such as #, ##, or ###" in entrypoint
-    assert "exactly two hyphen-prefixed Markdown bullets; never use a numbered list" in entrypoint
+    assert "extraction is not a prerequisite for generating a candidate plan" in entrypoint
+    assert "Do not invent data-preparation inputs" in entrypoint
+    assert "one concise data-preparation confirmation, not a study plan" not in entrypoint
     assert "the next unresolved key scientific decision" not in entrypoint
     assert "pi_regenerate_intent_invalid" in entrypoint
     projection = (APP_DIR / "src" / "event-projection.mjs").read_text(encoding="utf-8")
@@ -254,7 +248,7 @@ def test_initial_question_update_uses_host_finalization_without_second_provider_
         role: 'toolResult', toolCallId: 'call-1', toolName: 'easyicu_update_study_context',
         isError: false, content: [], details: {{
           status: 'ok', code: 'study_context_updated', details: {{ workflow: {{
-            next_action_code: 'study_setup_incomplete',
+            next_action_code: 'provider_ready_to_generate_plan',
             missing_setup_fields: ['outcome', 'primary_exposure', 'time_window'],
             study_setup_receipt: {{ configuration: {{ data_source: {{ database: 'miiv' }} }} }},
           }} }},
@@ -286,6 +280,148 @@ def test_initial_question_update_uses_host_finalization_without_second_provider_
     ]
     assert payload["result"]["usage"]["totalTokens"] == 0
     assert "尚未开始数据提取或分析" in payload["result"]["content"][0]["text"]
+
+
+def test_zero_direction_entry_uses_deterministic_host_routing_reply() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    module = APP_DIR / "src" / "post-tool-finalization.mjs"
+    script = f"""
+      import {{ hostPostToolFinalization }} from {json.dumps(module.as_uri())};
+      const model = {{ api: 'openai-completions', provider: 'test', id: 'test' }};
+      const user = {{
+        role: 'user',
+        content: '我还没有方向\\n\\n[EASYICU_ZERO_DIRECTION_ENTRY_V1]\\nroute only',
+      }};
+      const stream = hostPostToolFinalization(model, {{ messages: [user] }}, 'zh');
+      if (!stream) throw new Error('expected deterministic routing finalization');
+      const events = [];
+      for await (const event of stream) events.push(event);
+      const result = await stream.result();
+      console.log(JSON.stringify({{ types: events.map(event => event.type), result }}));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    payload = json.loads(completed.stdout)
+    assert payload["result"]["usage"]["totalTokens"] == 0
+    text = payload["result"]["content"][0]["text"]
+    assert "不必先写出完整研究问题。" in text
+    assert "EasyICU 仍会先确认数据源；" in text
+    assert text.endswith("- 从现有 ICU 数据开始")
+
+
+def test_idea_selection_forces_exact_literature_search_after_mining() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    module = APP_DIR / "src" / "post-tool-finalization.mjs"
+    script = f"""
+      import {{ hostPostToolFinalization }} from {json.dumps(module.as_uri())};
+      const model = {{ api: 'openai-completions', provider: 'test', id: 'test' }};
+      const user = {{
+        role: 'user', timestamp: 1,
+        content: '选择方向 1：乳酸动态轨迹与新发 AKI\\n\\n[EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1]\\nChinese\\n\\n[EASYICU_IDEA_SELECTION_V1]',
+      }};
+      const assistant = {{
+        role: 'assistant',
+        content: [{{
+          type: 'toolCall', id: 'call-mine', name: 'easyicu_mine_ideas',
+          arguments: {{ topic: '乳酸动态轨迹与新发 AKI' }},
+        }}],
+      }};
+      const toolResult = {{
+        role: 'toolResult', toolCallId: 'call-mine', toolName: 'easyicu_mine_ideas',
+        isError: false, content: [], details: {{
+          status: 'ok', code: 'easyicu_idea_mined', details: {{ idea_mining: {{
+            run_id: 'idea_run_exact', selected_idea_id: 'idea_exact',
+          }} }},
+        }},
+      }};
+      const stream = hostPostToolFinalization(
+        model, {{ messages: [user, assistant, toolResult] }}, 'zh',
+      );
+      if (!stream) throw new Error('expected mandatory literature continuation');
+      const events = [];
+      for await (const event of stream) events.push(event);
+      const result = await stream.result();
+      console.log(JSON.stringify({{ types: events.map(event => event.type), result }}));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    payload = json.loads(completed.stdout)
+    assert payload["types"] == [
+        "start",
+        "toolcall_start",
+        "toolcall_delta",
+        "toolcall_end",
+        "done",
+    ]
+    result = payload["result"]
+    assert result["stopReason"] == "toolUse"
+    assert result["usage"]["totalTokens"] == 0
+    assert result["content"] == [
+        {
+            "type": "toolCall",
+            "id": result["content"][0]["id"],
+            "name": "easyicu_search_literature",
+            "arguments": {
+                "topic": "选择方向 1：乳酸动态轨迹与新发 AKI",
+                "run_id": "idea_run_exact",
+                "idea_id": "idea_exact",
+            },
+        }
+    ]
+
+
+def test_failed_mining_does_not_force_literature() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    module = APP_DIR / "src" / "post-tool-finalization.mjs"
+    script = f"""
+      import {{ hostPostToolFinalization }} from {json.dumps(module.as_uri())};
+      const model = {{ api: 'openai-completions', provider: 'test', id: 'test' }};
+      const user = {{ role: 'user', timestamp: 1, content: 'idea mining' }};
+      const assistant = {{
+        role: 'assistant', content: [{{
+          type: 'toolCall', id: 'call-mine', name: 'easyicu_mine_ideas', arguments: {{}},
+        }}],
+      }};
+      const toolResult = {{
+        role: 'toolResult', toolCallId: 'call-mine', toolName: 'easyicu_mine_ideas',
+        isError: true, content: [], details: {{
+          status: 'blocked', code: 'idea_topic_required',
+        }},
+      }};
+      console.log(String(hostPostToolFinalization(
+        model, {{ messages: [user, assistant, toolResult] }}, 'zh',
+      )));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.strip() == "null"
 
 
 def test_initial_question_without_source_stops_at_database_selection() -> None:
@@ -827,6 +963,10 @@ def test_sidecar_environment_is_allowlisted_and_workspace_is_private(
             "LANG": "en_US.UTF-8",
             "EASYICU_PI_API_KEY": "pi-only-secret",
             "EASYICU_PI_MODEL": "gpt5.6 luna",
+            "EASYICU_PI_MAX_OPEN_SESSIONS": "6",
+            "EASYICU_PI_SESSION_IDLE_SECONDS": "900",
+            "EASYICU_PI_SOFT_RSS_MB": "800",
+            "EASYICU_PI_EMERGENCY_RSS_MB": "1200",
             "OPENAI_API_KEY": "scientific-secret",
             "ANTHROPIC_API_KEY": "scientific-secret",
             "TAVILY_API_KEY": "search-secret",
@@ -850,8 +990,26 @@ def test_sidecar_environment_is_allowlisted_and_workspace_is_private(
         "LANG": "en_US.UTF-8",
         "EASYICU_PI_API_KEY": "pi-only-secret",
         "EASYICU_PI_MODEL": "gpt5.6 luna",
+        "EASYICU_PI_MAX_OPEN_SESSIONS": "6",
+        "EASYICU_PI_SESSION_IDLE_SECONDS": "900",
+        "EASYICU_PI_SOFT_RSS_MB": "800",
+        "EASYICU_PI_EMERGENCY_RSS_MB": "1200",
         "EASYICU_PI_SESSION_DIR": str((tmp_path / "sessions").resolve()),
         "EASYICU_PI_CWD": str((tmp_path / "workspace").resolve()),
+    }
+
+
+def test_memory_diagnostics_do_not_start_a_stopped_sidecar(tmp_path: Path) -> None:
+    gateway = PiGatewayClient(app_dir=APP_DIR, session_dir=tmp_path)
+
+    assert gateway.memory_status() == {
+        "running": False,
+        "pid": None,
+        "rss_mb": 0.0,
+    }
+    assert gateway.maintain_sessions() == {
+        "running": False,
+        "maintained": False,
     }
 
 
@@ -1367,7 +1525,9 @@ def test_sidecar_projects_only_verified_literature_click_targets() -> None:
             host_rebind_after_turn: true, resources: [
             {{ kind: 'literature_source', title: 'Source-backed article',
                url: 'https://pubmed.ncbi.nlm.nih.gov/12345/', pmid: '12345',
-               venue: 'Critical Care', year: '2025' }},
+               venue: 'Critical Care', year: '2025',
+               retrieval_fit: 'direct_retrieval_fit',
+               retrieval_rationale: 'Direct retrieval fit; full screening pending.' }},
             {{ kind: 'literature_source', title: '<img src=x onerror=alert(1)>',
                url: 'javascript:alert(1)', pmid: '999' }}
           ] }}
@@ -1395,9 +1555,77 @@ def test_sidecar_projects_only_verified_literature_click_targets() -> None:
             "pmid": "12345",
             "media_type": "text/html",
             "authority_class": "literature_retrieval_candidate",
+            "retrieval_fit": "direct_retrieval_fit",
+            "retrieval_rationale": "Direct retrieval fit; full screening pending.",
         }
     ]
     assert payload["host_rebind_after_turn"] is True
+
+
+def test_sidecar_projects_bounded_idea_mining_preview_metadata() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    projection = (APP_DIR / "src" / "event-projection.mjs").as_uri()
+    receipt = {
+        "status": "ok",
+        "code": "easyicu_idea_mined",
+        "summary": "Candidate created",
+        "owner": "easyicu.webserver.ideas.mining",
+        "details": {
+            "idea_mining": {
+                "run_id": "idea_123",
+                "selected_idea_id": "idea_candidate",
+                "idea": {
+                    "idea_title": "Fluid balance and ventilator liberation",
+                    "population": "Adult ventilated ICU patients",
+                    "exposure_or_predictor": "24-hour cumulative fluid balance",
+                    "outcome": None,
+                    "go_no_go": "hold",
+                    "go_no_go_reason": "Outcome requires confirmation",
+                    "next_action": "Confirm the liberation endpoint",
+                    "mapped_concepts": [
+                        {
+                            "concept_id": "fluid_balance_cumulative",
+                            "module": "renal",
+                        }
+                    ],
+                },
+                "feasibility": {
+                    "status": "design_incomplete",
+                    "reportable": False,
+                },
+                "private_path": "/must/not/leak",
+            }
+        },
+    }
+    script = f"""
+      import {{ normalizePiEvent, projectTranscriptMessage }} from {json.dumps(projection)};
+      const receipt = {json.dumps(receipt)};
+      console.log(JSON.stringify({{
+        live: normalizePiEvent({{
+          type: 'tool_execution_end', toolCallId: 'idea-1',
+          toolName: 'easyicu_mine_ideas', result: {{details: receipt}},
+        }}),
+        saved: projectTranscriptMessage({{
+          role: 'toolResult', toolCallId: 'idea-1',
+          toolName: 'easyicu_mine_ideas', details: receipt,
+        }}),
+      }}));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["live"]["idea_mining"]["idea"]["outcome"] == ""
+    assert payload["saved"]["content"][0]["idea_mining"]["idea"][
+        "go_no_go"
+    ] == "hold"
+    assert "private_path" not in completed.stdout
 
 
 def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> None:
@@ -1444,6 +1672,21 @@ def test_data_source_transition_appends_a_hidden_mechanically_read_only_host_tur
     )[0]
     assert "sendCustomMessage" in prompt_session
     assert "navigateTree" not in prompt_session
+
+
+def test_zero_direction_entry_is_a_tool_free_routing_turn() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    prompt_session = entrypoint.split("async function promptSession", 1)[1].split(
+        "function regenerateTarget", 1
+    )[0]
+
+    assert 'intent === "clarify_research_entry" || intent === "idea_discovery_entry"' in prompt_session
+    assert "record.session.setActiveToolsByName([])" in prompt_session
+    assert "do not invent candidate ideas" in entrypoint
+    regenerate_session = entrypoint.split("async function regenerateSession", 1)[1].split(
+        "async function handleRequest", 1
+    )[0]
+    assert 'turnIntent === "clarify_research_entry" || turnIntent === "idea_discovery_entry"' in regenerate_session
 
 
 def test_data_source_transition_cannot_move_a_failed_plan_back_to_data_preparation() -> None:
@@ -1498,6 +1741,28 @@ def test_system_prompt_keeps_declined_optional_sensitivity_out_of_study_context(
 def test_research_system_prompt_requires_tool_first_idea_mining() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
     assert "Tool-first Idea Mining rule" in entrypoint
+    assert "accept one informal sentence, a PDF, or an article URL" in entrypoint
+    assert "Never require a complete PICO" in entrypoint
+    assert "an exploration seed, not a finished scientific question" in entrypoint
+    assert "one informal sentence, a PDF, or an article URL" in entrypoint
+    assert "immediately attempt easyicu_search_literature" in entrypoint
+    assert "do not make the researcher choose abstract research axes" in entrypoint
+    assert "Idea Mining candidate synthesis rule" in entrypoint
+    assert "值得继续验证的创新方向" in entrypoint
+    assert "the possible innovation point" in entrypoint
+    assert "the closest retrieved literature signal" in entrypoint
+    assert "owner-projected Chinese construct answerability label and explanation" in entrypoint
+    assert "Never replace an available construct_answerability verdict with the word unknown" in entrypoint
+    assert "begin with one evidence verdict" in entrypoint
+    assert "If two directions keep the same population, exposure, and outcome" in entrypoint
+    assert "direct retrieval candidate includes an abstract excerpt" in entrypoint
+    assert "Preserve every reported contrast, timing stratum, and subgroup exactly" in entrypoint
+    assert "Never merge weekday night with weekend" in entrypoint
+    assert "ask at most one plain-language preference" in entrypoint
+    assert "Never recreate PICO, candidate ledger, source parsing" in entrypoint
+    assert "evaluate a research idea or candidate" in entrypoint
+    assert "explicitly names Idea Mining" in entrypoint
+    assert "do not route the request into ordinary study setup" in entrypoint
     assert "do not author a candidate from general model knowledge" in entrypoint
     assert "call easyicu_mine_ideas before writing the answer" in entrypoint
     assert "use easyicu_accept_idea_handoff with its exact run_id and idea_id" in entrypoint

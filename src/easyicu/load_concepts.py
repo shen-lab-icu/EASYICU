@@ -746,7 +746,7 @@ class ConceptLoader:
         try:
             df = self._safe_load_table(table_name, required_columns)
         except Exception as e:
-            print(f"警告: 无法加载表 {table_name}: {e}")
+            logger.warning(f"无法加载表 {table_name}: {e}")
             return pd.DataFrame()
         
         # 2. 过滤患者
@@ -870,13 +870,13 @@ class ConceptLoader:
         try:
             df = self._safe_load_table(table_name, required_columns)
         except Exception as e:
-            print(f"警告: 无法加载表 {table_name}: {e}")
+            logger.warning(f"无法加载表 {table_name}: {e}")
             return pd.DataFrame()
         
         # 2. 过滤 sub_var (如 itemid)
         if source.sub_var and source.ids:
             if source.sub_var not in df.columns:
-                print(f"警告: 表 {table_name} 中找不到列 {source.sub_var}")
+                logger.warning(f"表 {table_name} 中找不到列 {source.sub_var}")
                 return pd.DataFrame()
             df = df[df[source.sub_var].isin(source.ids)]
         
@@ -1211,7 +1211,7 @@ class ConceptLoader:
                     # 从字典中加载子概念定义
                     concept_dict = load_dictionary(self._src_name)
                     if sub_name not in concept_dict:
-                        print(f"警告: 找不到子概念 {sub_name}")
+                        logger.warning(f"找不到子概念 {sub_name}")
                         continue
                     sub_concept = concept_dict[sub_name]
                     
@@ -1224,7 +1224,7 @@ class ConceptLoader:
                         sub_data[sub_name] = data
                         
                 except Exception as e:
-                    print(f"警告: 加载子概念 {sub_name} 失败: {e}")
+                    logger.warning(f"加载子概念 {sub_name} 失败: {e}")
                     import traceback
                     traceback.print_exc()
                     continue

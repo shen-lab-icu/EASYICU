@@ -96,6 +96,17 @@ _IDENTITIES = {
         screening_role_term="lactate",
         screening_required_terms=(),
     ),
+    "fluid_balance_cumulative": LiteratureConceptIdentity(
+        concept_id="fluid_balance_cumulative",
+        canonical_phrase="cumulative fluid balance",
+        retrieval_alternatives=(
+            ("cumulative fluid balance",),
+            ("fluid balance",),
+            ("fluid overload",),
+        ),
+        screening_role_term="fluid balance",
+        screening_required_terms=(),
+    ),
     "aki": LiteratureConceptIdentity(
         concept_id="aki",
         canonical_phrase="acute kidney injury",
@@ -116,6 +127,7 @@ _IDENTITIES = {
 
 _PHRASE_ALIASES = {
     "hospital_mortality": "hospital mortality",
+    "mechanical ventilation liberation outcomes": "ventilator liberation",
 }
 
 

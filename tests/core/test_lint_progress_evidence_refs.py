@@ -1,7 +1,7 @@
 from datetime import date
 from pathlib import Path
 
-from tools.lint_progress import lint_current
+from tools.lint_progress import lint_current, lint_root
 
 
 def _current_text(*references: str) -> str:
@@ -73,3 +73,42 @@ def test_progress_lint_fails_on_a_missing_current_evidence_pointer(
     )
 
     assert errors == ["web/CURRENT.md:15: 缺失仓库证据 `EASYICU/task_logs/missing.md`"]
+
+
+def test_progress_lint_rejects_duplicate_current_files_in_module_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "项目进度"
+    current = root / "agent" / "CURRENT.md"
+    current.parent.mkdir(parents=True)
+    current.write_text(_current_text(), encoding="utf-8")
+    (current.parent / "CURRENT 2.md").write_text(_current_text(), encoding="utf-8")
+    (root / "README.md").write_text(
+        "| [agent](agent/CURRENT.md) | current | in_progress | 2026-08-13 | X |\n",
+        encoding="utf-8",
+    )
+
+    errors, _warnings = lint_root(root, today=date(2026, 8, 13), stale_days=21)
+
+    assert errors == [
+        "agent/CURRENT 2.md: 模块根目录存在非标准 CURRENT 副本 —— "
+        "当前真相只能叫 CURRENT.md；历史快照移入 history/"
+    ]
+
+
+def test_progress_lint_allows_current_snapshots_under_history(tmp_path: Path) -> None:
+    root = tmp_path / "项目进度"
+    current = root / "agent" / "CURRENT.md"
+    current.parent.mkdir(parents=True)
+    current.write_text(_current_text(), encoding="utf-8")
+    history = current.parent / "history" / "CURRENT_20260813.md"
+    history.parent.mkdir()
+    history.write_text(_current_text(), encoding="utf-8")
+    (root / "README.md").write_text(
+        "| [agent](agent/CURRENT.md) | current | in_progress | 2026-08-13 | X |\n",
+        encoding="utf-8",
+    )
+
+    errors, _warnings = lint_root(root, today=date(2026, 8, 13), stale_days=21)
+
+    assert errors == []

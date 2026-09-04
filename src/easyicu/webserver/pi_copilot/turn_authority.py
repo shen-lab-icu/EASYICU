@@ -8,6 +8,8 @@ import unicodedata
 __all__ = [
     "explicitly_confirms_easyicu_registered_source",
     "infer_explicit_turn_actions",
+    "infer_idea_mining_followup_intent",
+    "infer_research_entry_intent",
 ]
 
 
@@ -146,3 +148,56 @@ def infer_explicit_turn_actions(message: str) -> frozenset[str]:
         marker in text for marker in _EXTRACTION_SCOPE_MARKERS
     )
     return frozenset({"extract"}) if confirmed and extraction_scoped else frozenset()
+
+
+def infer_research_entry_intent(message: str) -> str:
+    """Classify only an unscoped first turn in a blank research project.
+
+    Explicit starter wording wins.  A plain scientific sentence remains
+    ambiguous because completeness of prose does not prove whether the
+    researcher wants exploration or implementation.
+    """
+
+    text = _normalize(message)
+    if re.search(
+        r"(?:研究问题|科学问题).{0,12}(?:已经|已|很)?(?:明确|确定|定稿)|"
+        r"(?:直接|进入).{0,12}(?:研究方案|数据准备|实现)|"
+        r"(?:不要|无需|跳过).{0,8}(?:idea mining|想法发掘)|"
+        r"(?:生成|制定|形成|准备).{0,16}(?:研究|分析)?计划|"
+        r"(?:generate|draft|prepare|create)(?:\s+\w+){0,6}\s+(?:research\s+|analysis\s+)?plan",
+        text,
+    ):
+        return "implement_scientific_question"
+    if re.search(
+        r"(?:从|基于).{0,8}(?:icu )?数据(?:开始|出发)|"
+        r"(?:提取|分析).{0,8}(?:icu )?数据|构建队列",
+        text,
+    ):
+        return "data_first_entry"
+    if re.search(
+        r"(?:我|目前|现在)?(?:还)?没有.{0,8}(?:具体)?(?:研究)?(?:方向|想法|选题)|"
+        r"不知道.{0,10}(?:做什么研究|研究什么|选什么题|从哪里开始)",
+        text,
+    ):
+        return "idea_discovery_entry"
+    if re.search(
+        r"idea mining|(?:发掘|探索|评估|比较).{0,12}(?:想法|方向|idea)|"
+        r"(?:想法|idea).{0,12}(?:发掘|探索|评估|比较)",
+        text,
+    ):
+        return "idea_mining_entry"
+    return "clarify_research_entry"
+
+
+def infer_idea_mining_followup_intent(message: str) -> str | None:
+    """Recognize only a host-rendered Idea Mining candidate selection."""
+
+    text = _normalize(message)
+    if re.match(
+        r"^(?:(?:我\s*)?(?:选择|继续)方向\s*\d+\s*[：:]|"
+        r"我\s*更想研究方向\s*\d+\s*[：:]|"
+        r"(?:select|continue)\s+direction\s*\d+\s*:)",
+        text,
+    ):
+        return "idea_mining_candidate_selection"
+    return None

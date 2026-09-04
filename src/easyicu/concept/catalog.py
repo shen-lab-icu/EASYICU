@@ -167,6 +167,7 @@ CONCEPT_DICTIONARY = {
     'height': ('Height', '身高', 'cm'),
     'sex': ('Sex', '性别', ''),
     'weight': ('Weight', '体重', 'kg'),
+    'icu_unit_type': ('ICU Unit Type', 'ICU单元类型', 'category'),
 
     # SOFA-1 评分
     'sofa': ('SOFA Score (Total)', 'SOFA总分', '0-24'),
@@ -253,29 +254,43 @@ CONCEPT_DICTIONARY = {
     'uo_12h': ('Average Urine Output Rate (past 12h)', '过去12小时平均尿量率', 'mL/kg/h'),
     'uo_24h': ('Average Urine Output Rate (past 24h)', '过去24小时平均尿量率', 'mL/kg/h'),
 
-    # KDIGO AKI (急性肾损伤) - 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo
-    'aki': ('Acute Kidney Injury', '急性肾损伤', 'boolean'),
-    'aki_stage': ('AKI Stage (KDIGO)', 'AKI分期（KDIGO标准）', '0-3'),
-    'aki_stage_creat': ('AKI Stage (Creatinine)', 'AKI分期（肌酐）', '0-3'),
-    'aki_stage_uo': ('AKI Stage (Urine Output)', 'AKI分期（尿量）', '0-3'),
-    'aki_stage_rrt': ('AKI Stage (RRT)', 'AKI分期（RRT）', '0-3'),
-    'aki_severe': ('Severe AKI (KDIGO Stage 2-3)', '严重AKI（KDIGO 2-3期）', 'boolean'),
-    'aki_severe_creat': ('Severe AKI by Creatinine', '肌酐标准严重AKI', 'boolean'),
-    'aki_severe_uo': ('Severe AKI by Urine Output', '尿量标准严重AKI', 'boolean'),
-    'aki_severe_rrt': ('Severe AKI by RRT', 'RRT标准严重AKI', 'boolean'),
-    'aki_severe_assessable': ('Severe AKI Assessable', '严重AKI可判定性', 'boolean'),
-    'aki_severe_ascertainment': ('Severe AKI Ascertainment', '严重AKI判定状态', 'category'),
-    # These are receipts rather than measurements.  Their explicit storage
-    # kinds keep native-v2 exports portable and prevent categorical
-    # ascertainment states from being coerced to floating point.
-    'aki_assessable': ('KDIGO AKI Assessable', 'KDIGO AKI 可判定性', 'boolean'),
-    'aki_ascertainment': ('KDIGO AKI Ascertainment', 'KDIGO AKI 判定状态', 'category'),
-    'aki_assessment_reason': ('KDIGO AKI Assessment Reason', 'KDIGO AKI 判定原因', 'category'),
-    'observation_window_coverage': ('KDIGO Observation-window Coverage', 'KDIGO 观察窗覆盖度', 'category'),
-    'creatinine_ascertainment': ('KDIGO Creatinine-component Ascertainment', 'KDIGO 肌酐组件判定状态', 'category'),
-    'creatinine_ascertainment_reason': ('KDIGO Creatinine-component Ascertainment Reason', 'KDIGO 肌酐组件判定原因', 'category'),
-    'urine_ascertainment': ('KDIGO Urine-output-component Ascertainment', 'KDIGO 尿量组件判定状态', 'category'),
-    'rrt_ascertainment': ('KDIGO RRT-component Ascertainment', 'KDIGO RRT 组件判定状态', 'category'),
+    # AKI V2: public reference + source-native comparison.  The former
+    # strict/assessable phenotype is intentionally absent from the catalog.
+    'aki_reference': ('AKI (Public Reference)', 'AKI（公共参考口径）', 'boolean'),
+    'aki_stage_reference': ('AKI Stage (Public Reference)', 'AKI分期（公共参考口径）', '0-3'),
+    'aki_severe_reference': ('Severe AKI (Public Reference)', '严重AKI（公共参考口径）', 'boolean'),
+    'aki_stage_creat_reference': ('Reference AKI Stage (Creatinine)', '参考AKI分期（肌酐）', '0-3'),
+    'aki_stage_uo_reference': ('Reference AKI Stage (Urine Output)', '参考AKI分期（尿量）', '0-3'),
+    'aki_stage_rrt_reference': ('Reference AKI Stage (Active RRT)', '参考AKI分期（活动RRT）', '0-3'),
+    'aki_stage_reference_smoothed_6h': ('Reference AKI Stage (6h Past Maximum)', '参考AKI分期（6小时向后最大值）', '0-3'),
+    'aki_reference_profile': ('AKI Reference Profile ID', 'AKI参考口径版本', 'category'),
+    'aki_reference_status': ('AKI Reference Evaluation Status', 'AKI参考口径评估状态', 'category'),
+    'aki_reference_authority': ('AKI Reference Authority', 'AKI参考口径权威类型', 'category'),
+    'aki_reference_reliability_grade': ('AKI Reference Reliability Grade', 'AKI参考口径可靠性等级', 'category'),
+    'aki_reference_fidelity': ('AKI Reference Port Fidelity', 'AKI参考口径移植忠实度', 'category'),
+    'aki_reference_rrt_scope': ('AKI Reference RRT Scope', 'AKI参考口径RRT范围', 'category'),
+    'aki_reference_uses_future': ('AKI Reference Uses Future Information', 'AKI参考口径是否使用未来信息', 'boolean'),
+    'aki_source_native': ('AKI (Source-native)', 'AKI（数据库原生口径）', 'boolean'),
+    'aki_stage_source_native': ('AKI Stage (Source-native)', 'AKI分期（数据库原生口径）', '0-3'),
+    'aki_severe_source_native': ('Severe AKI (Source-native)', '严重AKI（数据库原生口径）', 'boolean'),
+    'aki_stage_creat_source_native': ('Source-native AKI Stage (Creatinine)', '原生AKI分期（肌酐）', '0-3'),
+    'aki_stage_uo_source_native': ('Source-native AKI Stage (Urine Output)', '原生AKI分期（尿量）', '0-3'),
+    'aki_stage_crrt_source_native': ('Source-native AKI Stage (CRRT)', '原生AKI分期（CRRT）', '0-3'),
+    'aki_stage_source_native_smoothed': ('Source-native AKI Stage (Smoothed)', '原生AKI分期（平滑后）', '0-3'),
+    'aki_source_native_profile': ('Source-native AKI Profile ID', '原生AKI口径版本', 'category'),
+    'aki_source_native_status': ('Source-native AKI Evaluation Status', '原生AKI评估状态', 'category'),
+    'aki_source_native_authority': ('Source-native AKI Authority', '原生AKI权威类型', 'category'),
+    'aki_source_native_reliability_grade': ('Source-native AKI Reliability Grade', '原生AKI可靠性等级', 'category'),
+    'aki_source_native_fidelity': ('Source-native AKI Fidelity', '原生AKI忠实度', 'category'),
+    'aki_source_native_ascertainment': ('Source-native AKI Ascertainment', '原生AKI判定回执', 'category'),
+    'aki_source_native_reason': ('Source-native AKI Availability Reason', '原生AKI可用性原因', 'category'),
+    'aki_source_native_time_scale': ('Source-native AKI Time Scale', '原生AKI时间尺度', 'category'),
+    'aki_source_native_uses_future': ('Source-native AKI Uses Future Information', '原生AKI是否使用未来信息', 'boolean'),
+    'kidney_observation_window_coverage': ('Kidney Observation-window Coverage', '肾脏观察窗覆盖度', 'category'),
+    'creatinine_evidence_status': ('Creatinine Evidence Status', '肌酐证据状态', 'category'),
+    'creatinine_evidence_reason': ('Creatinine Evidence Reason', '肌酐证据原因', 'category'),
+    'urine_evidence_status': ('Urine-output Evidence Status', '尿量证据状态', 'category'),
+    'rrt_evidence_status': ('RRT Evidence Status', 'RRT证据状态', 'category'),
     # 🔧 2026-02-12: 添加规范化后的 KDIGO 扩展列
     'creat_low_past_48hr': ('Lowest Creatinine in Past 48h', '过去48小时内最低肌酐', 'mg/dL'),
     'creat_low_past_7day': ('Baseline Creatinine (7-day lowest)', '基线肌酐（7天内最低值）', 'mg/dL'),
@@ -528,18 +543,33 @@ CONCEPT_GROUPS_INTERNAL = {
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
-    # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
-    'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
-              'aki_severe', 'aki_severe_creat', 'aki_severe_uo',
-              'aki_severe_rrt', 'aki_severe_assessable',
-              'aki_severe_ascertainment',
-              # KDIGO ascertainment receipt.  ``aki_stage == 0`` alone is not
-              # evidence of a complete negative when an input component was
-              # unavailable, so export the state alongside the stage.
-              'aki_assessable', 'aki_ascertainment', 'aki_assessment_reason',
-              'observation_window_coverage', 'creatinine_ascertainment',
-              'creatinine_ascertainment_reason',
-              'urine_ascertainment', 'rrt_ascertainment',
+    'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria',
+              # Current AKI contract: one public-reference phenotype plus a
+              # parallel source-native comparison or explicit unavailable
+              # receipt.  Historical strict/harmonized disease labels are not
+              # part of this module.
+              'aki_reference', 'aki_stage_reference', 'aki_severe_reference',
+              'aki_stage_creat_reference', 'aki_stage_uo_reference',
+              'aki_stage_rrt_reference', 'aki_stage_reference_smoothed_6h',
+              'aki_reference_profile', 'aki_reference_status',
+              'aki_reference_authority', 'aki_reference_reliability_grade',
+              'aki_reference_fidelity', 'aki_reference_rrt_scope',
+              'aki_reference_uses_future',
+              'aki_source_native', 'aki_stage_source_native',
+              'aki_severe_source_native', 'aki_stage_creat_source_native',
+              'aki_stage_uo_source_native', 'aki_stage_crrt_source_native',
+              'aki_stage_source_native_smoothed',
+              'aki_source_native_profile', 'aki_source_native_status',
+              'aki_source_native_authority',
+              'aki_source_native_reliability_grade',
+              'aki_source_native_fidelity',
+              'aki_source_native_ascertainment', 'aki_source_native_reason',
+              'aki_source_native_time_scale',
+              'aki_source_native_uses_future',
+              # Evidence receipts are QC fields, not a second phenotype.
+              'kidney_observation_window_coverage',
+              'creatinine_evidence_status', 'creatinine_evidence_reason',
+              'urine_evidence_status', 'rrt_evidence_status',
               # 规范化后的列名（从 kdigo_* 展开列规范化而来）
               'creat_low_past_48hr', 'creat_low_past_7day',
               'creat_baseline_n_48h', 'creat_baseline_n_7d',
@@ -551,7 +581,7 @@ CONCEPT_GROUPS_INTERNAL = {
               'bun_creatinine_ratio', 'egfr'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
-    'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
+    'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm', 'icu_unit_type'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
     'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'followup_days_28d', 'followup_days_90d', 'followup_days_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
 }
@@ -567,6 +597,7 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     'kdigo_creat',
     'kdigo_urine_input',
     'kdigo_uo',
+    'crrt_mode_input',
     'potassium',
     'sep3',
 }
@@ -701,6 +732,7 @@ CONCEPT_DB_COVERAGE = {
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,
     'anion_gap': 6, 'pulse_pressure': 6,
     'age': 6, 'sex': 6, 'weight': 6, 'height': 6, 'death': 6, 'los_icu': 6,
+    'icu_unit_type': 1,
     'sofa': 6, 'sofa2': 6, 'gcs': 6,
     'lact': 5, 'alb': 5, 'crp': 5, 'fio2': 5, 'po2': 5, 'pco2': 5, 'ph': 5,
     'pafi': 5, 'safi': 5, 'urine': 5,

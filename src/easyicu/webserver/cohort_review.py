@@ -1503,62 +1503,74 @@ def _group_profile(
     )
     columns = [label for label, _ in groups]
     member_sets = [members for _, members in groups]
+    rows: List[Dict[str, Any]] = [
+        {
+            "metric": "N",
+            "kind": "count",
+            "values": [len(members) for members in member_sets],
+        }
+    ]
+    # Core profile rows are projections of actual source mappings.  Do not
+    # manufacture a 0% row when the corresponding module is absent: a
+    # run-scoped package may intentionally carry a different selected exposure
+    # (for example sep3_sofa1_max) without the legacy sepsis3_sofa2 module.
+    core_rows = (
+        (
+            bool(death_by_entity),
+            "Mortality %",
+            "percent",
+            [_bool_pct(members, death_by_entity) for members in member_sets],
+            None,
+        ),
+        (
+            bool(sex_by_entity),
+            "Female %",
+            "percent",
+            [_female_pct(members, sex_by_entity) for members in member_sets],
+            None,
+        ),
+        (
+            bool(age_by_entity),
+            "Median age",
+            "numeric",
+            [_median_for(members, age_by_entity) for members in member_sets],
+            "years",
+        ),
+        (
+            bool(sofa_by_entity),
+            "Median SOFA-2",
+            "numeric",
+            [_median_for(members, sofa_by_entity) for members in member_sets],
+            None,
+        ),
+        (
+            bool(los_by_entity),
+            "Median ICU LOS",
+            "numeric",
+            [_median_for(members, los_by_entity) for members in member_sets],
+            "days",
+        ),
+        (
+            bool(sepsis_by_entity),
+            "Sepsis-3 %",
+            "percent",
+            [_bool_pct(members, sepsis_by_entity) for members in member_sets],
+            None,
+        ),
+    )
+    for available, metric, kind, values, unit in core_rows:
+        if not available:
+            continue
+        row: Dict[str, Any] = {"metric": metric, "kind": kind, "values": values}
+        if unit:
+            row["unit"] = unit
+        rows.append(row)
+    rows.extend(_selected_feature_rows(member_sets, selected_features))
     return {
         "status": "descriptive_aggregate_only",
         "columns": columns,
         "inferential_statistics_allowed": False,
-        "rows": [
-            {
-                "metric": "N",
-                "kind": "count",
-                "values": [len(members) for members in member_sets],
-            },
-            {
-                "metric": "Mortality %",
-                "kind": "percent",
-                "values": [
-                    _bool_pct(members, death_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Female %",
-                "kind": "percent",
-                "values": [
-                    _female_pct(members, sex_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Median age",
-                "kind": "numeric",
-                "unit": "years",
-                "values": [
-                    _median_for(members, age_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Median SOFA-2",
-                "kind": "numeric",
-                "values": [
-                    _median_for(members, sofa_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Median ICU LOS",
-                "kind": "numeric",
-                "unit": "days",
-                "values": [
-                    _median_for(members, los_by_entity) for members in member_sets
-                ],
-            },
-            {
-                "metric": "Sepsis-3 %",
-                "kind": "percent",
-                "values": [
-                    _bool_pct(members, sepsis_by_entity) for members in member_sets
-                ],
-            },
-        ]
-        + _selected_feature_rows(member_sets, selected_features),
+        "rows": rows,
     }
 
 

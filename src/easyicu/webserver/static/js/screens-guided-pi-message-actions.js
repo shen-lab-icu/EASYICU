@@ -183,5 +183,5 @@
     return { render, handleClick, handleSubmit };
   }
 
-  window.EU_GUIDED_PI_MESSAGE_ACTIONS = { create };
+  window.EasyICU.guidedPi.declare('messageActions', { create });
 })();

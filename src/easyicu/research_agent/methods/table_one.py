@@ -170,6 +170,58 @@ def _numeric_values(series: pd.Series, *, label: str) -> np.ndarray:
     return values
 
 
+def _canonicalize_declared_boolean_encodings(
+    frame: pd.DataFrame,
+    contract: TableOneSpec,
+) -> pd.DataFrame:
+    """Restore a sealed boolean domain after a lossless 0/1 serialization.
+
+    Legacy analysis-cohort materialization converted pandas ``boolean``
+    columns to ``float64`` so arbitrary generated code could call
+    ``np.isfinite``.  That mechanical representation change must not make an
+    already-approved boolean Table 1 contract unexecutable.  Reconcile only
+    the exact, reversible case: a column whose approved closed levels are
+    booleans and whose every non-missing physical value is numeric 0 or 1.
+    Any other value remains untouched and is rejected by the ordinary closed
+    level check below.
+    """
+
+    boolean_columns: set[str] = set()
+    if contract.group_levels and all(
+        isinstance(value, bool) for value in contract.group_levels
+    ):
+        boolean_columns.add(contract.group_by)
+    boolean_columns.update(
+        variable.name
+        for variable in contract.variables
+        if variable.levels
+        and all(isinstance(value, bool) for value in variable.levels)
+    )
+    updates: dict[str, pd.Series] = {}
+    for column in boolean_columns:
+        series = frame[column]
+        if pd.api.types.is_bool_dtype(series.dtype):
+            continue
+        nonmissing = series.dropna()
+        if not pd.api.types.is_numeric_dtype(series.dtype):
+            continue
+        values = nonmissing.to_numpy(dtype=float)
+        if values.size and (
+            not np.isfinite(values).all()
+            or not bool(np.isin(values, np.asarray([0.0, 1.0])).all())
+        ):
+            continue
+        updates[column] = series.map(
+            lambda value: pd.NA if pd.isna(value) else bool(int(value))
+        ).astype("boolean")
+    if not updates:
+        return frame
+    normalized = frame.copy()
+    for column, series in updates.items():
+        normalized[column] = series
+    return normalized
+
+
 def _numeric_test(
     groups: list[np.ndarray], spec: TableOneVariableSpec
 ) -> tuple[float | None, str]:
@@ -389,6 +441,7 @@ def build_grouped_table_one(
         raise TableOneContractError(
             f"Table 1 input columns are missing: {missing_columns}"
         )
+    frame = _canonicalize_declared_boolean_encodings(frame, contract)
     ungrouped = frame[contract.group_by].isna()
     group_missing_excluded_n = int(ungrouped.sum())
     if group_missing_excluded_n:

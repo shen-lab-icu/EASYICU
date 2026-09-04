@@ -212,6 +212,151 @@ def test_idea_mining_maps_resolved_nejm_title_to_vasopressor_fluid_concepts(
     assert "death" not in concept_ids
     assert concept_ids & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
     assert "death and death" not in idea["rationale"].lower()
+    assert idea["outcome"] is None
+    assert idea["go_no_go"] == "hold"
+    assert idea["feasibility"]["tier"] == "design_incomplete"
+    assert "outcome_not_mapped" in idea["feasibility"]["design_blockers"]
+
+
+def test_idea_mining_does_not_recommend_an_outcome_without_a_predictor() -> None:
+    death = idea_mining._concept_hit("death")
+    assert death is not None
+
+    idea = idea_mining._idea_from_source(
+        {"source_id": "source_outcome_only", "title": "ICU mortality"},
+        "ICU mortality",
+        [death],
+        {
+            "concept_to_file": {"death": {"module": "outcome"}},
+            "entity_ids": {"stay-1"},
+            "demo_like": False,
+        },
+    )
+
+    assert idea["outcome"] == death["label"]
+    assert idea["go_no_go"] == "hold"
+    assert idea["feasibility"]["tier"] == "design_incomplete"
+    assert "predictor_or_exposure_not_mapped" in idea["feasibility"]["design_blockers"]
+    assert "Confirm the primary exposure" in idea["next_action"]
+
+
+def test_chinese_fluid_balance_topic_preserves_the_exposure_concept() -> None:
+    hits = idea_mining._match_concepts("比较入 ICU 早期液体平衡与机械通气脱机候选设计")
+    concept_ids = {row["concept_id"] for row in hits}
+
+    assert "mech_vent" in concept_ids
+    assert concept_ids & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
+
+
+def test_ventilator_liberation_idea_separates_exposure_episode_and_design_support() -> (
+    None
+):
+    text = "比较成人 ICU 入科后早期累积液体平衡与机械通气脱机"
+    hits = idea_mining._match_concepts(text)
+
+    idea = idea_mining._idea_from_source(
+        {"source_id": "source_liberation", "title": text},
+        text,
+        hits,
+        {"concept_to_file": {}, "entity_ids": set(), "demo_like": False},
+    )
+
+    roles = {row["concept_id"]: row["role"] for row in idea["mapped_concepts"]}
+    assert idea["exposure_or_predictor"] == "Cumulative Fluid Balance"
+    assert roles["fluid_balance_cumulative"] == "exposure"
+    assert roles["mech_vent"] == "eligibility_or_episode"
+    assert "Mechanical Ventilation Mode" not in idea["exposure_or_predictor"]
+    assert idea["outcome"] is None
+    assert idea["design_support"]["card_id"] == "mechanical_ventilation_liberation"
+    assert "Successful liberation" in idea["design_support"]["outcome_family"]
+    assert idea["design_support"]["authority"] == "advisory_design_support_only"
+    assert any(
+        '"ventilator liberation"[Title/Abstract]' in query
+        for query in idea["prior_art"]["queries_to_run"]
+    )
+
+
+def test_one_sentence_chinese_idea_maps_topic_without_inventing_design_details() -> (
+    None
+):
+    text = "我想研究液体平衡和撤机的关系"
+    hits = idea_mining._match_concepts(text)
+
+    idea = idea_mining._idea_from_source(
+        {"source_id": "source_one_sentence", "title": text},
+        text,
+        hits,
+        {"concept_to_file": {}, "entity_ids": set(), "demo_like": False},
+    )
+
+    roles = {row["concept_id"]: row["role"] for row in idea["mapped_concepts"]}
+    assert idea["exposure_or_predictor"] == "Cumulative Fluid Balance"
+    assert roles["fluid_balance_cumulative"] == "exposure"
+    assert roles["mech_vent"] == "eligibility_or_episode"
+    assert idea["design_support"]["card_id"] == "mechanical_ventilation_liberation"
+    assert idea["design_support"]["study_families"] == [
+        "association",
+        "time_to_event",
+        "prediction",
+    ]
+    assert (
+        "Distinguish extubation from durable liberation"
+        in idea["design_support"]["eligibility_candidates"]
+    )
+    assert "baseline or time-varying" in idea["design_support"]["exposure_family"]
+    assert "readiness-to-wean landmark" in idea["design_support"]["time_zero"]
+    assert any(
+        "Competing-risk or multistate analysis" in value
+        for value in idea["design_support"]["recommended_methods"]
+    )
+    assert (
+        "Alternative durable-liberation gap"
+        in idea["design_support"]["sensitivity_analyses"]
+    )
+    assert idea["population"].endswith("(age scope pending)")
+    assert idea["outcome"] is None
+    assert idea["unresolved_slots"] == ["outcome_not_mapped"]
+
+
+def test_negative_mortality_instruction_is_not_treated_as_outcome_evidence() -> None:
+    text = "比较液体平衡与机械通气脱机，不得默认院内死亡作为主要结局"
+    hits = idea_mining._match_concepts(text)
+
+    assert idea_mining._pick_outcome(text, hits) is None
+
+
+def test_competing_death_handling_is_not_misread_as_the_primary_outcome() -> None:
+    text = (
+        "优先验证机械通气研究中成功撤机与拔管失败的操作性结局定义，"
+        "明确持续成功撤机、再插管、气管切开、死亡、出院和转院的处理。"
+    )
+    hits = idea_mining._match_concepts(text)
+
+    idea = idea_mining._idea_from_source(
+        {"source_id": "source_liberation_refinement", "title": text},
+        text,
+        hits,
+        {"concept_to_file": {}, "entity_ids": set(), "demo_like": False},
+    )
+
+    assert idea["outcome"] is None
+    assert "In-hospital Mortality" not in idea["idea_title"]
+    assert all(
+        row["concept_id"] != "death" or row["role"] != "outcome"
+        for row in idea["mapped_concepts"]
+    )
+
+
+def test_negative_mortality_instruction_overrides_a_generated_mortality_title() -> None:
+    text = "\n".join(
+        [
+            "比较液体平衡与机械通气脱机，不要默认死亡结局",
+            "Cumulative fluid balance and in-hospital mortality in adult ICU patients",
+        ]
+    )
+    hits = idea_mining._match_concepts(text)
+
+    assert idea_mining._pick_outcome(text, hits) is None
 
 
 def test_idea_mining_accepts_zotero_source_payload(
@@ -375,6 +520,13 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
             "idea_id": idea["idea_id"],
             "mode": "plan",
             "plan_edits": "Keep this as an ICU observational feasibility plan before Agent run.",
+            "plan_fields": {
+                "research_question": "Does 24-hour fluid balance relate to durable liberation?",
+                "population": "Ventilated adult ICU patients",
+                "exposure": "Cumulative fluid balance during ICU hours 0-24",
+                "outcome": "Extubation without reintubation within 48 hours",
+                "time_window": "Exposure: ICU hours 0-24; durability: 48 hours",
+            },
         },
     )
     assert planned.status_code == 200
@@ -389,6 +541,11 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     assert plan_payload["privacy"]["agent_run_created"] is False
     assert plan_payload["privacy"]["draft_unlocked"] is False
     assert plan_payload["privacy"]["reportable"] is False
+    assert plan["research_question"] == (
+        "Does 24-hour fluid balance relate to durable liberation?"
+    )
+    assert plan["outcome"] == "Extubation without reintubation within 48 hours"
+    assert "outcome and time window" not in plan["required_user_confirmations"]
     assert plan["reference_analysis_patterns"]
     assert plan["clinical_icu_constraints"]
     assert plan["required_user_confirmations"]
@@ -646,9 +803,7 @@ def test_create_agent_project_requires_exact_nonempty_identity(
         }
     )
     idea = run["idea_ledger"][0]
-    idea_mining.create_handoff(
-        {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
-    )
+    idea_mining.create_handoff({"run_id": run["run_id"], "idea_id": idea["idea_id"]})
 
     with pytest.raises(idea_mining.IdeaMiningWebError) as exc_info:
         idea_mining.create_agent_project({"run_id": run["run_id"]})
@@ -942,10 +1097,9 @@ def test_generic_sepsis_maps_to_canonical_sofa1_and_preserves_explicit_adjustmen
         '"Sepsis-3"[Title/Abstract]' in query
         for query in idea["prior_art"]["queries_to_run"]
     )
-    assert all(
-        '"mortality"[Title/Abstract]' in query
-        for query in idea["prior_art"]["queries_to_run"]
-    )
+    queries = idea["prior_art"]["queries_to_run"]
+    assert '"mortality"[Title/Abstract]' in queries[1]
+    assert all("mortality" in query for query in queries)
     assert all(
         '"SOFA Score (Total)"[Title/Abstract]' not in query
         for query in idea["prior_art"]["queries_to_run"]
@@ -960,8 +1114,9 @@ def test_prior_art_executes_the_queries_prespecified_by_the_mined_idea(
     run_dir = tmp_path / run_id
     run_dir.mkdir()
     queries = [
-        '("Sepsis-3"[Title/Abstract] AND "mortality"[Title/Abstract]) '
-        'AND ICU[Title/Abstract]'
+        f'("Sepsis-3"[Title/Abstract] AND "mortality"[Title/Abstract]) '
+        f'AND ICU[Title/Abstract] AND "stratum {index}"[Title/Abstract]'
+        for index in range(5)
     ]
     (run_dir / "idea_mining_run.json").write_text(
         json.dumps(
@@ -988,6 +1143,313 @@ def test_prior_art_executes_the_queries_prespecified_by_the_mined_idea(
     )
 
     assert checked["prior_art"]["queries_to_run"] == queries
+
+
+def test_chinese_conversational_idea_keeps_clinical_action_in_prior_art_queries() -> (
+    None
+):
+    source = {
+        "title": "我发现ICU患者夜间发生低血压后，医生的处理差异很大",
+        "evidence_quote": "这里面有没有值得研究的问题？",
+    }
+
+    queries = idea_mining._prior_art_queries(
+        source,
+        source["title"],
+    )
+
+    assert len(queries) == 5
+    assert all('"hypotension"[Title/Abstract]' in query for query in queries)
+    assert all(
+        '"management"[Title/Abstract]' in query
+        or '"treatment"[Title/Abstract]' in query
+        for query in queries
+    )
+    assert queries[0] != queries[1]
+    assert '"practice variation"[Title/Abstract]' in queries[0]
+    assert '"nighttime"[Title/Abstract]' in queries[1]
+    assert '"after-hours"[Title/Abstract]' in queries[1]
+    assert all("neonat*[Title/Abstract]" in query for query in queries)
+    assert all('"intensive care"[Title/Abstract]' in query for query in queries)
+    assert all('"icu"[Title/Abstract]' not in query.lower() for query in queries)
+
+
+def test_prior_art_search_records_stratified_retrieval_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries = idea_mining._prior_art_queries(
+        {"title": "Fluid balance and ventilator liberation"},
+        "Fluid balance and ventilator liberation",
+        exposure="fluid_balance_cumulative",
+        outcome="Mechanical ventilation liberation outcomes",
+        topic_aliases=(
+            "ventilator liberation",
+            "extubation failure",
+            "reintubation",
+        ),
+    )
+    assert len(queries) == 5
+    assert "extubation failure" in queries[0]
+    assert '"cumulative fluid balance"[Title/Abstract]' in queries[1]
+    assert '"ventilator liberation"[Title/Abstract]' in queries[1]
+    assert "pre-admission fluid rows" not in queries[1]
+    assert "cohort[Title/Abstract]" in queries[2]
+    assert "review[Publication Type]" in queries[3]
+    assert "MIMIC[Title/Abstract]" in queries[4]
+
+    query_ids = {
+        query: (["100", "200"] if index == 0 else ["100"])
+        for index, query in enumerate(queries)
+    }
+    monkeypatch.setattr(
+        idea_mining,
+        "_pubmed_esearch",
+        lambda query, limit=5: query_ids[query],
+    )
+    monkeypatch.setattr(
+        idea_mining,
+        "_pubmed_article_records",
+        lambda ids: [
+            {
+                "pmid": pmid,
+                "title": f"Candidate {pmid}",
+                "journal": "Critical Care",
+                "year": 2025,
+            }
+            for pmid in ids
+        ],
+    )
+
+    prior = idea_mining._pubmed_prior_art(queries)
+
+    assert [row["id"] for row in prior["query_strata"]] == [
+        "clinical_landscape",
+        "candidate_topic",
+        "direct_observational_candidates",
+        "review_or_guideline",
+        "critical_care_database",
+    ]
+    first = next(row for row in prior["results"] if row["pmid"] == "100")
+    assert first["matched_query_strata"] == [
+        "clinical_landscape",
+        "candidate_topic",
+        "direct_observational_candidates",
+        "review_or_guideline",
+        "critical_care_database",
+    ]
+    assert len(first["matched_queries"]) == 5
+
+
+def test_conversational_prior_art_ranks_direct_fit_and_excludes_population_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        "title": "我发现 ICU 患者夜间发生低血压后，医生的处理差异很大",
+        "evidence_quote": "这里面有没有值得研究的问题？",
+    }
+    queries = idea_mining._prior_art_queries(source, source["title"])
+    ids_by_query = {
+        queries[0]: [
+            "asthma",
+            "neonatal",
+            "pediatric_trial",
+            "variation",
+            "perioperative",
+        ],
+        queries[1]: ["case", "direct"],
+        queries[2]: ["fresh"],
+        queries[3]: [],
+        queries[4]: [],
+    }
+    records = {
+        "asthma": {
+            "title": "Critical Care Management of Severe Asthma Exacerbations",
+            "abstract_excerpt": (
+                "Severe asthma in the ICU may cause systemic hypotension; "
+                "the review describes ventilator management."
+            ),
+        },
+        "neonatal": {
+            "title": "Management of Neonatal Hypotension and Shock",
+            "abstract_excerpt": "Neonatal intensive care treatment of preterm infants.",
+        },
+        "pediatric_trial": {
+            "title": (
+                "Epinephrine vs Norepinephrine as Initial Treatment in Children "
+                "With Septic Shock"
+            ),
+            "abstract_excerpt": (
+                "A comparative treatment study in children admitted to a pediatric "
+                "intensive care unit with septic shock."
+            ),
+        },
+        "case": {
+            "title": "Mitral valve-in-valve implantation: A case report",
+            "abstract_excerpt": (
+                "One ICU patient developed hypotension during an overnight admission."
+            ),
+        },
+        "direct": {
+            "title": (
+                "The organizational structure of an intensive care unit influences "
+                "treatment of hypotension among critically ill patients"
+            ),
+            "abstract_excerpt": (
+                "A retrospective ICU cohort compared hypotension treatment during "
+                "weekday daytime, nighttime, and weekend staffing levels."
+            ),
+        },
+        "variation": {
+            "title": (
+                "Practice Patterns in the Initiation of Secondary Vasopressors "
+                "during Septic Shock"
+            ),
+            "abstract_excerpt": (
+                "A multicenter ICU cohort quantified physician and hospital practice "
+                "variation in vasopressor treatment."
+            ),
+        },
+        "fresh": {
+            "title": (
+                "Fluid Response Evaluation in Sepsis Hypotension and Shock: "
+                "A Randomized Clinical Trial"
+            ),
+            "abstract_excerpt": (
+                "Adult ICU admission was anticipated and fluid responsiveness guided "
+                "fluid and vasopressor resuscitation."
+            ),
+        },
+        "perioperative": {
+            "title": "The Role of Permissive Hypotension in Neuroanesthesia",
+            "abstract_excerpt": (
+                "A practice variation survey of induced intraoperative hypotension "
+                "among neuroanesthesia clinicians in critical care settings."
+            ),
+        },
+    }
+
+    monkeypatch.setattr(
+        idea_mining,
+        "_pubmed_esearch",
+        lambda query, limit=5: ids_by_query[query],
+    )
+    monkeypatch.setattr(
+        idea_mining,
+        "_pubmed_article_records",
+        lambda ids: [
+            {"pmid": pmid, "journal": "Critical Care", **records[pmid]} for pmid in ids
+        ],
+    )
+
+    prior = idea_mining._pubmed_prior_art(queries, source=source)
+
+    assert [row["pmid"] for row in prior["results"]] == ["direct", "variation"]
+    assert prior["retrieved_result_count"] == 8
+    assert prior["result_count"] == 2
+    assert prior["excluded_result_count"] == 6
+    assert {row["pmid"] for row in prior["excluded_results"]} == {
+        "asthma",
+        "neonatal",
+        "pediatric_trial",
+        "case",
+        "fresh",
+        "perioperative",
+    }
+    assert prior["results"][0]["retrieval_screen"]["fit"] == ("direct_retrieval_fit")
+
+
+def test_conversational_lactate_aki_screen_requires_both_concepts_and_icu() -> None:
+    source = {
+        "title": "ICU 患者早期乳酸下降轨迹与后续新发 AKI",
+        "evidence_quote": "成人 ICU 乳酸清除速度和急性肾损伤",
+    }
+
+    direct = idea_mining._conversational_prior_art_screen(
+        {
+            "title": "Early lactate clearance and acute kidney injury in ICU patients",
+            "abstract_excerpt": "An adult intensive care cohort study.",
+            "matched_query_strata": ["candidate_topic"],
+        },
+        source,
+    )
+    missing_aki = idea_mining._conversational_prior_art_screen(
+        {
+            "title": "Metformin-associated lactic acidosis",
+            "abstract_excerpt": "A review of lactate in critical care.",
+            "matched_query_strata": ["clinical_landscape"],
+        },
+        source,
+    )
+    pediatric = idea_mining._conversational_prior_art_screen(
+        {
+            "title": "Lactate clearance and acute kidney injury in children",
+            "abstract_excerpt": "A pediatric intensive care cohort.",
+            "matched_query_strata": ["candidate_topic"],
+        },
+        source,
+    )
+
+    assert direct["fit"] == "direct_retrieval_fit"
+    assert missing_aki["fit"] == "topic_mismatch"
+    assert pediatric["fit"] == "population_mismatch"
+
+
+def test_conversational_pair_scope_keeps_both_scientific_axes() -> None:
+    scope = idea_mining._conversational_literature_scope(
+        {
+            "title": "ICU患者乳酸清除速度与后续AKI风险",
+            "evidence_quote": "乳酸下降轨迹和急性肾损伤",
+        }
+    )
+
+    assert '"lactate"[Title/Abstract]' in scope
+    assert '"acute kidney injury"[Title/Abstract]' in scope
+
+
+def test_sedation_awakening_scope_and_screen_require_both_axes() -> None:
+    source = {
+        "title": "ICU 患者镇静药减量后清醒快慢不同",
+        "evidence_quote": "有的人很快清醒，有的人持续昏迷",
+    }
+    scope = idea_mining._conversational_literature_scope(source)
+    direct = idea_mining._conversational_prior_art_screen(
+        {
+            "title": "Delayed awakening after sedation interruption in ICU patients",
+            "abstract_excerpt": "An adult intensive care cohort study.",
+            "matched_query_strata": ["candidate_topic"],
+        },
+        source,
+    )
+    delirium_only = idea_mining._conversational_prior_art_screen(
+        {
+            "title": "ICU delirium: a diagnostic challenge",
+            "abstract_excerpt": "Delirium monitoring in critical care.",
+            "matched_query_strata": ["clinical_landscape"],
+        },
+        source,
+    )
+
+    assert '"sedation interruption"[Title/Abstract]' in scope
+    assert '"delayed awakening"[Title/Abstract]' in scope
+    assert direct["fit"] == "direct_retrieval_fit"
+    assert delirium_only["fit"] == "topic_mismatch"
+
+
+def test_value_difference_does_not_become_practice_variation() -> None:
+    source = {
+        "title": "ICU 患者乳酸下降快慢差别很大，与后续 AKI 是否有关",
+        "evidence_quote": "乳酸下降速度存在差异",
+    }
+    base_scope = idea_mining._conversational_literature_scope(source)
+
+    assert (
+        idea_mining._conversational_candidate_scope(source, base_scope=base_scope)
+        == base_scope
+    )
+    assert (
+        idea_mining._conversational_variation_scope(source, base_scope=base_scope)
+        == base_scope
+    )
 
 
 def test_prior_art_rejects_untracked_or_mismatched_legacy_run_identity(
@@ -1022,9 +1484,7 @@ def test_prior_art_rejects_untracked_or_mismatched_legacy_run_identity(
     )
 
     with pytest.raises(idea_mining.IdeaMiningWebError) as exc_info:
-        idea_mining.check_prior_art(
-            {"run_id": "legacy-prior", "idea_id": "idea-b"}
-        )
+        idea_mining.check_prior_art({"run_id": "legacy-prior", "idea_id": "idea-b"})
     assert exc_info.value.detail["error"] == "idea_not_found"
 
 
@@ -1082,9 +1542,7 @@ def test_pubmed_esearch_requests_relevance_order(
 
     monkeypatch.setattr(idea_mining.request, "urlopen", fake_urlopen)
 
-    assert idea_mining._pubmed_esearch("sepsis mortality", limit=5) == [
-        "26903338"
-    ]
+    assert idea_mining._pubmed_esearch("sepsis mortality", limit=5) == ["26903338"]
     assert "sort=relevance" in requested[0]
 
 
@@ -1206,9 +1664,7 @@ def test_literature_discovery_round_robins_prespecified_query_strata(
         lambda query, limit=5: next(returned),
     )
 
-    def article_records(
-        ids: list[str], *, focus_terms=()
-    ) -> list[dict[str, object]]:
+    def article_records(ids: list[str], *, focus_terms=()) -> list[dict[str, object]]:
         fetched.extend(ids)
         return [
             {
@@ -1251,9 +1707,7 @@ def test_literature_discovery_round_robins_prespecified_query_strata(
         0,
         0,
     ]
-    assert [
-        row["matched_query_strata"] for row in payload["source_candidates"]
-    ] == [
+    assert [row["matched_query_strata"] for row in payload["source_candidates"]] == [
         ["broad_icu"],
         ["concept_definition_or_validation"],
         ["direct_observational_comparator_all_years"],
@@ -1271,9 +1725,7 @@ def test_literature_discovery_runs_typed_direct_fallback_after_source_screen(
             return [f"10{len(calls)}"]
         return ["900", "901"]
 
-    def article_records(
-        ids: list[str], *, focus_terms=()
-    ) -> list[dict[str, object]]:
+    def article_records(ids: list[str], *, focus_terms=()) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
         for pmid in ids:
             if pmid == "900":
@@ -1341,9 +1793,10 @@ def test_literature_discovery_runs_typed_direct_fallback_after_source_screen(
         "typed_direct_observational_comparator"
     )
     assert payload["source_candidates"][0]["pmid"] == "900"
-    assert payload["source_candidates"][0]["direct_comparator_screen"][
-        "disposition"
-    ] == "include"
+    assert (
+        payload["source_candidates"][0]["direct_comparator_screen"]["disposition"]
+        == "include"
+    )
     unrelated = next(
         row for row in payload["source_candidates"] if row["pmid"] != "900"
     )
@@ -1359,9 +1812,7 @@ def test_excluded_direct_fallback_does_not_erase_prespecified_strata(
         calls.append(query)
         return [f"10{len(calls)}"] if len(calls) <= 6 else ["900", "901"]
 
-    def article_records(
-        ids: list[str], *, focus_terms=()
-    ) -> list[dict[str, object]]:
+    def article_records(ids: list[str], *, focus_terms=()) -> list[dict[str, object]]:
         return [
             {
                 "pmid": pmid,
@@ -1437,6 +1888,7 @@ def test_pubmed_metadata_retains_publication_type_and_design_excerpt(
         <PublicationTypeList><PublicationType>Observational Study</PublicationType></PublicationTypeList>
       </Article></MedlineCitation><PubmedData><ArticleIdList>
         <ArticleId IdType='doi'>10.1000/example</ArticleId>
+        <ArticleId IdType='pmc'>PMC1234567</ArticleId>
       </ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>"""
 
     class Response:
@@ -1457,214 +1909,74 @@ def test_pubmed_metadata_retains_publication_type_and_design_excerpt(
 
     row = idea_mining._pubmed_article_records(["12345"])[0]
     assert row["publication_types"] == ["Observational Study"]
+    assert row["pmcid"] == "PMC1234567"
     assert "retrospective cohort" in row["design_excerpt"]
     assert "hospital mortality" in row["design_excerpt"]
 
 
-def test_design_excerpt_preserves_late_outcome_axis_after_exposure_synonyms() -> None:
-    excerpt = idea_mining._study_design_excerpt(
-        (
-            "SOFA-2 updates the Sequential Organ Failure Assessment score. "
-            "Sepsis-3 criteria can use SOFA-2 for organ dysfunction. "
-            "We conducted a retrospective multicenter ICU cohort. "
-            "Adults with suspected infection were included. "
-            "The primary outcome was ICU mortality; hospital mortality was a "
-            "prespecified secondary outcome."
-        ),
-        focus_terms=(
-            "SOFA-2",
-            "Sepsis-3",
-            "SOFA",
-            "Sequential Organ Failure Assessment",
-            "hospital mortality",
-        ),
-    )
-
-    assert "SOFA-2" in excerpt
-    assert "Sepsis-3" in excerpt
-    assert "hospital mortality" in excerpt
-
-
-def test_idea_mining_maps_ards_peep_pdf_excerpt_to_respiratory_concepts(
-    tmp_path: Path,
+def test_pmc_full_text_review_keeps_only_bounded_section_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
-    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
-    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+    xml = b"""<?xml version='1.0' encoding='UTF-8'?>
+    <article><body>
+      <sec><title>Methods</title><p>We enrolled adult ICU patients and aligned measurements to sedation discontinuation.</p></sec>
+      <sec><title>Results</title><p>Delayed awakening occurred in a defined subset after discontinuation.</p></sec>
+      <sec><title>Discussion</title><p>The findings require confirmation because residual sedation may confound recovery.</p></sec>
+    </body></article>"""
 
-    response = TestClient(app).post(
-        "/api/ideas/mine",
-        json={
-            "source_type": "pdf",
-            "title": "Balancing lung recruitment and venous congestion in ARDS: rethinking PEEP",
-            "journal": "Intensive Care Medicine",
-            "year": 2026,
-            "excerpt": (
-                "Positive end-expiratory pressure (PEEP) is a cornerstone of mechanical "
-                "ventilation in acute respiratory distress syndrome. Ventilator settings "
-                "and oxygenation may be associated with ICU mortality."
-            ),
-            "allow_network": False,
-        },
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int = -1) -> bytes:
+            return xml if limit < 0 else xml[:limit]
+
+    monkeypatch.setattr(
+        idea_mining.request,
+        "urlopen",
+        lambda url, timeout=0: Response(),
     )
 
-    assert response.status_code == 200
-    payload = response.json()
-    idea = payload["idea_ledger"][0]
-    concept_ids = {row["concept_id"] for row in idea["mapped_concepts"]}
-    assert {"mech_vent", "peep", "death"} <= concept_ids
-    assert idea["prior_art"]["status"] == "not_checked_external_search_required"
-    assert payload["pre_experiment"]["status"] == "blocked"
-    assert payload["privacy"]["external_llm_calls"] == 0
-    assert payload["privacy"]["network_calls"] == 0
-    assert "stay_id" not in str(payload)
-    assert "subject_id" not in str(payload)
+    review = idea_mining._pmc_full_text_evidence("PMC1234567")
+
+    assert review["status"] == "reviewed"
+    assert [row["section"] for row in review["evidence_spans"]] == [
+        "methods",
+        "results",
+        "discussion",
+    ]
+    assert review["full_text_stored"] is False
+    assert len(json.dumps(review)) < 4_000
 
 
-def test_provider_config_route_writes_private_env_without_returning_secret(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("publication_types", "expected"),
+    [
+        (["Observational Study"], "original_research"),
+        (["Systematic Review"], "systematic_review"),
+        (["Review"], "narrative_review"),
+        (["Practice Guideline"], "guideline_consensus"),
+        (["Editorial"], "editorial_commentary"),
+        (["Clinical Trial Protocol"], "protocol"),
+    ],
+)
+def test_literature_article_kind_changes_interpretation_by_publication_type(
+    publication_types: list[str], expected: str
 ) -> None:
-    env_path = tmp_path / "provider.env"
-    settings_path = tmp_path / "settings.json"
-    monkeypatch.setattr(provider_adapter, "_DEFAULT_PROVIDER_ENV_FILE", env_path)
-    monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(settings_store, "_CONFIG_PATH", settings_path)
+    assert idea_mining._literature_article_kind(publication_types) == expected
 
-    response = TestClient(app).post(
-        "/api/agent-runs/provider-config",
-        json={
-            "provider": "openai",
-            "api_key": "sk-test-provider-config",
-            "base_url": "http://127.0.0.1:8787/v1",
-            "model": "gpt5.4",
-            "enable_ai": True,
-        },
+
+def test_literature_article_kind_uses_bounded_design_text_when_pubmed_is_generic() -> (
+    None
+):
+    assert (
+        idea_mining._literature_article_kind(
+            ["Journal Article"],
+            title="Delayed awakening after sedation interruption",
+            abstract="We conducted a retrospective cohort study in adult ICU patients.",
+        )
+        == "original_research"
     )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["ok"] is True
-    assert payload["secrets_returned"] is False
-    assert payload["provider_status"]["ready"] is True
-    assert payload["provider_status"]["credential_present"] is True
-    assert payload["provider_status"]["base_url_present"] is True
-    assert payload["provider_status"]["model_present"] is True
-    assert payload["settings"]["ai_enabled"] is True
-    assert env_path.exists()
-    assert (env_path.stat().st_mode & 0o777) == 0o600
-    assert "sk-test-provider-config" in env_path.read_text(encoding="utf-8")
-    assert "sk-test-provider-config" not in str(payload)
-    assert "http://127.0.0.1:8787/v1" not in str(payload)
-
-
-def test_provider_config_route_fails_closed_when_enable_ai_omitted(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    env_path = tmp_path / "provider.env"
-    settings_path = tmp_path / "settings.json"
-    monkeypatch.setattr(provider_adapter, "_DEFAULT_PROVIDER_ENV_FILE", env_path)
-    monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(settings_store, "_CONFIG_PATH", settings_path)
-
-    response = TestClient(app).post(
-        "/api/agent-runs/provider-config",
-        json={
-            "provider": "openai",
-            "api_key": "sk-test-fail-closed",
-            "base_url": "http://127.0.0.1:8787/v1",
-            "model": "gpt5.4",
-        },
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["settings"]["ai_enabled"] is False
-    # ``agent_model_mode`` was asserted here too, but it was a write-only
-    # mirror of this same gate that nothing ever read; ai_enabled is the gate.
-    assert "agent_model_mode" not in payload["settings"]
-
-
-def test_provider_config_rejects_invalid_enable_ai_before_writing_credentials(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    env_path = tmp_path / "provider.env"
-    settings_path = tmp_path / "settings.json"
-    monkeypatch.setattr(provider_adapter, "_DEFAULT_PROVIDER_ENV_FILE", env_path)
-    monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(settings_store, "_CONFIG_PATH", settings_path)
-
-    response = TestClient(app).post(
-        "/api/agent-runs/provider-config",
-        json={
-            "provider": "openai",
-            "api_key": "sk-must-not-be-written",
-            "enable_ai": "sometimes",
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == {
-        "error": "invalid_boolean",
-        "field": "enable_ai",
-    }
-    assert not env_path.exists()
-    assert not settings_path.exists()
-
-
-def test_blocked_prior_art_recheck_does_not_clobber_successful_review(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A casual re-check without network opt-in must not re-block the seed."""
-    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path)
-    run_id = "priorartkeep"
-    run_dir = tmp_path / run_id
-    run_dir.mkdir(parents=True)
-    successful = {
-        "ok": True,
-        "run_id": run_id,
-        "idea_id": "vasopressor-timing",
-        "prior_art": {
-            "status": "searched_no_hits",
-            "search_performed": True,
-            "results": [],
-        },
-    }
-    (run_dir / "prior_art_check.json").write_text(
-        json.dumps(successful, ensure_ascii=False), encoding="utf-8"
-    )
-
-    blocked = idea_mining.check_prior_art(
-        {
-            "run_id": run_id,
-            "idea_id": "vasopressor-timing",
-            "idea_title": "vasopressor timing",
-            "allow_network": False,
-        }
-    )
-
-    assert blocked["prior_art"]["search_performed"] is False
-    assert blocked["persisted"] is False
-    assert blocked["retained_prior_art_status"] == "searched_no_hits"
-    on_disk = json.loads((run_dir / "prior_art_check.json").read_text(encoding="utf-8"))
-    assert on_disk["prior_art"]["search_performed"] is True
-    assert on_disk["prior_art"]["status"] == "searched_no_hits"
-
-
-def test_execution_gate_treats_failed_prior_art_search_as_unreviewed() -> None:
-    """status=search_failed returned no reviewable metadata; the gate stays closed."""
-    idea = {"go_no_go": "recommend"}
-    pre_experiment = {"status": "ready", "missing_required_concepts": []}
-    failed_check = {"prior_art": {"status": "search_failed", "search_performed": True}}
-    gate = idea_mining._execution_gate(idea, pre_experiment, failed_check)
-    assert "run prior-art review before Agent execution" in gate["blockers"]
-
-    reviewed_check = {
-        "prior_art": {"status": "searched_no_hits", "search_performed": True}
-    }
-    gate_ok = idea_mining._execution_gate(idea, pre_experiment, reviewed_check)
-    assert gate_ok["blockers"] == []
-    assert gate_ok["agent_run_ready_after_human_confirmation"] is True

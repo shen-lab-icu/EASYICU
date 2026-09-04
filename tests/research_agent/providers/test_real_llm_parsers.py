@@ -1440,7 +1440,7 @@ def test_writer_evidence_repair_returns_cite_or_drop_decisions():
         ],
     )
 
-    assert decisions == [
+    assert [decision.as_dict() for decision in decisions] == [
         {
             "index": 0,
             "action": "cite",
@@ -1508,7 +1508,7 @@ def test_writer_evidence_repair_can_select_only_an_exact_host_claim():
         claim_required_sentences=[sentence],
     )
 
-    assert decisions == [
+    assert [decision.as_dict() for decision in decisions] == [
         {
             "index": 0,
             "action": "claim",

@@ -26,7 +26,7 @@ easyicu 高层API - 提供简单易用的接口，同时支持高级自定义
     >>> vitals = load_vitals(patient_ids=[123, 456])
 """
 
-from typing import List, Union, Optional, Dict
+from typing import Dict, List, Optional, Union, cast
 from pathlib import Path
 import os
 import re
@@ -38,6 +38,7 @@ import pandas as pd
 import logging
 
 from ..base import BaseICULoader
+from ..concept.data_source_contract import ConceptDataSourceStorage
 from ..databases.profiles import get_database_profile, public_database_keys
 from ..table.duration import (
     get_dur_var_unit,
@@ -104,6 +105,34 @@ def _patient_filter_values(patient_ids):
     else:
         values = patient_ids
     return list(values)
+
+
+def _restrict_result_to_requested_ids(result, patient_ids):
+    """Enforce an exact caller-supplied ID partition at the public boundary.
+
+    Some source concepts are keyed by hospital admission or subject. Resolving
+    them to ICU stays can legitimately load sibling stays as intermediate
+    context, but those rows must not escape a request explicitly scoped to one
+    stay-ID partition. Apply the restriction after standard and special
+    concepts have been merged so an outer join cannot reintroduce siblings.
+    Frames without the caller's exact ID column are left unchanged because no
+    safe cross-ID inference belongs at this boundary.
+    """
+    if not isinstance(patient_ids, dict) or len(patient_ids) != 1:
+        return result
+    id_col, values = next(iter(patient_ids.items()))
+    requested = set(_patient_filter_values({id_col: values}))
+
+    def _restrict(frame):
+        if not isinstance(frame, pd.DataFrame) or id_col not in frame.columns:
+            return frame
+        return frame.loc[frame[id_col].isin(requested)].reset_index(drop=True)
+
+    if isinstance(result, pd.DataFrame):
+        return _restrict(result)
+    if isinstance(result, dict):
+        return {name: _restrict(frame) for name, frame in result.items()}
+    return result
 
 
 #: Chunk size used for every SOFA-family auto-chunked extraction, on every
@@ -331,10 +360,11 @@ def _expand_public_numeric_win_tbl_output(
 def _build_fast_scan_expr(loader: "BaseICULoader", table_name: str) -> Optional[str]:
     """Build a DuckDB scan expression for a table without materializing it in pandas."""
     data_source = getattr(loader, "datasource", None)
-    if data_source is None or not hasattr(data_source, "_resolve_loader_from_disk"):
+    if data_source is None or not hasattr(data_source, "resolve_loader_from_disk"):
         return None
 
-    source = data_source._resolve_loader_from_disk(table_name)
+    storage = cast(ConceptDataSourceStorage, data_source)
+    source = storage.resolve_loader_from_disk(table_name)
     if not isinstance(source, Path):
         return None
 
@@ -702,7 +732,7 @@ def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
 
     可以节省约 50-60% 的内存
     """
-    if hasattr(df, "data") and isinstance(getattr(df, "data"), pd.DataFrame):
+    if hasattr(df, "data") and isinstance(df.data, pd.DataFrame):
         df.data = _compress_dtypes(df.data, verbose=verbose)
         return df
 
@@ -1181,7 +1211,7 @@ def load_concepts(
     # forcing API users to know about the side-channel modules. Detect
     # them up front, peel them off, run the standard path on the rest,
     # then re-attach the special results.
-    _KDIGO_OUTPUTS = {
+    _KDIGO_LEGACY_OUTPUTS = {
         "aki",
         "aki_stage",
         "aki_stage_creat",
@@ -1193,15 +1223,6 @@ def load_concepts(
         "aki_severe_rrt",
         "aki_severe_assessable",
         "aki_severe_ascertainment",
-        "uo_rt_6hr",
-        "uo_rt_12hr",
-        "uo_rt_24hr",
-        "creat_low_past_48hr",
-        "creat_low_past_7day",
-        "creat_baseline_n_48h",
-        "creat_baseline_n_7d",
-        "creat_baseline_source",
-        "creat_pre_icu_history_observed",
         # A zero stage is a definitive negative only when this receipt says
         # ``negative_complete``.  Keep these special KDIGO outputs routable
         # through ``load_concepts`` and the module exporter.
@@ -1214,6 +1235,13 @@ def load_concepts(
         "urine_ascertainment",
         "rrt_ascertainment",
     }
+    # Current renal exports use the versioned public-reference + source-native
+    # bundle produced by the dictionary-backed ``kdigo_aki`` callback.  Keep
+    # the legacy loader above available only for explicit historical requests.
+    from ..scores.aki_profiles import RENAL_AKI_BUNDLE_OUTPUTS
+
+    _KDIGO_BUNDLE_OUTPUTS = set(RENAL_AKI_BUNDLE_OUTPUTS)
+    _KDIGO_OUTPUTS = _KDIGO_LEGACY_OUTPUTS | _KDIGO_BUNDLE_OUTPUTS
     _CIRC_OUTPUTS = {"circ_failure", "circ_event"}
     # Comorbidity indices live in comorbidity.py (ICD code-set matching over
     # the diagnosis table), not concept-dict.json — route like kdigo/circ.
@@ -1888,17 +1916,36 @@ def load_concepts(
         special_dict: Dict[str, pd.DataFrame] = {}
         if _need_kdigo:
             try:
-                from ..scores.kdigo_aki import load_kdigo_aki
+                current_requested = _need_kdigo & _KDIGO_BUNDLE_OUTPUTS
+                legacy_requested = _need_kdigo & _KDIGO_LEGACY_OUTPUTS
+                aki_frames = []
+                if current_requested:
+                    from ..scores.aki_profiles import load_renal_aki_bundle
 
-                aki_df = load_kdigo_aki(
-                    database=loader.database,
-                    data_path=str(loader.data_path),
-                    patient_ids=special_patient_ids,
-                    max_patients=effective_max_patients,
-                    verbose=verbose,
-                    preloaded_data=_pre or None,
-                )
-                if isinstance(aki_df, pd.DataFrame) and not aki_df.empty:
+                    current_aki = load_renal_aki_bundle(
+                        database=loader.database,
+                        data_path=str(loader.data_path),
+                        patient_ids=special_patient_ids,
+                        max_patients=effective_max_patients,
+                        verbose=verbose,
+                        preloaded_data=_pre or None,
+                    )
+                    if isinstance(current_aki, pd.DataFrame) and not current_aki.empty:
+                        aki_frames.append((current_aki, current_requested))
+                if legacy_requested:
+                    from ..scores.kdigo_aki import load_kdigo_aki
+
+                    legacy_aki = load_kdigo_aki(
+                        database=loader.database,
+                        data_path=str(loader.data_path),
+                        patient_ids=special_patient_ids,
+                        max_patients=effective_max_patients,
+                        verbose=verbose,
+                        preloaded_data=_pre or None,
+                    )
+                    if isinstance(legacy_aki, pd.DataFrame) and not legacy_aki.empty:
+                        aki_frames.append((legacy_aki, legacy_requested))
+                for aki_df, requested_outputs in aki_frames:
                     id_time = [
                         c
                         for c in (
@@ -1914,11 +1961,11 @@ def load_concepts(
                         )
                         if c in aki_df.columns
                     ]
-                    for c in _need_kdigo:
+                    for c in requested_outputs:
                         if c in aki_df.columns:
                             special_dict[c] = aki_df[id_time + [c]].copy()
             except Exception as e:
-                logger.warning(f"load_kdigo_aki failed: {e}")
+                logger.warning(f"renal AKI bundle loading failed: {e}")
         if _need_circ:
             try:
                 from ..scores.circ_failure import load_circ_failure
@@ -2091,6 +2138,11 @@ def load_concepts(
                             # special frame as-is for this single-concept
                             # case.
                             result = sdf
+
+    # Admission-/subject-keyed concepts may expand to sibling ICU stays while
+    # resolving their source IDs. Keep that context internal: an explicit
+    # stay-ID request is an exact public-output boundary.
+    result = _restrict_result_to_requested_ids(result, patient_ids)
 
     # 🆕 内存优化模式：压缩数据类型
     if memory_efficient:

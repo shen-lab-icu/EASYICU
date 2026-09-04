@@ -47,6 +47,24 @@
       route: 'ideas',
       cta: T('Open Idea Mining', '打开想法挖掘'),
     }),
+    prior_art_not_differentiated: () => ({
+      requirement: T('The selected direction needs a current typed literature decision. Only a differentiated decision may advance.',
+        '所选方向需要当前有效的文献裁决；只有“存在明确差异”才能继续。'),
+      route: 'guided',
+      cta: T('Continue in Copilot', '在 Copilot 中继续'),
+    }),
+    source_feasibility_not_ready: () => ({
+      requirement: T('The confirmed real data source has not yet passed bounded concept, coverage, and temporal feasibility checks.',
+        '已确认的真实数据源尚未通过概念、覆盖率和时间可行性检查。'),
+      route: 'guided',
+      cta: T('Check data feasibility', '检查数据可行性'),
+    }),
+    study_definition_not_confirmed: () => ({
+      requirement: T('Confirm the research question, population, exposure, outcome, time zero, and window before execution.',
+        '执行前请确认研究问题、人群、暴露、结局、时间零点和观察窗口。'),
+      route: 'guided',
+      cta: T('Confirm in Copilot', '在 Copilot 中确认'),
+    }),
     seed_gate_missing: () => ({
       requirement: T('This project was created before the preflight checks existed. Refresh it from Idea Mining to generate them.',
         '这个项目创建于预检条件之前，请回到想法挖掘刷新它以生成预检。'),

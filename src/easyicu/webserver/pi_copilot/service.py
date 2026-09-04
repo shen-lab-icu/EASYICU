@@ -40,7 +40,7 @@ from easyicu.webserver.copilot_data_workbench import (
 )
 
 from .plan_projection import project_plan_reader_fields
-from . import cohort_eligibility, plan_decisions
+from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
     MAX_MESSAGE_CHARS,
     AuthorityBinding,
@@ -55,19 +55,21 @@ from .contracts import (
 )
 from .codex_gateway import CodexPiGatewayPool
 from .gateway import PiGatewayClient
+from .message_input import prepare_user_message
 from .project_authority import (
     ProjectAuthorityStore,
     ProjectStudyContextMigrationReceipt,
 )
 from .provider_config import PiProviderConfigStore
+from .resource_lifecycle import WebMemoryAdmission
 from .projections import (
     project_job,
     project_pi_replay_event,
     project_transcript,
-    reject_sensitive_message,
 )
 from .user_visible_text import sanitize_user_visible_text
 from .replay_store import PiConversationReplayStore
+from .session_storage import SessionStorageMaintenance
 from .run_authority import (
     latest_bound_run_id,
     list_bound_run_history,
@@ -76,6 +78,8 @@ from .run_authority import (
 from .turn_authority import (
     explicitly_confirms_easyicu_registered_source,
     infer_explicit_turn_actions,
+    infer_idea_mining_followup_intent,
+    infer_research_entry_intent,
 )
 from .tools import extraction_workspace_resource
 from .workspace import ProjectWorkspace
@@ -99,6 +103,23 @@ ALLOWED_TURN_ACTIONS = frozenset(
         "mcp_read",
     }
 )
+HOST_ACTION_JOB_KINDS = {
+    "generate_plan": frozenset({"agent-run"}),
+    "auto_revise_plan": frozenset({"agent-run"}),
+    "prepare_analysis_data": frozenset({"agent-run"}),
+    "execute_plan": frozenset({"agent-run"}),
+    "retry_analysis": frozenset({"agent-run"}),
+}
+HOST_ACTIONS_WITHOUT_JOBS = frozenset(
+    {
+        "review_prepared_data",
+        "review_results",
+        "review_result_tables",
+        "review_figures",
+        "review_manuscript",
+        "review_scientific_review",
+    }
+)
 _RETIRED_SESSION_METADATA_FIELDS = frozenset(
     {
         "canonical_task_id",
@@ -107,6 +128,27 @@ _RETIRED_SESSION_METADATA_FIELDS = frozenset(
         "last_turn_events",
     }
 )
+
+_AUTO_SESSION_TITLE_SUFFIXES = (
+    " · Research",
+    " · 研究",
+    " · Workspace",
+    " · 工作区",
+)
+
+
+def _first_message_session_title(message: str) -> str:
+    """Create a short local conversation label from the researcher's first turn."""
+
+    compact = " ".join(str(message or "").split())
+    if len(compact) <= 52:
+        return compact
+    return compact[:51].rstrip() + "…"
+
+
+def _session_title_is_automatic(title: str) -> bool:
+    value = str(title or "").strip()
+    return value == "EasyICU Copilot" or value.endswith(_AUTO_SESSION_TITLE_SUFFIXES)
 
 
 class PiCopilotService:
@@ -126,6 +168,8 @@ class PiCopilotService:
             CopilotDataWorkbenchSnapshotStore
         ] = None,
         codex_gateway_pool: Optional[CodexPiGatewayPool] = None,
+        memory_admission: Optional[WebMemoryAdmission] = None,
+        storage_maintenance: Optional[SessionStorageMaintenance] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -140,6 +184,13 @@ class PiCopilotService:
         )
         self.codex_gateway_pool = codex_gateway_pool or CodexPiGatewayPool(
             template_gateway=self.gateway,
+        )
+        session_root = getattr(self.gateway, "session_dir", None)
+        if session_root is None:
+            session_root = self.store_path.parent / "pi-agent" / "sessions"
+        self.memory_admission = memory_admission or WebMemoryAdmission()
+        self.storage_maintenance = storage_maintenance or SessionStorageMaintenance(
+            Path(session_root)
         )
         self.project_store = project_store or ProjectAuthorityStore(
             None
@@ -176,6 +227,7 @@ class PiCopilotService:
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
+        self._opening_sessions = 0
         self._replay_child_watchers: set[tuple[str, str]] = set()
         self._project_initialization_locks: Dict[str, threading.RLock] = {}
         # Outstanding browser coordinates are deliberately process-local. A
@@ -191,6 +243,104 @@ class PiCopilotService:
         )
         self.workspace_root = workspace_base.expanduser().absolute()
         self.workspace = ProjectWorkspace(self.workspace_root)
+
+    def _admit_new_work(
+        self,
+        *,
+        gateway: Optional[Any] = None,
+        exclude_session_id: str = "",
+    ) -> Dict[str, Any]:
+        status = self.memory_admission.status()
+        if status.get("pressure") in {"soft", "emergency"}:
+            selected_gateway = gateway or self.gateway
+            if selected_gateway is self.gateway:
+                maintain = getattr(self.gateway, "maintain_sessions", None)
+                if callable(maintain):
+                    maintain(exclude_session_id=exclude_session_id)
+            maintain_pool = getattr(self.codex_gateway_pool, "maintain_sessions", None)
+            if callable(maintain_pool):
+                maintain_pool(exclude_session_id=exclude_session_id)
+        return self.memory_admission.require_capacity()
+
+    def resource_status(self) -> Dict[str, Any]:
+        """Return path-free process, hot-session, and transcript diagnostics."""
+
+        with self._lock:
+            records = self._read_records()
+            opening = self._opening_sessions
+            busy = len(self._busy_sessions)
+        referenced = [
+            row.pi_session_file for row in records if row.pi_session_file
+        ]
+        storage = self.storage_maintenance.inventory(referenced).public_projection()
+        gateway_status = getattr(self.gateway, "memory_status", None)
+        api_gateway = (
+            gateway_status()
+            if callable(gateway_status)
+            else {"running": False, "diagnostics_available": False}
+        )
+        memory_statuses = getattr(self.codex_gateway_pool, "memory_statuses", None)
+        return {
+            "ok": True,
+            "memory": self.memory_admission.status(),
+            "sessions": {
+                "retained": len(records),
+                "busy": busy,
+                "opening": opening,
+                "pinned": sum(row.pinned_for_presentation for row in records),
+            },
+            "gateways": {
+                "api": api_gateway,
+                "codex": memory_statuses() if callable(memory_statuses) else [],
+            },
+            "storage": storage,
+        }
+
+    def maintain_session_storage(
+        self,
+        *,
+        action: str,
+        confirm: bool = False,
+        quarantine_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Audit, quarantine, or restore private transcripts without deletion."""
+
+        clean_action = str(action or "").strip()
+        with self._lock:
+            if self._opening_sessions or self._busy_sessions:
+                raise PiCopilotError(
+                    "pi_session_maintenance_busy",
+                    "Transcript maintenance requires every Copilot turn to be idle.",
+                    status_code=409,
+                )
+            records = self._read_records()
+            referenced = [
+                row.pi_session_file for row in records if row.pi_session_file
+            ]
+            if clean_action == "audit":
+                result: Dict[str, Any] = {
+                    "status": "audited",
+                    "inventory": self.storage_maintenance.inventory(
+                        referenced
+                    ).public_projection(),
+                }
+            elif clean_action == "quarantine":
+                result = self.storage_maintenance.quarantine(
+                    referenced,
+                    confirm=bool(confirm),
+                )
+            elif clean_action == "restore":
+                result = self.storage_maintenance.restore(
+                    str(quarantine_id or ""),
+                    confirm=bool(confirm),
+                )
+            else:
+                raise PiCopilotError(
+                    "pi_session_maintenance_action_invalid",
+                    "Transcript maintenance action must be audit, quarantine, or restore.",
+                    status_code=422,
+                )
+        return {"ok": True, **result}
 
     def _project_initialization_lock(self, project_id: str) -> threading.RLock:
         with self._lock:
@@ -366,13 +516,29 @@ class PiCopilotService:
             if record.session_id in self._busy_sessions:
                 self._pending_retirements[record.session_id] = record
                 return
-        self.replay_store.retire(record.session_id)
         gateway: Any = self.gateway
         try:
             gateway = self._conversation_gateway(record)
+        except (OSError, PiCopilotError):
+            pass
+        self.replay_store.retire(record.session_id)
+        self._dispose_gateway_session(
+            gateway,
+            session_id=record.session_id,
+            session_file=record.pi_session_file,
+        )
+
+    @staticmethod
+    def _dispose_gateway_session(
+        gateway: Any,
+        *,
+        session_id: str,
+        session_file: Optional[str],
+    ) -> None:
+        try:
             gateway.request(
                 "session.dispose",
-                {"session_id": record.session_id},
+                {"session_id": session_id},
                 timeout=5,
             )
         except (OSError, PiCopilotError):
@@ -382,9 +548,9 @@ class PiCopilotService:
             "session_dir",
             None,
         )
-        if session_root is None or not record.pi_session_file:
+        if session_root is None or not session_file:
             return
-        candidate = Path(record.pi_session_file).resolve()
+        candidate = Path(session_file).resolve()
         root = Path(session_root).resolve()
         try:
             candidate.relative_to(root)
@@ -1160,6 +1326,7 @@ class PiCopilotService:
                 "Verify the Pi model service before starting a conversation.",
                 status_code=503,
             )
+        self._admit_new_work(gateway=conversation_gateway)
         context = self._resolve_project_context(
             project_id=clean_project_id,
             title=title,
@@ -1194,36 +1361,56 @@ class PiCopilotService:
                 skills=extension_activation.skills,
                 mcp_servers=(),
             )
-        state = conversation_gateway.request(
-            "session.create",
-            {
-                "session_id": session_id,
-                "thinking_level": resolved_thinking,
-                "agent_mode": resolved_mode,
-                "language": resolved_language,
-                "extension_snapshot": extension_activation.model_dump(mode="json"),
-            },
-            timeout=30,
-        )
-        record = PiSessionRecord(
-            session_id=session_id,
-            project_id=clean_project_id,
-            pi_session_id=str(state.get("pi_session_id") or "") or None,
-            pi_session_file=str(state.get("session_file") or "") or None,
-            title=str(title or "EasyICU Copilot").strip()[:160] or "EasyICU Copilot",
-            agent_mode=resolved_mode,
-            language=resolved_language,
-            thinking_level=resolved_thinking,
-            external_llm_opt_in=True,
-            extension_activation=extension_activation,
-            research_provider=selected_model_connection,
-            binding=binding,
-            data_source_authorization=self._new_session_data_authorization(
-                context,
+        state: Dict[str, Any] = {}
+        record: Optional[PiSessionRecord] = None
+        session_created = False
+        with self._lock:
+            self._opening_sessions += 1
+        try:
+            state = conversation_gateway.request(
+                "session.create",
+                {
+                    "session_id": session_id,
+                    "thinking_level": resolved_thinking,
+                    "agent_mode": resolved_mode,
+                    "language": resolved_language,
+                    "extension_snapshot": extension_activation.model_dump(mode="json"),
+                },
+                timeout=30,
+            )
+            session_created = True
+            record = PiSessionRecord(
+                session_id=session_id,
+                project_id=clean_project_id,
+                pi_session_id=str(state.get("pi_session_id") or "") or None,
+                pi_session_file=str(state.get("session_file") or "") or None,
+                title=str(title or "EasyICU Copilot").strip()[:160]
+                or "EasyICU Copilot",
                 agent_mode=resolved_mode,
-            ),
-        )
-        self._save_record(record)
+                language=resolved_language,
+                thinking_level=resolved_thinking,
+                external_llm_opt_in=True,
+                extension_activation=extension_activation,
+                research_provider=selected_model_connection,
+                binding=binding,
+                data_source_authorization=self._new_session_data_authorization(
+                    context,
+                    agent_mode=resolved_mode,
+                ),
+            )
+            self._save_record(record)
+        except Exception:
+            if session_created:
+                self._dispose_gateway_session(
+                    conversation_gateway,
+                    session_id=session_id,
+                    session_file=str(state.get("session_file") or "") or None,
+                )
+            raise
+        finally:
+            with self._lock:
+                self._opening_sessions = max(0, self._opening_sessions - 1)
+        assert record is not None
         return {
             "ok": True,
             "session": self._public_session(record, gateway_state=state),
@@ -1717,6 +1904,97 @@ class PiCopilotService:
             confirmed_at=utc_now(),
         )
 
+    def _bind_registered_source_from_message(
+        self,
+        record: PiSessionRecord,
+        *,
+        source: Mapping[str, Any],
+    ) -> PiSessionRecord:
+        """Bind an exact registry path supplied by the user, before provider use."""
+
+        context_id = str(record.binding.study_context_id or "").strip()
+        if not context_id:
+            raise PiCopilotError(
+                "pi_message_study_context_required",
+                "Create a research project before selecting its local data source.",
+                status_code=409,
+            )
+        try:
+            current = study_contexts.get_context(context_id)
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(exc.detail.get("error") or "study_context_invalid"),
+                "The bound StudyContext could not be loaded.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        if not current:
+            raise PiCopilotError(
+                "study_context_not_found",
+                "The bound StudyContext no longer exists.",
+                status_code=409,
+            )
+        if current.get("active_job_id"):
+            raise PiCopilotError(
+                "study_context_active_job_conflict",
+                "The local data source cannot change while its EasyICU job is active.",
+                status_code=409,
+            )
+        source_path = str(source.get("path") or "").strip()
+        database = str(source.get("database") or "").strip()
+        if not source_path or not database or not bool(source.get("ok")):
+            raise PiCopilotError(
+                "pi_message_local_source_invalid",
+                "The selected registry row is not a validated EasyICU data source.",
+                status_code=409,
+            )
+        confirmations = dict(current.get("confirmations") or {})
+        confirmations["extraction_completed"] = True
+        try:
+            updated = study_contexts.upsert_context(
+                {
+                    "id": context_id,
+                    "data_source": {
+                        "path": source_path,
+                        "label": str(source.get("label") or "local EasyICU data")[:160],
+                        "database": database,
+                    },
+                    "confirmations": confirmations,
+                },
+                active=True,
+                expected_revision=int(current.get("revision") or 0),
+                require_revision=True,
+                lifecycle_write=False,
+            )
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(exc.detail.get("error") or "study_context_update_blocked"),
+                "The StudyContext owner rejected the local data-source binding.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        record.binding = self._binding_for_context(
+            updated,
+            run_id=self._latest_run_id(context_id, project_id=record.project_id),
+        )
+        source_reference = self._session_source_reference(updated)
+        if source_reference is None:
+            raise PiCopilotError(
+                "pi_message_local_source_reference_unavailable",
+                "The selected data source could not be projected into session authority.",
+                status_code=409,
+            )
+        record.data_source_authorization = PiSessionDataSourceAuthorization(
+            status="confirmed",
+            reason=None,
+            confirmation_mode="select_local_source",
+            extraction_scope="reuse_prepared_full",
+            source=source_reference,
+            confirmed_at=utc_now(),
+        )
+        self._save_record(record)
+        return record
+
     def send_message(
         self,
         session_id: str,
@@ -1727,6 +2005,7 @@ class PiCopilotService:
         regenerate_user_entry_id: Optional[str] = None,
         regeneration_intent: Optional[str] = None,
         message_intent: Optional[str] = None,
+        idea_source: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         record = self._scoped_record(session_id, project_id=project_id)
         self._provider_gate(
@@ -1745,7 +2024,11 @@ class PiCopilotService:
                 "The EasyICU Copilot message exceeds its bounded contract.",
                 details={"max_chars": MAX_MESSAGE_CHARS},
             )
-        reject_sensitive_message(text)
+        prepared_input = prepare_user_message(
+            text,
+            registered_sources=sources.load_registry().get("sources") or [],
+        )
+        provider_text = prepared_input.provider_message
         stale = self._stale_details(record)
         if stale.get("stale"):
             raise PiCopilotError(
@@ -1757,6 +2040,11 @@ class PiCopilotService:
                 status_code=409,
                 details=stale,
             )
+        if prepared_input.registered_source is not None:
+            record = self._bind_registered_source_from_message(
+                record,
+                source=prepared_input.registered_source,
+            )
         # A prepared source that is already bound to this project can be
         # confirmed before the provider turn.  This lets one explicit user
         # choice both unlock the data gate and advance to the requested data
@@ -1765,7 +2053,7 @@ class PiCopilotService:
         prior_authorization = record.data_source_authorization.model_dump(mode="json")
         self._confirm_registered_source_selected_in_turn(
             record,
-            user_message=text,
+            user_message=provider_text,
         )
         if (
             record.data_source_authorization.model_dump(mode="json")
@@ -1774,7 +2062,7 @@ class PiCopilotService:
             self._save_record(record)
         requested_actions = frozenset(
             str(item).strip() for item in allowed_actions if str(item).strip()
-        ) | infer_explicit_turn_actions(text)
+        ) | infer_explicit_turn_actions(provider_text)
         unknown_actions = sorted(requested_actions - ALLOWED_TURN_ACTIONS)
         if unknown_actions:
             raise PiCopilotError(
@@ -1782,7 +2070,34 @@ class PiCopilotService:
                 "The message requested an unknown host action capability.",
                 details={"actions": unknown_actions},
             )
-        self._ensure_open(record)
+        self._admit_new_work(
+            gateway=self._conversation_gateway(record),
+            exclude_session_id=record.session_id,
+        )
+        opened_state = self._ensure_open(record)
+        if not regenerate_user_entry_id and not message_intent:
+            workflow = build_project_workflow_projection(
+                study_context_id=record.binding.study_context_id,
+            )
+            if workflow.workflow.current_stage == "idea":
+                message_intent = infer_idea_mining_followup_intent(provider_text)
+        if (
+            not regenerate_user_entry_id
+            and not message_intent
+            and int(opened_state.get("message_count") or 0) == 0
+        ):
+            workflow = build_project_workflow_projection(
+                study_context_id=record.binding.study_context_id,
+            )
+            if workflow.workflow.current_stage == "idea":
+                message_intent = infer_research_entry_intent(provider_text)
+        if (
+            not regenerate_user_entry_id
+            and int(opened_state.get("message_count") or 0) == 0
+            and _session_title_is_automatic(record.title)
+        ):
+            record.title = _first_message_session_title(provider_text)
+            self._save_record(record)
         regenerate_target: Optional[Dict[str, Any]] = None
         if regenerate_user_entry_id:
             regenerate_target = self._conversation_gateway(
@@ -1806,7 +2121,8 @@ class PiCopilotService:
             }
             if (
                 regeneration_intent not in edited_regeneration_intents
-                and str(regenerate_target.get("message") or "").strip() != text
+                and str(regenerate_target.get("message") or "").strip()
+                != provider_text
             ):
                 raise PiCopilotError(
                     "pi_regenerate_message_mismatch",
@@ -1920,7 +2236,9 @@ class PiCopilotService:
                     }
                 )
                 method = "session.regenerate" if regenerate_target is not None else "session.prompt"
-                params = {"session_id": record.session_id, "message": text}
+                params = {"session_id": record.session_id, "message": provider_text}
+                if idea_source:
+                    params["idea_source"] = dict(idea_source)
                 if message_intent:
                     params[
                         "turn_intent" if regenerate_target is not None else "intent"
@@ -1945,7 +2263,7 @@ class PiCopilotService:
                 )
                 self._confirm_registered_source_selected_in_turn(
                     refreshed,
-                    user_message=text,
+                    user_message=provider_text,
                 )
                 refreshed.last_message_job_id = job.id
                 refreshed.active_message_job_id = job.id
@@ -2042,6 +2360,7 @@ class PiCopilotService:
             tool_context = ToolExecutionContext(
                 session=record.model_copy(deep=True),
                 user_message=text,
+                idea_source=idea_source,
                 allowed_actions=requested_actions,
                 authority_validator=lambda binding: self._binding_stale_details(
                     binding,
@@ -2093,6 +2412,12 @@ class PiCopilotService:
                         time.sleep(0.1)
                         continue
                     if child.status in {"done", "failed", "cancelled"}:
+                        self.replay_store.finish_host_actions_for_child_job(
+                            session_id=session_id,
+                            project_id=project_id,
+                            child_job_id=job_id,
+                            status=child.status,
+                        )
                         self.replay_store.archive_child_job(
                             session_id=session_id,
                             project_id=project_id,
@@ -2111,6 +2436,84 @@ class PiCopilotService:
             name=f"pi-replay-{job_id[:24]}",
             daemon=True,
         ).start()
+
+    def record_host_action(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        action_code: str,
+        action_key: str,
+        child_job_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Bind one explicit host-UI action to the durable conversation replay."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        action = str(action_code or "").strip()
+        key = str(action_key or "").strip()
+        child_id = str(child_job_id or "").strip()
+        expected_kinds = HOST_ACTION_JOB_KINDS.get(action)
+        if expected_kinds is None and action not in HOST_ACTIONS_WITHOUT_JOBS:
+            raise PiCopilotError(
+                "pi_host_action_unsupported",
+                "This host conversation action is not supported.",
+                status_code=400,
+            )
+        if not key:
+            raise PiCopilotError(
+                "pi_host_action_key_required",
+                "The host conversation action is missing its stable key.",
+                status_code=400,
+            )
+        child = None
+        if expected_kinds is not None:
+            if not child_id:
+                raise PiCopilotError(
+                    "pi_host_action_child_job_required",
+                    "This host conversation action requires its child job.",
+                    status_code=400,
+                )
+            child = jobs.MANAGER.get(child_id)
+            if child is None or child.kind not in expected_kinds:
+                raise PiCopilotError(
+                    "pi_host_action_child_job_invalid",
+                    "The host conversation action does not match this child job.",
+                    status_code=409,
+                )
+        elif child_id:
+            raise PiCopilotError(
+                "pi_host_action_child_job_forbidden",
+                "This host conversation action must not bind a child job.",
+                status_code=400,
+            )
+        action_id = "host_" + hashlib.sha256(
+            f"{record.session_id}\0{action}\0{key}".encode("utf-8")
+        ).hexdigest()[:24]
+        child_status = str(child.status) if child is not None else "done"
+        status = child_status if child_status in {"done", "failed", "cancelled"} else "running"
+        turn = self.replay_store.record_host_action(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+            action_id=action_id,
+            action_code=action,
+            action_key=key,
+            child_job_id=child_id or None,
+            status=status,
+        )
+        if child is not None:
+            if status == "running":
+                self._watch_child_job_for_replay(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=child_id,
+                )
+            else:
+                self.replay_store.archive_child_job(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job=project_job(child.snapshot()),
+                )
+        return {"ok": True, "host_action": turn}
 
     def archive_child_job(
         self,
@@ -2144,6 +2547,13 @@ class PiCopilotService:
                 status_code=404,
             )
         projected = project_job(child.snapshot())
+        if child.status in {"done", "failed", "cancelled"}:
+            self.replay_store.finish_host_actions_for_child_job(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+                child_job_id=job_id,
+                status=child.status,
+            )
         saved = self.replay_store.archive_child_job(
             session_id=record.session_id,
             project_id=str(record.project_id),
@@ -2233,12 +2643,21 @@ class PiCopilotService:
             )
             for row in records
         ]
+        sessions: list[Dict[str, Any]] = []
+        for row in records:
+            public = self._public_session(row, include_replay=False)
+            replay = self.replay_store.snapshot(
+                session_id=row.session_id,
+                project_id=clean_project_id,
+                limit=1,
+            )
+            turn_page = replay.get("turn_page") or {}
+            public["history_turn_count"] = int(turn_page.get("total") or 0)
+            sessions.append(public)
         return {
             "ok": True,
-            "count": len(records),
-            "sessions": [
-                self._public_session(row, include_replay=False) for row in records
-            ],
+            "count": len(sessions),
+            "sessions": sessions,
         }
 
     def get_session(
@@ -2513,7 +2932,7 @@ class PiCopilotService:
             and item.get("requires_user_authorization") is True
         }
         clean_code = str(decision_code or "").strip()
-        if clean_code not in authorized_codes:
+        if clean_code not in authorized_codes or plan_decisions.decision_is_resolved(context, clean_code):
             raise PiCopilotError(
                 "plan_decision_not_required_by_review",
                 "The selected decision is not an unresolved human choice in this review.",
@@ -2528,6 +2947,7 @@ class PiCopilotService:
                 status_code=409,
             )
         try:
+            plan_review_progress.validate_choice_source(context, row)
             compiled = plan_decisions.compile_plan_decision(
                 decision_code=clean_code,
                 option_id=option_id,
@@ -2539,6 +2959,10 @@ class PiCopilotService:
                 expected_revision=current_revision,
                 require_revision=True,
                 lifecycle_write=False,
+            )
+            plan_review_progress.record_choice(
+                before=context, after=updated, run=row,
+                decision_code=clean_code, option_id=option_id,
             )
         except plan_decisions.PlanDecisionError as exc:
             raise PiCopilotError(
@@ -2946,16 +3370,23 @@ class PiCopilotService:
                 break
 
         try:
-            if files:
-                body: Dict[str, Any] = {"source_path": source_path}
-                if feature_ids:
-                    body["selected_features"] = feature_ids
-                owner_payload = cohort_review.cohort_review_summary(body)
-            elif materialized_analysis_path is not None:
+            # A completed or reviewable run owns the exact cohort that its
+            # plan and results consumed.  Prefer that immutable input even
+            # while the broader export remains online; resolving plan tokens
+            # back to similarly named source columns can visualize a different
+            # feature (for example raw sepsis3_sofa1 instead of the analysed
+            # sep3_sofa1_max).  The registered export is only the fallback
+            # before a run-scoped cohort exists.
+            if materialized_analysis_path is not None:
                 owner_payload = cohort_review.materialized_analysis_review(
                     materialized_analysis_path,
                     requested_variables,
                 )
+            elif files:
+                body: Dict[str, Any] = {"source_path": source_path}
+                if feature_ids:
+                    body["selected_features"] = feature_ids
+                owner_payload = cohort_review.cohort_review_summary(body)
             else:
                 reason = str(description.get("error") or "source_not_available")
                 raise cohort_review.CohortReviewError({"error": reason})
@@ -3092,6 +3523,7 @@ class PiCopilotService:
         project_id: str,
         run_id: str,
         artifact_name: str,
+        expected_sha256: str | None = None,
     ) -> Dict[str, Any]:
         """Resolve a run artefact through project authority without exposing paths."""
 
@@ -3122,6 +3554,19 @@ class PiCopilotService:
             raise PiCopilotError(
                 "pi_research_artifact_privacy_blocked",
                 "The artefact preview was withheld by the EasyICU privacy scan.",
+                status_code=409,
+                details={"artifact": clean_artifact},
+            )
+        metadata = loaded.get("artifact") or {}
+        clean_expected = str(expected_sha256 or "").strip().lower()
+        observed_sha256 = str(metadata.get("sha256") or "").strip().lower()
+        if clean_expected and (
+            re.fullmatch(r"[a-f0-9]{64}", clean_expected) is None
+            or observed_sha256 != clean_expected
+        ):
+            raise PiCopilotError(
+                "pi_research_artifact_digest_mismatch",
+                "The EasyICU run artefact changed after its reference was issued.",
                 status_code=409,
                 details={"artifact": clean_artifact},
             )
@@ -3165,7 +3610,6 @@ class PiCopilotService:
                 status_code=409,
                 details={"artifact": clean_artifact},
             )
-        metadata = loaded.get("artifact") or {}
         return {
             "ok": True,
             "run_id": clean_run,
@@ -3491,27 +3935,60 @@ class PiCopilotService:
         """Reconcile persisted UX continuity with the process-local JobManager."""
 
         active_job_id = str(record.active_message_job_id or "").strip()
-        if not active_job_id or record.last_turn_status != "running":
-            return record
-        job = jobs.MANAGER.get(active_job_id)
-        if job is not None and job.status == "running":
-            return record
-        record.active_message_job_id = None
-        if job is not None and job.status in {"done", "failed", "cancelled"}:
-            record.last_turn_status = job.status
-        else:
-            # The generic JobManager is intentionally process-local. A persisted
-            # running pointer with no matching job therefore means the Web
-            # process restarted; never leave the presentation showing "running".
-            record.last_turn_status = "interrupted"
-        saved = self._save_record(record)
-        self.replay_store.finish_turn(
+        if active_job_id and record.last_turn_status == "running":
+            job = jobs.MANAGER.get(active_job_id)
+            if job is None or job.status != "running":
+                record.active_message_job_id = None
+                if job is not None and job.status in {"done", "failed", "cancelled"}:
+                    record.last_turn_status = job.status
+                else:
+                    # The generic JobManager is intentionally process-local. A
+                    # persisted running pointer with no matching job therefore
+                    # means the Web process restarted; never leave the
+                    # presentation showing "running".
+                    record.last_turn_status = "interrupted"
+                record = self._save_record(record)
+                self.replay_store.finish_turn(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=active_job_id,
+                    status=str(record.last_turn_status),
+                )
+
+        # Host-owned buttons launch separate child jobs and are intentionally
+        # not represented by active_message_job_id. Reconcile them as well, or
+        # a process restart leaves historical plan/extraction actions looking
+        # live forever and blocks the next real action in the browser.
+        for child_job_id in self.replay_store.running_host_action_child_job_ids(
             session_id=record.session_id,
             project_id=str(record.project_id),
-            job_id=active_job_id,
-            status=str(record.last_turn_status),
-        )
-        return saved
+        ):
+            child = jobs.MANAGER.get(child_job_id)
+            if child is not None and child.status == "running":
+                self._watch_child_job_for_replay(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=child_job_id,
+                )
+                continue
+            terminal_status = (
+                child.status
+                if child is not None and child.status in {"done", "failed", "cancelled"}
+                else "interrupted"
+            )
+            self.replay_store.finish_host_actions_for_child_job(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+                child_job_id=child_job_id,
+                status=terminal_status,
+            )
+            if child is not None:
+                self.replay_store.archive_child_job(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job=project_job(child.snapshot()),
+                )
+        return record
 
     def close(self) -> None:
         self.gateway.close()
@@ -3530,17 +4007,25 @@ def get_pi_copilot_service() -> PiCopilotService:
         return _SERVICE
 
 
-def reset_pi_copilot_service_for_tests() -> None:
+def shutdown_pi_copilot_service() -> None:
+    """Close the singleton without creating one during WebApp shutdown."""
+
     global _SERVICE
     with _SERVICE_LOCK:
-        if _SERVICE is not None:
-            _SERVICE.close()
+        service = _SERVICE
         _SERVICE = None
+    if service is not None:
+        service.close()
+
+
+def reset_pi_copilot_service_for_tests() -> None:
+    shutdown_pi_copilot_service()
 
 
 __all__ = [
     "ALLOWED_TURN_ACTIONS",
     "PiCopilotService",
     "get_pi_copilot_service",
+    "shutdown_pi_copilot_service",
     "reset_pi_copilot_service_for_tests",
 ]

@@ -457,6 +457,9 @@
   function loadPiCopilotProjectWorkflow(projectId) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId || '') + '/workflow');
   }
+  function loadPiCopilotLiteratureSource(pmid) {
+    return getJSON('/api/copilot/pi/literature/sources/' + encodeURIComponent(pmid || ''));
+  }
   function loadPiCopilotSessions(limit, projectId, agentMode) {
     const n = Math.max(1, Math.min(100, Number(limit) || 30));
     const mode = agentMode === 'research' || agentMode === 'workspace' ? '&agent_mode=' + encodeURIComponent(agentMode) : '';
@@ -499,6 +502,12 @@
       body || {},
     );
   }
+  function recordPiCopilotHostAction(sessionId, body) {
+    return postJSON(
+      '/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/host-actions',
+      body || {},
+    );
+  }
   function abortPiCopilotSession(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/abort', body || {});
   }
@@ -510,11 +519,14 @@
       + '/workspace/preview?file=' + encodeURIComponent(file)
       + '&checked_sha256=' + encodeURIComponent(checkedSha256 || '');
   }
-  function loadPiCopilotResearchArtifact(projectId, runId, artifact) {
+  function loadPiCopilotResearchArtifact(projectId, runId, artifact, expectedSha256) {
+    const digest = String(expectedSha256 || '').trim().toLowerCase();
     return getJSON(
       '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
       + '/runs/' + encodeURIComponent(runId)
       + '/artifacts/' + encodeURIComponent(artifact)
+      + (/^[a-f0-9]{64}$/.test(digest)
+        ? '?expected_sha256=' + encodeURIComponent(digest) : '')
     );
   }
   function loadPiCopilotResearchEvidence(projectId, runId, evidenceId, expectedSha256) {
@@ -736,6 +748,7 @@
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
   window.EU_API.loadPiCopilotProjectWorkflow = loadPiCopilotProjectWorkflow;
+  window.EU_API.loadPiCopilotLiteratureSource = loadPiCopilotLiteratureSource;
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
@@ -746,6 +759,7 @@
   window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;
   window.EU_API.pinPiCopilotPresentation = pinPiCopilotPresentation;
   window.EU_API.archivePiCopilotChildJob = archivePiCopilotChildJob;
+  window.EU_API.recordPiCopilotHostAction = recordPiCopilotHostAction;
   window.EU_API.abortPiCopilotSession = abortPiCopilotSession;
   window.EU_API.loadPiCopilotWorkspaceFile = loadPiCopilotWorkspaceFile;
   window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;

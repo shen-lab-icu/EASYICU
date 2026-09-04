@@ -221,9 +221,13 @@ def draw_robustness_coverage(
     title: str = "Sensitivity-analysis coverage",
     label_formatter: Callable[[Any], str] | None = None,
 ) -> dict[str, Any]:
-    """Draw audit coverage without placing heterogeneous effects on one axis."""
+    """Draw a compact audit strip without implying effect comparability.
 
-    from matplotlib.colors import LinearSegmentedColormap
+    A fully saturated heatmap made a tiny ``1/1`` audit look like a scientific
+    result panel.  The journal-facing display now uses quiet status markers and
+    keeps the exact numerator/denominator text.  No rows, counts, or authority
+    semantics are changed.
+    """
 
     result = prepare_robustness_coverage(frame)
     columns = [
@@ -235,14 +239,21 @@ def draw_robustness_coverage(
     counts = result[[name for name, _ in columns]].to_numpy(dtype=float)
     totals = result["total_specs"].to_numpy(dtype=float)[:, None]
     fractions = counts / totals
-    cmap = LinearSegmentedColormap.from_list(
-        "easyicu_robustness_coverage", ("#f1f3f5", color)
-    )
-    ax.imshow(fractions, aspect="auto", cmap=cmap, vmin=0.0, vmax=1.0)
     for row_index in range(len(result)):
         for column_index in range(len(columns)):
             fraction = float(fractions[row_index, column_index])
-            text_color = "white" if fraction >= 0.68 else "#222222"
+            complete = bool(np.isclose(fraction, 1.0))
+            marker_color = color if complete else "#D9DEE3"
+            ax.scatter(
+                column_index,
+                row_index,
+                s=190,
+                facecolor=marker_color,
+                edgecolor="white",
+                linewidth=1.2,
+                alpha=0.16 if complete else 0.55,
+                zorder=1,
+            )
             ax.text(
                 column_index,
                 row_index,
@@ -250,7 +261,9 @@ def draw_robustness_coverage(
                 ha="center",
                 va="center",
                 fontsize=5.8,
-                color=text_color,
+                fontweight="semibold" if complete else "normal",
+                color=color if complete else "#555B61",
+                zorder=2,
             )
     formatter = label_formatter or (lambda value: str(value).replace("_", " "))
     ax.set_xticks(
@@ -262,7 +275,13 @@ def draw_robustness_coverage(
         fontsize=5.8,
     )
     ax.tick_params(length=0)
-    ax.set_xlabel("Specifications meeting each audit condition")
+    ax.set_xlim(-0.55, len(columns) - 0.45)
+    ax.set_ylim(len(result) - 0.45, -0.55)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    for boundary in np.arange(0.5, len(result) - 0.5, 1.0):
+        ax.axhline(boundary, color="#ECEFF1", linewidth=0.6, zorder=0)
+    ax.set_xlabel("Registered specifications meeting each condition")
     ax.set_title(title, loc="left", pad=7)
     return {
         "chart_type": "sensitivity_coverage_matrix",

@@ -22,7 +22,7 @@ def _load_research_agent() -> Any:
         mod = sys.modules["easyicu.research_agent"]
         parent = sys.modules.get("easyicu")
         if parent is not None:
-            setattr(parent, "research_agent", mod)
+            parent.research_agent = mod
         return mod
 
     if "easyicu" not in sys.modules:
@@ -40,7 +40,7 @@ def _load_research_agent() -> Any:
     mod = importlib.util.module_from_spec(spec)
     sys.modules["easyicu.research_agent"] = mod
     spec.loader.exec_module(mod)
-    setattr(sys.modules["easyicu"], "research_agent", mod)
+    sys.modules["easyicu"].research_agent = mod
     return mod
 
 
