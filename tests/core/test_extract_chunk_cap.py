@@ -285,6 +285,58 @@ def test_measured_eicu_profile_can_authorize_full_cohort_above_legacy_size_cap()
     assert plan.advisory is None
 
 
+@pytest.mark.parametrize(
+    ("module", "expected_peak_mb"),
+    [
+        ("demographics", 210.1),
+        ("outcome", 193.5),
+        ("blood_gas", 2_207.2),
+        ("hematology", 2_060.8),
+        ("chemistry", 1_665.7),
+        ("vasopressors", 2_253.5),
+        ("vitals", 4_101.1),
+        ("renal", 4_101.8),
+        ("medications", 3_782.0),
+        ("neurological", 2_035.7),
+        ("circulatory", 3_677.6),
+        ("sepsis_shared", 1_531.7),
+    ],
+)
+def test_measured_aumc_light_modules_preserve_full_cohort_one_shot(
+    module, expected_peak_mb
+):
+    plan = plan_extraction_resources(
+        "aumc",
+        [module],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 23_106
+    assert plan.measured_peak_rss_mb == pytest.approx(expected_peak_mb)
+    assert plan.required_available_memory_mb == pytest.approx(
+        expected_peak_mb * 1.10
+    )
+    assert plan.advisory is None
+
+
+@pytest.mark.parametrize("module", ["respiratory", "ventilator", "other_scores"])
+def test_unmeasured_heavy_aumc_modules_keep_memory_guard(module):
+    plan = plan_extraction_resources(
+        "aumc",
+        [module],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "unmeasured_profile_memory_guard"
+    assert plan.batch_size == 5_000
+    assert plan.measured_peak_rss_mb is None
+
+
 def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
     plan = plan_extraction_resources(
         "eicu",

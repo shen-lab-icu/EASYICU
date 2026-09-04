@@ -214,6 +214,26 @@ _STREAM_CALIBRATED_REFERENCE = {
 # currently available is enough for a full MIMIC-IV one-shot.
 _MEASURED_ONESHOT_HEADROOM = 1.10
 _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "aumc": {
+        # Full-cohort module measurements from the sealed 23,106-stay AUMC
+        # extraction. These owners are outside the later IMV/SOFA semantic
+        # repair; the deterministic worker envelope only reduces their lower-
+        # layer concurrency/cache limits. Keep the three historically heavy
+        # owners (respiratory, ventilator and other_scores) out of this table
+        # until an 8-GiB batch boundary has been measured for each one.
+        "demographics": {"cohort_stays": 23_106, "peak_rss_mb": 210.1, "seconds": 0.4},
+        "outcome": {"cohort_stays": 23_106, "peak_rss_mb": 193.5, "seconds": 0.3},
+        "blood_gas": {"cohort_stays": 23_106, "peak_rss_mb": 2_207.2, "seconds": 11.7},
+        "hematology": {"cohort_stays": 23_106, "peak_rss_mb": 2_060.8, "seconds": 78.9},
+        "chemistry": {"cohort_stays": 23_106, "peak_rss_mb": 1_665.7, "seconds": 74.9},
+        "vasopressors": {"cohort_stays": 23_106, "peak_rss_mb": 2_253.5, "seconds": 7.4},
+        "vitals": {"cohort_stays": 23_106, "peak_rss_mb": 4_101.1, "seconds": 73.5},
+        "renal": {"cohort_stays": 23_106, "peak_rss_mb": 4_101.8, "seconds": 67.2},
+        "medications": {"cohort_stays": 23_106, "peak_rss_mb": 3_782.0, "seconds": 29.5},
+        "neurological": {"cohort_stays": 23_106, "peak_rss_mb": 2_035.7, "seconds": 13.1},
+        "circulatory": {"cohort_stays": 23_106, "peak_rss_mb": 3_677.6, "seconds": 29.6},
+        "sepsis_shared": {"cohort_stays": 23_106, "peak_rss_mb": 1_531.7, "seconds": 1.3},
+    },
     "eicu": {
         "demographics": {"cohort_stays": 200_859, "peak_rss_mb": 1_194.6, "seconds": 2.951},
         "outcome": {"cohort_stays": 200_859, "peak_rss_mb": 1_114.3, "seconds": 2.624},
