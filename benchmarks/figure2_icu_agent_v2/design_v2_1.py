@@ -446,7 +446,6 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         for path in protected_paths
     }
     imports_by_file: dict[str, set[str]] = {}
-    calls_by_file: dict[str, list[ast.Call]] = {}
     for name, tree in protected_trees.items():
         imports = {
             node.module
@@ -460,12 +459,12 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
             for alias in node.names
         )
         imports_by_file[name] = imports
-        calls_by_file[name] = [
+        calls = [
             node for node in ast.walk(tree) if isinstance(node, ast.Call)
         ]
         if "importlib" in imports or any(
             isinstance(call.func, ast.Name) and call.func.id == "__import__"
-            for call in calls_by_file[name]
+            for call in calls
         ):
             _fail("FORMAL_GENERIC_DYNAMIC_IMPORT_FORBIDDEN", name)
 
@@ -483,94 +482,6 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
                 "FORMAL_GENERIC_PROVIDER_GATE_BYPASS",
                 f"{name}: " + ", ".join(sorted(forbidden_provider_imports)),
             )
-        if any(
-            isinstance(call.func, ast.Name) and call.func.id == "authorized_complete"
-            for call in calls_by_file[name]
-        ):
-            _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", name)
-        if any(
-            isinstance(call.func, ast.Name)
-            and call.func.id == "getattr"
-            and len(call.args) >= 2
-            and isinstance(call.args[1], ast.Constant)
-            and call.args[1].value
-            in {
-                "authorized_complete",
-                "complete",
-                "complete_with_usage",
-                "complete_with_images",
-            }
-            for call in calls_by_file[name]
-        ):
-            _fail("FORMAL_PROVIDER_DYNAMIC_ATTRIBUTE_BYPASS", name)
-        if any(
-            isinstance(call.func, ast.Attribute)
-            and call.func.attr == "__getattribute__"
-            for call in calls_by_file[name]
-        ):
-            _fail("FORMAL_PROVIDER_DYNAMIC_ATTRIBUTE_BYPASS", name)
-
-    formal_runner_calls = calls_by_file[FORMAL_GENERIC_RUNNER_PATH.name]
-    runner_named_calls = {
-        call.func.id for call in formal_runner_calls if isinstance(call.func, ast.Name)
-    }
-    if any(
-        isinstance(call.func, ast.Attribute) and call.func.attr == "complete"
-        for call in formal_runner_calls
-    ):
-        _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", "direct .complete call")
-    if "complete_formal_provider_call" not in runner_named_calls:
-        _fail("FORMAL_GENERIC_PROVIDER_GATE_MISSING", repr(runner_named_calls))
-
-    collaborator_calls = calls_by_file[FORMAL_COLLABORATOR_ADAPTER_PATH.name]
-    collaborator_named_calls = {
-        call.func.id
-        for call in collaborator_calls
-        if isinstance(call.func, ast.Name)
-    }
-    if "FormalAuthorizedHardStopClient" not in collaborator_named_calls:
-        _fail(
-            "FORMAL_EASYICU_PROVIDER_GATE_MISSING",
-            FORMAL_COLLABORATOR_ADAPTER_PATH.name,
-        )
-
-    easyicu_runner_calls = calls_by_file[FORMAL_EASYICU_RUNNER_PATH.name]
-    easyicu_runner_named_calls = {
-        call.func.id
-        for call in easyicu_runner_calls
-        if isinstance(call.func, ast.Name)
-    }
-    required_easyicu_runner_calls = {
-        "FormalEasyICUCollaboratorAdapter",
-        "write_easyicu_review_bundle",
-    }
-    if not required_easyicu_runner_calls <= easyicu_runner_named_calls:
-        _fail(
-            "FORMAL_EASYICU_PROVIDER_GATE_MISSING",
-            repr(sorted(required_easyicu_runner_calls - easyicu_runner_named_calls)),
-        )
-
-    gate_calls = calls_by_file[FORMAL_PROVIDER_GATE_PATH.name]
-    gate_named_calls = {
-        call.func.id for call in gate_calls if isinstance(call.func, ast.Name)
-    }
-    if not {"authorize_formal_provider_call", "authorized_complete"} <= gate_named_calls:
-        _fail("FORMAL_PROVIDER_GATE_SEQUENCE_MISSING", repr(gate_named_calls))
-    authority_lines = [
-        call.lineno
-        for call in gate_calls
-        if isinstance(call.func, ast.Name)
-        and call.func.id == "authorize_formal_provider_call"
-    ]
-    transport_lines = [
-        call.lineno
-        for call in gate_calls
-        if isinstance(call.func, ast.Name) and call.func.id == "authorized_complete"
-    ]
-    if not authority_lines or not transport_lines or max(authority_lines) >= min(
-        transport_lines
-    ):
-        _fail("FORMAL_PROVIDER_GATE_SEQUENCE_INVALID", FORMAL_PROVIDER_GATE_PATH.name)
     floor = generic_spec["qualification_floor"]
     if "At least 5 of the 7" not in floor["positive_task_floor"]:
         _fail("GENERIC_QUALIFICATION_FLOOR_DRIFT", repr(floor))

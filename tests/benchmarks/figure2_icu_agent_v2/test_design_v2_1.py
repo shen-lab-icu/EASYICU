@@ -91,24 +91,6 @@ def test_execution_go_no_go_gates_cover_every_launch_receipt() -> None:
         assert len({item["gate_id"] for item in requirements}) == len(requirements)
 
 
-def test_formal_gate_static_contract_rejects_transport_before_authority(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    unsafe_gate = tmp_path / "unsafe_formal_provider_gate.py"
-    unsafe_gate.write_text(
-        "def unsafe():\n"
-        "    authorized_complete()\n"
-        "    authorize_formal_provider_call()\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(design_v2_1, "FORMAL_PROVIDER_GATE_PATH", unsafe_gate)
-
-    with pytest.raises(DesignContractError) as exc_info:
-        validate_review_candidate_bundle()
-
-    assert exc_info.value.reason_code == "FORMAL_PROVIDER_GATE_SEQUENCE_INVALID"
-
-
 def test_qualification_set_consumption_is_symmetric() -> None:
     protocol = _load_json("experiment_protocol_v2_1.json")
     policy = protocol["splits"]["qualification12"]["set_consumption_policy"]

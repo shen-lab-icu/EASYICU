@@ -302,8 +302,8 @@ def test_formal_provider_gate_denies_before_transport(tmp_path: Path) -> None:
         limits=ProviderHardStopLimits(
             max_provider_attempts_per_run=1,
             max_provider_attempts_per_batch=1,
-            max_total_tokens_per_run=100,
-            max_total_tokens_per_batch=100,
+            max_total_tokens_per_run=200_000,
+            max_total_tokens_per_batch=200_000,
             max_estimated_cost_usd_per_batch=1.0,
             max_wall_clock_seconds_per_task=60.0,
             input_cost_usd_per_million_tokens=0.1,
@@ -783,10 +783,15 @@ def test_formal_provider_gate_preserves_production_transport_trust_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _TransportSpy()
+    authority_consumption: list[bool] = []
+
+    def record_authority(_payload, *, consume=True):
+        authority_consumption.append(consume)
+
     monkeypatch.setattr(
         formal_provider_gate,
         "authorize_formal_provider_call",
-        lambda payload, **_kwargs: None,
+        record_authority,
     )
     task_budget = ProviderHardStopLedger(
         path=tmp_path / "untrusted-hard-stop.json",
@@ -794,8 +799,8 @@ def test_formal_provider_gate_preserves_production_transport_trust_check(
         limits=ProviderHardStopLimits(
             max_provider_attempts_per_run=1,
             max_provider_attempts_per_batch=1,
-            max_total_tokens_per_run=100,
-            max_total_tokens_per_batch=100,
+            max_total_tokens_per_run=200_000,
+            max_total_tokens_per_batch=200_000,
             max_estimated_cost_usd_per_batch=1.0,
             max_wall_clock_seconds_per_task=60.0,
             input_cost_usd_per_million_tokens=0.1,
@@ -819,6 +824,58 @@ def test_formal_provider_gate_preserves_production_transport_trust_check(
         )
 
     assert client.called is False
+    assert authority_consumption == [False]
+
+
+def test_formal_provider_gate_validates_then_consumes_before_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority_consumption: list[bool] = []
+
+    def record_authority(_payload, *, consume=True):
+        authority_consumption.append(consume)
+
+    monkeypatch.setattr(
+        formal_provider_gate,
+        "authorize_formal_provider_call",
+        record_authority,
+    )
+    task_id = "qualification12_a_01"
+    task_budget = ProviderHardStopLedger(
+        path=tmp_path / "ordered-gate-hard-stop.json",
+        task_ids=(task_id,),
+        limits=ProviderHardStopLimits(
+            max_provider_attempts_per_run=1,
+            max_provider_attempts_per_batch=1,
+            max_total_tokens_per_run=200_000,
+            max_total_tokens_per_batch=200_000,
+            max_estimated_cost_usd_per_batch=1.0,
+            max_wall_clock_seconds_per_task=60.0,
+            input_cost_usd_per_million_tokens=0.1,
+            output_cost_usd_per_million_tokens=0.1,
+        ),
+        batch_id="ordered-gate-test",
+    ).start_task(task_id)
+    client = ScriptedMockLLMClient(["offline response"])
+
+    response = complete_formal_provider_call(
+        client,
+        [LLMMessage(role="user", content="offline")],
+        session=FormalProviderSession(
+            receipts={"future": "registered"},
+            scope="qualification12",
+            task_id=task_id,
+            arm="generic_code_agent",
+            execution_site="server",
+            provider_hard_stop=task_budget,
+        ),
+        max_tokens=16,
+    )
+
+    assert response == "offline response"
+    assert authority_consumption == [False, True]
+    assert len(client.calls) == 1
 
 
 def test_formal_provider_session_requires_shared_budget(

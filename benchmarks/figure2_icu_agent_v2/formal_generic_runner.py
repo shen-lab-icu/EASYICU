@@ -57,6 +57,14 @@ class FormalGenericModelGateway:
     max_tokens: int
     temperature: float
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.session, FormalProviderSession):
+            raise TypeError("session must be FormalProviderSession")
+        if self.session.arm != "generic_code_agent":
+            raise ValueError(
+                "formal generic gateway requires the generic_code_agent arm"
+            )
+
     def complete(self, *, phase: str, messages: Sequence[LLMMessage]) -> str:
         del phase
         try:

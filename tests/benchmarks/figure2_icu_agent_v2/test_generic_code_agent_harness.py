@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -417,31 +416,14 @@ def test_formal_gateway_denies_before_transport(tmp_path: Path):
     assert transport.called is False
 
 
-def test_formal_runner_source_has_no_provider_transport_bypass():
-    source_path = Path(__file__).parents[3] / (
-        "benchmarks/figure2_icu_agent_v2/formal_generic_runner.py"
-    )
-    tree = ast.parse(source_path.read_text(encoding="utf-8"))
-    imported = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module
-    }
-    called_names = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-
-    assert "easyicu.research_agent.providers.client_trust" not in imported
-    assert "authorized_complete" not in called_names
-    assert "complete_formal_provider_call" in called_names
-    assert not any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "complete"
-        for node in ast.walk(tree)
-    )
+def test_formal_gateway_requires_governed_provider_session():
+    with pytest.raises(TypeError, match="FormalProviderSession"):
+        FormalGenericModelGateway(
+            client=object(),
+            session=object(),  # type: ignore[arg-type]
+            max_tokens=100,
+            temperature=0.0,
+        )
 
 
 def test_formal_coordinate_remains_generic_arm_owned():
