@@ -64,6 +64,76 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
     )
 
 
+def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "eicu": {"module_metrics": {"outcome": {"rows": 200_859}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=["respiratory"],
+        databases=["eicu"],
+        memory_budget_mb=8 * 1024,
+    )
+
+    modules = plan["databases"]["eicu"]["modules"]
+    assert plan["raw_database_reread"] is False
+    assert modules["respiratory"]["batch_size"] == 50_000
+    assert modules["respiratory"]["planned_batches"] == 5
+    assert modules["sepsis_shared"]["batch_size"] == 200_859
+    assert modules["sepsis_shared"]["planned_batches"] == 1
+    assert modules["sofa1_score"]["batch_size"] == 67_000
+    assert modules["sofa2_score"]["batch_size"] == 200_859
+    assert modules["sepsis3_sofa1"]["batch_size"] == 67_000
+    assert modules["sepsis3_sofa2"]["batch_size"] == 200_859
+
+
+def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
+    refresher = _load_refresher()
+    base = [
+        "--source-run-root",
+        "/source",
+        "--output-root",
+        "/candidate",
+        "--module",
+        "respiratory",
+    ]
+    with pytest.raises(SystemExit):
+        refresher.parse_args([*base, "--batch-size", "5000"])
+
+    parsed = refresher.parse_args(
+        [
+            *base,
+            "--batch-size",
+            "5000",
+            "--allow-resource-policy-override",
+            "--resource-policy-override-reason",
+            "controlled partition-invariance experiment",
+        ]
+    )
+    assert parsed.batch_size == 5_000
+
+
+def test_plan_only_does_not_require_candidate_output_root() -> None:
+    refresher = _load_refresher()
+    parsed = refresher.parse_args(
+        [
+            "--source-run-root",
+            "/source",
+            "--plan-only",
+            "--module",
+            "respiratory",
+            "--database",
+            "eicu",
+        ]
+    )
+    assert parsed.plan_only
+    assert parsed.output_root is None
+
+
 def test_selected_module_refresh_rejects_duplicate_data_path_overrides() -> None:
     refresher = _load_refresher()
     with pytest.raises(refresher.ModuleRefreshError, match="Duplicate"):
