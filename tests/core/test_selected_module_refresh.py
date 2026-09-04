@@ -90,15 +90,14 @@ def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
     assert modules["sepsis3_sofa1"]["batch_size"] == 67_000
     assert modules["sepsis3_sofa2"]["batch_size"] == 25_000
     assert modules["sofa2_score"]["reason_code"] == (
-        "invalidated_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
     )
     assert modules["sepsis3_sofa2"]["reason_code"] == (
-        "invalidated_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
     )
-    assert plan["formal_release_admissible"] is False
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "eicu": ["sofa2_score", "sepsis3_sofa2"]
-    }
+    assert modules["sofa2_score"]["measured_peak_rss_mb"] == pytest.approx(6_800.3)
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
 
 
 def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
@@ -253,7 +252,8 @@ def test_per_database_release_plan_uses_each_database_closure() -> None:
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     }
-    assert plan["formal_release_admissible"] is False
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
 
 
 def test_measured_miiv_score_plan_is_formally_admissible() -> None:

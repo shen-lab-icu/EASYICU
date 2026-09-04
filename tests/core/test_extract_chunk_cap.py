@@ -273,7 +273,7 @@ def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
     assert plan.advisory_zh is None
 
 
-def test_eicu_full_request_summary_fails_closed_on_invalidated_profiles():
+def test_eicu_full_request_uses_slowest_measured_safe_batch():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -281,10 +281,11 @@ def test_eicu_full_request_summary_fails_closed_on_invalidated_profiles():
         available_memory_mb=8 * 1024,
     )
 
-    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
     assert plan.batch_size == 25_000
-    assert plan.required_available_memory_mb is None
-    assert "invalidated" in plan.advisory
+    assert plan.measured_peak_rss_mb == pytest.approx(6_800.3)
+    assert plan.required_available_memory_mb == pytest.approx(7_480.33)
+    assert plan.advisory is None
 
 
 def test_invalidated_profiles_cannot_remain_in_measured_registries():
@@ -317,9 +318,11 @@ def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
         "sepsis3_sofa2": 25_000,
     }
     assert plans["sepsis_shared"].mode == "one_shot"
-    assert plans["sofa2_score"].reason_code == "invalidated_profile_memory_guard"
+    assert plans["sofa2_score"].reason_code == (
+        "measured_profile_fastest_safe_batch"
+    )
     assert plans["sepsis3_sofa2"].reason_code == (
-        "invalidated_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
     )
     assert plans["respiratory"].reason_code == (
         "measured_profile_fastest_safe_batch"

@@ -33,9 +33,9 @@ For the eICU respiratory dependency closure at 8 GiB, the executable plan is:
 |---|---|---:|---:|---|
 | respiratory | measured batch | 50,000 | 5 | 67k crossed the 8 GiB contract |
 | sofa1_score | measured batch | 67,000 | 3 | measured full cohort batches |
-| sofa2_score | quarantined fallback | 25,000 | 9 | old profile invalid after IMV dependency change; not yet a verified final batch |
+| sofa2_score | measured batch | 25,000 | 9 | complete post-IMV closure; 6,800.3 MiB internal peak |
 | sepsis3_sofa1 | measured batch | 67,000 | 3 | measured dependency-complete run |
-| sepsis3_sofa2 | quarantined fallback | 25,000 | 9 | inherits the invalidated SOFA-2 dependency; not yet a verified final batch |
+| sepsis3_sofa2 | measured batch | 25,000 | 9 | complete post-IMV closure; 3,151.7 MiB internal peak |
 
 `sepsis_shared` is no longer a refreshed module in this closure. Its sealed
 Parquet is copied and SHA-verified in staging as a read-only Sepsis dependency,
@@ -48,11 +48,14 @@ the resource owner, caused avoidable repeated scans and made the manifest say
 strictest module batch to light modules. Both paths are now blocked or removed
 from formal release execution.
 
-The 25,000-stay entries above are conservative planner fallbacks, not a new
-fixed production standard. The final value must be the largest candidate that
-completes under the 7,447 MiB process-tree hard stop after the algorithm fixes
-below. Until then, the executable reason code is
-`invalidated_profile_memory_guard` and the candidate must remain unsealed.
+The 25,000-stay entries are now measured production strategies for this exact
+database, cohort and implementation, not generic fallbacks. A complete
+benchmark-only closure at EasyICU commit `f061bcc0` finished in 619.2 seconds:
+external process-tree RSS peaked at 6,750.1 MiB and the higher internal sampler
+peak was 6,800.3 MiB. The planner records
+`measured_profile_fastest_safe_batch`. The benchmark artifact itself remains
+non-sealable; registration of its reviewed receipt authorises a fresh formal
+run, never promotion of the benchmark directory.
 
 ## SOFA-2 algorithm review after the failed run
 
@@ -75,6 +78,13 @@ above the 7,447 MiB admission limit; the slower external sampler missed this
 brief peak and reported 7,404.8 MiB. The 31,000 profile therefore remains
 rejected. No lower candidate is to be measured until the semantic repairs in
 the next section pass their full test gate.
+
+After those repairs, complete hard-stop runs rejected 30,000 stays at 7,459.7
+MiB, 29,000 at 7,447.9 MiB and 28,000 at 7,854.0 MiB. The non-monotonic peak
+confirms that per-batch event density matters in addition to stay count. The
+25,000-stay run completed all nine SOFA-2 partitions and all nine downstream
+Sepsis partitions without crossing the limit. It produced 17,393,757 SOFA-2
+rows and 30 positive Sepsis-3/SOFA-2 rows with error-free producer manifests.
 
 The code review found three algorithmic peak owners:
 
@@ -247,6 +257,9 @@ coherent; the same output still fails for every other database.
   data when any database/module would use a calibrated, invalidated or other
   unmeasured fallback. Explicit benchmark overrides remain possible but are
   marked non-admissible and the release sealer rejects them.
+- `--benchmark-only` runs exactly one database closure, writes a dedicated
+  non-sealable resource receipt and skips six-database republication. This
+  prevents a batch-boundary experiment from reprocessing unrelated databases.
 - The planner's output is copied into per-module producer manifests and
   selected-refresh provenance so the executed policy can be compared with the
   preflight plan.
@@ -269,11 +282,13 @@ coherent; the same output still fails for every other database.
 
 ## Decision
 
-The targeted rebuild remains paused. First complete the focused and full
-relevant test suites, then perform a publication-only six-database SOFA impact
-audit and determine whether all Sepsis-3 derivatives require regeneration.
-Only after that semantic closure may a lower eICU batch candidate be measured;
-31,000 is already rejected, so 30,000 is the highest sensible next candidate.
-It is admitted only if process-tree RSS plus the required headroom fits the
-8,192 MiB contract. MIMIC-III profiling and the broader release rebuild come
-afterwards. No candidate may change `current` before downstream review.
+The targeted rebuild remains paused while the remaining AUMC, HiRID,
+MIMIC-III and SIC score closures receive their own 8-GiB measurements. eICU is
+no longer a resource-plan blocker at 25,000 stays. A publication-only impact
+audit confirmed that current native-v2 republication adds only
+catalog-declared all-null placeholders to unaffected modules until it reaches
+the deliberately corrected SOFA files; existing source columns remain
+multiset-identical. The final refresh scope therefore regenerates SOFA-1,
+SOFA-2 and their Sepsis consumers in all six databases, plus respiratory only
+in eICU and MIMIC-III. No candidate may change `current` before downstream
+review.
