@@ -17,6 +17,10 @@ from typing import Any, NoReturn
 
 from .design_errors import DesignContractError
 from .formal_authority import authorize_formal_provider_call
+from .formal_release_identity import (
+    registered_implementation_owners,
+    required_registration_fields,
+)
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -789,31 +793,13 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("FAILED_GATE_COUNT_MULTIPLICITY_DRIFT", sap["secondary_analyses"]["failed_hard_gate_count"])
 
     preregistration = _load_json(PREREGISTRATION_PLAN_PATH)
-    receipt_fields = set(preregistration["required_receipt_fields"])
-    required_digest_fields = {
-        "protocol_sha256",
-        "validator_sha256",
-        "validator_test_sha256",
-        "formal_authority_sha256",
-        "formal_authority_test_sha256",
-        "formal_provider_gate_sha256",
-        "formal_easyicu_runner_sha256",
-        "formal_generic_runner_sha256",
-        "generic_harness_sha256",
-        "easyicu_review_adapter_sha256",
-        "review_bundle_normalizer_sha256",
-        "review_bundle_semantics_sha256",
-        "formal_scheduler_sha256",
-        "multi_host_acceptance_sha256",
-        "blinded_evaluator_sha256",
-        "formal_implementation_owner_test_sha256",
-        "design_commit",
-        "annotated_tag",
-        "trusted_authority_signer_identity",
-        "trusted_authority_ed25519_public_key_base64",
-    }
-    if not required_digest_fields <= receipt_fields:
-        _fail("PREREGISTRATION_DIGEST_BINDING_MISSING", repr(sorted(required_digest_fields - receipt_fields)))
+    receipt_fields = tuple(preregistration["required_receipt_fields"])
+    required_digest_fields = required_registration_fields()
+    if receipt_fields != required_digest_fields:
+        _fail(
+            "PREREGISTRATION_DIGEST_BINDING_MISSING",
+            repr(sorted(set(required_digest_fields) - set(receipt_fields))),
+        )
     qualification_consumption_step = preregistration["post_registration_sequence"][2]
     if not all(
         term in qualification_consumption_step
@@ -911,28 +897,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
                 "EXECUTION_GATE_RECEIPT_COVERAGE_INVALID",
                 f"{gate_name}: missing={sorted(expected_ids - mapped_ids)!r}",
             )
-    expected_launch_owners = {
-        "provider_gate": str(FORMAL_PROVIDER_GATE_PATH.relative_to(REPO_ROOT)),
-        "easyicu_formal_runner": str(
-            FORMAL_EASYICU_RUNNER_PATH.relative_to(REPO_ROOT)
-        ),
-        "generic_formal_runner": str(
-            FORMAL_GENERIC_RUNNER_PATH.relative_to(REPO_ROOT)
-        ),
-        "generic_harness": str(GENERIC_HARNESS_PATH.relative_to(REPO_ROOT)),
-        "easyicu_review_adapter": str(
-            EASYICU_REVIEW_ADAPTER_PATH.relative_to(REPO_ROOT)
-        ),
-        "shared_review_semantics": str(REVIEW_SEMANTICS_PATH.relative_to(REPO_ROOT)),
-        "review_normalizer": str(
-            (PACKAGE_ROOT / "review_bundle_normalizer.py").relative_to(REPO_ROOT)
-        ),
-        "formal_scheduler": str(FORMAL_SCHEDULER_PATH.relative_to(REPO_ROOT)),
-        "multi_host_acceptance": str(
-            MULTI_HOST_ACCEPTANCE_PATH.relative_to(REPO_ROOT)
-        ),
-        "blinded_evaluator": str(BLINDED_EVALUATOR_PATH.relative_to(REPO_ROOT)),
-    }
+    expected_launch_owners = registered_implementation_owners()
     if launch.get("implementation_owners") != expected_launch_owners:
         _fail(
             "FORMAL_IMPLEMENTATION_OWNER_DRIFT",
