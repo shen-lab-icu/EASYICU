@@ -237,6 +237,18 @@ value. The experimental Sepsis-SOFA2 sensitivity output changes from 1,466 to
 can supply baseline and change scores; it does not replace standard
 SOFA1-based Sepsis-3.
 
+The AUMC SOFA-1 closure was measured independently at commit `8f72b901`.
+A 12,000-stay candidate, the smallest rounded size capable of covering 23,106
+stays in two partitions, crossed the 7,447-MiB hard stop at 7,472.3 MiB. The
+8,000-stay candidate completed 8,000/8,000/7,106 stays with a 6,535.4-MiB
+process-tree peak. Its 2,871,000 published keys and six component columns are
+identical to the sealed package, while all totals equal the component sum.
+The sealed total violated that formula on 2,349,193 rows because totals and
+components had been consolidated independently. The corrected standard
+SOFA1-based Sepsis-3 sensitivity therefore moves from 6,707 to 6,900 first
+positive event rows. No non-SOFA1 module other than its declared Sepsis
+consumer changed SHA.
+
 ## Time and I/O review
 
 ### Sound choices retained
@@ -277,10 +289,10 @@ SOFA1-based Sepsis-3.
    under 8 GiB, so the planner conservatively chooses 20,000 stays (four
    batches). Benchmarking larger candidates under a hard process-tree stop is
    the only defensible way to reduce those batches.
-5. **Other database profiles.** AUMC now has exact 8-GiB evidence only for
-   `sofa2_score` and `sepsis3_sofa2`; its other 17 modules, together with HiRID
-   and SIC modules, do not yet have equivalent evidence. Their conservative
-   plans are not proof of a fastest batch.
+5. **Other database profiles.** AUMC now has exact 8-GiB evidence for both
+   SOFA score modules and their two Sepsis consumers; its other 15 modules,
+   together with HiRID and SIC modules, do not yet have equivalent evidence.
+   Their conservative plans are not proof of a fastest batch.
 6. **Hash and publication reads.** SHA-256, logical multiset QC and metadata
    binding necessarily reread published files. These passes are audit costs;
    removing them would weaken release integrity. They can be scheduled once per

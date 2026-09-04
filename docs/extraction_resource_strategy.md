@@ -209,11 +209,26 @@ and 26,363.6 MiB for SOFA-2. It therefore proves that one-shot works on that
 large server, but it does not prove that one-shot fits a 16 GiB or 8 GiB
 machine.
 
-Under the deterministic 8,192-MiB worker envelope, the completed part of an
-8,000-stay benchmark showed that AUMC SOFA-1 can finish in three batches at a
-5,912.8-MiB internal peak. The subsequent SOFA-2 part crossed the 7,447-MiB
-hard-stop boundary, so the combined run was rejected and does not register a
-SOFA-1 closure profile.
+Under the deterministic 8,192-MiB worker envelope, a first combined benchmark
+showed that AUMC SOFA-1 could finish at 8,000 stays per batch, but its later
+SOFA-2 step crossed the hard stop, so that partial run was not registered. A
+dedicated boundary test then rejected the smallest rounded two-partition
+candidate, 12,000 stays, at 7,472.3 MiB after 31.7 seconds. The dedicated
+8,000-stay closure completed in three partitions (8,000/8,000/7,106): the
+external process-tree peak was 6,535.4 MiB and `sofa1_score` took 574.9
+seconds. This proves that three is the minimum safe partition count under the
+8-GiB contract; testing 9k--11k would still produce three partitions and
+cannot improve that count.
+
+The SOFA-1 candidate preserves exactly the sealed 2,871,000 row keys and all
+six component values. Its total is recomputed from those components on every
+row; the sealed total differed from that formula on 2,349,193 rows because it
+had previously been consolidated independently. The corrected standard
+SOFA1-based Sepsis-3 output contains 6,900 positive event rows versus 6,707 in
+the sealed package after first-event times are recomputed. Only
+`sofa1_score.parquet` and `sepsis3_sofa1.parquet` changed; all other AUMC
+module Parquets were SHA-identical. The 8,000-stay policy is therefore
+registered only for these two modules.
 
 The exact post-semantics SOFA-2 boundary search rejected both 7,000 stays
 (7,714.9 MiB external process-tree RSS) and 6,000 stays (7,607.4 MiB). The

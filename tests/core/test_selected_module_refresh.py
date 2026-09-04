@@ -314,6 +314,32 @@ def test_measured_aumc_sofa2_closure_is_formally_admissible() -> None:
     assert plan["unmeasured_or_overridden_modules"] == {}
 
 
+def test_measured_aumc_sofa1_closure_is_formally_admissible() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "aumc": {"module_metrics": {"outcome": {"rows": 23_106}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=("sofa1_score",),
+        databases=("aumc",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    modules = plan["databases"]["aumc"]["modules"]
+    assert modules["sofa1_score"]["batch_size"] == 8_000
+    assert modules["sepsis3_sofa1"]["batch_size"] == 8_000
+    assert all(
+        record["reason_code"] == "measured_profile_fastest_safe_batch"
+        for record in modules.values()
+    )
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
+
+
 def test_data_path_resolution_checks_only_selected_databases(tmp_path: Path) -> None:
     refresher = _load_refresher()
     eicu = tmp_path / "eicu"
