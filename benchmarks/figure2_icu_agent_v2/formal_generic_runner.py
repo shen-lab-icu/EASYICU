@@ -173,8 +173,6 @@ class FormalGenericCodeAgentRunner:
         output_dir: Path,
         review_plan: Callable[[Mapping[str, Any]], PlanReviewDecision],
     ) -> GenericHarnessResult:
-        self._trajectory.require_output_dir(output_dir)
-
         def review_without_charging_human_wait(
             plan: Mapping[str, Any],
         ) -> PlanReviewDecision:
@@ -184,12 +182,17 @@ class FormalGenericCodeAgentRunner:
             finally:
                 self._provider_hard_stop.resume()
 
-        return self._harness.run(
-            task_prompt=task_prompt,
-            neutral_input_description=neutral_input_description,
-            mandatory_artifacts=mandatory_artifacts,
+        required_artifacts = tuple(mandatory_artifacts)
+        return self._trajectory.run_to_terminal(
+            operation=lambda: self._harness.run(
+                task_prompt=task_prompt,
+                neutral_input_description=neutral_input_description,
+                mandatory_artifacts=required_artifacts,
+                output_dir=output_dir,
+                review_plan=review_without_charging_human_wait,
+            ),
             output_dir=output_dir,
-            review_plan=review_without_charging_human_wait,
+            mandatory_artifacts=required_artifacts,
         )
 
 

@@ -20,12 +20,7 @@ from .formal_collaborator_adapter import (
     FormalEasyICUCollaboratorAdapter,
     FormalEasyICUModelRouter,
 )
-from .review_bundle_writer import terminal_failure_material
-from .review_bundle_semantics import (
-    FailureCategory,
-    ReviewResourceReceipt,
-    TerminalOutcome,
-)
+from .review_bundle_semantics import ReviewResourceReceipt
 from .formal_trajectory_lifecycle import FormalExecutionSession
 
 
@@ -79,34 +74,6 @@ class FormalEasyICURunner:
             raise ValueError("formal Figure 2 runs cannot resume")
         return self._pipeline.run(**kwargs)
 
-    def _write_terminal_failure_bundle(
-        self,
-        *,
-        output_dir: Path,
-        mandatory_artifacts: tuple[str, ...],
-    ) -> None:
-        accounting = self._provider_hard_stop.accounting_summary()
-        resource_receipt = ReviewResourceReceipt.from_provider_accounting(
-            accounting,
-            within_frozen_budget=False,
-        )
-        failed = terminal_failure_material(
-            plan={
-                "available": False,
-                "failure_category": FailureCategory.EXECUTION_FAILURE.value,
-            },
-            failure_category=FailureCategory.EXECUTION_FAILURE,
-            mandatory_artifacts=mandatory_artifacts,
-        )
-        write_easyicu_review_bundle(
-            failed,
-            output_dir=output_dir,
-            task_id=self._task_id,
-            mandatory_artifacts=mandatory_artifacts,
-            resource_receipt=resource_receipt,
-            outcome=TerminalOutcome.failed(FailureCategory.EXECUTION_FAILURE),
-        )
-
     def run_and_write_review_bundle(
         self,
         *,
@@ -117,8 +84,7 @@ class FormalEasyICURunner:
     ) -> PipelineResult:
         """Run once and immediately project fixed native outputs for review."""
 
-        self._trajectory.require_output_dir(output_dir)
-        try:
+        def run_and_project() -> PipelineResult:
             result = self.run(**run_kwargs)
             if not isinstance(result, PipelineResult):
                 raise ValueError(
@@ -134,20 +100,20 @@ class FormalEasyICURunner:
                 accounting,
                 within_frozen_budget=True,
             )
-        except Exception:
-            self._write_terminal_failure_bundle(
+            write_easyicu_review_bundle(
+                material,
                 output_dir=output_dir,
+                task_id=self._task_id,
                 mandatory_artifacts=mandatory_artifacts,
+                resource_receipt=resource_receipt,
             )
-            raise
-        write_easyicu_review_bundle(
-            material,
+            return result
+
+        return self._trajectory.run_to_terminal(
+            operation=run_and_project,
             output_dir=output_dir,
-            task_id=self._task_id,
             mandatory_artifacts=mandatory_artifacts,
-            resource_receipt=resource_receipt,
         )
-        return result
 
 
 __all__ = ["FormalEasyICUModelRouter", "FormalEasyICURunner"]
