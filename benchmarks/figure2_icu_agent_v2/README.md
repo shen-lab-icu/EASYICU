@@ -154,14 +154,14 @@ conjunctive gate in `execution_acceptance_contract_v1.json` and every receipt in
 with an externally timestamped immutable package. Scientific A/B outcomes may
 never decide whether to launch, continue, migrate, exclude, or rerun work.
 
-## Historical v1 owner
+## Superseded 2026-09-01 v2 design record
 
-## 2026-09-01 design freeze
-
-The prospective paper design is frozen in `experiment_protocol_v2.json` and
-`design_freeze_manifest_v2.json`.  It replaces the future formal design in the
-historical aware-only v1 protocol without modifying or reinterpreting any prior
-development evidence.  The frozen paper program separates three questions:
+`experiment_protocol_v2.json` and `design_freeze_manifest_v2.json` preserve the
+2026-09-01 internal v2 design checkpoint for audit history. They are not a
+second current protocol: the v2.1 review candidate described above supersedes
+v2 for all future review, preregistration, and implementation work. Neither
+version modifies or reinterprets prior development evidence. The historical v2
+program separated three questions:
 
 1. deterministic six-database substrate validation without LLM trajectories;
 2. a paired 27-task comparison of `easyicu_full` with a matched
@@ -173,10 +173,9 @@ stage adds 36 runs only after the core batch.  The primary endpoint is binary
 task-level `reportable_without_postrun_repair`; rubric subitems and artifacts are
 not independent sample-size units.
 
-This is a **design freeze, not a formal-run freeze**.  Provider, Planner, formal
-batch, and paper-result authority remain false until fresh inputs, Safety12
-fixtures, dual human sign-off, exact clean code/image/model/provider identities,
-budgets, network policy, CI, and the atomic batch declaration are sealed.  Run:
+This was a **design checkpoint, not a formal-run freeze**. Provider, Planner,
+formal-batch, and paper-result authority remain false. The validator below is
+retained only to reproduce the superseded v2 checkpoint:
 
 ```bash
 python -c "from benchmarks.figure2_icu_agent_v2.freeze_v2 import validate_design_freeze; print(validate_design_freeze())"
@@ -194,6 +193,8 @@ The v2 design assets are:
   validation, kept outside the LLM A/B denominator;
 - `freeze_v2.py` — fail-closed identity, digest, schedule, and authority
   validator.
+
+## Historical v1 owner
 
 This directory is the versioned experiment owner for the Biomni-aligned EasyICU
 evaluation design:
