@@ -636,6 +636,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
         module: [] for module in MODULES
     }
     database_totals: dict[str, dict[str, int]] = {}
+    run_manifest_receipts: dict[str, dict[str, Any]] = {}
     total_rows = 0
     total_bytes = 0
 
@@ -804,6 +805,28 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                 source_manifest_sha256[database] = hashlib.sha256(
                     raw_manifest
                 ).hexdigest()
+                root_module_metrics: dict[str, dict[str, Any]] = {}
+                for module in MODULES:
+                    entry = by_module[module]
+                    metric = {
+                        "rows": entry.get("rows"),
+                        "parquet_bytes": entry.get("parquet_bytes"),
+                        "parquet_sha256": entry.get("parquet_sha256"),
+                        "elapsed_seconds": module_timings[module],
+                    }
+                    if isinstance(module_peak_rss, dict):
+                        metric["peak_rss_mb"] = module_peak_rss.get(module)
+                    if isinstance(module_peak_working_set, dict):
+                        metric["peak_working_set_mb"] = (
+                            module_peak_working_set.get(module)
+                        )
+                    root_module_metrics[module] = metric
+                run_manifest_receipts[database] = {
+                    "native_manifest_sha256": source_manifest_sha256[database],
+                    "total_rows": database_rows,
+                    "total_parquet_bytes": database_bytes,
+                    "module_metrics": root_module_metrics,
+                }
         finally:
             connection.close()
 
@@ -833,6 +856,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
         "source_manifest_sha256": source_manifest_sha256,
         "module_concepts": module_concepts,
         "database_totals": database_totals,
+        "run_manifest_receipts": run_manifest_receipts,
         "total_rows": total_rows,
         "total_parquet_bytes": total_bytes,
     }
@@ -906,12 +930,130 @@ def validate_extraction_timing(
     }
 
 
+def validate_run_provenance(
+    *, run_root: Path, validation: dict[str, Any]
+) -> dict[str, dict[str, str]]:
+    """Bind root manifests to the exact native manifests being sealed."""
+
+    run_manifest_path = run_root / "run_manifest.json"
+    if run_manifest_path.is_symlink() or not run_manifest_path.is_file():
+        raise ReleaseValidationError(
+            f"Missing regular run manifest: {run_manifest_path}"
+        )
+    run_manifest, raw_run_manifest = _read_json_object(
+        run_manifest_path, label="run manifest"
+    )
+    publication_checkout = run_manifest.get("publication_checkout")
+    if (
+        not isinstance(publication_checkout, dict)
+        or publication_checkout.get("easyicu_git_commit")
+        != validation["easyicu_commit"]
+        or publication_checkout.get("easyicu_git_dirty") is not False
+    ):
+        raise ReleaseValidationError(
+            "run_manifest.publication_checkout disagrees with the validated "
+            "six-database runtime"
+        )
+    sources = run_manifest.get("sources")
+    if not isinstance(sources, dict) or set(sources) != set(DATABASES):
+        raise ReleaseValidationError(
+            "run_manifest.sources must cover exactly all six databases"
+        )
+    expected_receipts = validation.get("run_manifest_receipts")
+    if not isinstance(expected_receipts, dict):
+        raise ReleaseValidationError("Internal run-manifest receipts are missing")
+    for database in DATABASES:
+        source_record = sources.get(database)
+        expected = expected_receipts.get(database)
+        if not isinstance(source_record, dict) or not isinstance(expected, dict):
+            raise ReleaseValidationError(
+                f"run_manifest source receipt is invalid for {database}"
+            )
+        for field in (
+            "native_manifest_sha256",
+            "total_rows",
+            "total_parquet_bytes",
+        ):
+            if source_record.get(field) != expected[field]:
+                raise ReleaseValidationError(
+                    f"run_manifest.sources[{database!r}].{field} disagrees "
+                    "with the validated native package"
+                )
+        actual_metrics = source_record.get("module_metrics")
+        expected_metrics = expected.get("module_metrics")
+        if not isinstance(actual_metrics, dict) or set(actual_metrics) != set(
+            MODULES
+        ):
+            raise ReleaseValidationError(
+                f"run_manifest module_metrics is incomplete for {database}"
+            )
+        for module in MODULES:
+            actual_metric = actual_metrics.get(module)
+            expected_metric = expected_metrics.get(module)
+            if not isinstance(actual_metric, dict) or not isinstance(
+                expected_metric, dict
+            ):
+                raise ReleaseValidationError(
+                    f"run_manifest module receipt is invalid for {database}/{module}"
+                )
+            for field, expected_value in expected_metric.items():
+                if actual_metric.get(field) != expected_value:
+                    raise ReleaseValidationError(
+                        "run_manifest module receipt disagrees with the native "
+                        f"package for {database}/{module}/{field}"
+                    )
+
+    receipts = {
+        "run_manifest": {
+            "file": run_manifest_path.name,
+            "sha256": hashlib.sha256(raw_run_manifest).hexdigest(),
+        }
+    }
+    refresh_path = run_root / "module_refresh_provenance.json"
+    embedded_refresh = run_manifest.get("module_refresh")
+    has_refresh_file = refresh_path.exists() or refresh_path.is_symlink()
+    if has_refresh_file or embedded_refresh is not None:
+        if refresh_path.is_symlink() or not refresh_path.is_file():
+            raise ReleaseValidationError(
+                "module-refresh provenance must be one regular file when "
+                "run_manifest.module_refresh is present"
+            )
+        refresh, raw_refresh = _read_json_object(
+            refresh_path, label="module-refresh provenance"
+        )
+        if embedded_refresh != refresh:
+            raise ReleaseValidationError(
+                "run_manifest.module_refresh does not equal the standalone "
+                "module-refresh provenance"
+            )
+        if refresh.get("publication_easyicu_git_dirty") is not False:
+            raise ReleaseValidationError(
+                "module-refresh publication checkout was not recorded clean"
+            )
+        if (
+            publication_checkout.get("scope")
+            != "publication_only_republication"
+            and refresh.get("publication_easyicu_git_commit")
+            != validation["easyicu_commit"]
+        ):
+            raise ReleaseValidationError(
+                "current module-refresh checkout disagrees with the validated "
+                "six-database runtime"
+            )
+        receipts["module_refresh_provenance"] = {
+            "file": refresh_path.name,
+            "sha256": hashlib.sha256(raw_refresh).hexdigest(),
+        }
+    return receipts
+
+
 def build_run_metadata(
     *,
     run_id: str,
     validation: dict[str, Any],
     extraction_timing: dict[str, Any],
     module_timing: dict[str, Any],
+    run_provenance: dict[str, dict[str, str]],
     execution_profile: str,
 ) -> dict[str, Any]:
     if not run_id.strip():
@@ -968,6 +1110,7 @@ def build_run_metadata(
         "runtime_provenance": validation["runtime_provenance"],
         "provenance": {
             "database_native_manifests": "exports/{database}/_manifest.json",
+            **run_provenance,
             "sealer": "scripts/releases/EX-A01_seal_full6_release.py",
             "sealer_sha256": _sha256_file(Path(__file__)),
         },
@@ -1074,6 +1217,9 @@ def seal_release(
     extraction_timing = validate_extraction_timing(
         run_root=resolved_run_root, validation=validation
     )
+    run_provenance = validate_run_provenance(
+        run_root=resolved_run_root, validation=validation
+    )
     module_timing = write_module_extraction_timing(
         run_root=resolved_run_root, validation=validation
     )
@@ -1082,6 +1228,7 @@ def seal_release(
         validation=validation,
         extraction_timing=extraction_timing,
         module_timing=module_timing,
+        run_provenance=run_provenance,
         execution_profile=execution_profile,
     )
     destination = resolved_run_root / "run_metadata.json"

@@ -12,6 +12,7 @@ of the original run.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -243,6 +244,18 @@ def _republish_database(
 ) -> dict[str, Any]:
     old_manifest = database_root / "_manifest.json"
     old_payload = _read_json(old_manifest)
+    preserved_runtime_receipts: dict[str, dict[str, Any]] = {}
+    for field in (
+        "module_timings_seconds",
+        "module_peak_rss_mb",
+        "module_peak_working_set_mb",
+    ):
+        values = old_payload.get(field)
+        if not isinstance(values, dict) or set(values) != set(MODULES):
+            raise RepublicationError(
+                f"{database}: source native manifest lacks complete {field}"
+            )
+        preserved_runtime_receipts[field] = dict(values)
     sidecar = old_payload.get("column_metadata") or {}
     sidecar_name = sidecar.get("file")
     old_manifest.unlink()
@@ -262,6 +275,11 @@ def _republish_database(
         },
     )
     new_manifest = _read_json(old_manifest)
+    # Publication regenerates package bytes but does not re-run extraction.
+    # Preserve the measured module runtimes instead of the publisher's zero
+    # placeholders; a targeted refresher may subsequently replace only the
+    # modules it actually re-extracted.
+    new_manifest.update(preserved_runtime_receipts)
     new_manifest["source_extraction_provenance"] = {
         **source_receipt,
         "publication_only": True,
@@ -274,6 +292,87 @@ def _republish_database(
     }
     _atomic_write_json(old_manifest, new_manifest)
     return new_manifest
+
+
+def _rebind_run_manifest_sources(
+    run_manifest: dict[str, Any],
+    native_manifests: dict[str, dict[str, Any]],
+    *,
+    candidate_root: Path,
+    publication_commit: str,
+) -> None:
+    """Bind root receipts to all republished native manifests."""
+
+    sources = run_manifest.get("sources")
+    if not isinstance(sources, dict) or set(sources) != set(DATABASES):
+        raise RepublicationError(
+            "Run manifest sources must cover exactly all six databases"
+        )
+    for database in DATABASES:
+        source_record = sources.get(database)
+        manifest = native_manifests.get(database)
+        if not isinstance(source_record, dict) or not isinstance(manifest, dict):
+            raise RepublicationError(
+                f"Cannot rebind run-manifest receipts for {database}"
+            )
+        metrics = source_record.get("module_metrics")
+        files = manifest.get("files")
+        if not isinstance(metrics, dict) or set(metrics) != set(MODULES):
+            raise RepublicationError(
+                f"Run manifest module_metrics is incomplete for {database}"
+            )
+        if not isinstance(files, list) or not all(
+            isinstance(entry, dict) for entry in files
+        ):
+            raise RepublicationError(
+                f"Native manifest file receipts are invalid for {database}"
+            )
+        files_by_module = {str(entry.get("module")): entry for entry in files}
+        if set(files_by_module) != set(MODULES):
+            raise RepublicationError(
+                f"Native manifest file receipts are incomplete for {database}"
+            )
+        runtime_fields = {
+            "elapsed_seconds": manifest.get("module_timings_seconds"),
+            "peak_rss_mb": manifest.get("module_peak_rss_mb"),
+            "peak_working_set_mb": manifest.get("module_peak_working_set_mb"),
+        }
+        if any(
+            not isinstance(values, dict) or set(values) != set(MODULES)
+            for values in runtime_fields.values()
+        ):
+            raise RepublicationError(
+                f"Native manifest runtime receipts are incomplete for {database}"
+            )
+        for module in MODULES:
+            metric = metrics[module]
+            if not isinstance(metric, dict):
+                raise RepublicationError(
+                    f"Run manifest metric is invalid for {database}/{module}"
+                )
+            entry = files_by_module[module]
+            metric.update(
+                {
+                    "rows": entry.get("rows"),
+                    "parquet_bytes": entry.get("parquet_bytes"),
+                    "parquet_sha256": entry.get("parquet_sha256"),
+                    **{
+                        field: values[module]
+                        for field, values in runtime_fields.items()
+                    },
+                }
+            )
+        source_record["native_publication_easyicu_git_commit"] = publication_commit
+        source_record["native_manifest_sha256"] = _sha256_file(
+            candidate_root / "exports" / database / "_manifest.json"
+        )
+        source_record["total_rows"] = sum(
+            int(files_by_module[module].get("rows") or 0) for module in MODULES
+        )
+        source_record["total_parquet_bytes"] = sum(
+            int(files_by_module[module].get("parquet_bytes") or 0)
+            for module in MODULES
+        )
 
 
 def republish_candidate(source_run_root: Path, output_root: Path) -> Path:
@@ -330,33 +429,20 @@ def republish_candidate(source_run_root: Path, output_root: Path) -> Path:
         }
         _atomic_write_json(destination / "republication_provenance.json", provenance)
 
-        updated_run_manifest = dict(source_run_manifest)
+        updated_run_manifest = copy.deepcopy(source_run_manifest)
         updated_run_manifest["release_republication"] = provenance
         updated_run_manifest["publication_checkout"] = {
             "easyicu_git_commit": publication_commit,
             "easyicu_git_dirty": False,
+            "scope": "publication_only_republication",
         }
-        for database, native_manifest in new_manifests.items():
-            source_record = (updated_run_manifest.get("sources") or {}).get(database)
-            if not isinstance(source_record, dict):
-                continue
-            source_record["native_publication_easyicu_git_commit"] = (
-                publication_commit
-            )
-            metrics = source_record.get("module_metrics")
-            if not isinstance(metrics, dict):
-                continue
-            for entry in native_manifest.get("files") or []:
-                module = entry.get("module")
-                if module not in metrics or not isinstance(metrics[module], dict):
-                    continue
-                metrics[module].update(
-                    {
-                        "rows": entry.get("rows"),
-                        "parquet_bytes": entry.get("parquet_bytes"),
-                        "parquet_sha256": entry.get("parquet_sha256"),
-                    }
-                )
+        updated_run_manifest["updated_at"] = provenance["created_at"]
+        _rebind_run_manifest_sources(
+            updated_run_manifest,
+            new_manifests,
+            candidate_root=destination,
+            publication_commit=publication_commit,
+        )
         _atomic_write_json(destination / "run_manifest.json", updated_run_manifest)
     except Exception:
         # A failed destination is intentionally retained for diagnosis.  It has
