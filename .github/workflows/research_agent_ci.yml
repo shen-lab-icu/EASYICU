@@ -116,6 +116,7 @@ jobs:
             "patsy>=0.5.6" \
             "packaging>=23.0" \
             "Send2Trash>=1.8" \
+            "cryptography>=42.0" \
             "openai>=1.40.0" \
             "mcp>=1.28,<2" \
             "fastapi>=0.115" \
