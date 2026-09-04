@@ -510,6 +510,8 @@ def test_signed_authority_and_budget_gate_reach_only_offline_mock(
 
     assert response == "authorized offline response"
     assert len(client.calls) == 1
+    calls = task_budget.ledger.snapshot()["tasks"][0]["calls"]
+    assert [call["logical_call_id"] for call in calls] == [coordinate["call_id"]]
 
 
 def test_easyicu_router_authorizes_pipeline_role_before_offline_transport(
@@ -554,6 +556,8 @@ def test_easyicu_router_authorizes_pipeline_role_before_offline_transport(
 
     assert response == "authorized EasyICU offline response"
     assert len(client.calls) == 1
+    calls = task_budget.ledger.snapshot()["tasks"][0]["calls"]
+    assert [call["logical_call_id"] for call in calls] == [coordinate["call_id"]]
 
 
 def test_easyicu_router_denies_before_transport_without_registered_signer(

@@ -907,11 +907,20 @@ def test_each_web_500_retry_is_charged_to_provider_hard_stop(tmp_path, monkeypat
         allow_environment_overrides=False,
     )
     ledger = _ledger(tmp_path)
-    client = HardStopClient(inner, role="planner", task=ledger.start_task("E1"))
+    client = HardStopClient(
+        inner,
+        role="planner",
+        task=ledger.start_task("E1"),
+        logical_call_id="logical_0001",
+    )
 
     assert client.complete(_message(), max_tokens=8) == "ok"
     assert completions.calls == 2
-    assert ledger.snapshot()["totals"]["provider_attempts"] == 2
+    snapshot = ledger.snapshot()
+    assert snapshot["totals"]["provider_attempts"] == 2
+    assert [
+        call["logical_call_id"] for call in snapshot["tasks"][0]["calls"]
+    ] == ["logical_0001", "logical_0001"]
 
 
 def test_vision_transport_is_reserved_settled_and_stopped_before_overrun(

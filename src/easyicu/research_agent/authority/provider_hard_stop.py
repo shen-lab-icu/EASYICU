@@ -1001,8 +1001,14 @@ class ProviderHardStopLedger:
         max_tokens: int,
         prior_attempt_id: Optional[str],
         additional_prompt_payload_bytes: int = 0,
+        logical_call_id: Optional[str] = None,
     ) -> str:
         """Reserve one maximum-cost transport attempt before network delivery."""
+
+        if logical_call_id is not None and (
+            not isinstance(logical_call_id, str) or not logical_call_id.strip()
+        ):
+            raise ValueError("logical_call_id must be a non-empty string or None")
 
         # A second reservation in one logical call means the previous raw
         # transport failed and the reviewed client is about to retry. Close and
@@ -1107,6 +1113,9 @@ class ProviderHardStopLedger:
                     "state": "in_progress",
                     "role": str(role) if role else None,
                     "model": str(model),
+                    "logical_call_id": (
+                        str(logical_call_id) if logical_call_id else None
+                    ),
                     "started_at": _utc_now(),
                     "finished_at": None,
                     "prompt_token_reservation": prompt_reserve,
@@ -1436,6 +1445,7 @@ class _ActiveHardStopCall:
         messages: Sequence[Any],
         max_tokens: int,
         additional_prompt_payload_bytes: int = 0,
+        logical_call_id: Optional[str] = None,
     ) -> None:
         self.task = task
         self.role = role
@@ -1445,6 +1455,7 @@ class _ActiveHardStopCall:
         self.additional_prompt_payload_bytes = max(
             0, int(additional_prompt_payload_bytes)
         )
+        self.logical_call_id = logical_call_id
         self.attempt_ids: list[str] = []
         self._active_attempt_id: Optional[str] = None
 
@@ -1462,6 +1473,7 @@ class _ActiveHardStopCall:
             max_tokens=self.max_tokens,
             additional_prompt_payload_bytes=self.additional_prompt_payload_bytes,
             prior_attempt_id=prior,
+            logical_call_id=self.logical_call_id,
         )
         self.attempt_ids.append(attempt_id)
         self._active_attempt_id = attempt_id
@@ -1507,6 +1519,7 @@ def provider_hard_stop_call_scope(
     messages: Sequence[Any],
     max_tokens: int,
     additional_prompt_payload_bytes: int = 0,
+    logical_call_id: Optional[str] = None,
 ) -> Iterator[_ActiveHardStopCall]:
     """Activate task/batch accounting around one logical Provider call."""
 
@@ -1518,6 +1531,7 @@ def provider_hard_stop_call_scope(
         messages=messages,
         max_tokens=max_tokens,
         additional_prompt_payload_bytes=additional_prompt_payload_bytes,
+        logical_call_id=logical_call_id,
     )
     token = _ACTIVE_HARD_STOP_CALL.set(state)
     try:

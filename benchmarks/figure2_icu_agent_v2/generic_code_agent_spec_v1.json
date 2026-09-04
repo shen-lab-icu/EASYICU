@@ -29,7 +29,7 @@
     "formal_provider_owner": "benchmarks/figure2_icu_agent_v2/formal_generic_runner.py",
     "formal_authority_owner": "benchmarks/figure2_icu_agent_v2/formal_authority.py",
     "execution_backend": "The generic harness requires the frozen isolated DockerRunner with network disabled and every resource ceiling enabled. Python runs directly; shell actions use a fixed bash argv wrapper inside the same container without host-shell execution. R is not advertised because the frozen image does not contain a registered R runtime and package lock.",
-    "formal_provider_rule": "Every formal generic-arm model turn must pass through complete_formal_provider_call before transport. Offline model injection is development-only and has no formal authority.",
+    "formal_provider_rule": "Every formal generic-arm model turn must pass through complete_formal_provider_call before transport. One signed call coordinate identifies that logical turn and is consumed once before its first raw request; every transport retry retains the same logical call id and is separately reserved and charged by the durable Provider hard-stop ledger. Offline model injection is development-only and has no formal authority.",
     "budget_owner_boundary": "The harness imposes no arm-specific iteration cap. Formal model turns and Docker executions are bound to the same durable task-level Provider hard-stop ledger, while billed-cost reconciliation and frozen container ceilings remain shared authorities. Exhaustion fails closed before or during a call or execution."
   },
   "tools": [

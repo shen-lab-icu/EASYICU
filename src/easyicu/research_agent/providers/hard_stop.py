@@ -38,10 +38,16 @@ class HardStopClient:
         *,
         role: Optional[str],
         task: TaskProviderHardStop,
+        logical_call_id: Optional[str] = None,
     ) -> None:
+        if logical_call_id is not None and (
+            not isinstance(logical_call_id, str) or not logical_call_id.strip()
+        ):
+            raise ValueError("logical_call_id must be a non-empty string or None")
         self._inner = inner
         self._role = role
         self._task = task
+        self._logical_call_id = logical_call_id
         from .factory import _register_provider_wrapper
 
         _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
@@ -84,6 +90,7 @@ class HardStopClient:
             model=_model_identity(self._inner),
             messages=messages,
             max_tokens=max_tokens,
+            logical_call_id=self._logical_call_id,
             additional_prompt_payload_bytes=(
                 structured_output.payload_bytes
                 if structured_output is not None
@@ -147,6 +154,7 @@ class HardStopClient:
             model=_model_identity(self._inner),
             messages=messages,
             max_tokens=max_tokens,
+            logical_call_id=self._logical_call_id,
         ) as hard_stop:
             clear_provider_call_receipt()
             try:
