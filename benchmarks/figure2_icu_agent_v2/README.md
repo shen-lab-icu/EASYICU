@@ -67,17 +67,28 @@ and fail-closed launch status. It cannot call a model or authorize a run.
 `generic_code_agent_harness.py` implements the frozen generic baseline loop
 and adapts the existing isolated DockerRunner to Python and in-container shell.
 `formal_generic_runner.py` and `formal_easyicu_runner.py` are the two formal
-arm entry points; both route every model turn through `formal_provider_gate.py`
-and the same durable budget ledger. `PipelineServices` owns the complete list
-of Provider-bearing collaborators, and `formal_collaborator_adapter.py`
-projects that list through formal authority. An opaque prebuilt visual-QA
-adapter is rejected because its internal transport cannot be proven governed;
-formal visual QA must supply its client through `vlm_client`. The EasyICU arm
-is projected into the shared seven-file contract only by
-`easyicu_review_bundle_adapter.py`; both producers commit bytes through
-`review_bundle_writer.py` and share `review_bundle_semantics.py`, while
-`review_bundle_normalizer.py` performs the arm-neutral reviewer projection
-without repairing scientific content.
+arm entry points. Both are constructed through `FormalExecutionSession`, and
+every Provider-bearing collaborator receives the same arm-bound
+`FormalProviderSession`. That session owns call numbering, budget receipts,
+hard-stop state, and the two-phase authority sequence: validate the signed
+coordinate without consuming it, verify production transport trust, then
+atomically consume the coordinate immediately before the one permitted
+transport call. A replay or a concurrent second consumer fails closed.
+`PipelineServices` owns the complete list of Provider-bearing collaborators,
+and `formal_collaborator_adapter.py` projects that list through formal
+authority. An opaque prebuilt visual-QA adapter is rejected because its
+internal transport cannot be proven governed; formal visual QA must supply its
+client through `vlm_client`.
+
+The EasyICU arm is projected into the shared seven-file contract only by
+`easyicu_review_bundle_adapter.py`. Both arms produce the same closed
+`TerminalOutcome` and exact `easyicu.figure2_resource_receipt/1` schema through
+`review_bundle_semantics.py`; unknown statuses, failure categories, fields, or
+invalid numeric and boolean values are rejected. `review_bundle_writer.py`
+stages and verifies an exact bundle in a sibling directory, then publishes it
+with one atomic rename; competing writers cannot mix files or remove the
+winner. `review_bundle_normalizer.py` performs the arm-neutral reviewer
+projection without repairing scientific content.
 
 `formal_scheduler.py` reproduces all 78 core task-arm trajectories, creates the
 post-unsealing Qualification12 assignment deterministically, rejects nonempty
@@ -89,10 +100,13 @@ or mismatched assignment digest before transport. The signed declaration also
 binds the exact output root for each site; both qualification and core leases
 must match the registered task, site, pair, global sequence, and site output
 root. `formal_trajectory_lifecycle.py` validates the lease without consuming it,
-derives the only permitted scratch workdir under the signed site root, constructs
-the arm implementation, and only then commits the single-use lease. The final
-seven-file review bundle is written only to the exact leased output directory;
-an initialization failure leaves the lease unconsumed.
+derives the only permitted scratch workdir under the signed site root,
+constructs the arm implementation, and only then commits the single-use lease.
+Initialization may create only paths inside that owned workdir. A failed
+attempt is moved to a unique `.trajectory-failed` quarantine path so the exact
+task can be retried without hiding partial state; a pre-initialization failure
+leaves the lease unconsumed. The final seven-file review bundle is written only
+to the exact leased output directory.
 `multi_host_acceptance.py` accepts exactly one server and one laptop preflight
 receipt as unparsed JSON bytes only when the frozen release, model route, input
 set, budgets, container limits, and network policy match exactly; duplicate
@@ -108,7 +122,10 @@ registration fields, implementation-owner paths, and registered source paths.
 `formal_authority.py` verifies an Ed25519-signed atomic declaration, the exact
 call coordinate, and the registered SHA-256 of every critical runner, gate,
 producer, normalizer, scheduler, evaluator, and test owner before a transport
-can be reached. The current launch contract still denies every
+can be reached. Each accepted coordinate also creates one durable,
+create-if-absent consumption marker beneath the signed output root, making
+authorization single-use across processes rather than only within one Python
+object. The current launch contract still denies every
 Provider call because this review candidate intentionally has no registered
 signer key; offline test keys grant no qualification or formal-run authority.
 
