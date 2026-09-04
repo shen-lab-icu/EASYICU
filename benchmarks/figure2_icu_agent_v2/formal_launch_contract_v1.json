@@ -5,6 +5,8 @@
   "authority_owner": "benchmarks/figure2_icu_agent_v2/formal_authority.py",
   "implementation_owners": {
     "provider_gate": "benchmarks/figure2_icu_agent_v2/formal_provider_gate.py",
+    "provider_hard_stop_client": "src/easyicu/research_agent/providers/hard_stop.py",
+    "provider_hard_stop_ledger": "src/easyicu/research_agent/authority/provider_hard_stop.py",
     "formal_collaborator_adapter": "benchmarks/figure2_icu_agent_v2/formal_collaborator_adapter.py",
     "pipeline_services": "src/easyicu/research_agent/orchestration/services.py",
     "easyicu_formal_runner": "benchmarks/figure2_icu_agent_v2/formal_easyicu_runner.py",
@@ -12,6 +14,7 @@
     "generic_harness": "benchmarks/figure2_icu_agent_v2/generic_code_agent_harness.py",
     "easyicu_review_adapter": "benchmarks/figure2_icu_agent_v2/easyicu_review_bundle_adapter.py",
     "review_bundle_writer": "benchmarks/figure2_icu_agent_v2/review_bundle_writer.py",
+    "immutable_publication": "benchmarks/figure2_icu_agent_v2/immutable_publication.py",
     "shared_review_semantics": "benchmarks/figure2_icu_agent_v2/review_bundle_semantics.py",
     "review_normalizer": "benchmarks/figure2_icu_agent_v2/review_bundle_normalizer.py",
     "formal_scheduler": "benchmarks/figure2_icu_agent_v2/formal_scheduler.py",

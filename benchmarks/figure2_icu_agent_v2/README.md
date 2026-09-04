@@ -73,7 +73,9 @@ every Provider-bearing collaborator receives the same arm-bound
 hard-stop state, and the two-phase authority sequence: validate the signed
 coordinate without consuming it, verify production transport trust, then
 atomically consume the coordinate immediately before the one permitted
-transport call. A replay or a concurrent second consumer fails closed.
+logical model turn. Every raw transport retry carries that same logical call
+identifier while receiving its own pre-transport budget reservation and ledger
+entry. A replay or a concurrent second coordinate consumer fails closed.
 `PipelineServices` owns the complete list of Provider-bearing collaborators,
 and `formal_collaborator_adapter.py` projects that list through formal
 authority. An opaque prebuilt visual-QA adapter is rejected because its
@@ -105,8 +107,10 @@ constructs the arm implementation, and only then commits the single-use lease.
 Initialization may create only paths inside that owned workdir. A failed
 attempt is moved to a unique `.trajectory-failed` quarantine path so the exact
 task can be retried without hiding partial state; a pre-initialization failure
-leaves the lease unconsumed. The final seven-file review bundle is written only
-to the exact leased output directory.
+leaves the lease unconsumed. After the lease is committed, the same execution
+session terminalizes unexpected runner, plan-review, executor, resource, or
+projection failures into the neutral seven-file failure contract. The final
+review bundle is written only to the exact leased output directory.
 `multi_host_acceptance.py` accepts exactly one server and one laptop preflight
 receipt as unparsed JSON bytes only when the frozen release, model route, input
 set, budgets, container limits, and network policy match exactly; duplicate
@@ -124,6 +128,10 @@ lock before unblinding. The lock is published from complete fsynced staging
 bytes with atomic no-overwrite linking, so a failed write leaves no partial
 final file and remains retryable. Reviewers consume the
 package's sealed bytes rather than reopening mutable source paths.
+`immutable_publication.py` owns that same staged, verified, no-overwrite,
+file-and-directory-fsynced publication primitive for trajectory leases,
+started markers, signed-coordinate consumption markers, and score locks. The
+seven-file review bundle keeps a separate directory-level atomic transaction.
 The same seam creates split-specific Heldout27 and Qualification12 sheets;
 Qualification12 sheets bind the frozen `meta_generalization` row and its
 `bound_result` or `fail_closed` contract so the preregistered blinding pilot
