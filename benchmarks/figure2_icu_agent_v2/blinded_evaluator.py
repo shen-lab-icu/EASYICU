@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
+
+from .review_bundle_normalizer import (
+    CANONICAL_FILES,
+    NormalizedReviewBundle,
+    ReviewBlindingContext,
+    normalize_review_bundle,
+)
 
 
 RUBRIC_PATH = Path(__file__).with_name("heldout27_evaluation_rubric_v2.json")
@@ -22,10 +30,56 @@ _TASK_FIELDS = (
     "semantic_guardrails",
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_BLINDED_BUNDLE_IDS = ("bundle_1", "bundle_2")
 
 
 class BlindedEvaluationError(ValueError):
     reason_code = "BLINDED_EVALUATION_INVALID"
+
+
+@dataclass(frozen=True)
+class BlindedReviewBundle:
+    """Immutable normalized bytes and audit identity for one blinded label."""
+
+    bundle_id: str
+    _files: tuple[tuple[str, bytes], ...]
+    pre_normalization_sha256: tuple[tuple[str, str], ...]
+    post_normalization_sha256: tuple[tuple[str, str], ...]
+    normalized_bundle_sha256: str
+
+    def files_for_review(self) -> dict[str, bytes]:
+        """Return a copy of the exact bytes identified by the digest receipt."""
+
+        return dict(self._files)
+
+    def digest_receipt(self) -> dict[str, Any]:
+        return {
+            "pre_normalization_sha256": dict(self.pre_normalization_sha256),
+            "post_normalization_sha256": dict(self.post_normalization_sha256),
+            "normalized_bundle_sha256": self.normalized_bundle_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class BlindedReviewPackage:
+    """One task's exact normalized pair, sheet, and digest seal."""
+
+    task_id: str
+    sheet_sha256: str
+    bundles: tuple[BlindedReviewBundle, BlindedReviewBundle]
+    review_package_sha256: str
+
+    def files_for_review(self, bundle_id: str) -> dict[str, bytes]:
+        for bundle in self.bundles:
+            if bundle.bundle_id == bundle_id:
+                return bundle.files_for_review()
+        raise BlindedEvaluationError(f"unknown blinded bundle: {bundle_id}")
+
+    def digest_receipt(self) -> dict[str, dict[str, Any]]:
+        return {
+            bundle.bundle_id: bundle.digest_receipt()
+            for bundle in self.bundles
+        }
 
 
 def _canonical_json(value: Mapping[str, Any]) -> bytes:
@@ -39,6 +93,174 @@ def _canonical_json(value: Mapping[str, Any]) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _bundle_identity_payload(bundle: BlindedReviewBundle) -> dict[str, Any]:
+    return {
+        "bundle_id": bundle.bundle_id,
+        **bundle.digest_receipt(),
+    }
+
+
+def _package_identity_payload(
+    *,
+    task_id: str,
+    sheet_sha256: str,
+    bundles: Sequence[BlindedReviewBundle],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "easyicu.figure2_blinded_review_package/1",
+        "task_id": task_id,
+        "sheet_sha256": sheet_sha256,
+        "arm_mapping_present": False,
+        "bundles": [_bundle_identity_payload(bundle) for bundle in bundles],
+    }
+
+
+def _seal_normalized_bundle(
+    bundle_id: str,
+    normalized: NormalizedReviewBundle,
+) -> BlindedReviewBundle:
+    if bundle_id not in _BLINDED_BUNDLE_IDS:
+        raise BlindedEvaluationError(f"unknown blinded bundle: {bundle_id}")
+    if not isinstance(normalized, NormalizedReviewBundle):
+        raise BlindedEvaluationError("normalizer returned an invalid bundle")
+    if (
+        set(normalized.files) != set(CANONICAL_FILES)
+        or set(normalized.pre_normalization_sha256) != set(CANONICAL_FILES)
+        or set(normalized.post_normalization_sha256) != set(CANONICAL_FILES)
+    ):
+        raise BlindedEvaluationError("normalized bundle file identity is incomplete")
+    files = tuple((name, normalized.files[name]) for name in CANONICAL_FILES)
+    if any(not isinstance(payload, bytes) for _name, payload in files):
+        raise BlindedEvaluationError("normalized review files must be bytes")
+    pre_digests = tuple(
+        (name, normalized.pre_normalization_sha256[name])
+        for name in CANONICAL_FILES
+    )
+    post_digests = tuple(
+        (name, normalized.post_normalization_sha256[name])
+        for name in CANONICAL_FILES
+    )
+    if any(
+        not isinstance(digest, str) or not _SHA256_RE.fullmatch(digest)
+        for _name, digest in (*pre_digests, *post_digests)
+    ):
+        raise BlindedEvaluationError("normalized bundle digest is invalid")
+    mismatches = [
+        name
+        for name, payload in files
+        if hashlib.sha256(payload).hexdigest()
+        != normalized.post_normalization_sha256[name]
+    ]
+    if mismatches:
+        raise BlindedEvaluationError(
+            "normalized review bytes do not match post-normalization digests: "
+            + ", ".join(mismatches)
+        )
+    bundle_digest = hashlib.sha256(
+        _canonical_json(
+            {
+                "schema_version": "easyicu.figure2_normalized_review_bundle/1",
+                "bundle_id": bundle_id,
+                "post_normalization_sha256": dict(post_digests),
+            }
+        )
+    ).hexdigest()
+    return BlindedReviewBundle(
+        bundle_id=bundle_id,
+        _files=files,
+        pre_normalization_sha256=pre_digests,
+        post_normalization_sha256=post_digests,
+        normalized_bundle_sha256=bundle_digest,
+    )
+
+
+def _validate_review_package(review_package: BlindedReviewPackage) -> None:
+    if not isinstance(review_package, BlindedReviewPackage):
+        raise BlindedEvaluationError(
+            "score lock requires a BlindedReviewPackage"
+        )
+    sheet = instantiate_review_sheet(review_package.task_id)
+    if review_package.sheet_sha256 != sheet["sheet_sha256"]:
+        raise BlindedEvaluationError("review package sheet digest mismatch")
+    if tuple(bundle.bundle_id for bundle in review_package.bundles) != (
+        _BLINDED_BUNDLE_IDS
+    ):
+        raise BlindedEvaluationError("review package bundle identities are invalid")
+    resealed = tuple(
+        _seal_normalized_bundle(
+            bundle.bundle_id,
+            NormalizedReviewBundle(
+                files=bundle.files_for_review(),
+                pre_normalization_sha256=dict(
+                    bundle.pre_normalization_sha256
+                ),
+                post_normalization_sha256=dict(
+                    bundle.post_normalization_sha256
+                ),
+                redaction_log=(),
+            ),
+        )
+        for bundle in review_package.bundles
+    )
+    if resealed != review_package.bundles:
+        raise BlindedEvaluationError("review package bundle seal is invalid")
+    identity = _package_identity_payload(
+        task_id=review_package.task_id,
+        sheet_sha256=review_package.sheet_sha256,
+        bundles=review_package.bundles,
+    )
+    if hashlib.sha256(_canonical_json(identity)).hexdigest() != (
+        review_package.review_package_sha256
+    ):
+        raise BlindedEvaluationError("review package digest is invalid")
+
+
+def prepare_blinded_review_package(
+    *,
+    task_id: str,
+    source_dirs: Mapping[str, Path],
+    blinding_context: ReviewBlindingContext,
+) -> BlindedReviewPackage:
+    """Normalize and seal the exact pair of bytes supplied to reviewers."""
+
+    if set(source_dirs) != set(_BLINDED_BUNDLE_IDS):
+        raise BlindedEvaluationError(
+            "review package must map bundle_1 and bundle_2 exactly"
+        )
+    resolved_sources = tuple(
+        Path(source_dirs[bundle_id]).resolve()
+        for bundle_id in _BLINDED_BUNDLE_IDS
+    )
+    if len(set(resolved_sources)) != 2:
+        raise BlindedEvaluationError("blinded bundle sources must be distinct")
+    sheet = instantiate_review_sheet(task_id)
+    bundles = tuple(
+        _seal_normalized_bundle(
+            bundle_id,
+            normalize_review_bundle(
+                source_dirs[bundle_id],
+                blinding_context=blinding_context,
+            ),
+        )
+        for bundle_id in _BLINDED_BUNDLE_IDS
+    )
+    identity = _package_identity_payload(
+        task_id=task_id,
+        sheet_sha256=sheet["sheet_sha256"],
+        bundles=bundles,
+    )
+    package = BlindedReviewPackage(
+        task_id=task_id,
+        sheet_sha256=sheet["sheet_sha256"],
+        bundles=bundles,  # type: ignore[arg-type]
+        review_package_sha256=hashlib.sha256(
+            _canonical_json(identity)
+        ).hexdigest(),
+    )
+    _validate_review_package(package)
+    return package
 
 
 def _load_rubric() -> dict[str, Any]:
@@ -133,8 +355,7 @@ def _validate_score(
 
 def lock_blinded_scores(
     *,
-    task_id: str,
-    sheet_sha256: str,
+    review_package: BlindedReviewPackage,
     reviews: Sequence[Mapping[str, Any]],
     eligible_reviewer_ids: Sequence[str],
     reviewer_eligibility_receipt_sha256: str,
@@ -142,9 +363,8 @@ def lock_blinded_scores(
 ) -> dict[str, Any]:
     """Atomically lock two independent reviews before any arm mapping is supplied."""
 
-    sheet = instantiate_review_sheet(task_id)
-    if sheet_sha256 != sheet["sheet_sha256"]:
-        raise BlindedEvaluationError("review sheet digest mismatch")
+    _validate_review_package(review_package)
+    task_id = review_package.task_id
     if len(reviews) != 4:
         raise BlindedEvaluationError("two reviewers must score both blinded bundles")
     if not _SHA256_RE.fullmatch(reviewer_eligibility_receipt_sha256):
@@ -203,9 +423,11 @@ def lock_blinded_scores(
         for bundle_id in ("bundle_1", "bundle_2")
     }
     receipt = {
-        "schema_version": "easyicu.figure2_blinded_score_lock/1",
+        "schema_version": "easyicu.figure2_blinded_score_lock/2",
         "task_id": task_id,
-        "sheet_sha256": sheet_sha256,
+        "sheet_sha256": review_package.sheet_sha256,
+        "review_package_sha256": review_package.review_package_sha256,
+        "blinded_bundle_digests": review_package.digest_receipt(),
         "reviewer_eligibility_receipt_sha256": (
             reviewer_eligibility_receipt_sha256
         ),
@@ -225,8 +447,11 @@ def lock_blinded_scores(
 
 
 __all__ = [
+    "BlindedReviewBundle",
+    "BlindedReviewPackage",
     "BlindedEvaluationError",
     "instantiate_review_sheet",
     "load_heldout_tasks",
     "lock_blinded_scores",
+    "prepare_blinded_review_package",
 ]

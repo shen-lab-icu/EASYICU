@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -7,9 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from benchmarks.figure2_icu_agent_v2.blinded_evaluator import (
+    BlindedReviewPackage,
     BlindedEvaluationError,
-    instantiate_review_sheet,
     lock_blinded_scores,
+    prepare_blinded_review_package,
 )
 from benchmarks.figure2_icu_agent_v2.easyicu_review_bundle_adapter import (
     EasyICUReviewMaterial,
@@ -1034,11 +1036,45 @@ def _score(task_id: str, reviewer: str, bundle: str, success: bool) -> dict:
     }
 
 
+def _blinded_review_package(
+    root: Path,
+    *,
+    task_id: str = "icu27_t01",
+) -> BlindedReviewPackage:
+    sources: dict[str, Path] = {}
+    for bundle_id, estimate in (("bundle_1", 1.2), ("bundle_2", 1.3)):
+        material = EasyICUReviewMaterial(
+            plan={"population": "adult ICU"},
+            cohort={"n": 42},
+            results={"estimate": estimate},
+            diagnostics={"complete": True},
+            report=f"The estimate was {estimate}.",
+            headline_evidence=(
+                {"claim": "estimate", "file": "03_results.json"},
+            ),
+            artifact_inventory={"main result": ["03_results.json"]},
+        )
+        sources[bundle_id] = write_easyicu_review_bundle(
+            material,
+            output_dir=root / bundle_id,
+            mandatory_artifacts=("main result",),
+            resource_receipt=ReviewResourceReceipt(
+                within_frozen_budget=True,
+                provider_tokens=10,
+            ),
+        )
+    return prepare_blinded_review_package(
+        task_id=task_id,
+        source_dirs=sources,
+        blinding_context=_BLINDING_CONTEXT,
+    )
+
+
 def test_blinded_scores_lock_before_arm_mapping_and_cannot_overwrite(
     tmp_path: Path,
 ) -> None:
     task_id = "icu27_t01"
-    sheet = instantiate_review_sheet(task_id)
+    package = _blinded_review_package(tmp_path, task_id=task_id)
     reviews = [
         _score(task_id, reviewer, bundle, True)
         for reviewer in ("clinical-r1", "methods-r2")
@@ -1046,8 +1082,7 @@ def test_blinded_scores_lock_before_arm_mapping_and_cannot_overwrite(
     ]
     destination = tmp_path / "locked.json"
     receipt = lock_blinded_scores(
-        task_id=task_id,
-        sheet_sha256=sheet["sheet_sha256"],
+        review_package=package,
         reviews=reviews,
         eligible_reviewer_ids=("clinical-r1", "methods-r2"),
         reviewer_eligibility_receipt_sha256="a" * 64,
@@ -1055,14 +1090,24 @@ def test_blinded_scores_lock_before_arm_mapping_and_cannot_overwrite(
     )
 
     assert receipt["arm_mapping_present"] is False
+    assert receipt["review_package_sha256"] == package.review_package_sha256
+    assert set(receipt["blinded_bundle_digests"]) == {
+        "bundle_1",
+        "bundle_2",
+    }
+    for bundle_id in ("bundle_1", "bundle_2"):
+        expected = receipt["blinded_bundle_digests"][bundle_id]
+        assert set(expected["post_normalization_sha256"]) == set(
+            CANONICAL_FILES
+        )
+        assert package.files_for_review(bundle_id)
     assert receipt["adjudication_required"] == {
         "bundle_1": False,
         "bundle_2": False,
     }
     with pytest.raises(FileExistsError):
         lock_blinded_scores(
-            task_id=task_id,
-            sheet_sha256=sheet["sheet_sha256"],
+            review_package=package,
             reviews=reviews,
             eligible_reviewer_ids=("clinical-r1", "methods-r2"),
             reviewer_eligibility_receipt_sha256="a" * 64,
@@ -1070,9 +1115,42 @@ def test_blinded_scores_lock_before_arm_mapping_and_cannot_overwrite(
         )
 
 
+def test_blinded_score_lock_rejects_normalized_bytes_changed_after_seal(
+    tmp_path: Path,
+) -> None:
+    task_id = "icu27_t01"
+    package = _blinded_review_package(tmp_path, task_id=task_id)
+    first = package.bundles[0]
+    tampered_files = tuple(
+        (name, b'{"estimate":999}\n' if name == "03_results.json" else payload)
+        for name, payload in first._files
+    )
+    tampered_package = replace(
+        package,
+        bundles=(replace(first, _files=tampered_files), package.bundles[1]),
+    )
+    reviews = [
+        _score(task_id, reviewer, bundle, True)
+        for reviewer in ("clinical-r1", "methods-r2")
+        for bundle in ("bundle_1", "bundle_2")
+    ]
+
+    with pytest.raises(
+        BlindedEvaluationError,
+        match="post-normalization digests",
+    ):
+        lock_blinded_scores(
+            review_package=tampered_package,
+            reviews=reviews,
+            eligible_reviewer_ids=("clinical-r1", "methods-r2"),
+            reviewer_eligibility_receipt_sha256="a" * 64,
+            destination=tmp_path / "tampered-lock.json",
+        )
+
+
 def test_blinded_primary_cannot_disagree_with_hard_gates(tmp_path: Path) -> None:
     task_id = "icu27_t01"
-    sheet = instantiate_review_sheet(task_id)
+    package = _blinded_review_package(tmp_path, task_id=task_id)
     reviews = [
         _score(task_id, reviewer, bundle, True)
         for reviewer in ("clinical-r1", "methods-r2")
@@ -1081,8 +1159,7 @@ def test_blinded_primary_cannot_disagree_with_hard_gates(tmp_path: Path) -> None
     reviews[0]["hard_gates_passed"]["HG04_MANDATORY_OUTPUTS"] = False
     with pytest.raises(BlindedEvaluationError):
         lock_blinded_scores(
-            task_id=task_id,
-            sheet_sha256=sheet["sheet_sha256"],
+            review_package=package,
             reviews=reviews,
             eligible_reviewer_ids=("clinical-r1", "methods-r2"),
             reviewer_eligibility_receipt_sha256="a" * 64,

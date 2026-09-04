@@ -658,6 +658,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         "arm_neutral_normalizer": str(
             (PACKAGE_ROOT / "review_bundle_normalizer.py").relative_to(REPO_ROOT)
         ),
+        "blinded_evaluator": str(BLINDED_EVALUATOR_PATH.relative_to(REPO_ROOT)),
     }
     if review_contract.get("implementation_owners") != expected_review_owners:
         _fail(
@@ -703,6 +704,24 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("BLINDING_ARTIFACT_ASSERTION_BOUNDARY_MISSING", repr(visible_fields))
     if "model-turn and provider-call counts" not in receipt_projection["reviewer_hidden_until_scores_lock"]:
         _fail("BLINDING_RAW_RESOURCE_PROJECTION_INVALID", repr(receipt_projection))
+    audit = review_contract.get("audit", {})
+    if (
+        audit.get("pre_normalization_digest_required") is not True
+        or audit.get("post_normalization_digest_required") is not True
+        or audit.get("blinded_review_package_schema")
+        != "easyicu.figure2_blinded_review_package/1"
+        or audit.get("blinded_score_lock_schema")
+        != "easyicu.figure2_blinded_score_lock/2"
+        or not all(
+            term in str(audit.get("score_lock_binding", ""))
+            for term in (
+                "exact blinded review package digest",
+                "pre- and post-normalization SHA-256 maps",
+                "sealed bytes",
+            )
+        )
+    ):
+        _fail("BLINDED_SCORE_LOCK_DIGEST_BINDING_MISSING", repr(audit))
 
     independence = rubric["human_review"]["independence_eligibility"]
     if "At least one" not in independence or "every adjudicator" not in independence:
