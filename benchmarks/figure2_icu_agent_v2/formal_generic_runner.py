@@ -17,11 +17,7 @@ from .formal_provider_gate import (
     FormalCallCoordinate,
     complete_formal_provider_call,
 )
-from .formal_scheduler import (
-    consume_trajectory_lease,
-    signed_output_root,
-    signed_site_assignment,
-)
+from .formal_trajectory_lifecycle import FormalTrajectoryLifecycle
 from .generic_code_agent_harness import (
     DockerRunnerBackend,
     GenericCodeAgentHarness,
@@ -103,23 +99,18 @@ class FormalGenericCodeAgentRunner:
         trajectory_lease_path: Path,
         max_tokens: int,
         temperature: float,
-        docker_runner: DockerRunner,
+        docker_runner_factory: Callable[[Path], DockerRunner],
         provider_hard_stop: TaskProviderHardStop,
         resource_snapshot: Callable[[], Mapping[str, Any]],
     ) -> None:
-        lease = consume_trajectory_lease(
-            trajectory_lease_path,
+        trajectory = FormalTrajectoryLifecycle(
+            lease_path=trajectory_lease_path,
+            receipts=receipts,
             scope=scope,
             task_id=task_id,
             arm="generic_code_agent",
             execution_site=execution_site,
-            site_assignment=signed_site_assignment(receipts, scope=scope),
-            expected_output_root=signed_output_root(
-                receipts,
-                execution_site=execution_site,
-            ),
         )
-        self._leased_output_dir = Path(lease["output_dir"]).resolve()
         gateway = FormalGenericModelGateway(
             client=client,
             receipts=receipts,
@@ -158,15 +149,24 @@ class FormalGenericCodeAgentRunner:
             )
             return snapshot
 
-        executor: GenericExecutionBackend = DockerRunnerBackend(
-            docker_runner,
-            task_hard_stop=provider_hard_stop,
+        def build_harness() -> GenericCodeAgentHarness:
+            docker_runner = docker_runner_factory(trajectory.workdir)
+            trajectory.require_workdir(docker_runner.workdir)
+            executor: GenericExecutionBackend = DockerRunnerBackend(
+                docker_runner,
+                task_hard_stop=provider_hard_stop,
+            )
+            return GenericCodeAgentHarness(
+                model=gateway,
+                executor=executor,
+                resource_snapshot=validated_resource_snapshot,
+            )
+
+        self._harness = trajectory.initialize(
+            workdir=trajectory.workdir,
+            factory=build_harness,
         )
-        self._harness = GenericCodeAgentHarness(
-            model=gateway,
-            executor=executor,
-            resource_snapshot=validated_resource_snapshot,
-        )
+        self._trajectory = trajectory
         self._provider_hard_stop = provider_hard_stop
 
     def run(
@@ -178,8 +178,7 @@ class FormalGenericCodeAgentRunner:
         output_dir: Path,
         review_plan: Callable[[Mapping[str, Any]], PlanReviewDecision],
     ) -> GenericHarnessResult:
-        if Path(output_dir).resolve() != self._leased_output_dir:
-            raise ValueError("formal output directory does not match the consumed lease")
+        self._trajectory.require_output_dir(output_dir)
 
         def review_without_charging_human_wait(
             plan: Mapping[str, Any],

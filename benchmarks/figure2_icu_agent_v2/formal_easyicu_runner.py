@@ -23,11 +23,7 @@ from .formal_provider_gate import (
     FormalAuthorizedHardStopClient,
     FormalCallCoordinate,
 )
-from .formal_scheduler import (
-    consume_trajectory_lease,
-    signed_output_root,
-    signed_site_assignment,
-)
+from .formal_trajectory_lifecycle import FormalTrajectoryLifecycle
 
 
 class _FormalCallSequence:
@@ -145,19 +141,14 @@ class FormalEasyICURunner:
             raise ValueError(
                 "PipelineServices must carry the same formal provider hard stop"
             )
-        lease = consume_trajectory_lease(
-            trajectory_lease_path,
+        trajectory = FormalTrajectoryLifecycle(
+            lease_path=trajectory_lease_path,
+            receipts=receipts,
             scope=scope,
             task_id=task_id,
             arm="easyicu_full",
             execution_site=execution_site,
-            site_assignment=signed_site_assignment(receipts, scope=scope),
-            expected_output_root=signed_output_root(
-                receipts,
-                execution_site=execution_site,
-            ),
         )
-        self._leased_output_dir = Path(lease["output_dir"]).resolve()
         router = FormalEasyICUModelRouter(
             services.llm,
             receipts=receipts,
@@ -178,10 +169,19 @@ class FormalEasyICURunner:
                 role="concept_auditor",
             ),
         )
-        self._pipeline = ResearchAgentPipeline(
-            config=config,
-            services=formal_services,
+        formal_config = replace(
+            config,
+            workdir=trajectory.workdir,
+            cache_dir=trajectory.workdir / ".cache",
         )
+        self._pipeline = trajectory.initialize(
+            workdir=trajectory.workdir,
+            factory=lambda: ResearchAgentPipeline(
+                config=formal_config,
+                services=formal_services,
+            ),
+        )
+        self._trajectory = trajectory
         self._provider_hard_stop = provider_hard_stop
 
     def run(self, **kwargs: Any) -> Any:
@@ -225,8 +225,7 @@ class FormalEasyICURunner:
     ) -> PipelineResult:
         """Run once and immediately project fixed native outputs for review."""
 
-        if Path(output_dir).resolve() != self._leased_output_dir:
-            raise ValueError("formal output directory does not match the consumed lease")
+        self._trajectory.require_output_dir(output_dir)
         try:
             result = self.run(**run_kwargs)
             if not isinstance(result, PipelineResult):
