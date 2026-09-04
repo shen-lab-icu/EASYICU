@@ -114,6 +114,8 @@ function projectedResource(value) {
     if (!url || !title) return undefined;
     const authorityClass = value.authority_class === "literature_method"
       ? "literature_method" : "literature_retrieval_candidate";
+    const retrievalFit = ["direct_retrieval_fit", "adjacent_retrieval_fit", "unclassified"]
+      .includes(value.retrieval_fit) ? value.retrieval_fit : "";
     return {
       kind: "literature_source",
       url,
@@ -126,6 +128,10 @@ function projectedResource(value) {
       pmid: boundedText(value.pmid, 32),
       media_type: "text/html",
       authority_class: authorityClass,
+      ...(retrievalFit ? {
+        retrieval_fit: retrievalFit,
+        retrieval_rationale: boundedText(value.retrieval_rationale, 600),
+      } : {}),
     };
   }
   if (value.kind === "research_artifact") {
@@ -140,6 +146,18 @@ function projectedResource(value) {
       label: boundedText(value.label || artifact, 160),
       media_type: "application/json",
       ...(sha256 ? { sha256 } : {}),
+    };
+  }
+  if (value.kind === "idea_plan") {
+    const runId = safeStableId(value.run_id);
+    if (!runId || value.artifact !== "idea_plan.json") return undefined;
+    return {
+      kind: "idea_plan",
+      run_id: runId,
+      artifact: "idea_plan.json",
+      label: boundedText(value.label || "Idea Mining plan preview", 160),
+      media_type: "application/json",
+      authority_class: "idea_mining_planning_only",
     };
   }
   if (value.kind === "research_document" || value.kind === "system_validation_document") {
@@ -251,6 +269,77 @@ function projectedResources(value) {
   return value.slice(0, 80).map(projectedResource).filter(Boolean);
 }
 
+function projectedIdeaMining(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const idea = value.idea && typeof value.idea === "object" ? value.idea : {};
+  const feasibility = value.feasibility && typeof value.feasibility === "object"
+    ? value.feasibility : {};
+  const mappedConcepts = Array.isArray(idea.mapped_concepts)
+    ? idea.mapped_concepts.slice(0, 24).map(row => ({
+      concept_id: boundedText(row?.concept_id, 120),
+      label: boundedText(row?.label, 180),
+      module: boundedText(row?.module, 120),
+      role: boundedText(row?.role, 120),
+      status: boundedText(row?.status, 120),
+      ...(typeof row?.available === "boolean" ? { available: row.available } : {}),
+    })).filter(row => row.concept_id || row.label)
+    : [];
+  const support = idea.design_support && typeof idea.design_support === "object"
+    ? idea.design_support : {};
+  const citations = Array.isArray(support.citations)
+    ? support.citations.slice(0, 4).map(row => ({
+      citation_id: boundedText(row?.citation_id, 120),
+      title: boundedText(row?.title, 400),
+      year: Number(row?.year) || undefined,
+      url: safeLiteratureUrl(row?.url),
+      supports: Array.isArray(row?.supports)
+        ? row.supports.slice(0, 4).map(item => boundedText(item, 240)) : [],
+    })).filter(row => row.citation_id && row.title)
+    : [];
+  const projected = {
+    run_id: boundedText(value.run_id, 160),
+    selected_idea_id: boundedText(value.selected_idea_id, 160),
+    idea: {
+      idea_title: boundedText(idea.idea_title, 500),
+      population: boundedText(idea.population, 500),
+      exposure_or_predictor: boundedText(idea.exposure_or_predictor, 500),
+      outcome: boundedText(idea.outcome, 500),
+      analysis_family: boundedText(idea.analysis_family, 120),
+      rationale: boundedText(idea.rationale, 1600),
+      go_no_go: boundedText(idea.go_no_go, 80),
+      go_no_go_reason: boundedText(idea.go_no_go_reason, 1600),
+      next_action: boundedText(idea.next_action, 1000),
+      plan_status: boundedText(idea.plan_status, 120),
+      mapped_concepts: mappedConcepts,
+      unresolved_slots: Array.isArray(idea.unresolved_slots)
+        ? idea.unresolved_slots.slice(0, 8).map(item => boundedText(item, 120)) : [],
+      design_support: {
+        card_id: boundedText(support.card_id, 120),
+        version: boundedText(support.version, 40),
+        file_sha256: safeSha256(support.file_sha256),
+        trust_level: boundedText(support.trust_level, 80),
+        review_status: boundedText(support.review_status, 80),
+        summary: boundedText(support.summary, 1200),
+        population: boundedText(support.population, 800),
+        time_zero: boundedText(support.time_zero, 800),
+        outcome_family: boundedText(support.outcome_family, 1200),
+        requires_confirmation: Array.isArray(support.requires_confirmation)
+          ? support.requires_confirmation.slice(0, 6).map(item => boundedText(item, 500)) : [],
+        stop_conditions: Array.isArray(support.stop_conditions)
+          ? support.stop_conditions.slice(0, 6).map(item => boundedText(item, 500)) : [],
+        citations,
+        authority: boundedText(support.authority, 120),
+      },
+    },
+    feasibility: {
+      status: boundedText(feasibility.status, 120),
+      reason: boundedText(feasibility.reason, 1600),
+      reportable: feasibility.reportable === true,
+    },
+  };
+  return projected.idea.idea_title || projected.selected_idea_id ? projected : undefined;
+}
+
 function toolResource(toolName, args) {
   const name = boundedText(toolName, 160);
   if (!WORKSPACE_FILE_TOOLS.has(name)) return undefined;
@@ -278,6 +367,9 @@ function toolReceipt(result) {
   const fallback = content.find((item) => item && item.type === "text")?.text || "";
   const resource = projectedResource(details.resource || ownerDetails.resource);
   const resources = projectedResources(details.resources || ownerDetails.resources);
+  const ideaMining = projectedIdeaMining(
+    ownerDetails.idea_mining || details.idea_mining,
+  );
   const jobId = safeJobId(ownerDetails.job_id || details.job_id);
   const hostRebindAfterTurn = ownerDetails.host_rebind_after_turn === true;
   return {
@@ -289,6 +381,7 @@ function toolReceipt(result) {
     ...(hostRebindAfterTurn ? { host_rebind_after_turn: true } : {}),
     ...(resource ? { resource } : {}),
     ...(resources.length ? { resources } : {}),
+    ...(ideaMining ? { idea_mining: ideaMining } : {}),
   };
 }
 

@@ -52,7 +52,7 @@ def _aumc_admissions_relation_sql(data_source: Any) -> str:
     candidates: List[Path] = []
 
     try:
-        resolved = data_source._resolve_loader_from_disk("admissions")
+        resolved = data_source.resolve_loader_from_disk("admissions")
     except (AttributeError, KeyError, TypeError, ValueError):
         resolved = None
     if isinstance(resolved, (str, Path)):
@@ -97,7 +97,7 @@ def _sic_cases_relation_sql(data_source: Any) -> str:
     base_path = Path(data_source.base_path)
     candidates: List[Path] = []
     try:
-        resolved = data_source._resolve_loader_from_disk("cases")
+        resolved = data_source.resolve_loader_from_disk("cases")
     except (AttributeError, KeyError, TypeError, ValueError):
         resolved = None
     if isinstance(resolved, (str, Path)):
@@ -1571,6 +1571,23 @@ class ICUDataSource:
         # 未过滤且未缓存时返回切片
         return frame[:] if self.enable_cache else frame
 
+    def resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
+        """Return a partitioned table directory through the public layout contract."""
+
+        return self._resolve_bucket_directory(table_name)
+
+    def resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
+        """Return a flat parquet directory through the public layout contract."""
+
+        return self._resolve_flat_parquet_directory(table_name)
+
+    def resolve_loader_from_disk(
+        self, table_name: str
+    ) -> Optional[Callable[[], pd.DataFrame] | Path]:
+        """Resolve a disk loader through the public concept storage contract."""
+
+        return self._resolve_loader_from_disk(table_name)
+
     def _resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
         """
         🚀 优先检查分桶目录（性能最优）
@@ -2168,6 +2185,16 @@ class ICUDataSource:
                 pass
 
         return num_buckets, files_by_bucket
+
+    def get_bucket_files_for_ids(
+        self,
+        bucket_dir: Path,
+        itemids: Iterable[object],
+        duckdb_module,
+    ) -> Tuple[set, int, Tuple[Path, ...]]:
+        """Resolve bucket files through the public concept storage contract."""
+
+        return self._get_bucket_files_for_ids(bucket_dir, itemids, duckdb_module)
 
     def _get_bucket_files_for_ids(
         self,
@@ -3067,12 +3094,12 @@ def load_bucketed_table_aggregated(
     
     # 🔧 直接查找分桶目录（不依赖_resolve_loader_from_disk）
     base_path = data_source.base_path
-    bucket_dir = data_source._resolve_bucket_directory(table_name)
+    bucket_dir = data_source.resolve_bucket_directory(table_name)
     
     # 🚀 FIX 2026-03-13: 如果没有 bucket 目录，回退到扁平 parquet 目录
     flat_parquet_dir = None
     if bucket_dir is None:
-        flat_parquet_dir = data_source._resolve_flat_parquet_directory(table_name)
+        flat_parquet_dir = data_source.resolve_flat_parquet_directory(table_name)
     
     if bucket_dir is None and flat_parquet_dir is None:
         raise ValueError(f"Cannot find bucketed or flat parquet directory for {table_name}")
@@ -3164,7 +3191,7 @@ def load_bucketed_table_aggregated(
     if bucket_dir is not None:
         # 分桶目录：通过 hash(itemid) 选择目标桶
         itemid_list = list(itemids)
-        _, _, target_files = data_source._get_bucket_files_for_ids(
+        _, _, target_files = data_source.get_bucket_files_for_ids(
             bucket_dir,
             itemid_list,
             duckdb,
@@ -3956,10 +3983,10 @@ def load_bucketed_table_multi_aggregated(
         all_itemids = sorted({int(x) for ids in concept_itemids.values() for x in ids})
 
     # ── Find parquet files ─────────────────────────────────────
-    bucket_dir = data_source._resolve_bucket_directory(table_name)
+    bucket_dir = data_source.resolve_bucket_directory(table_name)
     flat_parquet_dir = None
     if bucket_dir is None:
-        flat_parquet_dir = data_source._resolve_flat_parquet_directory(table_name)
+        flat_parquet_dir = data_source.resolve_flat_parquet_directory(table_name)
     if bucket_dir is None and flat_parquet_dir is None:
         raise ValueError(f"Cannot find bucketed directory for {table_name}")
 
@@ -3967,7 +3994,7 @@ def load_bucketed_table_multi_aggregated(
 
     # ── Build glob pattern from bucket or flat dir ─────────
     if bucket_dir is not None:
-        _, _, target_files = data_source._get_bucket_files_for_ids(
+        _, _, target_files = data_source.get_bucket_files_for_ids(
             bucket_dir,
             all_itemids,
             duckdb,
@@ -4426,7 +4453,7 @@ def load_wide_table_aggregated(
         return combined if combined is not None else pd.DataFrame()
     
     # 确定数据目录
-    table_path = data_source._resolve_loader_from_disk(table_name)
+    table_path = data_source.resolve_loader_from_disk(table_name)
     if table_path is None:
         raise ValueError(f"Cannot find data for table {table_name}")
     

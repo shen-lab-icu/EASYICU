@@ -1797,11 +1797,11 @@ class DockerRunner:
     GHOST_MONITOR_INTERVAL_SECONDS = 0.25
     RUNTIME_PROVENANCE_MAX_ATTEMPTS = 2
 
-    #: Default container resource caps. Chosen to fit an ordinary analysis
-    #: step (a Cox fit, a bootstrap, a figure render) with headroom, while
-    #: keeping one runaway step from taking the host — or a sibling step —
-    #: down with it.
-    DEFAULT_CPU_LIMIT = "4"
+    #: Two CPUs fits the smallest supported Docker Desktop/Colima allocation;
+    #: callers may widen it on larger runtimes. The memory/process caps still
+    #: leave ordinary Cox, bootstrap, and figure steps headroom while keeping
+    #: one runaway container from taking down the host or a sibling step.
+    DEFAULT_CPU_LIMIT = "2"
     DEFAULT_MEMORY_LIMIT = "8g"
     DEFAULT_PIDS_LIMIT = 256
     DEFAULT_OPEN_FILES_LIMIT = 4096

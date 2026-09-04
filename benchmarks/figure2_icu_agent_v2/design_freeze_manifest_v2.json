@@ -1,0 +1,56 @@
+{
+  "schema_version": "easyicu.figure2_design_freeze_manifest/2",
+  "freeze_ref": "easyicu.figure2_icu_agent_v2/design-freeze-20260901-v2",
+  "created_at": "2026-09-01",
+  "scope": "preregistered experiment design only",
+  "source_checkout": {
+    "path": "/Users/haibo/Documents/GitHub/EASYICU-unified-product-20260823",
+    "branch": "codex/easyicu-group-demo-20260826",
+    "head": "88cd2187a9aa46b7e9cb5323a0ea18f72cf9f08f",
+    "worktree_clean": false,
+    "boundary": "The shared checkout already contained unrelated dirty work. This manifest freezes only the named design files and does not claim an exact-head runtime freeze."
+  },
+  "protocol": {
+    "path": "benchmarks/figure2_icu_agent_v2/experiment_protocol_v2.json",
+    "sha256": "d5577482c5663489bc4f5c789c845235aa0ca1db415f40f2f5f69e1b2c9ab357"
+  },
+  "validator": {
+    "path": "benchmarks/figure2_icu_agent_v2/freeze_v2.py",
+    "sha256": "1e523784a0a95c928335af41afaa2cf66b6300e2d0c7bc611759884d9f579beb"
+  },
+  "frozen_assets": {
+    "benchmarks/figure2_icu_agent_v2/action_space_v1.json": "dc7e4cf2778225c5ffb07699fe1ee2ef941a72faa445e2897e0c27320e47dd9a",
+    "benchmarks/meta_generalization/meta_benchmark.jsonl": "d7dadaf9a0ea9383c283fcc76027ec4d0453b0ba73308ac0d99a8a2d1543d9fd",
+    "benchmarks/figure2_icu_agent_v2/heldout27_taskbank_v1.jsonl": "55b711822008583a319d0dfd5f7f62bb6c8b585adacec59f8f7bf45f787ccf59",
+    "benchmarks/figure2_icu_agent_v2/heldout27_evaluation_rubric_v1.json": "99a5ab7581ce216cb3f8243c06cb64f607de1dd5256c866784aa060d6eadfef5",
+    "benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v1.json": "9fdb9b9cd7cdf8d70f2b7698592abf6515083ba334b26a314ea3625d435d1014",
+    "benchmarks/figure2_icu_agent_v2/formal_safety12_taskbank_v1.jsonl": "683ec2f6c69837f0532a86d768ef601ba0076fc1fc99b30e86bb5068d954a3cc",
+    "benchmarks/figure2_icu_agent_v2/formal_safety12_rubric_v1.json": "2f94419f4e09948161bc43c4265fd6b4e81e1f730b9858bcbd214139a30db1ad",
+    "benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v1.json": "92ae451dfa17914c37e8a9c7bfdcbc8c488e15081b3eb085f1e35cc8496fe88f"
+  },
+  "core_design": {
+    "heldout27_paired_runs": 54,
+    "formal_safety12_paired_runs": 24,
+    "core_formal_runs": 78,
+    "optional_repeatability_additional_runs": 36,
+    "primary_endpoint": "reportable_without_postrun_repair"
+  },
+  "authority": {
+    "design_frozen": true,
+    "provider_calls_authorized": false,
+    "planner_calls_authorized": false,
+    "formal_batch_authorized": false,
+    "paper_result_authority": false
+  },
+  "remaining_atomic_batch_coordinates": [
+    "fresh sealed task inputs and neutral generic-arm projections",
+    "Formal Safety12 sealed fixtures",
+    "clinical and methods sign-off",
+    "exact clean code commit and CI receipts",
+    "container digest and package lock",
+    "provider route and immutable model identifier",
+    "numeric token, time, cost, CPU, and memory budgets",
+    "network policy and repository deny proof",
+    "reviewer identities and atomic batch declaration"
+  ]
+}

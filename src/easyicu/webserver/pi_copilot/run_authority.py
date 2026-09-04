@@ -8,6 +8,7 @@ histories so a newer pipeline run cannot be hidden by an older native run.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
@@ -16,6 +17,45 @@ from easyicu.webserver import agent_runs, state_paths, study_contexts
 
 from .contracts import PLANNER_CHECKPOINT_GATE_REASONS
 from .workspace import ProjectWorkspace
+
+_MAX_FAILURE_PROJECTION_BYTES = 64 * 1024
+
+
+def _normalized_planner_gate_reason(row: Mapping[str, Any]) -> str:
+    """Upgrade one legacy planner-only Provider 5xx projection on read.
+
+    Older wrappers used the generic execution-failure code even though their
+    immutable source manifest recorded that analysis never started and the
+    Planner stopped on a Provider HTTP error.  Reading that closed projection
+    is enough to restore the same checkpoint-resume route used by new runs;
+    every other historical execution failure remains untouched.
+    """
+
+    reason = str(row.get("gate_reason") or "")
+    if reason != "research_pipeline_execution_failed":
+        return reason
+    project_dir = Path(str(row.get("project_dir") or "")).expanduser()
+    manifest = project_dir / "source_run_manifest.json"
+    try:
+        if manifest.is_symlink() or not manifest.is_file():
+            return reason
+        raw = manifest.read_bytes()
+        if not raw or len(raw) > _MAX_FAILURE_PROJECTION_BYTES:
+            return reason
+        payload = json.loads(raw)
+    except (OSError, ValueError, TypeError):
+        return reason
+    if not isinstance(payload, Mapping):
+        return reason
+    if (
+        payload.get("schema_version") == "easyicu.web-research-pipeline-projection/1"
+        and payload.get("status") == "failed"
+        and payload.get("failure_code") == "research_pipeline_execution_failed"
+        and payload.get("failure_type") == "provider_http"
+        and payload.get("analysis_started") is False
+    ):
+        return "research_pipeline_planner_provider_unavailable"
+    return reason
 
 
 def research_pipeline_workspace() -> ProjectWorkspace:
@@ -65,6 +105,7 @@ def list_bound_run_history(
             if not run_id:
                 continue
             row = dict(raw)
+            row["gate_reason"] = _normalized_planner_gate_reason(row)
             row["development_planner_checkpoint_available"] = (
                 _development_planner_checkpoint_available(row)
             )
@@ -95,6 +136,69 @@ def latest_bound_run_id(
     if not rows:
         return None
     return str(rows[0].get("run_id") or "") or None
+
+
+def workflow_authoritative_run(
+    rows: Sequence[Mapping[str, Any]],
+) -> Optional[Mapping[str, Any]]:
+    """Return the run that currently owns the user-facing workflow.
+
+    A package-bound preparation attempt can fail before producing a plan or
+    starting analysis. When it was launched from an unchanged, review-pending
+    candidate plan, the failed attempt remains audit history but must not erase
+    that candidate or force the researcher to spend another Planner run.
+    """
+
+    if not rows:
+        return None
+    latest = rows[0]
+    if len(rows) < 2:
+        return latest
+    digest = str(latest.get("scientific_configuration_sha256") or "")
+    for index, candidate in enumerate(rows[1:], start=1):
+        same_configuration = bool(
+            digest
+            and digest
+            == str(candidate.get("scientific_configuration_sha256") or "")
+        )
+        candidate_artifacts = {
+            str(name or "").strip()
+            for name in candidate.get("artifact_names") or []
+        }
+        candidate_waits_for_execution_upgrade = bool(
+            str(candidate.get("run_status") or "") == "human_review_pending"
+            and str(candidate.get("gate_reason") or "")
+            == "human_plan_review_required"
+            and {
+                "operator_plan_approval_required",
+                "plan_scientific_changes_required",
+            }
+            & {
+                str(code or "").strip()
+                for code in candidate.get("pending_review_reason_codes") or []
+            }
+            and "agent_plan.json" in candidate_artifacts
+        )
+        preceding_attempts_failed_before_plan = all(
+            str(row.get("run_status") or "") == "failed"
+            and str(row.get("run_type") or "") == "full"
+            and "agent_plan.json"
+            not in {
+                str(name or "").strip()
+                for name in row.get("artifact_names") or []
+            }
+            and str(row.get("scientific_configuration_sha256") or "") == digest
+            for row in rows[:index]
+        )
+        if (
+            same_configuration
+            and candidate_waits_for_execution_upgrade
+            and preceding_attempts_failed_before_plan
+        ):
+            return candidate
+        if not preceding_attempts_failed_before_plan:
+            break
+    return latest
 
 
 def _updated_epoch(row: Dict[str, Any]) -> float:

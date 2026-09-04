@@ -401,19 +401,18 @@ def ensure_landmark_association_composite_figure_step(
     *,
     plan: AnalysisPlan,
 ) -> tuple[AnalysisPlan, list[ValidationFinding]]:
-    """Append the registered four-panel landmark association renderer.
+    """Append the registered claim-led landmark association renderer.
 
     The signed landmark runtime publishes complementary tables rather than one
     overloaded result table. Once the plan has unique owners for the exact
-    curve, absolute-risk, robustness, and measurement-process products,
+    ratio curve, model-standardised risk curve, robustness, and
+    measurement-process products,
     selecting their registered renderer is presentation plumbing rather than
     a new scientific decision.
     """
 
     produced = {
-        str(output)
-        for step in plan.steps
-        for output in step.expected_outputs or []
+        str(output) for step in plan.steps for output in step.expected_outputs or []
     }
     curve_candidates = sorted(
         output
@@ -421,17 +420,35 @@ def ensure_landmark_association_composite_figure_step(
         if output.startswith("table:")
         and output.partition(":")[2].endswith("landmark_rcs_curve")
     )
+    adjusted_risk_candidates = sorted(
+        output
+        for output in produced
+        if output.startswith("table:")
+        and any(
+            token in output.partition(":")[2]
+            for token in (
+                "adjusted_absolute_risk",
+                "standardized_absolute_risk",
+                "standardised_absolute_risk",
+                "absolute_risk_curve",
+            )
+        )
+    )
     measurement_candidates = sorted(
         output
         for output in produced
         if output.partition(":")[2]
         in {"measurement_process", "measurement_process_audit"}
     )
-    if len(curve_candidates) != 1 or len(measurement_candidates) != 1:
+    if (
+        len(curve_candidates) != 1
+        or len(adjusted_risk_candidates) != 1
+        or len(measurement_candidates) != 1
+    ):
         return plan, []
     sources = (
         curve_candidates[0],
-        "table:absolute_risk_context",
+        adjusted_risk_candidates[0],
         "table:robustness_summary",
         measurement_candidates[0],
     )
@@ -448,7 +465,7 @@ def ensure_landmark_association_composite_figure_step(
     curve_owner = next(
         step
         for step in plan.steps
-        if str(step.step_id) == owners["table:landmark_rcs_curve"][0]
+        if str(step.step_id) == owners[curve_candidates[0]][0]
     )
     if (
         curve_owner.planned_analysis_role != "primary"
@@ -468,14 +485,15 @@ def ensure_landmark_association_composite_figure_step(
             and not step.figure_panels
             and len(step.expected_outputs) == 1
             and str(step.expected_outputs[0]).startswith("figure:")
-            and "article" in (
-                f"{step.step_id} {step.expected_outputs[0]}".lower()
+            and "article" in (f"{step.step_id} {step.expected_outputs[0]}".lower())
+            and "table:robustness_summary"
+            in {str(value) for value in step.inputs}
+            and (
+                adjusted_risk_candidates[0]
+                in {str(value) for value in step.inputs}
+                or "table:absolute_risk_context"
+                in {str(value) for value in step.inputs}
             )
-            and {
-                "table:absolute_risk_context",
-                "table:robustness_summary",
-            }
-            <= {str(value) for value in step.inputs}
         ),
         None,
     )
@@ -492,8 +510,9 @@ def ensure_landmark_association_composite_figure_step(
         ),
         planned_analysis_role="auxiliary",
         intent=(
-            "Render the exact signed landmark association curve, absolute-risk "
-            "context, robustness summary, and measurement-process audit using "
+            "Render the exact signed landmark association curve, aligned "
+            "model-standardised absolute-risk curve, robustness summary, and "
+            "measurement-process audit using "
             "their registered deterministic composite contract. Do not refit "
             "a model, change denominators, or scan run files."
         ),
@@ -535,6 +554,84 @@ def ensure_landmark_association_composite_figure_step(
     ]
 
 
+def ensure_absolute_risk_association_composite_figure_step(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Append the registered association summary when all sources are closed.
+
+    The four source tables already fix the descriptive context, headline
+    adjusted estimate, and robustness display. Selecting their registered
+    renderer is presentation plumbing; it does not choose or refit an
+    estimand.
+    """
+
+    sources = ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS
+    owners = {
+        source: [
+            str(step.step_id)
+            for step in plan.steps
+            if source in {str(output) for output in step.expected_outputs}
+        ]
+        for source in sources
+    }
+    if any(len(step_ids) != 1 for step_ids in owners.values()):
+        return plan, []
+    primary_owner = next(
+        step
+        for step in plan.steps
+        if str(step.step_id) == owners["table:adjusted_association_estimates"][0]
+    )
+    if (
+        primary_owner.planned_analysis_role != "primary"
+        or _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources)
+    ):
+        return plan, []
+
+    steps = list(plan.steps)
+    step_id = _next_step_id(steps, "absolute_risk_association_figure")
+    figure_output = _next_figure_output(steps, "figure:absolute_risk_association")
+    figure_step = AnalysisStep(
+        step_id=step_id,
+        planned_analysis_role="auxiliary",
+        intent=(
+            "Render the exact observed absolute-risk context, adjusted primary "
+            "association, and prespecified robustness products using their "
+            "registered deterministic composite contract. Do not refit a model, "
+            "change denominators, or scan run files."
+        ),
+        method="visualization",
+        inputs=list(sources),
+        expected_outputs=[figure_output],
+        icu_rule_refs=["visualization_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source, mode="all_rows")
+            for source in sources
+        ],
+        figure_panels=[
+            panel.bind(figure_output=figure_output)
+            for panel in absolute_risk_association_composite_panels(sources)
+        ],
+    )
+    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+        ValidationFinding(
+            validator="absolute_risk_association_figure_contract",
+            severity="warning",
+            message=(
+                "Bound the adjusted association plan to its exact deterministic "
+                "absolute-risk and robustness article figure."
+            ),
+            detail={
+                "reason_code": "absolute_risk_association_composite_figure_bound",
+                "appended_step_id": step_id,
+                "inputs": list(sources),
+                "producer_step_ids": owners,
+                "figure_output": figure_output,
+            },
+        )
+    ]
+
+
 def select_deterministic_result_renderers(
     *,
     plan: AnalysisPlan,
@@ -552,6 +649,7 @@ def select_deterministic_result_renderers(
     findings: list[ValidationFinding] = []
     for select in (
         ensure_primary_result_figure_step,
+        ensure_absolute_risk_association_composite_figure_step,
         ensure_landmark_association_composite_figure_step,
     ):
         plan, pass_findings = select(plan=plan)
@@ -627,14 +725,30 @@ def ensure_cohort_accounting_figure_step(
     """Append the deterministic cohort-flow renderer when its source is closed."""
 
     steps = list(plan.steps or [])
-    owners = [
-        str(step.step_id)
+    primary_population_sources = [
+        (str(output), str(step.step_id))
+        for step in steps
+        if step.planned_analysis_role == "primary"
+        for output in step.expected_outputs or []
+        if str(output).startswith("table:")
+        and str(output).partition(":")[2].endswith("population_flow")
+    ]
+    generic_sources = [
+        (COHORT_FLOW_INPUT, str(step.step_id))
         for step in steps
         if COHORT_FLOW_INPUT in {str(value) for value in step.expected_outputs or []}
     ]
-    if len(owners) != 1 or dedicated_renderer_consumes_typed_source(
+    candidates = (
+        primary_population_sources
+        if len(primary_population_sources) == 1
+        else generic_sources
+    )
+    if len(candidates) != 1:
+        return plan, []
+    source, owner = candidates[0]
+    if dedicated_renderer_consumes_typed_source(
         steps,
-        source=COHORT_FLOW_INPUT,
+        source=source,
     ):
         return plan, []
     step_id = _next_step_id(steps, "cohort_accounting_figure")
@@ -648,12 +762,12 @@ def ensure_cohort_accounting_figure_step(
             "recalculate attrition, or scan run files."
         ),
         method="visualization",
-        inputs=[COHORT_FLOW_INPUT],
+        inputs=[source],
         expected_outputs=[figure_output],
         icu_rule_refs=["visualization_rule"],
         input_consumption_contracts=[
             ArtifactConsumptionContract(
-                input_key=COHORT_FLOW_INPUT,
+                input_key=source,
                 mode="all_rows",
             )
         ],
@@ -664,13 +778,13 @@ def ensure_cohort_accounting_figure_step(
             severity="warning",
             message=(
                 "Bound a rendering-only cohort-accounting figure to the unique "
-                f"typed source {COHORT_FLOW_INPUT!r}."
+                f"typed source {source!r}."
             ),
             detail={
                 "reason_code": "cohort_accounting_figure_bound_to_typed_source",
                 "appended_step_id": step_id,
-                "source_product": COHORT_FLOW_INPUT,
-                "producer_step_id": owners[0],
+                "source_product": source,
+                "producer_step_id": owner,
                 "figure_output": figure_output,
             },
         )
@@ -711,7 +825,7 @@ def ensure_data_quality_figure_step(
                     "missing_inputs": missing,
                     "ambiguous_inputs": ambiguous,
                 },
-            )
+            ),
         ]
     assert required_inputs is not None
     if _dedicated_renderer_consumes_exact_sources(steps, sources=required_inputs):
@@ -758,7 +872,7 @@ def ensure_data_quality_figure_step(
                     for role, values in candidates.items()
                 },
             },
-        )
+        ),
     ]
 
 
@@ -789,7 +903,8 @@ def _complete_typed_data_quality_audit_pair(
     owner_indexes = [
         index
         for index, step in enumerate(plan.steps)
-        if str(step.step_id) == owner_step_id and step.measurement_audit_spec is not None
+        if str(step.step_id) == owner_step_id
+        and step.measurement_audit_spec is not None
     ]
     if len(owner_indexes) != 1:
         return plan, []
@@ -800,8 +915,7 @@ def _complete_typed_data_quality_audit_pair(
     }
     output = output_by_role[missing_role]
     if any(
-        output in {str(value) for value in step.expected_outputs}
-        for step in plan.steps
+        output in {str(value) for value in step.expected_outputs} for step in plan.steps
     ):
         return plan, []
 
@@ -998,6 +1112,15 @@ def bind_deterministic_figure_panels(
                 )
             )
         templates = templates_by_inputs.get(input_set)
+        if len(input_set) == 1:
+            cohort_source = next(iter(input_set))
+            if cohort_source.startswith("table:") and cohort_source.partition(":")[
+                2
+            ].endswith("population_flow"):
+                templates = tuple(
+                    panel.model_copy(update={"source_products": (cohort_source,)})
+                    for panel in COHORT_FLOW_FIGURE_PANELS
+                )
         if (
             ROBUSTNESS_FIGURE_INPUT in input_set
             and input_set <= ROBUSTNESS_FIGURE_KNOWN_INPUTS
@@ -1123,6 +1246,22 @@ def apply_deterministic_figure_panels(
     return shaped
 
 
+def apply_runtime_bound_figure_contracts(
+    plan: AnalysisPlan,
+    findings: list[ValidationFinding],
+) -> AnalysisPlan:
+    """Close renderer contracts after a runtime owner replaces its products.
+
+    Runtime binding can replace one generic primary output with a richer exact
+    family. Re-running these idempotent selectors makes that late owner visible
+    in the human-reviewed plan without duplicating pipeline policy.
+    """
+
+    revised, renderer_findings = select_deterministic_result_renderers(plan=plan)
+    findings.extend(renderer_findings)
+    return apply_deterministic_figure_panels(revised, findings)
+
+
 def apply_article_figure_strategy_placements(
     *, plan: AnalysisPlan, strategy: Any
 ) -> AnalysisPlan:
@@ -1138,17 +1277,26 @@ def apply_article_figure_strategy_placements(
         str(role.role): str(role.placement)
         for role in getattr(strategy, "role_strategies", ())
     }
+    # Coverage/status matrices report whether registered checks ran; they do
+    # not show the direction or uncertainty of a scientific effect.  Keep
+    # these audit-only grammars available in the figure suite, but never
+    # promote them into the main result merely because their broad article
+    # role is named ``robustness``.  A real sensitivity forest or small-
+    # multiple result remains eligible for the main article through the role
+    # strategy above.
+    audit_only_chart_types = {
+        "sensitivity_coverage_matrix",
+        "status_matrix",
+    }
     changed = False
     steps: list[AnalysisStep] = []
     for step in plan.steps:
-        panels = [
-            panel.model_copy(
-                update={
-                    "placement": placements.get(panel.article_role, panel.placement)
-                }
-            )
-            for panel in step.figure_panels
-        ]
+        panels = []
+        for panel in step.figure_panels:
+            placement = placements.get(panel.article_role, panel.placement)
+            if str(panel.chart_type) in audit_only_chart_types:
+                placement = "supplementary"
+            panels.append(panel.model_copy(update={"placement": placement}))
         if panels != step.figure_panels:
             changed = True
             step = step.model_copy(update={"figure_panels": panels})
@@ -1199,8 +1347,15 @@ def close_empty_deterministic_figure_contracts(
         inputs = tuple(str(value) for value in step.inputs)
         input_set = frozenset(inputs)
         templates = None
-        if input_set == frozenset({COHORT_FLOW_INPUT}):
-            templates = COHORT_FLOW_FIGURE_PANELS
+        if len(input_set) == 1 and (
+            next(iter(input_set)) == COHORT_FLOW_INPUT
+            or next(iter(input_set)).partition(":")[2].endswith("population_flow")
+        ):
+            cohort_source = next(iter(input_set))
+            templates = tuple(
+                panel.model_copy(update={"source_products": (cohort_source,)})
+                for panel in COHORT_FLOW_FIGURE_PANELS
+            )
         elif (
             ROBUSTNESS_FIGURE_INPUT in input_set
             and input_set <= ROBUSTNESS_FIGURE_KNOWN_INPUTS
@@ -1216,6 +1371,19 @@ def close_empty_deterministic_figure_contracts(
             and any(
                 value.startswith("table:")
                 and value.partition(":")[2].endswith("landmark_rcs_curve")
+                for value in input_set
+            )
+            and any(
+                value.startswith("table:")
+                and any(
+                    token in value.partition(":")[2]
+                    for token in (
+                        "adjusted_absolute_risk",
+                        "standardized_absolute_risk",
+                        "standardised_absolute_risk",
+                        "absolute_risk_curve",
+                    )
+                )
                 for value in input_set
             )
             and any(
@@ -1289,6 +1457,7 @@ def close_empty_deterministic_figure_contracts(
 __all__ = [
     "apply_article_figure_strategy_placements",
     "apply_deterministic_figure_panels",
+    "apply_runtime_bound_figure_contracts",
     "apply_required_plan_obligations",
     "bind_deterministic_figure_panels",
     "close_empty_deterministic_figure_contracts",
@@ -1296,6 +1465,7 @@ __all__ = [
     "ensure_descriptive_context_figure_step",
     "ensure_cohort_accounting_figure_step",
     "ensure_data_quality_figure_step",
+    "ensure_absolute_risk_association_composite_figure_step",
     "ensure_landmark_association_composite_figure_step",
     "ensure_primary_result_figure_step",
     "select_deterministic_result_renderers",

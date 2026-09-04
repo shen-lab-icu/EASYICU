@@ -46,6 +46,12 @@ from ..authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
 from ..figures.skill import PublicationFigureSkill
+from ..figures.contracts import (
+    figure_contract_label,
+    figure_contract_paths,
+    figure_contract_tier,
+    read_figure_contract,
+)
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
@@ -73,7 +79,6 @@ from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_k
 from ..orchestration.profiles import is_paper_facing_profile
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
-from ..providers.structured_retry import StructuredResponseFailure
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     _writer_repair_target_span,
@@ -94,6 +99,11 @@ from .writer_evidence import (
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
 )
+from .manuscript_state import (
+    MANIFEST_COMMENT_RE as _MANIFEST_COMMENT_RE,
+)
+from .manuscript_state import ManuscriptState, render_not_generated
+from .manuscript_repair_pass import ManuscriptRepairPass
 from .writer_evidence_repair import decide_writer_evidence_repairs
 from ..replication.notebook import (
     NotebookStep,
@@ -125,6 +135,8 @@ class RuntimeProvenanceMismatchError(RuntimeError):
 
 def _latex_figure_paths(
     evidence_records: Sequence[Any],
+    *,
+    run_dir: Optional[Path] = None,
 ) -> Tuple[List[Tuple[str, str]], Tuple[str, ...]]:
     """Choose one LaTeX-safe export for each registered logical figure.
 
@@ -157,9 +169,7 @@ def _latex_figure_paths(
         if not relative_path:
             continue
         evidence_id = str(getattr(record, "evidence_id", "") or "")
-        logical_key = evidence_artifact_basename_stem(
-            Path(relative_path), evidence_id
-        )
+        logical_key = evidence_artifact_basename_stem(Path(relative_path), evidence_id)
         suffix = Path(relative_path).suffix.lower()
         if suffix not in priority:
             unrepresented.setdefault(logical_key, evidence_id or logical_key)
@@ -173,12 +183,80 @@ def _latex_figure_paths(
         current = selected.get(logical_key)
         if current is None or candidate[:2] < current[:2]:
             selected[logical_key] = candidate
-    chosen = [
-        (evidence_id, relative_path)
-        for _priority, _index, evidence_id, relative_path in sorted(
-            selected.values(), key=lambda row: row[1]
-        )
+    chosen_rows = [
+        (logical_key, *row)
+        for logical_key, row in sorted(selected.items(), key=lambda item: item[1][1])
     ]
+    if run_dir is not None:
+        contract_by_stem: Dict[str, Tuple[Path, str, set[str]]] = {}
+        for contract_path in figure_contract_paths(run_dir):
+            name = contract_path.name
+            stem = (
+                name[: -len(".figure_contract.json")]
+                if name.endswith(".figure_contract.json")
+                else contract_path.stem
+            )
+            raw = read_figure_contract(contract_path)
+            roles = {
+                str(panel.get("role") or "").strip().lower()
+                for panel in (raw.get("panels") or [])
+                if isinstance(panel, Mapping) and str(panel.get("role") or "").strip()
+            }
+            contract_by_stem[stem] = (
+                contract_path,
+                figure_contract_tier(contract_path, run_dir),
+                roles,
+            )
+
+        primary_roles = {
+            role
+            for _path, tier, roles in contract_by_stem.values()
+            if tier == "primary_publication"
+            for role in roles
+        }
+        primary_like_roles = {
+            "descriptive_result",
+            "primary_estimand",
+            "relationship",
+        }
+        reader_rows: List[Tuple[int, int, str, str]] = []
+        for logical_key, _priority, index, evidence_id, relative_path in chosen_rows:
+            contract = contract_by_stem.get(logical_key)
+            if contract is None:
+                reader_rows.append((1, index, evidence_id, relative_path))
+                continue
+            contract_path, tier, roles = contract
+            if (
+                tier == "supporting_step"
+                and primary_roles
+                and roles
+                and roles <= primary_roles
+                and bool(roles & primary_like_roles)
+            ):
+                # The canonical publication figure already covers this
+                # scientific display. Keep the step artifact in the evidence
+                # ledger, but do not duplicate it in the reader PDF.
+                continue
+            if tier == "primary_publication":
+                label = "Primary publication figure"
+                rank = 0
+            else:
+                label = figure_contract_label(contract_path)
+                if label.casefold().startswith("figure:"):
+                    label = label.split(":", 1)[1]
+                label = label.replace("_", " ").strip()
+                label = label[:1].upper() + label[1:] if label else "Supporting figure"
+                rank = 1
+            reader_rows.append((rank, index, label, relative_path))
+        chosen = [
+            (label, relative_path)
+            for _rank, _index, label, relative_path in sorted(reader_rows)
+        ]
+    else:
+        chosen = [
+            (evidence_id, relative_path)
+            for _logical_key, _priority, _index, evidence_id, relative_path in chosen_rows
+        ]
     omitted = tuple(
         identifier
         for logical_key, identifier in unrepresented.items()
@@ -187,38 +265,14 @@ def _latex_figure_paths(
     return chosen, omitted
 
 
-def _deterministically_drop_rejected_writer_sentences(
-    scaffold: str,
-    rejected_sentences: Sequence[str],
-) -> tuple[str, List[Dict[str, object]]]:
-    """Remove STRICT-rejected prose without depending on mutable offsets.
+def _manuscript_repair_pass() -> ManuscriptRepairPass:
+    """Resolve collaborators at call time so tests and hosts may replace them."""
 
-    Rejected sentence strings can overlap (for example, a labelled sentence
-    and its unlabelled body) or repeat across manuscript sections. Applying
-    one indexed edit at a time can therefore remove the target of a later
-    edit. The fallback is intentionally more conservative: longest exact
-    rejected strings are removed first, and every remaining exact occurrence
-    of the same rejected prose is removed. The unchanged STRICT gate still
-    revalidates the result immediately afterwards.
-    """
-
-    sentences = [str(sentence).strip() for sentence in rejected_sentences]
-    repaired = scaffold
-    for sentence in sorted(set(sentences), key=lambda value: (-len(value), value)):
-        if not sentence:
-            continue
-        while (span := _writer_repair_target_span(repaired, sentence)) is not None:
-            repaired = repaired[: span[0]] + repaired[span[1] :]
-    applied = [
-        {
-            "index": index,
-            "action": "drop",
-            "evidence_ids": [],
-            "sentence": sentence[:500],
-        }
-        for index, sentence in enumerate(sentences)
-    ]
-    return repaired, applied
+    return ManuscriptRepairPass(
+        decision_provider=decide_writer_evidence_repairs,
+        decision_applier=_apply_writer_evidence_repair_decisions,
+        target_locator=_writer_repair_target_span,
+    )
 
 
 def _repair_rejected_writer_sentences(
@@ -233,53 +287,19 @@ def _repair_rejected_writer_sentences(
     allowed_claim_refs: Sequence[str],
     language: str,
 ) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
-    """Apply bounded model decisions or deterministically drop rejected prose.
+    """Compatibility seam for callers of the former write-phase helper."""
 
-    The optional model pass can only choose cite, exact host claim, or drop.
-    Invalid structured output or an internally inconsistent application must
-    never abort an otherwise valid analysis run. Dropping every sentence the
-    unchanged STRICT gate already rejected is the conservative host-owned
-    fallback: it cannot add a number, citation, or scientific interpretation.
-
-    Provider transport, refusal, and budget failures deliberately propagate;
-    they are not validation failures and must retain their owning boundary.
-    """
-
-    fallback_detail: Optional[Dict[str, Any]] = None
-    original_scaffold = scaffold
-    try:
-        repair_decisions = decide_writer_evidence_repairs(
-            llm,
-            evidence_ids=evidence_ids,
-            evidence_digest=evidence_digest,
-            missing_sentences=rejected_sentences,
-            scientific_claims=scientific_claims,
-            claim_required_sentences=claim_required_sentences,
-            language=language,
-        )
-        repaired, applied = _apply_writer_evidence_repair_decisions(
-            original_scaffold,
-            missing_sentences=rejected_sentences,
-            decisions=repair_decisions,
-            allowed_evidence_ids=evidence_ids,
-            allowed_claim_refs=allowed_claim_refs,
-        )
-    except (StructuredResponseFailure, ValueError) as exc:
-        repaired, applied = _deterministically_drop_rejected_writer_sentences(
-            original_scaffold,
-            rejected_sentences,
-        )
-        raw_attempts = getattr(exc, "easyicu_structured_attempt_metadata", [])
-        safe_attempts = [dict(item) for item in raw_attempts if isinstance(item, dict)][
-            :4
-        ]
-        fallback_detail = {
-            "reason_code": "writer_evidence_repair_deterministic_drop",
-            "exception_type": type(exc).__name__,
-            "rejected_sentence_count": len(rejected_sentences),
-            "structured_attempts": safe_attempts,
-        }
-    return repaired, applied, fallback_detail
+    return _manuscript_repair_pass().repair_rejected(
+        scaffold,
+        llm=llm,
+        evidence_ids=evidence_ids,
+        evidence_digest=evidence_digest,
+        rejected_sentences=rejected_sentences,
+        scientific_claims=scientific_claims,
+        claim_required_sentences=claim_required_sentences,
+        allowed_claim_refs=allowed_claim_refs,
+        language=language,
+    )
 
 
 def _drop_residual_strict_writer_sentences(
@@ -287,60 +307,12 @@ def _drop_residual_strict_writer_sentences(
     *,
     enforce_scaffold: Callable[[str], object],
 ) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
-    """Revalidate one bounded repair and drop any prose STRICT still rejects.
+    """Compatibility seam for callers of the former write-phase helper."""
 
-    A model-selected evidence citation is not scientific-claim authority.  In
-    particular, appending ``{evidence:*}`` to numeric or interpretive prose
-    does not make that sentence legal under the manuscript grammar.  Run the
-    unchanged owner gate immediately after the bounded repair and remove only
-    the exact residual sentences it names.  A second failure propagates, so
-    this helper cannot turn an unknown enforcement defect into a manuscript.
-    """
-
-    try:
-        enforce_scaffold(scaffold)
-    except EvidenceEnforcementError as exc:
-        detail = exc.detail or {}
-        raw_results = detail.get("removed_sentences", [])
-        raw_claims = detail.get("unsupported_scientific_claim_sentences", [])
-        result_sentences = (
-            [str(value).strip() for value in raw_results if str(value).strip()]
-            if isinstance(raw_results, list)
-            else []
-        )
-        claim_sentences = (
-            [str(value).strip() for value in raw_claims if str(value).strip()]
-            if isinstance(raw_claims, list)
-            else []
-        )
-        rejected = [*result_sentences, *claim_sentences]
-        if not rejected:
-            raise
-        drop_decisions = [
-            {"index": index, "action": "drop", "evidence_ids": []}
-            for index in range(len(rejected))
-        ]
-        cleaned, applied = _apply_writer_evidence_repair_decisions(
-            scaffold,
-            missing_sentences=rejected,
-            decisions=drop_decisions,
-            allowed_claim_refs=(),
-        )
-        # Fail closed if anything outside the exact first-gate rejection set
-        # remains invalid.  The normal bind stage will enforce the same gate
-        # again, but this local check keeps the repair boundary attributable.
-        enforce_scaffold(cleaned)
-        return (
-            cleaned,
-            applied,
-            {
-                "reason_code": "writer_evidence_repair_residual_strict_drop",
-                "rejected_sentence_count": len(rejected),
-                "result_sentence_count": len(result_sentences),
-                "scientific_claim_sentence_count": len(claim_sentences),
-            },
-        )
-    return scaffold, [], None
+    return _manuscript_repair_pass().drop_residual(
+        scaffold,
+        enforce_scaffold=enforce_scaffold,
+    )
 
 
 _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
@@ -586,12 +558,6 @@ def _writer_probe_banner(failed_steps: Sequence[str]) -> str:
         "> be used as a manuscript scaffold for publication.\n"
         f"> Failed steps: {failed_text}"
     )
-
-
-_MANIFEST_COMMENT_RE = re.compile(
-    r"<!--\s*(?P<level>warning|error)\s*:\s*see manifest\s*-->",
-    flags=re.I,
-)
 
 
 def _manifest_comment_counts(text: str) -> Dict[str, int]:
@@ -1303,6 +1269,9 @@ def _render_or_resume_writer_scaffold(
         return scaffold
 
     administrative_authority = load_manuscript_administrative_authority(run_dir)
+    reader_display_labels = dict(
+        getattr(execute_result.plan, "display_labels", {}) or {}
+    )
     literature_digest = render_writer_literature_digest(
         literature,
         plan=execute_result.plan,
@@ -1319,6 +1288,7 @@ def _render_or_resume_writer_scaffold(
             evidence_ids=preferred_evidence_names,
             evidence_digest=writer_evidence_digest,
             literature_digest=literature_digest,
+            reader_display_labels=reader_display_labels,
             administrative_authority=administrative_authority,
         )
 
@@ -1330,6 +1300,7 @@ def _render_or_resume_writer_scaffold(
             evidence_ids=preferred_evidence_names,
             evidence_digest=writer_evidence_digest,
             literature_digest=literature_digest,
+            reader_display_labels=reader_display_labels,
             administrative_authority=administrative_authority,
         )
     except Exception as exc:
@@ -1793,11 +1764,7 @@ def _draft_manuscript(
             claim_text_by_ref = {
                 claim.claim_ref: claim.render_text() for claim in authoritative_claims
             }
-            (
-                scaffold,
-                applied_evidence_repairs,
-                repair_fallback_detail,
-            ) = _repair_rejected_writer_sentences(
+            repair_result = _manuscript_repair_pass().run(
                 scaffold,
                 llm=writer.llm,
                 evidence_ids=preferred_writer_evidence_names,
@@ -1807,27 +1774,22 @@ def _draft_manuscript(
                 claim_required_sentences=strict_scientific_claim_sentences,
                 allowed_claim_refs=tuple(claim_text_by_ref),
                 language=run_language,
-            )
-            (
-                scaffold,
-                residual_strict_drops,
-                residual_strict_drop_detail,
-            ) = _drop_residual_strict_writer_sentences(
-                scaffold,
                 enforce_scaffold=evidence.enforce_evidence_bound_scaffold,
             )
+            scaffold = repair_result.scaffold
             repair_message_prefix = (
                 "Applied deterministic drop fallback after an invalid bounded "
                 "writer evidence repair decision for "
-                if repair_fallback_detail is not None
+                if repair_result.fallback_detail is not None
                 else "Applied one bounded writer evidence repair pass to "
             )
             residual_message = (
                 " "
-                f"STRICT still rejected {len(residual_strict_drops)} cited or "
+                f"STRICT still rejected {len(repair_result.residual_strict_drops)} "
+                "cited or "
                 "unsupported sentence(s), which the host removed before "
                 "binding."
-                if residual_strict_drops
+                if repair_result.residual_strict_drops
                 else ""
             )
             findings.append(
@@ -1836,23 +1798,11 @@ def _draft_manuscript(
                     severity="warning",
                     message=(
                         repair_message_prefix
-                        + f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
+                        + f"{len(repair_result.evidence_repairs)} sentence(s); "
+                        "the unchanged "
                         "STRICT gate revalidated the result." + residual_message
                     ),
-                    detail={
-                        "evidence_repairs": applied_evidence_repairs,
-                        "residual_strict_drops": residual_strict_drops,
-                        **(
-                            {"fallback": repair_fallback_detail}
-                            if repair_fallback_detail is not None
-                            else {}
-                        ),
-                        **(
-                            {"residual_drop": residual_strict_drop_detail}
-                            if residual_strict_drop_detail is not None
-                            else {}
-                        ),
-                    },
+                    detail=repair_result.finding_detail(),
                 )
             )
     authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
@@ -1931,6 +1881,35 @@ def _draft_manuscript(
     )
 
 
+def _repair_bound_display_language(
+    bound: str,
+    *,
+    reader_display_labels: Mapping[str, str],
+    manuscript_language: str,
+    findings: List[ValidationFinding],
+) -> str:
+    from .manuscript_quality import repair_incompatible_reader_labels
+
+    repaired, repairs = repair_incompatible_reader_labels(
+        bound,
+        reader_display_labels=reader_display_labels,
+        manuscript_language=manuscript_language,
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_display_language",
+                severity="warning",
+                message=(
+                    "Removed UI-locale display labels that conflicted with the "
+                    "selected manuscript language."
+                ),
+                detail={"repairs": list(repairs)},
+            )
+        )
+    return repaired
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -1945,6 +1924,8 @@ def _bind_and_review_manuscript(
     writer_probe_mode: bool,
     writer_probe_failed_steps: Sequence[str],
     run_dir: Path,
+    reader_display_labels: Mapping[str, str],
+    manuscript_language: str,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
@@ -2088,6 +2069,12 @@ def _bind_and_review_manuscript(
                 detail={"removed_sentences": removed_numeric_sentences},
             )
         )
+    bound = _repair_bound_display_language(
+        bound,
+        reader_display_labels=reader_display_labels,
+        manuscript_language=manuscript_language,
+        findings=findings,
+    )
     from .manuscript_quality import repair_reader_structure_from_existing_prose
 
     bound, post_filter_structural_repairs = repair_reader_structure_from_existing_prose(
@@ -2176,11 +2163,11 @@ def _bind_and_review_manuscript(
                 detail={"blockers": manuscript_output_blockers},
             )
         )
-        bound = (
-            "# Manuscript scaffold not generated\n\n"
+        bound = render_not_generated(
+            ManuscriptState.blocked("writer_produced_no_bindable_prose"),
             "The manuscript writer failed or produced no substantive "
             "evidence-bound prose for this run. See manifest findings for the "
-            "writer and evidence-binding errors.\n"
+            "writer and evidence-binding errors.",
         )
     # Value-level provenance binding: attach a footnote next to every
     # numeric value in the manuscript pointing to the exact step /
@@ -2447,7 +2434,10 @@ def _publish_and_audit_manuscript(
             # logical figure; publication TIFF remains registered for release
             # but is not a LaTeX input.
             fig_paths_for_latex, figures_without_latex_export = (
-                _latex_figure_paths(current_verified_evidence_records)
+                _latex_figure_paths(
+                    current_verified_evidence_records,
+                    run_dir=run_dir,
+                )
             )
             if figures_without_latex_export:
                 findings.append(
@@ -2463,7 +2453,11 @@ def _publish_and_audit_manuscript(
                     )
                 )
             tex = scaffold_to_latex(
-                markdown=bound,
+                # The bound manuscript remains the auditable authority on
+                # disk.  The PDF is a reader artifact, so render the existing
+                # deterministic reader projection rather than exposing raw
+                # numeric-footnote definitions and evidence identifiers.
+                markdown=render_reader_manuscript(bound),
                 title=manuscript_title
                 or f"EasyICU research-agent: {context.research_question}",
                 authors=manuscript_authors or ["EasyICU research-agent"],
@@ -2933,8 +2927,7 @@ def _development_runtime_lineage_allowed(pipeline: Any) -> bool:
         getattr(pipeline, "_submission_profile_name", "") or ""
     ).strip()
     return bool(
-        submission_profile_name
-        and not is_paper_facing_profile(submission_profile_name)
+        submission_profile_name and not is_paper_facing_profile(submission_profile_name)
     )
 
 
@@ -3075,9 +3068,7 @@ def _write_reproducibility_artifacts(
                     "paper_authority": not development_lineage_allowed,
                     "diagnostic_only": development_lineage_allowed,
                 },
-                on_sha_change=(
-                    "new_id" if development_lineage_allowed else "raise"
-                ),
+                on_sha_change=("new_id" if development_lineage_allowed else "raise"),
             )
     except RuntimeProvenanceMismatchError:
         raise
@@ -3203,10 +3194,13 @@ def run_write_phase(
             )
             bound_path = run_dir / "manuscript_scaffold_bound.md"
             bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "This run stopped after a requested analysis checkpoint before "
-                "all planned analysis steps completed. Review the completed "
-                "step outputs and resume from the next step when ready.\n",
+                render_not_generated(
+                    ManuscriptState.paused("paused_before_all_steps_completed"),
+                    "This run stopped after a requested analysis checkpoint "
+                    "before all planned analysis steps completed. Review the "
+                    "completed step outputs and resume from the next step when "
+                    "ready.",
+                ),
                 encoding="utf-8",
             )
             return blocked_write_result(
@@ -3229,12 +3223,15 @@ def run_write_phase(
             )
             bound_path = run_dir / "manuscript_scaffold_bound.md"
             bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "Strict fail-closed policy blocked manuscript drafting because "
-                "one or more required analysis steps did not complete successfully.\n\n"
-                "Review `author_review_note.md`, `run_status.json`, "
-                "`evidence_audit.json`, `numeric_audit.json`, and "
-                "`claim_ledger.csv` for the diagnostic record.\n",
+                render_not_generated(
+                    ManuscriptState.blocked("execution_gate_did_not_pass"),
+                    "Strict fail-closed policy blocked manuscript drafting "
+                    "because one or more required analysis steps did not "
+                    "complete successfully.\n\n"
+                    "Review `author_review_note.md`, `run_status.json`, "
+                    "`evidence_audit.json`, `numeric_audit.json`, and "
+                    "`claim_ledger.csv` for the diagnostic record.",
+                ),
                 encoding="utf-8",
             )
             return blocked_write_result(
@@ -3265,11 +3262,13 @@ def run_write_phase(
         )
         bound_path = run_dir / "manuscript_scaffold_bound.md"
         bound_path.write_text(
-            "# Manuscript scaffold not generated\n\n"
-            "This run stopped after the analysis phase. Review the "
-            "`results_report.md`, tables, figures and manifest, then "
-            "rerun with manuscript drafting enabled when the analysis "
-            "is ready.\n",
+            render_not_generated(
+                ManuscriptState.paused("stop_after_analysis_requested"),
+                "This run stopped after the analysis phase. Review the "
+                "`results_report.md`, tables, figures and manifest, then "
+                "rerun with manuscript drafting enabled when the analysis "
+                "is ready.",
+            ),
             encoding="utf-8",
         )
         return blocked_write_result(
@@ -3325,6 +3324,8 @@ def run_write_phase(
         writer_probe_mode=writer_probe_mode,
         writer_probe_failed_steps=writer_probe_failed_steps,
         run_dir=run_dir,
+        reader_display_labels=dict(execute_result.plan.display_labels or {}),
+        manuscript_language=run_language,
     )
     bound_path = binding.bound_path
     manuscript_critique = binding.manuscript_critique

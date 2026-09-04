@@ -22,7 +22,11 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...figures.display_labels import display_label
-from ...figures.robustness import draw_robustness_coverage
+from ...figures.robustness import (
+    draw_robustness_coverage,
+    prepare_robustness_coverage,
+)
+from ...icu_rules import classify_variable
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
@@ -31,9 +35,22 @@ from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
 _REQUIRED_COLUMNS = {
     "curve": frozenset(
         {
+            "exposure",
             "adjusted_odds_ratio",
             "ci_low",
             "ci_high",
+            "exposure_density_n",
+            "exposure_density_fraction",
+        }
+    ),
+    "adjusted_risk_curve": frozenset(
+        {
+            "exposure",
+            "adjusted_absolute_risk",
+            "ci_low",
+            "ci_high",
+            "exposure_density_n",
+            "exposure_density_fraction",
         }
     ),
     "table:absolute_risk_context": frozenset(
@@ -66,16 +83,33 @@ def _figure_product(value: Any) -> str | None:
 
 def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:
     reserved = {
-        "table:absolute_risk_context",
         "table:robustness_summary",
     }
+    adjusted_risk = _adjusted_risk_input(inputs)
     matches = [
         value
         for value in inputs
         if value.startswith("table:")
         and value not in reserved
+        and value != adjusted_risk
         and value.partition(":")[2]
         not in {"measurement_process", "measurement_process_audit"}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _adjusted_risk_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+    accepted_tokens = (
+        "adjusted_absolute_risk",
+        "standardized_absolute_risk",
+        "standardised_absolute_risk",
+        "absolute_risk_curve",
+    )
+    matches = [
+        value
+        for value in inputs
+        if value.startswith("table:")
+        and any(token in value.partition(":")[2] for token in accepted_tokens)
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -114,9 +148,11 @@ def landmark_association_figure_input_profile(
     ):
         return values
     curve = _curve_input(values)
+    adjusted_risk = _adjusted_risk_input(values)
     measurement = _measurement_input(values)
     if (
         curve is None
+        or adjusted_risk is None
         or measurement is None
         or len(values) != 4
         or len(values) != len(set(values))
@@ -158,6 +194,7 @@ def landmark_association_figure_executor_owns_step(
         return False
     legacy_profile = set(profile) == _LEGACY_LANDMARK_ARTICLE_INPUTS
     curve = None if legacy_profile else _curve_input(profile)
+    adjusted_risk = None if legacy_profile else _adjusted_risk_input(profile)
     measurement = None if legacy_profile else _measurement_input(profile)
     return all(
         _binding_has_columns(
@@ -165,13 +202,22 @@ def landmark_association_figure_executor_owns_step(
             _REQUIRED_COLUMNS[
                 "curve"
                 if key == curve
+                else "adjusted_risk_curve"
+                if key == adjusted_risk
                 else "measurement_process"
                 if key == measurement
                 else key
             ],
         )
         for key in profile
-    ) and (legacy_profile or (curve is not None and measurement is not None))
+    ) and (
+        legacy_profile
+        or (
+            curve is not None
+            and adjusted_risk is not None
+            and measurement is not None
+        )
+    )
 
 
 def landmark_association_figure_executor_code(step: AnalysisStep) -> str:
@@ -245,7 +291,7 @@ def _measurement_state_label(value: Any) -> str:
 
 
 def _continuous_exposure_label(column: str) -> str:
-    """Derive a reader-facing exposure label and common unit from its field."""
+    """Derive a reader-facing summary, concept, and unit from its field."""
 
     unit_suffixes = {
         "_mmol_l": "mmol/L",
@@ -254,16 +300,123 @@ def _continuous_exposure_label(column: str) -> str:
         "_g_dl": "g/dL",
     }
     token = str(column or "").strip().lower()
-    for suffix, unit in unit_suffixes.items():
+    unit: str | None = None
+    for suffix, candidate_unit in unit_suffixes.items():
         if token.endswith(suffix):
-            name = token[: -len(suffix)]
-            return f"{_label(name).title()} ({unit})"
-    token = re.sub(r"_(max|min|mean|median|first|last|value)$", "", token)
+            token = token[: -len(suffix)]
+            unit = candidate_unit
+            break
+    summary_match = re.search(r"_(max|min|mean|median|first|last|value)$", token)
+    summary = summary_match.group(1) if summary_match else None
+    if summary_match:
+        token = token[: summary_match.start()]
     clinical_names = {
         "lact": "Lactate",
         "bili": "Bilirubin",
     }
-    return clinical_names.get(token, _label(token).title())
+    concept = clinical_names.get(token, _label(token).title())
+    summary_labels = {
+        "max": "Maximum",
+        "min": "Minimum",
+        "mean": "Mean",
+        "median": "Median",
+        "first": "First",
+        "last": "Last",
+        "value": "",
+    }
+    if summary and summary_labels[summary]:
+        concept = f"{summary_labels[summary]} {concept.lower()}"
+    if unit is None:
+        unit = classify_variable(str(column or ""), "float64").unit
+    return f"{concept} ({unit})" if unit else concept
+
+
+def _configure_ratio_y_axis(ax: Any, *, lows: np.ndarray, highs: np.ndarray) -> None:
+    """Use a compact plain-number log axis for ratio-scale estimates."""
+
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
+
+    positive = np.concatenate([lows[lows > 0], highs[highs > 0]])
+    if not positive.size:
+        raise ValueError("ratio-scale interval requires positive bounds")
+    lower_limit = float(positive.min()) / 1.06
+    upper_limit = float(positive.max()) * 1.06
+    candidate_ticks = (
+        0.1,
+        0.2,
+        0.3,
+        0.5,
+        0.75,
+        1.0,
+        1.5,
+        2.0,
+        3.0,
+        5.0,
+        10.0,
+        20.0,
+    )
+    visible = [
+        tick for tick in candidate_ticks if lower_limit <= tick <= upper_limit
+    ]
+    if 1.0 not in visible and lower_limit <= 1.0 <= upper_limit:
+        visible.append(1.0)
+    if len(visible) > 5:
+        visible = [visible[0], *visible[1:-1:2], visible[-1]][:5]
+        if lower_limit <= 1.0 <= upper_limit and 1.0 not in visible:
+            visible = sorted({*visible[:4], 1.0})
+    ax.set_yscale("log")
+    ax.set_ylim(lower_limit, upper_limit)
+    ax.yaxis.set_major_locator(FixedLocator(sorted(set(visible))))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+    ax.yaxis.set_minor_locator(FixedLocator([]))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+
+
+def _draw_exposure_distribution(
+    ax: Any,
+    *,
+    x: np.ndarray,
+    fractions: np.ndarray,
+    color: str,
+    exposure_label: str,
+) -> None:
+    """Draw the exact published grid-bin distribution as a quiet strip."""
+
+    if len(x) != len(fractions) or not len(x):
+        raise ValueError("exposure density must align with the curve grid")
+    if (fractions < 0).any() or not np.isfinite(fractions).all():
+        raise ValueError("exposure density fractions must be finite and non-negative")
+    if not np.isclose(float(fractions.sum()), 1.0, rtol=0.0, atol=1e-8):
+        raise ValueError("displayed exposure density fractions must sum to one")
+    ax.fill_between(
+        x,
+        100.0 * fractions,
+        color=color,
+        alpha=0.24,
+        linewidth=0,
+        step="mid",
+    )
+    ax.plot(x, 100.0 * fractions, color=color, alpha=0.72, linewidth=0.55)
+    ax.set_xlim(float(x.min()), float(x.max()))
+    ax.set_ylim(0, max(float((100.0 * fractions).max()) * 1.14, 1.0))
+    ax.set_yticks([])
+    ax.set_xlabel(exposure_label, labelpad=3)
+    ax.text(
+        0.0,
+        1.02,
+        "Exposure distribution",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=4.8,
+        color="#616971",
+        clip_on=False,
+    )
+    for name in ("left", "right", "top"):
+        ax.spines[name].set_visible(False)
+    ax.spines["bottom"].set_color("#C9CED3")
+    ax.spines["bottom"].set_linewidth(0.55)
+    ax.tick_params(axis="x", labelsize=5.8, length=2.2, width=0.55)
 
 
 def _run_legacy_landmark_article_figure(
@@ -562,21 +715,28 @@ def run_landmark_association_figure(
             bound=bound,
         )
     curve_key = _curve_input(profile)
+    adjusted_risk_key = _adjusted_risk_input(profile)
     measurement_key = _measurement_input(profile)
-    assert curve_key is not None and measurement_key is not None
+    assert (
+        curve_key is not None
+        and adjusted_risk_key is not None
+        and measurement_key is not None
+    )
     curve = bound[curve_key].frame.copy()
-    risk = bound["table:absolute_risk_context"].frame.copy()
+    adjusted_risk = bound[adjusted_risk_key].frame.copy()
     robustness = bound["table:robustness_summary"].frame.copy()
     process = bound[measurement_key].frame.copy()
     for key, frame in (
         (curve_key, curve),
-        ("table:absolute_risk_context", risk),
+        (adjusted_risk_key, adjusted_risk),
         ("table:robustness_summary", robustness),
         (measurement_key, process),
     ):
         required = _REQUIRED_COLUMNS[
             "curve"
             if key == curve_key
+            else "adjusted_risk_curve"
+            if key == adjusted_risk_key
             else "measurement_process"
             if key == measurement_key
             else key
@@ -587,14 +747,29 @@ def run_landmark_association_figure(
     exposure_column, reference_column = _exposure_columns(curve)
     _require_finite_columns(
         curve,
-        (exposure_column, reference_column, "adjusted_odds_ratio", "ci_low", "ci_high"),
+        (
+            exposure_column,
+            reference_column,
+            "adjusted_odds_ratio",
+            "ci_low",
+            "ci_high",
+            "exposure_density_n",
+            "exposure_density_fraction",
+        ),
     )
-    shown_risk = risk.loc[
-        risk["estimate_type"].astype(str).isin(["outcome_risk", "prevalence"])
-    ].copy()
-    if shown_risk.empty:
-        raise ValueError("absolute-risk context has no displayable estimate rows")
-    _require_finite_columns(shown_risk, ("estimate", "ci_low", "ci_high"))
+    risk_exposure_column, risk_reference_column = _exposure_columns(adjusted_risk)
+    _require_finite_columns(
+        adjusted_risk,
+        (
+            risk_exposure_column,
+            risk_reference_column,
+            "adjusted_absolute_risk",
+            "ci_low",
+            "ci_high",
+            "exposure_density_n",
+            "exposure_density_fraction",
+        ),
+    )
     _require_finite_columns(process, ("n_total", "measured_one_n"))
 
     source_files: list[str] = []
@@ -613,22 +788,34 @@ def run_landmark_association_figure(
 
     palette = apply_publication_style(font_size=7.0)
     placements = dict(panel_placements or {})
-    show_process = placements.get("measurement_process", "main") == "main"
-    fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=True)
-    if show_process:
-        grid = fig.add_gridspec(
-            2, 3, width_ratios=(1.0, 1.0, 0.86), height_ratios=(1.12, 0.88)
+    # The registered article contract keeps audit-only coverage and routine
+    # measurement availability outside the primary scientific figure.  Their
+    # source tables remain exported and clickable in the run dossier.
+    show_process = placements.get("measurement_process", "supplementary") == "main"
+    show_robustness = placements.get("robustness_summary", "supplementary") == "main"
+    if show_process or show_robustness:
+        raise ValueError(
+            "landmark audit panels require a supplementary display, not the primary curve figure"
         )
-        ax_curve = fig.add_subplot(grid[0, :2])
-        ax_context = fig.add_subplot(grid[0, 2])
-        ax_robustness = fig.add_subplot(grid[1, :2])
-        ax_process = fig.add_subplot(grid[1, 2])
-    else:
-        grid = fig.add_gridspec(2, 2, height_ratios=(1.12, 0.88))
-        ax_curve = fig.add_subplot(grid[0, :])
-        ax_context = fig.add_subplot(grid[1, 0])
-        ax_robustness = fig.add_subplot(grid[1, 1])
-        ax_process = None
+    figure_height_mm = 78.0
+    fig = plt.figure(
+        figsize=(183 / 25.4, figure_height_mm / 25.4),
+    )
+    grid = fig.add_gridspec(
+        2,
+        2,
+        height_ratios=(5.2, 0.72),
+        hspace=0.12,
+        wspace=0.32,
+        left=0.08,
+        right=0.985,
+        bottom=0.19,
+        top=0.90,
+    )
+    ax_curve = fig.add_subplot(grid[0, 0])
+    ax_risk = fig.add_subplot(grid[0, 1])
+    ax_curve_density = fig.add_subplot(grid[1, 0], sharex=ax_curve)
+    ax_risk_density = fig.add_subplot(grid[1, 1], sharex=ax_risk)
 
     ax = ax_curve
     display_curve = curve.sort_values(exposure_column, kind="stable")
@@ -636,150 +823,166 @@ def run_landmark_association_figure(
     y = pd.to_numeric(display_curve["adjusted_odds_ratio"]).to_numpy(dtype=float)
     low = pd.to_numeric(display_curve["ci_low"]).to_numpy(dtype=float)
     high = pd.to_numeric(display_curve["ci_high"]).to_numpy(dtype=float)
-    ax.fill_between(x, low, high, color=palette["blue_soft"], alpha=0.45, linewidth=0)
-    ax.plot(x, y, color=palette["blue"], linewidth=1.5)
-    ax.axhline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+    density = pd.to_numeric(
+        display_curve["exposure_density_fraction"]
+    ).to_numpy(dtype=float)
+    ax.fill_between(
+        x,
+        low,
+        high,
+        color=palette["blue_soft"],
+        alpha=0.50,
+        linewidth=0,
+    )
+    ax.plot(x, y, color=palette["blue"], linewidth=1.45)
+    ax.axhline(1.0, color="#7A8188", linestyle=(0, (3, 3)), linewidth=0.75)
+    _configure_ratio_y_axis(ax, lows=low, highs=high)
     references = pd.to_numeric(
         display_curve[reference_column], errors="coerce"
     ).dropna()
-    source_exposure = (
-        str(risk["exposure"].dropna().iloc[0])
-        if "exposure" in risk.columns and not risk["exposure"].dropna().empty
-        else exposure_column
-    )
+    if references.nunique() != 1:
+        raise ValueError("association curve requires one reference exposure value")
+    reference = float(references.iloc[0])
+    source_exposures = {
+        str(value or "").strip() for value in display_curve["exposure"]
+    }
+    if "" in source_exposures or len(source_exposures) != 1:
+        raise ValueError("association curve requires one named exposure")
+    source_exposure = next(iter(source_exposures))
+    risk_source_exposures = {
+        str(value or "").strip() for value in adjusted_risk["exposure"]
+    }
+    if risk_source_exposures != {source_exposure}:
+        raise ValueError("adjusted association and absolute-risk exposure names differ")
     exposure_label = _continuous_exposure_label(source_exposure)
-    if references.nunique() == 1:
-        reference = float(references.iloc[0])
-        exposure_label = (
-            f"{exposure_label[:-1]}; reference {reference:g})"
-            if exposure_label.endswith(")")
-            else f"{exposure_label} (reference {reference:g})"
-        )
-    ax.set_xlabel(exposure_label)
-    ax.set_ylabel("Adjusted odds ratio")
-    ax.set_title("Adjusted landmark association", loc="left", pad=7)
-    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
-
-    ax = ax_context
-    group_column = "group_value" if "group_value" in shown_risk.columns else "label"
-    display = shown_risk.copy()
-    display["group_key"] = display[group_column].astype(str)
-    group_keys = list(dict.fromkeys(display["group_key"].tolist()))
-    positions = np.arange(len(group_keys), dtype=float)
-    height = 0.34
-    series_specs = (
-        ("prevalence", "Cohort share", palette["blue_soft"], -height / 2),
-        ("outcome_risk", "Observed outcome risk", palette["orange"], height / 2),
+    ax.axvline(reference, color="#7A8188", linestyle=(0, (3, 3)), linewidth=0.75)
+    ax.text(
+        reference,
+        0.98,
+        f"Reference {reference:g}",
+        transform=ax.get_xaxis_transform(),
+        ha="left",
+        va="top",
+        fontsize=4.8,
+        color="#616971",
     )
-    for estimate_type, legend_label, color, offset in series_specs:
-        subset = display.loc[display["estimate_type"].astype(str).eq(estimate_type)]
-        if subset["group_key"].duplicated().any():
-            raise ValueError(
-                f"absolute-risk context repeats {estimate_type!r} within a group"
-            )
-        by_group = subset.set_index("group_key")
-        values = np.array(
-            [
-                100.0 * float(by_group.loc[key, "estimate"])
-                if key in by_group.index
-                else np.nan
-                for key in group_keys
-            ],
-            dtype=float,
-        )
-        valid = np.isfinite(values)
-        if not valid.any():
-            continue
-        lower = np.array(
-            [
-                100.0 * float(by_group.loc[key, "ci_low"])
-                if key in by_group.index
-                else np.nan
-                for key in group_keys
-            ],
-            dtype=float,
-        )
-        upper = np.array(
-            [
-                100.0 * float(by_group.loc[key, "ci_high"])
-                if key in by_group.index
-                else np.nan
-                for key in group_keys
-            ],
-            dtype=float,
-        )
-        xerr = np.vstack(
-            [
-                np.maximum(values[valid] - lower[valid], 0.0),
-                np.maximum(upper[valid] - values[valid], 0.0),
-            ]
-        )
-        ax.barh(
-            positions[valid] + offset,
-            values[valid],
-            height=height,
-            color=color,
-            xerr=xerr,
-            capsize=2.2,
-            label=legend_label,
-        )
-    ax.set_yticks(
-        positions,
-        [_measurement_state_label(value) for value in group_keys],
-        fontsize=5.8,
+    ax.set_xlim(float(x.min()), float(x.max()))
+    ax.set_ylabel("Adjusted odds ratio (95% CI)")
+    ax.set_title(
+        "Adjusted association",
+        loc="left",
+        pad=4,
+        fontsize=7.0,
+        fontweight="semibold",
     )
-    ax.invert_yaxis()
-    ax.set_xlabel("Percent")
-    ax.set_title("Measurement context", loc="left", pad=7)
-    ax.legend(frameon=False, fontsize=5.4, loc="lower right")
-    add_panel_label(ax, "b", x=-0.15, y=1.04, fontsize=8.0)
-
-    ax = ax_robustness
-    robustness_display = draw_robustness_coverage(
-        ax,
-        robustness,
+    ax.tick_params(axis="x", labelbottom=False)
+    ax.grid(axis="y", color="#E7EAED", linewidth=0.5)
+    ax.set_axisbelow(True)
+    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=7.0)
+    _draw_exposure_distribution(
+        ax_curve_density,
+        x=x,
+        fractions=density,
         color=palette["blue"],
-        label_formatter=lambda value: display_label(value),
+        exposure_label=exposure_label,
     )
-    add_panel_label(ax, "c", x=-0.08, y=1.04, fontsize=8.0)
 
-    if ax_process is not None:
-        ax = ax_process
-        denominator = pd.to_numeric(process["n_total"])
-        numerator = pd.to_numeric(process["measured_one_n"])
-        if (
-            (denominator <= 0).any()
-            or (numerator < 0).any()
-            or (numerator > denominator).any()
-        ):
-            raise ValueError("measurement-process counts do not nest")
-        pct = 100.0 * numerator / denominator
-        positions = np.arange(len(process))
-        ax.barh(positions, pct, color=palette["blue_soft"])
-        ax.set_yticks(
-            positions,
-            [display_label(value) for value in process["concept"]],
-            fontsize=5.8,
-        )
-        ax.set_xlim(0, 100)
-        ax.set_xlabel("Measured at least once (%)")
-        ax.set_title("Measurement availability", loc="left", pad=7)
-        add_panel_label(ax, "d", x=-0.15, y=1.04, fontsize=8.0)
+    display_risk = adjusted_risk.sort_values(
+        risk_exposure_column, kind="stable"
+    )
+    risk_x = pd.to_numeric(display_risk[risk_exposure_column]).to_numpy(dtype=float)
+    risk_reference = pd.to_numeric(
+        display_risk[risk_reference_column]
+    ).to_numpy(dtype=float)
+    risk_values = 100.0 * pd.to_numeric(
+        display_risk["adjusted_absolute_risk"]
+    ).to_numpy(dtype=float)
+    risk_low = 100.0 * pd.to_numeric(display_risk["ci_low"]).to_numpy(dtype=float)
+    risk_high = 100.0 * pd.to_numeric(display_risk["ci_high"]).to_numpy(dtype=float)
+    risk_density = pd.to_numeric(
+        display_risk["exposure_density_fraction"]
+    ).to_numpy(dtype=float)
+    if not np.allclose(risk_x, x, rtol=0.0, atol=1e-10):
+        raise ValueError("adjusted association and absolute-risk grids do not align")
+    if not np.allclose(risk_reference, reference, rtol=0.0, atol=1e-10):
+        raise ValueError("adjusted association and absolute-risk references do not align")
+    if not np.allclose(risk_density, density, rtol=0.0, atol=1e-10):
+        raise ValueError("adjusted association and absolute-risk densities do not align")
+    if (risk_low < 0).any() or (risk_high > 100).any():
+        raise ValueError("model-standardised absolute-risk intervals must be in [0, 1]")
+
+    ax = ax_risk
+    risk_color = "#2C7F86"
+    ax.fill_between(
+        risk_x,
+        risk_low,
+        risk_high,
+        color="#D9EFEE",
+        alpha=0.72,
+        linewidth=0,
+    )
+    ax.plot(risk_x, risk_values, color=risk_color, linewidth=1.45)
+    ax.axvline(reference, color="#7A8188", linestyle=(0, (3, 3)), linewidth=0.75)
+    risk_span = max(float(risk_high.max() - risk_low.min()), 0.5)
+    ax.set_ylim(
+        max(0.0, float(risk_low.min()) - 0.08 * risk_span),
+        min(100.0, float(risk_high.max()) + 0.08 * risk_span),
+    )
+    ax.set_xlim(float(risk_x.min()), float(risk_x.max()))
+    ax.set_ylabel("Model-standardised outcome risk (%)")
+    ax.set_title(
+        "Absolute risk",
+        loc="left",
+        pad=4,
+        fontsize=7.0,
+        fontweight="semibold",
+    )
+    ax.tick_params(axis="x", labelbottom=False)
+    ax.grid(axis="y", color="#E7EAED", linewidth=0.5)
+    ax.set_axisbelow(True)
+    add_panel_label(ax, "b", x=-0.08, y=1.04, fontsize=7.0)
+    _draw_exposure_distribution(
+        ax_risk_density,
+        x=risk_x,
+        fractions=risk_density,
+        color=risk_color,
+        exposure_label=exposure_label,
+    )
+
+    # Validate the supplementary audit sources even though they do not compete
+    # with the primary result for visual salience.
+    prepare_robustness_coverage(robustness)
+    robustness_display = {
+        "chart_type": "sensitivity_coverage_matrix",
+        "effect_comparison_authorized": False,
+        "reason_code": "ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED",
+        "display_authority": "audit_only",
+    }
+    denominator = pd.to_numeric(process["n_total"])
+    numerator = pd.to_numeric(process["measured_one_n"])
+    if (
+        (denominator <= 0).any()
+        or (numerator < 0).any()
+        or (numerator > denominator).any()
+    ):
+        raise ValueError("measurement-process counts do not nest")
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
+    panel_templates = landmark_association_composite_panels(profile)
     panels = tuple(
         panel
-        for panel in landmark_association_composite_panels(profile)
-        if placements.get(panel.panel_id, "main") == "main"
+        for panel in panel_templates
+        if placements.get(panel.panel_id, panel.placement) == "main"
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
-            "The four typed source tables jointly describe the landmark association, absolute-risk context, robustness, and measurement process."
+            "The aligned main panels show the adjusted ratio-scale association and model-standardised absolute outcome risk with 95% confidence intervals across the prespecified exposure grid. "
+            "The source-backed distribution strips show where the complete-case cohort contributes information; audit-only coverage and measurement-process tables remain supplementary."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=132.0,
+        height_mm=figure_height_mm,
         panels=[
             {
                 "panel_id": panel.panel_id,
@@ -804,7 +1007,8 @@ def run_landmark_association_figure(
                     "source_products": list(panel.source_products),
                     "estimate_geometry": (
                         "continuous_fitted_curve_with_95ci"
-                        if panel.panel_id == "association_curve"
+                        if panel.panel_id
+                        in {"association_curve", "absolute_risk_curve"}
                         else "direct_table_projection"
                     ),
                     "source_data": [
@@ -822,8 +1026,8 @@ def run_landmark_association_figure(
         ],
         source_data=source_files,
         statistics_note=(
-            "All plotted values are direct projections of registered source rows; no model is fit by the renderer. "
-            "Robustness summaries are audit-only counts. Their source envelope columns are not displayed as confidence intervals or comparable effects."
+            "All plotted values and exposure-grid densities are direct projections of registered source rows; no model is fit and no patient rows are read by the renderer. "
+            "The two curves share one exposure grid and reference value. Robustness summaries remain audit-only counts and are not displayed as confidence intervals or comparable effects."
         ),
     )
     outputs = save_publication_figure(
@@ -858,9 +1062,9 @@ def run_landmark_association_figure(
         ],
         "source_data_files": source_files,
         "supplementary_panel_ids": sorted(
-            panel_id
-            for panel_id, placement in placements.items()
-            if placement == "supplementary"
+            panel.panel_id
+            for panel in panel_templates
+            if placements.get(panel.panel_id, panel.placement) == "supplementary"
         ),
         "figure_files": [
             path.name for key, path in outputs.items() if key != "contract"

@@ -54,6 +54,7 @@ from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
     progressive_output_roles_for_module,
+    required_reader_display_label_keys,
     validate_progressive_foundation,
 )
 from easyicu.research_agent.planning.dependence_authority import (
@@ -85,6 +86,7 @@ from easyicu.research_agent.planning.progressive_contract import (
 from easyicu.research_agent.planning.progressive_host_materialization import (
     host_materialize_progressive_step,
     normalize_progressive_cohort_identity,
+    progressive_module_method_source_keys,
 )
 from easyicu.research_agent.planning.progressive_resume import (
     ProgressivePrefixState,
@@ -219,6 +221,10 @@ def _payload() -> dict:
             "exclusion": [],
         },
         "display_labels": [
+            {"key": "exposure_flag", "value": "Exposure status"},
+            {"key": "outcome_flag", "value": "In-hospital outcome"},
+            {"key": "age_years", "value": "Age in years"},
+            {"key": "sex_code", "value": "Recorded sex"},
             {"key": "exposure_flag=0", "value": "Exposure absent"},
             {"key": "exposure_flag=1", "value": "Exposure present"},
         ],
@@ -869,7 +875,9 @@ def test_outline_requires_direct_comparator_on_primary_step() -> None:
         for step in outline_payload["steps"]
         if step["planned_analysis_role"] == "primary"
     )
-    primary["literature_citation_keys"] = ["direct_comparator"]
+    for step in outline_payload["steps"]:
+        if step["planned_analysis_role"] in {"primary", "secondary", "sensitivity"}:
+            step["literature_citation_keys"] = ["direct_comparator"]
     ProgressivePlannerAgent._validate_outline_authority(
         ProgressivePlanOutline.model_validate(outline_payload),
         analysis_types=["association_study"],
@@ -887,6 +895,55 @@ def test_progressive_prompt_declares_categorical_distribution_guard() -> None:
     assert "Executable module ownership for required article result roles" in prompt
     assert '"cohort_definition":["cohort_accounting"]' in prompt
     assert "scientific_action_id=null provisionally owns baseline_context" in prompt
+
+
+def test_descriptive_prompt_binds_registered_table_one_action() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                inferred_analysis_family="descriptive_epidemiology",
+            )
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[1].content
+
+    assert (
+        "A table_one step must bind descriptive.table_one when that exact "
+        "action appears" in prompt
+    )
+
+
+def test_descriptive_outline_requires_registered_table_one_action() -> None:
+    payload = _payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    payload["robustness_intents"] = []
+    payload["steps"] = payload["steps"][:4]
+    payload["steps"][1]["planned_analysis_role"] = "secondary"
+    payload["steps"][2]["planned_analysis_role"] = "primary"
+    outline_payload = _outline_payload(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(outline_payload),
+            analysis_types=["descriptive_epidemiology"],
+            variable_names=[variable.name for variable in _context().variables],
+            allowed_literature_citation_keys=[],
+            closed_domain_variables=["exposure_flag", "outcome_flag", "sex_code"],
+        )
+
+    assert caught.value.reason_code == "progressive_outline_action_module_mismatch"
+    assert caught.value.step_id == "02_table_one"
+    assert caught.value.path == "scientific_action_id"
+
+    outline_payload["steps"][1]["scientific_action_id"] = "descriptive.table_one"
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(outline_payload),
+        analysis_types=["descriptive_epidemiology"],
+        variable_names=[variable.name for variable in _context().variables],
+        allowed_literature_citation_keys=[],
+        closed_domain_variables=["exposure_flag", "outcome_flag", "sex_code"],
+    )
 
 
 def test_metadata_only_descriptive_fallback_owns_baseline_article_role() -> None:
@@ -977,9 +1034,7 @@ def test_article_contract_credits_host_compiled_data_quality_audit_product() -> 
 
     covered = roles_covered_by_plan(
         plan,
-        build_article_analysis_contract(
-            _context(), analysis_type=plan.analysis_type
-        ),
+        build_article_analysis_contract(_context(), analysis_type=plan.analysis_type),
     )
 
     assert "data_quality" in covered
@@ -1115,6 +1170,30 @@ def test_host_materializes_only_mechanical_outline_coordinates() -> None:
     assert primary is None
 
 
+def test_host_distribution_binds_sealed_repeated_unit_method_source() -> None:
+    outline_payload = _outline_payload()
+    outline_payload["steps"][2]["literature_citation_keys"] = ["strobe_2007"]
+    outline = ProgressivePlanOutline.model_validate(outline_payload)
+    foundation = ProgressiveFoundationMaterialization.model_validate(
+        _foundation_payload()
+    ).foundation
+
+    distribution = host_materialize_progressive_step(
+        context=_context(),
+        outline=outline,
+        outline_step=outline.steps[2],
+        foundation=foundation,
+        available_product_refs=(("01_cohort", "artifact:analysis_cohort"),),
+    )
+
+    assert distribution is not None
+    bindings = {
+        binding.citation_key: set(binding.design_elements)
+        for binding in distribution.step.literature_bindings
+    }
+    assert "dependence" in bindings["strobe_2007"]
+
+
 def _multi_identity_context(*, proven_stay: bool) -> ResearchContext:
     stay_id = "stay_id" if proven_stay else "episode_key"
     patient_id = "patient_id" if proven_stay else "person_key"
@@ -1234,8 +1313,7 @@ def test_host_normalizes_proven_identity_without_dropping_planner_bindings() -> 
 
     assert normalized.step.raw_inputs == ["stay_id", "exposure_flag"]
     assert (
-        normalized.step.literature_bindings
-        == materialization.step.literature_bindings
+        normalized.step.literature_bindings == materialization.step.literature_bindings
     )
 
 
@@ -1311,9 +1389,10 @@ def test_host_reuses_selected_design_decision_for_dynamic_figure_binding() -> No
     assert [
         binding.citation_key for binding in materialization.step.literature_bindings
     ] == ["dynamic_card"]
-    assert "Show cohort accounting" in materialization.step.literature_bindings[
-        0
-    ].application
+    assert (
+        "Show cohort accounting"
+        in materialization.step.literature_bindings[0].application
+    )
 
 
 def test_host_materialization_keeps_one_schema_ledger_entry_per_step(
@@ -1373,9 +1452,9 @@ def test_checkpoint_resume_reuses_host_materialized_null_schema_authority(
         resume_dependency_context=dependency_context,
     )
     resume_checkpoint = source_checkpoints[4]
-    assert resume_checkpoint.prompt_metrics[
-        "step_materialization_schema_sha256"
-    ][:3] == [None, None, None]
+    assert resume_checkpoint.prompt_metrics["step_materialization_schema_sha256"][
+        :3
+    ] == [None, None, None]
 
     resumed_llm = ScriptedMockLLMClient(
         [json.dumps(materializations[index]) for index in (3, 4, 5)]
@@ -1391,7 +1470,9 @@ def test_checkpoint_resume_reuses_host_materialized_null_schema_authority(
     assert len(resumed_llm.calls) == 3
 
 
-def test_step_materialization_parser_collapses_normalized_raw_input_duplicates() -> None:
+def test_step_materialization_parser_collapses_normalized_raw_input_duplicates() -> (
+    None
+):
     payload = _materialization_payloads()[0]
     payload["step"]["raw_inputs"] = ["age_years", " age_years ", "sex_code"]
 
@@ -1400,7 +1481,9 @@ def test_step_materialization_parser_collapses_normalized_raw_input_duplicates()
     assert parsed.step.raw_inputs == ["age_years", "sex_code"]
 
 
-def test_outline_parser_canonicalizes_only_bijective_internal_step_coordinates() -> None:
+def test_outline_parser_canonicalizes_only_bijective_internal_step_coordinates() -> (
+    None
+):
     payload = _outline_payload()
     original_ids = [step["step_id"] for step in payload["steps"]]
     renamed = {
@@ -1462,6 +1545,32 @@ def test_step_parser_rejects_non_string_custom_analysis_method() -> None:
     payload = _materialization_payloads()[3]
     payload["step"]["module_id"] = "custom_analysis"
     payload["step"]["custom_method"] = {"method": "model_selected"}
+
+    with pytest.raises(ValueError):
+        _parse_step_materialization(json.dumps(payload))
+
+
+def test_step_parser_clears_irrelevant_distribution_policies() -> None:
+    payload = _materialization_payloads()[3]
+    payload["step"].update(
+        {
+            "denominator_policy": "other",
+            "missing_exposure_policy": "other",
+            "missing_outcome_policy": "other",
+        }
+    )
+
+    parsed = _parse_step_materialization(json.dumps(payload))
+
+    assert parsed.step.module_id != "exposure_outcome_distribution"
+    assert parsed.step.denominator_policy is None
+    assert parsed.step.missing_exposure_policy is None
+    assert parsed.step.missing_outcome_policy is None
+
+
+def test_step_parser_keeps_distribution_policy_literals_fail_closed() -> None:
+    payload = _materialization_payloads()[2]
+    payload["step"]["denominator_policy"] = "other"
 
     with pytest.raises(ValueError):
         _parse_step_materialization(json.dumps(payload))
@@ -1635,8 +1744,7 @@ def test_materialization_prompt_projects_exact_method_source_scope() -> None:
         '["dependence","estimand","outcome","reporting"]' in prompt
     )
     assert (
-        '"citation_key":"record_2015","allowed_design_elements":["reporting"]'
-        in prompt
+        '"citation_key":"record_2015","allowed_design_elements":["reporting"]' in prompt
     )
     assert "Never add a plausible-sounding element outside this exact source" in prompt
 
@@ -1644,9 +1752,7 @@ def test_materialization_prompt_projects_exact_method_source_scope() -> None:
 def test_association_custom_sensitivity_must_follow_primary_adjusted_model() -> None:
     payload = _outline_payload(_payload())
     primary = next(
-        step
-        for step in payload["steps"]
-        if step["planned_analysis_role"] == "primary"
+        step for step in payload["steps"] if step["planned_analysis_role"] == "primary"
     )
     primary["module_id"] = "adjusted_association"
     sensitivity = next(
@@ -1753,9 +1859,7 @@ def test_outline_preflight_rejects_missing_continuous_method_source() -> None:
                 "strobe_2007",
                 "durrleman_splines_1989",
             ),
-            continuous_domain_variables=_continuous_planning_variable_names(
-                _context()
-            ),
+            continuous_domain_variables=_continuous_planning_variable_names(_context()),
             primary_exposure=_context().primary_exposure,
             target_outcome=_context().target_outcome,
             context_required_method_layers=("reporting_standard",),
@@ -1793,20 +1897,25 @@ def test_host_binds_required_outline_method_sources_without_a_retry() -> None:
         "strobe_2007",
         "durrleman_splines_1989",
     ]
-    assert _bind_required_outline_method_sources(
-        bound,
-        allowed_literature_citation_keys=(
-            "strobe_2007",
-            "durrleman_splines_1989",
-        ),
-        context_required_method_layers=("reporting_standard",),
-        continuous_domain_variables=_continuous_planning_variable_names(_context()),
-    ) == bound
+    assert (
+        _bind_required_outline_method_sources(
+            bound,
+            allowed_literature_citation_keys=(
+                "strobe_2007",
+                "durrleman_splines_1989",
+            ),
+            context_required_method_layers=("reporting_standard",),
+            continuous_domain_variables=_continuous_planning_variable_names(_context()),
+        )
+        == bound
+    )
 
 
 def test_host_binds_screened_direct_comparator_to_primary_without_a_retry() -> None:
     outline = ProgressivePlanOutline.model_validate(_outline_payload())
-    primary = next(step for step in outline.steps if step.planned_analysis_role == "primary")
+    primary = next(
+        step for step in outline.steps if step.planned_analysis_role == "primary"
+    )
     outline = outline.model_copy(
         update={
             "steps": [
@@ -1826,9 +1935,7 @@ def test_host_binds_screened_direct_comparator_to_primary_without_a_retry() -> N
     bound_primary = next(
         step for step in bound.steps if step.planned_analysis_role == "primary"
     )
-    assert bound_primary.literature_citation_keys == [
-        "direct_lactate_mortality"
-    ]
+    assert bound_primary.literature_citation_keys == ["direct_lactate_mortality"]
 
 
 def test_host_uses_ungrouped_baseline_fallback_without_closed_domain() -> None:
@@ -1859,10 +1966,13 @@ def test_missing_method_layer_outside_step_roster_is_not_llm_repairable() -> Non
         exc,
         ("strobe_2007", "sterne_missing_data_2009"),
     ) == ("functional_form",)
-    assert _missing_method_layers_outside_step_roster(
-        exc,
-        ("strobe_2007", "durrleman_splines_1989"),
-    ) == ()
+    assert (
+        _missing_method_layers_outside_step_roster(
+            exc,
+            ("strobe_2007", "durrleman_splines_1989"),
+        )
+        == ()
+    )
 
 
 def test_step_parser_removes_only_product_already_bound_as_product_input() -> None:
@@ -2518,14 +2628,12 @@ def test_visualization_schema_hides_products_outside_direct_dependencies() -> No
             ("05_primary", "table:adjusted_association_estimates"),
         ],
     )
-    product_refs = json.loads(request.schema_json)["$defs"][
-        "ProgressiveProductRef"
-    ]["anyOf"]
+    product_refs = json.loads(request.schema_json)["$defs"]["ProgressiveProductRef"][
+        "anyOf"
+    ]
 
     assert len(product_refs) == 1
-    assert product_refs[0]["properties"]["producer_step_id"]["const"] == (
-        "05_primary"
-    )
+    assert product_refs[0]["properties"]["producer_step_id"]["const"] == ("05_primary")
     assert product_refs[0]["properties"]["product_id"]["const"] == (
         "table:adjusted_association_estimates"
     )
@@ -2785,6 +2893,74 @@ def test_current_adjusted_step_requires_model_contract_fields() -> None:
     assert step["model_terms"]["minItems"] == 1
 
 
+def test_adjusted_prompt_projects_exact_model_term_authority() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="ventilation_status",
+                    role=VariableRole.INTERVENTION,
+                    dtype="int64",
+                    observed_domain={
+                        "n_unique": 2,
+                        "is_binary": True,
+                        "levels": [0, 1],
+                    },
+                ),
+            ]
+        }
+    )
+    outline_step = ProgressiveOutlineStep(
+        step_id="05_primary",
+        planned_analysis_role="primary",
+        module_id="adjusted_association",
+        objective="Estimate the prespecified adjusted association.",
+        depends_on=[],
+        variable_names=[
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+            "ventilation_status",
+        ],
+        literature_citation_keys=[],
+        scientific_action_id="association.adjusted_association",
+    )
+    outline = ProgressivePlanOutline(
+        analysis_type="association_study",
+        cohort_objective="Use the sealed cohort.",
+        steps=[outline_step],
+        rationale="Use the registered adjusted association module.",
+    )
+
+    prompt = ProgressivePlannerAgent._materialization_prompt(
+        context=context,
+        outline=outline,
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variables=outline_step.variable_names,
+        action_rows=[],
+        allowed_literature_citation_keys=[],
+        know_how_context="",
+        planning_contract_context="",
+        prefix_summary=[],
+        available_product_refs=[],
+    )
+
+    assert "Host model-term planning authority (binding)" in prompt
+    assert '"name":"age_years","semantic_role":"other"' in prompt
+    assert '"name":"sex_code","semantic_role":"other"' in prompt
+    assert '"allowed_codings":["binary"]' in prompt
+    assert (
+        '"name":"ventilation_status","reason":"time_zero_authority_missing"' in prompt
+    )
+    assert (
+        '"name":"outcome_flag"'
+        not in prompt.split("Host model-term planning authority (binding):", 1)[1]
+    )
+
+
 @pytest.mark.parametrize(
     "module_id",
     ["measurement_audit", "visualization", "report"],
@@ -2918,7 +3094,9 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
 
 def test_absolute_risk_context_module_compiles_existing_deterministic_owner() -> None:
     payload = json.loads(json.dumps(_payload()))
-    step = next(item for item in payload["steps"] if item["step_id"] == "03_distribution")
+    step = next(
+        item for item in payload["steps"] if item["step_id"] == "03_distribution"
+    )
     step.update(
         {
             "step_id": "03_absolute_risk_context",
@@ -3033,7 +3211,21 @@ def test_compiler_uses_declared_integer_range_for_metadata_only_ordinal_score() 
                     is_ordinal=True,
                     ordinal_levels=None,
                 ),
-            ]
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age_years", "sex_code", "severity_total"],
+                covariate_selection="exact",
+                covariate_rationales={
+                    "age_years": "Prespecified baseline age confounder.",
+                    "sex_code": "Prespecified baseline sex confounder.",
+                    "severity_total": "Prespecified baseline severity confounder.",
+                },
+                covariate_temporal_roles={
+                    "age_years": "baseline_static",
+                    "sex_code": "baseline_static",
+                    "severity_total": "at_or_before_time_zero",
+                },
+            ),
         }
     )
 
@@ -3518,8 +3710,7 @@ def test_outline_rejects_table_one_without_closed_group_domain() -> None:
         )
 
     assert (
-        caught.value.reason_code
-        == "progressive_outline_table_one_domain_unavailable"
+        caught.value.reason_code == "progressive_outline_table_one_domain_unavailable"
     )
     assert caught.value.details["step_id"] == table_one["step_id"]
 
@@ -3692,6 +3883,83 @@ def test_outline_prompt_projects_scientific_to_physical_adjustment_authority() -
     assert "not modeling roles" in prompt
 
 
+def test_outline_requires_functional_form_sensitivity_for_exact_continuous_covariate() -> None:
+    payload = _outline_payload()
+    selected = next(
+        candidate
+        for candidate in payload["design_selection"]["candidates"]
+        if candidate["disposition"] == "selected"
+    )
+    selected["required_variables"].append("age_years")
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            continuous_domain_variables=("age_years",),
+            required_exact_covariates=("age_years",),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_outline_functional_form_sensitivity_missing"
+    )
+
+    payload["steps"].append(
+        {
+            "step_id": "08_functional_form_check",
+            "planned_analysis_role": "sensitivity",
+            "module_id": "custom_analysis",
+            "objective": "Check the prespecified continuous covariate functional form.",
+            "depends_on": ["05_primary"],
+            "variable_names": ["age_years"],
+            "literature_citation_keys": [],
+            "scientific_action_id": None,
+        }
+    )
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+        ),
+        allowed_literature_citation_keys=(),
+        continuous_domain_variables=("age_years",),
+        required_exact_covariates=("age_years",),
+    )
+
+
+def test_outline_prompt_requires_functional_form_step_before_plan_review() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["AGE"],
+                covariate_selection="exact",
+                covariate_rationales={
+                    "AGE": "Prespecified baseline demographic confounder."
+                },
+                covariate_temporal_roles={"AGE": "baseline_static"},
+                covariate_operationalizations={"AGE": "age_years"},
+            )
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
+
+    assert "Host-resolved functional-form obligation" in prompt
+    assert "step_id contains 'functional_form'" in prompt
+    assert '["age_years"]' in prompt
+
+
 def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
     payload = _outline_payload()
     for step in payload["steps"]:
@@ -3787,7 +4055,9 @@ def test_outline_prompt_rejects_convenient_demographic_table_one_grouping() -> N
     assert "merely because it has a closed domain" in prompt
 
 
-def test_retrieved_data_cards_expose_module_compatibility_without_level_values() -> None:
+def test_retrieved_data_cards_expose_module_compatibility_without_level_values() -> (
+    None
+):
     cards = ProgressivePlannerAgent._retrieved_data_cards(
         _context(),
         ("exposure_flag", "age_years"),
@@ -3801,7 +4071,9 @@ def test_retrieved_data_cards_expose_module_compatibility_without_level_values()
     assert "observed_domain" not in by_name["exposure_flag"]
 
 
-def test_retrieved_data_cards_use_concept_declared_domain_without_claiming_observation() -> None:
+def test_retrieved_data_cards_use_concept_declared_domain_without_claiming_observation() -> (
+    None
+):
     context = _context().model_copy(
         update={
             "variables": [
@@ -4035,7 +4307,11 @@ def test_outline_prompt_projects_exact_case_neutral_json_shape() -> None:
         '"planned_analysis_role":"<primary|secondary|sensitivity|auxiliary>"' in prompt
     )
     assert '"depends_on":[]' in prompt
-    assert '"literature_citation_keys":[]' in prompt
+    assert (
+        '"literature_citation_keys":["<sealed method key for every '
+        'primary/secondary/sensitivity step>"]' in prompt
+    )
+    assert "only auxiliary steps may use an empty array" in prompt
     assert '"scientific_action_id":null' in prompt
     assert "preserve every key; add no other keys" in prompt
     assert (
@@ -4061,6 +4337,23 @@ def test_predicate_filtered_foundation_contract_projects_nested_item_shapes() ->
     assert "value object must preserve all six displayed keys" in contract
     assert 'each item has exactly {"key":' in contract
     assert '"card_sha256":"<authorized 64-char digest>"' in contract
+
+
+def test_foundation_contract_projects_required_reader_label_keys() -> None:
+    contract = _foundation_shape_contract(
+        outline_sha256="a" * 64,
+        host_cohort=None,
+        required_reader_display_label_keys=("exposure_flag", "outcome_flag"),
+    )
+
+    assert (
+        '"key":"exposure_flag","value":"<reader-facing clinical variable label>"'
+        in contract
+    )
+    assert (
+        '"key":"outcome_flag","value":"<reader-facing clinical variable label>"'
+        in contract
+    )
 
 
 def test_foundation_projects_exact_sealed_predicate_binding_rows() -> None:
@@ -4427,6 +4720,41 @@ def test_scientific_sensitivity_requires_closed_ids_and_a_binary_primary_parent(
     )
     assert caught.value.step_id == "06_sensitivity"
 
+
+def test_functional_form_sensitivity_requires_an_exact_executable_method() -> None:
+    unsupported = _payload()
+    step = unsupported["steps"][5]
+    step["step_id"] = "06_functional_form_sensitivity"
+    step["custom_method"] = "continuous_functional_form_check"
+    step["sensitivity_spec_ids"] = ["age_restricted_cubic_spline_vs_linear"]
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(unsupported),
+            context=_context(),
+        )
+
+    assert caught.value.reason_code == "progressive_functional_form_method_unsupported"
+    assert caught.value.path == "custom_method"
+
+    supported = _payload()
+    supported_step = supported["steps"][5]
+    supported_step["step_id"] = "06_functional_form_sensitivity"
+    supported_step["custom_method"] = "restricted_cubic_spline_sensitivity"
+    supported_step["sensitivity_spec_ids"] = [
+        "age_restricted_cubic_spline_vs_linear"
+    ]
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(supported),
+        context=_context(),
+    )
+
+    compiled = next(
+        item for item in plan.steps if item.step_id == "06_functional_form_sensitivity"
+    )
+    assert compiled.method == "restricted_cubic_spline_sensitivity"
+
     continuous_parent = _payload()
     continuous_parent["steps"][4]["outcome_type"] = "continuous"
 
@@ -4784,9 +5112,7 @@ def test_compiler_uses_concept_declared_levels_for_metadata_only_model_term() ->
     requirement = next(
         step for step in plan.steps if step.step_id == "05_primary"
     ).model_requirements[0]
-    term = next(
-        item for item in requirement.model_terms if item.name == "sex_declared"
-    )
+    term = next(item for item in requirement.model_terms if item.name == "sex_declared")
     assert term.levels == ["Female", "Male"]
     assert term.reference_level == "Female"
     assert term.transform == "treatment_contrast"
@@ -4852,6 +5178,88 @@ def test_compiler_reports_outcome_covariate_at_the_model_owner() -> None:
     assert caught.value.step_id == "05_primary"
     assert caught.value.step_index == 4
     assert caught.value.path == "model_terms"
+
+
+def test_compiler_rejects_a_different_outcome_as_baseline_covariate() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="length_of_stay",
+                    role=VariableRole.OUTCOME,
+                    dtype="float64",
+                ),
+            ]
+        }
+    )
+    payload = _payload()
+    primary = payload["steps"][4]
+    primary["raw_inputs"].append("length_of_stay")
+    primary["model_terms"].append(
+        {
+            "name": "length_of_stay",
+            "role": "covariate",
+            "coding": "continuous",
+            "reference_level_index": None,
+        }
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=context,
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_covariate_semantic_role_ineligible"
+    )
+    assert caught.value.step_id == "05_primary"
+    assert caught.value.path == "model_terms[3]"
+    assert "outcome" in str(caught.value)
+
+
+def test_compiler_rejects_dynamic_covariate_without_time_zero_authority() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="ventilation_status",
+                    role=VariableRole.INTERVENTION,
+                    dtype="int64",
+                    observed_domain={
+                        "n_unique": 2,
+                        "is_binary": True,
+                        "levels": [0, 1],
+                    },
+                ),
+            ]
+        }
+    )
+    payload = _payload()
+    primary = payload["steps"][4]
+    primary["raw_inputs"].append("ventilation_status")
+    primary["model_terms"].append(
+        {
+            "name": "ventilation_status",
+            "role": "covariate",
+            "coding": "binary",
+            "reference_level_index": 0,
+        }
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=context,
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_covariate_time_zero_authority_missing"
+    )
+    assert caught.value.path == "model_terms[3]"
+    assert "availability in the source catalog" in str(caught.value)
 
 
 def test_compiler_rejects_navigation_coordinate_as_a_model_term() -> None:
@@ -5273,7 +5681,9 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
         '"schema_version":"easyicu.progressive_plan_foundation/1"' in foundation_prompt
     )
     assert '"foundation":{"cohort":' in foundation_prompt
-    assert '"display_labels":[]' in foundation_prompt
+    assert '"key":"exposure_flag=0"' in foundation_prompt
+    assert '"key":"exposure_flag=1"' in foundation_prompt
+    assert "Required binary display-label authority" in foundation_prompt
     assert '"robustness_intents":[]' in foundation_prompt
     assert '"know_how_decisions":[]' in foundation_prompt
     assert "never flatten foundation fields" not in foundation_prompt
@@ -5397,9 +5807,7 @@ def test_missing_visualization_outline_is_retried_before_foundation() -> None:
 def test_outline_uses_fourth_attempt_after_three_distinct_contract_repairs() -> None:
     missing_figure = _outline_payload()
     missing_figure["steps"] = [
-        step
-        for step in missing_figure["steps"]
-        if step["module_id"] != "visualization"
+        step for step in missing_figure["steps"] if step["module_id"] != "visualization"
     ]
     wrong_action = _outline_payload()
     primary = next(
@@ -5433,9 +5841,7 @@ def test_outline_uses_fourth_attempt_after_three_distinct_contract_repairs() -> 
     assert "progressive_outline_visualization_owner_missing" in (
         llm.calls[1][0][-1].content
     )
-    assert "progressive_outline_action_unavailable" in (
-        llm.calls[2][0][-1].content
-    )
+    assert "progressive_outline_action_unavailable" in (llm.calls[2][0][-1].content)
 
 
 def test_agent_rejects_invalid_foundation_before_any_step_provider_call() -> None:
@@ -5654,9 +6060,12 @@ def test_agent_resumes_only_the_unmaterialized_suffix() -> None:
         resumed_checkpoints[0].previous_checkpoint_sha256
         == resume_checkpoint.checkpoint_sha256
     )
-    assert resumed_agent.last_result.facts.prompt_metrics[
-        "resume_reused_materialization_count"
-    ] == 3
+    assert (
+        resumed_agent.last_result.facts.prompt_metrics[
+            "resume_reused_materialization_count"
+        ]
+        == 3
+    )
     assert (
         resumed_agent.last_result.facts.prompt_metrics[
             "current_run_step_materialization_count"
@@ -5797,9 +6206,7 @@ def test_agent_repairs_only_the_current_materialization() -> None:
     assert agent.last_result.facts.prompt_metrics["step_materialization_count"] == 7
     assert (
         len(
-            agent.last_result.facts.prompt_metrics[
-                "step_materialization_schema_sha256"
-            ]
+            agent.last_result.facts.prompt_metrics["step_materialization_schema_sha256"]
         )
         == 7
     )
@@ -5811,6 +6218,43 @@ def test_agent_repairs_only_the_current_materialization() -> None:
         )
         == 8
     )
+    assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
+
+
+def test_agent_repairs_two_independent_current_step_findings() -> None:
+    materializations = _materialization_payloads()
+    unknown_covariate = deepcopy(materializations[4])
+    unknown_covariate["step"]["model_terms"][1]["name"] = "invented_covariate"
+    outcome_covariate = deepcopy(materializations[4])
+    outcome_covariate["step"]["model_terms"].append(
+        {
+            "name": "outcome_flag",
+            "role": "covariate",
+            "coding": "binary",
+            "reference_level_index": 0,
+        }
+    )
+    responses = [
+        _outline_payload(),
+        _foundation_payload(),
+        *materializations[:4],
+        unknown_covariate,
+        outcome_covariate,
+        materializations[4],
+        *materializations[5:],
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(_context())
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 11
+    assert "progressive_unknown_variable" in llm.calls[7][0][-1].content
+    assert "progressive_model_outcome_is_covariate" in llm.calls[8][0][-1].content
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 2
+    assert agent.last_result.facts.prompt_metrics["step_materialization_count"] == 7
     assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
 
 
@@ -5831,18 +6275,25 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
             )
         }
     )
-    outline = _outline_payload()
+    payload = _payload()
+    functional_form_step = payload["steps"][5]
+    functional_form_step["step_id"] = "06_functional_form_sensitivity"
+    functional_form_step["custom_method"] = "restricted_cubic_spline_sensitivity"
+    functional_form_step["sensitivity_spec_ids"] = [
+        "age_restricted_cubic_spline_vs_linear"
+    ]
+    outline = _outline_payload(payload)
     selected = next(
         candidate
         for candidate in outline["design_selection"]["candidates"]
         if candidate["disposition"] == "selected"
     )
     selected["required_variables"].extend(["age_years", "sex_code"])
-    foundation = _foundation_payload()
+    foundation = _foundation_payload(payload)
     foundation["outline_sha256"] = canonical_sha256(
         ProgressivePlanOutline.model_validate(outline).model_dump(mode="json")
     )
-    materializations = _materialization_payloads()
+    materializations = _materialization_payloads(payload)
     invalid_primary = deepcopy(materializations[4])
     invalid_primary["step"]["model_terms"] = [
         term
@@ -5865,9 +6316,7 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
 
     primary = next(step for step in plan.steps if step.step_id == "05_primary")
     assert primary.model_requirements[0].covariates == ["age_years", "sex_code"]
-    assert "progressive_adjustment_authority_mismatch" in (
-        llm.calls[7][0][-1].content
-    )
+    assert "progressive_adjustment_authority_mismatch" in (llm.calls[7][0][-1].content)
     assert '"required_covariates":["age_years","sex_code"]' in (
         llm.calls[7][0][-1].content
     )
@@ -6084,7 +6533,7 @@ def test_prefix_pydantic_failure_becomes_attributable_compiler_finding() -> None
     assert "at most one primary" in caught.value.details["findings"][0]["message"]
 
 
-def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
+def test_agent_stops_after_two_host_compile_repairs_and_keeps_attempts() -> None:
     materializations = _materialization_payloads()
     invalid_distribution = json.loads(json.dumps(materializations[2]))
     invalid_distribution["step"]["comparison_exposure_level_index"] = 0
@@ -6092,6 +6541,7 @@ def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
         _outline_payload(),
         _foundation_payload(),
         *materializations[:2],
+        invalid_distribution,
         invalid_distribution,
         invalid_distribution,
     ]
@@ -6105,18 +6555,19 @@ def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
     assert caught.value.reason_code == (
         "progressive_distribution_contrast_not_distinct"
     )
-    assert len(llm.calls) == 6
+    assert len(llm.calls) == 7
     failure_facts = progressive_planner_failure_facts(caught.value)
     assert [item.revision for item in failure_facts.compile_failure_attempts] == [
         0,
         1,
+        2,
     ]
     assert {
         item.compiler_finding.reason_code
         for item in failure_facts.compile_failure_attempts
     } == {"progressive_distribution_contrast_not_distinct"}
-    assert failure_facts.prompt_metrics["compile_revision_count"] == 1
-    assert len(failure_facts.compile_failure_attempts) == 2
+    assert failure_facts.prompt_metrics["compile_revision_count"] == 2
+    assert len(failure_facts.compile_failure_attempts) == 3
     assert failure_facts.complete_for_persistence is False
 
 
@@ -6148,6 +6599,7 @@ def test_progressive_compile_failure_persists_for_zero_provider_replay(
             json.dumps(_outline_payload()),
             json.dumps(_foundation_payload()),
             *[json.dumps(item) for item in materializations[:2]],
+            json.dumps(invalid_distribution),
             json.dumps(invalid_distribution),
             json.dumps(invalid_distribution),
         ]
@@ -6183,7 +6635,7 @@ def test_progressive_compile_failure_persists_for_zero_provider_replay(
     )
     assert isinstance(replay, ProgressiveCompileFailureReplay)
     assert replay.prefix_checkpoint_sequence == 3
-    assert len(replay.attempts) == 2
+    assert len(replay.attempts) == 3
     assert evidence.records["progressive_compile_failure_replay"]["inputs"] == [
         "research_context",
         "progressive_planner_checkpoint_003",

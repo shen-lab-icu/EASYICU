@@ -87,7 +87,9 @@ def _safe_extract_tar(tar: tarfile.TarFile, destination: Path) -> None:
             raise ValueError(f"Unsafe tar link member: {member.name}")
         if not (member.isfile() or member.isdir()):
             raise ValueError(f"Unsupported tar member type: {member.name}")
-    tar.extractall(path=destination, members=members)
+    # noqa justification: every member above is checked for path containment,
+    # link type, and member type, which is what S202 asks for.
+    tar.extractall(path=destination, members=members)  # noqa: S202
 
 
 # Partitioning configuration for large tables (matching ricu's data-sources.json)

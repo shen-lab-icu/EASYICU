@@ -40,6 +40,9 @@ from easyicu.research_agent.contracts.capability_ids import (
 )
 
 _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
+    "signed_time_varying_exposure_cox": (
+        "execution.runners.time_varying_executor", "time_varying_executor_code",
+    ),
     "adjusted_association_estimates": (
         "execution.runners.adjusted_association_executor",
         "adjusted_association_executor_code",
@@ -181,6 +184,7 @@ def test_partition_helpers_are_consistent():
     det = set(cr.deterministic_primary_families())
     llm = set(cr.llm_coded_primary_families())
     assert det == {
+        "Association — source-bound time-updated Cox",
         "Association — exact single-model adjusted",
         "Association — digest-bound landmark spline",
         "Descriptive — typed exposure/outcome absolute risks",

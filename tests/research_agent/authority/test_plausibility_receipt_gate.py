@@ -293,7 +293,7 @@ def test_the_receipt_gate_runs_inside_the_final_deterministic_gates():
 
     from easyicu.research_agent.execution import final_validation
 
-    from .test_gate_evaluator_contract import gate_call_order
+    from tests.research_agent.gates.test_gate_evaluator_contract import gate_call_order
 
     order = gate_call_order(
         final_validation._evaluate_final_deterministic_gates,
@@ -324,7 +324,7 @@ def test_a_missing_receipt_enters_the_repair_loop_instead_of_sealing_the_step():
 
     from easyicu.research_agent.execution import candidate_loop, phase_support
 
-    from .test_gate_evaluator_contract import gate_call_order
+    from tests.research_agent.gates.test_gate_evaluator_contract import gate_call_order
 
     names = [
         "_step_deterministic_contract_findings",

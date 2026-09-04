@@ -22,6 +22,7 @@ from easyicu.api.extraction import (
     _interleave_stream_patient_ids,
     _next_stream_retry_batch_size,
     _resolve_stream_batch_size,
+    plan_extraction_resources,
 )
 
 
@@ -214,6 +215,211 @@ def test_explicit_stream_batch_size_always_wins():
         )
         == 25_000
     )
+
+
+def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
+    """1.66-GiB measured peak + 10% headroom fits inside 2 GiB."""
+
+    plan = plan_extraction_resources(
+        "miiv",
+        ["blood_gas"],
+        94_458,
+        available_memory_mb=2 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 94_458
+    assert plan.measured_peak_rss_mb == pytest.approx(1_658.219)
+    assert plan.required_available_memory_mb == pytest.approx(1_824.041)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+def test_measured_eicu_profile_can_authorize_full_cohort_above_legacy_size_cap():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["blood_gas"],
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 200_859
+    assert plan.measured_peak_rss_mb == pytest.approx(1_104.6)
+    assert plan.advisory is None
+
+
+def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["respiratory"],
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 50_000
+    assert _n_chunks(200_859, plan.batch_size) == 5
+    assert plan.measured_peak_rss_mb == pytest.approx(6_252.8)
+    assert plan.required_available_memory_mb == pytest.approx(6_878.08)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
+    plan = plan_extraction_resources(
+        "eicu",
+        list(EXTRACT_MODULES),
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 50_000
+    assert plan.required_available_memory_mb == pytest.approx(7_163.53)
+    assert plan.advisory is None
+
+
+def test_measured_miiv_full_module_set_uses_one_shot_at_8gib():
+    plan = plan_extraction_resources(
+        "miiv",
+        list(EXTRACT_MODULES),
+        94_458,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 94_458
+    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
+    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+def test_measured_miiv_renal_warns_only_below_its_one_shot_threshold():
+    plan = plan_extraction_resources(
+        "miiv",
+        ["renal"],
+        94_458,
+        available_memory_mb=8_000,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_insufficient_memory"
+    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
+    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
+    assert plan.advisory
+    assert plan.advisory_zh
+
+
+def test_measured_mimic_vasopressors_use_one_shot_at_8gib():
+    plan = plan_extraction_resources(
+        "mimic",
+        ["vasopressors"],
+        61_532,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 61_532
+    assert plan.measured_peak_rss_mb == pytest.approx(7_415.4)
+    assert plan.required_available_memory_mb == pytest.approx(8_156.94)
+    assert plan.advisory is None
+
+
+def test_measured_mimic_medications_use_fastest_verified_two_batches():
+    plan = plan_extraction_resources(
+        "mimic",
+        ["medications"],
+        61_532,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 31_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_236.8)
+    assert plan.required_available_memory_mb == pytest.approx(7_960.48)
+    assert plan.advisory is None
+
+
+def test_mimic_full_module_request_remains_guarded_until_last_five_are_measured():
+    plan = plan_extraction_resources(
+        "mimic",
+        list(EXTRACT_MODULES),
+        61_532,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "unmeasured_profile_memory_guard"
+    assert plan.advisory_zh
+
+
+def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["respiratory"],
+        200_859,
+        available_memory_mb=6 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_insufficient_memory"
+    assert plan.batch_size == 40_000
+    assert "fastest-batch threshold" in plan.advisory
+    assert "最快批次门槛" in plan.advisory_zh
+    assert "速度会变慢" in plan.advisory_zh
+
+
+def test_measured_module_batches_and_warns_only_below_its_threshold():
+    plan = plan_extraction_resources(
+        "miiv",
+        ["blood_gas"],
+        94_458,
+        available_memory_mb=1_800,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_insufficient_memory"
+    assert plan.batch_size == 48_000
+    assert _n_chunks(94_458, plan.batch_size) == 2
+    assert "1.78 GiB" in plan.advisory
+    assert "1.78 GiB" in plan.advisory_zh
+    assert "速度会变慢" in plan.advisory_zh
+
+
+def test_unmeasured_module_cannot_borrow_a_light_module_fast_path():
+    plan = plan_extraction_resources(
+        "mimic",
+        ["blood_gas", "other_scores"],
+        61_532,
+        available_memory_mb=2 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "unmeasured_profile_memory_guard"
+    assert plan.required_available_memory_mb == 24 * 1024
+    assert plan.advisory_zh
+
+
+def test_explicit_batch_remains_authoritative_without_cleanup_advisory():
+    plan = plan_extraction_resources(
+        "miiv",
+        ["blood_gas"],
+        94_458,
+        requested_batch_size=10_000,
+        available_memory_mb=64 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "explicit_batch_size"
+    assert plan.batch_size == 10_000
+    assert plan.advisory is None
 
 
 def test_first_measured_batch_can_grow_40k_to_67k():

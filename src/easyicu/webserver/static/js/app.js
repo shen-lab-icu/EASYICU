@@ -231,8 +231,8 @@
 
     const rail = scr.rail ? scr.rail() : '';
     const guidedSub = window.EU_HASWORK
-      ? t('continue the current workflow by chat', '用对话继续当前流程')
-      : t('plan a study by conversation', '用对话规划研究');
+      ? t('continue discovery, evidence review, and research by chat', '用对话继续发掘、证据审阅与研究')
+      : t('mine ideas, review evidence, and plan by conversation', '用对话发掘想法、审阅证据并规划研究');
 
     return `
     <aside class="sidebar" aria-label="${t('Application sidebar', '应用侧边栏')}">
@@ -247,17 +247,7 @@
         <span class="cp-body"><span class="cp-t">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span><span class="cp-d">${guidedSub}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
-      <button type="button" class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas" aria-label="${navLabel(t('Idea Mining', '想法挖掘'), t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划'))}">
-        <span class="cp-ico">${icon('target', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Idea Mining', '想法挖掘')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
-        <span class="cp-go">${icon('arrow', 14)}</span>
-      </button>
-      <!-- The two entries above and the Data Workspace below are the SAME
-           pipeline with different skins; first-time users read them as three
-           separate products and do not know a half-finished conversation can
-           be continued on the classic pages (it can — study-context.js carries
-           the handoff both ways). Say so where the choice is made. -->
-      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('Paper or topic? Start with Idea Mining. Clear question? Start Guided Copilot. Already have data? Start with Extract Data. All three feed one pipeline — you can switch between conversation and the classic pages at any point without losing the study.', '有文章或主题，从想法挖掘开始；有明确问题，从研究引导开始；已有数据，从数据抽取开始。三者进入同一条流水线 —— 对话与经典页面之间随时可以互相切换，研究不会丢。')}</span></div>
+      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('A topic, clinical observation, paper URL, or PDF all start in Copilot. Evidence and literature open in its review panel without leaving the conversation.', '研究主题、临床现象、文章链接或 PDF 都从 Copilot 开始；证据和文献直接在审阅区打开，无需离开对话。')}</span></div>
       ${navSection('data', 'Data & Review', '数据与审阅', progress)}
       <div class="wsnav">
         <button type="button" class="wsgroup-head ${wsOpen ? 'open' : ''} ${classicActive ? 'active' : ''}" data-ws-toggle aria-expanded="${wsOpen}" aria-controls="data-workspace-links">

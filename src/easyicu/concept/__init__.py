@@ -29,6 +29,7 @@ from ..datasource import (
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
 from .availability_signal import ConceptAvailabilityRecord
+from .data_source_contract import ConceptDataSourceStorage
 from ..utils import compat
 
 logger = logging.getLogger(__name__)
@@ -67,115 +68,12 @@ WINDOW_AGGREGATE_OVERRIDES: Dict[str, tuple] = {
 }
 
 
-def _declare_dur_var_hours(frame) -> None:
-    """Record that ``frame``'s ``dur_var`` is now expressed in hours.
-
-    Every timedelta→hours conversion below must call this, otherwise the
-    public expansion path has to guess the unit back from the values.
-    """
-
-    from ..table.duration import UNIT_HOURS, set_dur_var_unit
-
-    set_dur_var_unit(frame, UNIT_HOURS)
-
-
-def _normalize_source_dur_var_hours(
-    frame,
-    *,
-    concept_name: str,
-    source_frame=None,
-):
-    """Normalize one source frame before row-binding multiple concept sources.
-
-    ``DataFrame.attrs`` is not reliably retained by column projection or
-    ``pd.concat``.  Recover the producer declaration from the pre-projection
-    frame, convert the source duration exactly once, and return a frame whose
-    numeric ``dur_var`` is explicitly in hours.
-    """
-
-    if "dur_var" not in frame.columns:
-        return frame
-
-    from ..table.duration import (
-        UNIT_HOURS,
-        get_dur_var_unit,
-        resolve_dur_var_hours,
-        set_dur_var_unit,
-    )
-
-    declared = get_dur_var_unit(frame) or get_dur_var_unit(source_frame)
-    if declared:
-        set_dur_var_unit(frame, declared)
-    if pd.api.types.is_numeric_dtype(
-        frame["dur_var"]
-    ) or pd.api.types.is_timedelta64_dtype(frame["dur_var"]):
-        frame["dur_var"] = resolve_dur_var_hours(
-            frame,
-            concept=concept_name,
-        )
-        set_dur_var_unit(frame, UNIT_HOURS)
-    return frame
-
-
-def _drop_negative_source_end_durations(
-    frame: pd.DataFrame,
-    *,
-    concept_name: str,
-    source_table: str,
-    column: str = "dur_var",
-) -> pd.DataFrame:
-    """Drop raw end-before-start records before strict duration validation.
-
-    ``resolve_dur_var_hours`` intentionally rejects every negative duration:
-    once a value has reached the generic window layer, it cannot distinguish
-    a corrupt source record from a producer/unit bug.  Here that provenance is
-    still known: ``column`` was just calculated as source end minus source
-    start.  Public ICU datasets contain a handful of such malformed records,
-    so quarantine those rows with an explicit warning while keeping the
-    generic window contract fail-closed for all other negative durations.
-    """
-
-    if column not in frame.columns or frame.empty:
-        return frame
-    values = pd.to_numeric(frame[column], errors="coerce")
-    invalid = values < 0
-    count = int(invalid.sum())
-    if not count:
-        return frame
-    logger.warning(
-        "dropping %d raw end-before-start row(s) for concept %r from table %r",
-        count,
-        concept_name,
-        source_table,
-    )
-    return frame.loc[~invalid].copy()
-
-
-def _source_duration_is_end(source) -> bool:
-    """Return whether a configured source duration column stores an end time.
-
-    This is schema semantics and must never be inferred from sampled patient
-    values.  The old ``head(100)``/80% heuristic made the same eICU
-    ``drugstopoffset`` column switch meaning when the patient batch boundary
-    changed, so 45k and 67k exports produced different D10 time grids.
-
-    Future dictionaries can declare ``params.dur_is_end`` explicitly.
-    Existing ricu-compatible sources use unambiguous end/stop column names.
-    """
-
-    params = getattr(source, "params", None) or {}
-    explicit = params.get("dur_is_end")
-    if isinstance(explicit, str):
-        normalized = explicit.strip().lower()
-        if normalized in {"true", "1", "yes"}:
-            return True
-        if normalized in {"false", "0", "no"}:
-            return False
-    elif explicit is not None:
-        return bool(explicit)
-
-    name = re.sub(r"[^a-z0-9]+", "", str(getattr(source, "dur_var", "")).lower())
-    return "end" in name or "stop" in name
+from .source_duration import (  # noqa: E402
+    declare_dur_var_hours as _declare_dur_var_hours,
+    drop_negative_source_end_durations as _drop_negative_source_end_durations,
+    normalize_source_dur_var_hours as _normalize_source_dur_var_hours,
+    source_duration_is_end as _source_duration_is_end,
+)
 
 
 def resolve_window_aggregate(concept_name: str, agg_method):
@@ -209,7 +107,7 @@ class _AvailabilityLoadContext:
     def set_sources(self, concept_name: str, sources: Iterable[object]) -> None:
         table_names = tuple(
             dict.fromkeys(
-                str(getattr(source, "table"))
+                str(source.table)
                 for source in sources
                 if getattr(source, "table", None)
             )
@@ -395,88 +293,9 @@ def _is_patient_id_filter_column(column: object, effective_id_var: Optional[str]
     }
 
 
-def _expand_wintbl_vectorized(
-    data: pd.DataFrame,
-    *,
-    idx_col: str,
-    dur_col: str,
-    id_cols: List[str],
-    value_columns: List[str],
-    interval_hours: float,
-    end_mode: str = "raw",
-    duration_zero_single: bool = False,
-) -> pd.DataFrame:
-    """Vectorized WinTbl -> time-series expansion.
-
-    Replaces two iterrows-based loops in this module:
-
-    * ``end_mode="raw"`` mirrors the recursive-concept callback path,
-      where ``end = start + duration`` and ``duration <= 0`` emits a
-      single point at the floored start when ``duration_zero_single``.
-    * ``end_mode="floored_clamped"`` mirrors the post-load WinTbl
-      expansion path, where
-      ``end = max(floor((floored_start + duration) / interval) * interval, 0)``.
-
-    The helper produces identical rows to the original loops (verified on
-    synthetic frames covering positive / zero / negative durations and
-    multiple interval choices). It runs ~200x faster than ``iterrows`` on
-    a 100k-row WinTbl on a typical laptop because all expansion is done
-    with ``np.repeat`` + cumulative offsets instead of Python-level loops.
-    """
-    base_cols = [idx_col]
-    base_cols += [c for c in id_cols if c in data.columns and c not in base_cols]
-    base_cols += [
-        c
-        for c in value_columns
-        if c in data.columns and c != dur_col and c not in base_cols
-    ]
-
-    if data.empty:
-        return pd.DataFrame(columns=base_cols)
-
-    start = pd.to_numeric(data[idx_col], errors="coerce").to_numpy(dtype=np.float64)
-    dur = pd.to_numeric(data[dur_col], errors="coerce").to_numpy(dtype=np.float64)
-    start = np.where(np.isnan(start), 0.0, start)
-    dur = np.where(np.isnan(dur), 0.0, dur)
-
-    start_aligned = np.floor(start / interval_hours) * interval_hours
-
-    if end_mode == "raw":
-        end_eff = start + dur
-        n_pts = np.floor((end_eff - start_aligned) / interval_hours).astype(np.int64) + 1
-        if duration_zero_single:
-            n_pts = np.where(dur <= 0.0, 1, n_pts)
-    elif end_mode == "floored_clamped":
-        end_eff = np.floor((start_aligned + dur) / interval_hours) * interval_hours
-        end_eff = np.maximum(end_eff, 0.0)
-        n_pts = np.floor((end_eff - start_aligned) / interval_hours).astype(np.int64) + 1
-    else:
-        raise ValueError(f"Unknown end_mode: {end_mode!r}")
-
-    n_pts = np.maximum(n_pts, 1)
-    total = int(n_pts.sum())
-    if total == 0:
-        return pd.DataFrame(columns=base_cols)
-
-    row_idx = np.repeat(np.arange(len(start)), n_pts)
-    offsets = np.arange(total) - np.repeat(
-        np.concatenate(([0], np.cumsum(n_pts)[:-1])), n_pts
-    )
-    times = start_aligned[row_idx] + offsets.astype(np.float64) * interval_hours
-
-    out: Dict[str, np.ndarray] = {idx_col: times}
-    seen = {idx_col}
-    for col in id_cols:
-        if col in data.columns and col not in seen:
-            out[col] = data[col].to_numpy()[row_idx]
-            seen.add(col)
-    for col in value_columns:
-        if col in seen or col == dur_col:
-            continue
-        if col in data.columns:
-            out[col] = data[col].to_numpy()[row_idx]
-            seen.add(col)
-    return pd.DataFrame(out)
+from .window_expansion import (  # noqa: E402
+    expand_wintbl_vectorized as _expand_wintbl_vectorized,
+)
 
 
 # --------------------------------------------------------------------------
@@ -494,6 +313,7 @@ from .errors import (  # noqa: F401
     ConceptError,
     ConceptExtractionUnavailable,
 )
+from .relative_time import coerce_mixed_time_column
 
 
 
@@ -573,10 +393,55 @@ def _estimate_cached_bytes(value: object) -> int:
         return 1024
 
 
+def _requested_dependency_overlap(
+    dictionary: ConceptDictionary,
+    concept_names: Iterable[str],
+) -> List[str]:
+    """Return requested concepts that are dependencies of another request.
+
+    Resolving an ancestor and one of its requested descendants concurrently
+    duplicates the descendant's full source scan before either thread can
+    populate the resolver cache. Keep independent concepts parallel, but
+    serialize a dependency-overlapping request so the existing cache can be
+    reused safely.
+    """
+
+    names = list(dict.fromkeys(concept_names))
+    requested = set(names)
+    overlap: set[str] = set()
+
+    for root in names:
+        visited: set[str] = set()
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            definition = dictionary.get(current)
+            if definition is None:
+                continue
+            dependencies = list(definition.depends_on or [])
+            dependencies.extend(definition.sub_concepts or [])
+            for dependency in dependencies:
+                if dependency != root and dependency in requested:
+                    overlap.add(dependency)
+                if dependency not in visited:
+                    stack.append(dependency)
+
+    return sorted(overlap)
+
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
-    def __init__(self, dictionary: ConceptDictionary, cache_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        dictionary: ConceptDictionary,
+        cache_dir: Optional[Path] = None,
+        *,
+        use_pickle: bool = False,
+    ) -> None:
         self.dictionary = dictionary
         # Cache for icustays table to avoid repeated loading
         self._icustays_cache: Optional[pd.DataFrame] = None
@@ -612,6 +477,31 @@ class ConceptResolver:
         self._cache_total_bytes = 0
         self._cache_evictions = 0
         self.cache_dir = cache_dir if cache_dir else None
+        # The cross-call disk cache stores ICUTable subclasses (IdTbl/TsTbl/
+        # WinTbl) whose type and metadata do not survive a plain parquet round
+        # trip, so its only serializer is pickle — and pickle.load executes the
+        # payload before anything gets to inspect it. ``easyicu.api``'s cache
+        # already states the rule for that: pickle is a trusted-local
+        # compatibility opt-in, never the default, because a cache directory
+        # can be shared, synced or written by another process.
+        #
+        # This cache read the same rule and then ignored it: it gated on
+        # ``cache_dir`` alone. Setting a cache directory is not consent to
+        # deserialize arbitrary objects out of it, so the opt-in is now
+        # explicit and separate. Without it a ``cache_dir`` simply gets no
+        # disk cache; there is no safe serializer at this layer to fall back
+        # to, and silently caching through an unsafe one is the failure mode
+        # being removed.
+        self.use_pickle = bool(use_pickle)
+        if self.cache_dir is not None and not self.use_pickle:
+            logger.warning(
+                "ConceptResolver cache_dir=%s is set without use_pickle=True; "
+                "the cross-call disk cache stays disabled. Pass "
+                "use_pickle=True only for a cache directory you fully "
+                "control — loading one writes arbitrary code execution into "
+                "this process.",
+                self.cache_dir,
+            )
         self.cache_schema_version = "1"
         self.dictionary_signature = self._compute_dictionary_signature()
 
@@ -1084,8 +974,28 @@ class ConceptResolver:
         if not source_values:
             return patient_ids
         
-        # 加载或使用缓存的 ID 映射表
-        if self._id_mapping_cache is None:
+        # 加载或使用缓存的 ID 映射表。该表是按请求队列过滤的，
+        # 因此不能把“已有缓存”当成“已覆盖所有后续 ID”。流式提取
+        # 会用同一 loader 依次处理互不重叠的队列；首批 5,000 stay 的
+        # partial cache 曾使第二批 stay_id -> subject_id 转换得到空值，
+        # 随后 hospital-table 路径因没有患者过滤而读入近似全库。
+        mapping_columns = [stay_id_col, 'subject_id']
+        mapping_df = self._id_mapping_cache
+        if (
+            mapping_df is None
+            or source_var not in mapping_df.columns
+            or target_id_var not in mapping_df.columns
+        ):
+            missing_source_values = list(dict.fromkeys(source_values))
+            mapping_df = None
+        else:
+            cached_source_values = set(mapping_df[source_var].dropna().tolist())
+            missing_source_values = [
+                value for value in dict.fromkeys(source_values)
+                if value not in cached_source_values
+            ]
+
+        if missing_source_values:
             try:
                 # eICU doesn't use icustays table
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
@@ -1102,7 +1012,7 @@ class ConceptResolver:
                     FilterSpec(
                         column=source_var,
                         op=FilterOp.IN,
-                        value=source_values,
+                        value=missing_source_values,
                     )
                 ]
                 icustays_table = data_source.load_table(
@@ -1112,9 +1022,19 @@ class ConceptResolver:
                     verbose=False
                 )
                 if hasattr(icustays_table, 'data'):
-                    self._id_mapping_cache = icustays_table.data[[stay_id_col, 'subject_id']].drop_duplicates()
+                    loaded_mapping = icustays_table.data[mapping_columns].drop_duplicates()
                 else:
-                    self._id_mapping_cache = icustays_table[[stay_id_col, 'subject_id']].drop_duplicates()
+                    loaded_mapping = icustays_table[mapping_columns].drop_duplicates()
+
+                if mapping_df is None or mapping_df.empty:
+                    mapping_df = loaded_mapping
+                elif not loaded_mapping.empty:
+                    mapping_df = pd.concat(
+                        [mapping_df, loaded_mapping],
+                        ignore_index=True,
+                        copy=False,
+                    ).drop_duplicates(subset=mapping_columns, keep='last')
+                self._id_mapping_cache = mapping_df
                     
                 if verbose:
                     if DEBUG_MODE: print(f"   🔗 加载 ID 映射表: {len(self._id_mapping_cache)} 条记录")
@@ -1125,11 +1045,17 @@ class ConceptResolver:
         
         # 从映射表中获取目标ID
         mapping_df = self._id_mapping_cache
+        if mapping_df is None:
+            mapping_df = pd.DataFrame(columns=mapping_columns)
+            self._id_mapping_cache = mapping_df
         mask = mapping_df[source_var].isin(source_values)
         target_values = mapping_df.loc[mask, target_id_var].unique().tolist()
-        
+
+        # Always materialize the target key, including the legitimate empty
+        # mapping.  Callers can then emit an explicit empty IN filter instead
+        # of silently omitting the filter and widening to the whole table.
+        patient_ids[target_id_var] = target_values
         if target_values:
-            patient_ids[target_id_var] = target_values
             if verbose:
                 if DEBUG_MODE: print(f"   🔗 ID 转换: {source_var}={len(source_values)}个 → {target_id_var}={len(target_values)}个")
         
@@ -1668,9 +1594,19 @@ class ConceptResolver:
             
             # 检查是否有共享的子概念（被多个概念引用）
             shared_sub_concepts = [sub for sub, parents in all_sub_concepts.items() if len(parents) > 1]
-            if shared_sub_concepts:
+            requested_dependency_overlap = _requested_dependency_overlap(
+                self.dictionary,
+                names,
+            )
+            if shared_sub_concepts or requested_dependency_overlap:
                 if verbose:
-                    logger.info(f"🔄 检测到共享子概念 {shared_sub_concepts}，使用串行加载以利用缓存")
+                    hazards = sorted(
+                        set(shared_sub_concepts) | set(requested_dependency_overlap)
+                    )
+                    logger.info(
+                        "🔄 检测到依赖重叠概念 %s，使用串行加载以利用缓存",
+                        hazards,
+                    )
                 effective_workers = 1
 
         def _resolve(
@@ -1972,6 +1908,7 @@ class ConceptResolver:
         availability_context: Optional[_AvailabilityLoadContext] = None,
         **kwargs,  # Additional parameters for callbacks
     ) -> ICUTable:
+        storage: ConceptDataSourceStorage = data_source
         # 🔧 批量加载模式：减少诊断输出
         batch_loading = kwargs.get('_batch_loading', False)
         if batch_loading:
@@ -2044,7 +1981,7 @@ class ConceptResolver:
                                 tables[sub_name] = sub_result
                         except Exception as e:
                             if DEBUG_MODE:
-                                print(f"   DEBUG: Failed to load sub-concept {sub_name}: {e}")
+                                logger.debug(f"Failed to load sub-concept {sub_name}: {e}")
                             continue
                 
                 callback_context = ConceptCallbackContext(
@@ -2157,7 +2094,7 @@ class ConceptResolver:
             # 如果无匹配则直接跳过（节省数秒），有匹配则转化为精确 ids 过滤器利用谓词下推。
             _rgx_pre_matched_ids = None  # 保存预匹配结果，供后续 regex 过滤使用
             if (getattr(source, 'regex', None) and source.sub_var and 
-                source.ids is None and hasattr(data_source, '_resolve_loader_from_disk')):
+                source.ids is None and hasattr(storage, 'resolve_loader_from_disk')):
                 try:
                     import re as _re_module
                     # 使用实例级缓存：同一表的 DISTINCT 值只查询一次
@@ -2168,7 +2105,7 @@ class ConceptResolver:
                     if _distinct_cache_key in self._rgx_distinct_cache:
                         _all_vals = self._rgx_distinct_cache[_distinct_cache_key]
                     else:
-                        _table_path = data_source._resolve_loader_from_disk(source.table)
+                        _table_path = storage.resolve_loader_from_disk(source.table)
                         if _table_path is not None and isinstance(_table_path, Path):
                             import duckdb as _ddb
                             _con = _ddb.connect()
@@ -2280,7 +2217,7 @@ class ConceptResolver:
                         id_values = expanded_patient_ids.get(effective_id_var)
                         
                         # DEBUG
-                        if id_values:
+                        if id_values is not None:
                             # ✅ 关键修复：对于 hospital tables（如 labevents），如果使用 subject_id 过滤
                             # 需要在 metadata 中保存原始的 stay_id/icustay_id，供 datasource 在 join 后精确过滤
                             metadata = None
@@ -2481,9 +2418,9 @@ class ConceptResolver:
                     # 通用检查：表是否有分桶目录或扁平parquet目录 + 源是否有 sub_var + ids + 无复杂 callback
                     _has_bucket_dir = False
                     try:
-                        _bucket_dir_check = data_source._resolve_bucket_directory(source.table)
+                        _bucket_dir_check = storage.resolve_bucket_directory(source.table)
                         if _bucket_dir_check is None:
-                            _bucket_dir_check = data_source._resolve_flat_parquet_directory(source.table)
+                            _bucket_dir_check = storage.resolve_flat_parquet_directory(source.table)
                         _has_bucket_dir = _bucket_dir_check is not None
                     except Exception:
                         pass
@@ -2583,10 +2520,10 @@ class ConceptResolver:
                                     _idtbl_sub_var = source.sub_var
                                     _idtbl_val_var = getattr(source, 'value_var', None) or 'value'
                                     # Resolve bucket/flat directory
-                                    _idtbl_bucket_dir = data_source._resolve_bucket_directory(source.table)
+                                    _idtbl_bucket_dir = storage.resolve_bucket_directory(source.table)
                                     _idtbl_flat_dir = None
                                     if _idtbl_bucket_dir is None:
-                                        _idtbl_flat_dir = data_source._resolve_flat_parquet_directory(source.table)
+                                        _idtbl_flat_dir = storage.resolve_flat_parquet_directory(source.table)
                                     if _idtbl_bucket_dir is not None or _idtbl_flat_dir is not None:
                                         # Build read_parquet source: 显式文件列表，过滤 AppleDouble (._*.parquet)
                                         # 否则在 macFUSE/NTFS/exFAT 上 DuckDB 的 ** glob 会把 macOS sidecar 元数据
@@ -3139,7 +3076,7 @@ class ConceptResolver:
                             _wt_agg_func = aggregator.upper()
 
                         # Find parquet files
-                        _wt_table_path = data_source._resolve_loader_from_disk(source.table)
+                        _wt_table_path = storage.resolve_loader_from_disk(source.table)
                         if _wt_table_path is not None:
                             _wt_dir = Path(_wt_table_path) if not isinstance(_wt_table_path, Path) else _wt_table_path
                             _wt_glob = _duckdb_path(_wt_dir / '*.parquet') if _wt_dir.is_dir() else _duckdb_path(_wt_dir)
@@ -3483,9 +3420,9 @@ class ConceptResolver:
                     # 比缓存整张表更高效且内存友好
                     skip_cache_for_bucket_table = False
                     try:
-                        _cache_skip_dir = data_source._resolve_bucket_directory(source.table)
+                        _cache_skip_dir = storage.resolve_bucket_directory(source.table)
                         if _cache_skip_dir is None:
-                            _cache_skip_dir = data_source._resolve_flat_parquet_directory(source.table)
+                            _cache_skip_dir = storage.resolve_flat_parquet_directory(source.table)
                         if _cache_skip_dir is not None:
                             skip_cache_for_bucket_table = True
                             if DEBUG_MODE and verbose:
@@ -3572,7 +3509,7 @@ class ConceptResolver:
                     )
                 except Exception as e:
                     if DEBUG_MODE:
-                        print(f"   ⚠️  patients 表关联失败: {e}")
+                        logger.warning(f"patients 表关联失败: {e}")
             
             # MIMIC-IV特殊处理：若表为labevents/microbiologyevents/inputevents，仅有subject_id，按时间窗口映射到对应ICU stay
             if DEBUG_MODE:
@@ -3837,7 +3774,7 @@ class ConceptResolver:
                             # 这是正常的数据过滤行为（例如实验室结果在ICU出院后采集，或在miiv中是ICU入院前的数据）
                             if DEBUG_MODE:
                                 reason = "ricu.R-style时间过滤" if before_filter > 0 else "ICU住院匹配"
-                                print(f"   ⚠️  [{concept_name}] MIMIC {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
+                                logger.warning(f"[{concept_name}] MIMIC {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
                             frame = pd.DataFrame(columns=frame.columns)
                             
                         # 🔗 关键修复：如果用户提供了特定的 stay_id/icustay_id，在映射后再次过滤
@@ -3867,7 +3804,7 @@ class ConceptResolver:
                                 id_columns = [actual_stay_col]
                                 if DEBUG_MODE: print(f"   🔄 MIMIC特殊处理(无时间列): {source.table} ID列从 subject_id → {actual_stay_col} (行数: {len(frame)})")
                 except Exception as ex:
-                    print(f"⚠️  Warning: Failed to time-map labevents to icu stays: {ex}")
+                    logger.warning(f"Failed to time-map labevents to icu stays: {ex}")
                     if verbose:
                         import traceback
                         traceback.print_exc()
@@ -4031,7 +3968,7 @@ class ConceptResolver:
                             id_columns = ['stay_id']
                             if DEBUG_MODE: print("   🔄 MIMIC-IV特殊处理: admissions ID列从 subject_id → stay_id")
                 except Exception as ex:
-                    print(f"⚠️  Warning: Failed to map admissions to icu stays: {ex}")
+                    logger.warning(f"Failed to map admissions to icu stays: {ex}")
                     if verbose:
                         import traceback
                         traceback.print_exc()
@@ -4244,7 +4181,7 @@ class ConceptResolver:
                 elif value_column not in frame.columns:
                     # 如果仍然不存在，跳过这个源
                     if DEBUG_MODE:
-                        print(f"   ⚠️  value_column '{value_column}' 不存在，跳过此源")
+                        logger.warning(f"value_column '{value_column}' 不存在，跳过此源")
                     frame = pd.DataFrame()
                     continue
 
@@ -4300,7 +4237,7 @@ class ConceptResolver:
                 if regex_column not in frame.columns:
                     # 如果目标列不存在，跳过这个源
                     if DEBUG_MODE:
-                        print(f"   ⚠️ regex 列 '{regex_column}' 不存在，跳过此源")
+                        logger.warning(f"regex 列 '{regex_column}' 不存在，跳过此源")
                     frame = pd.DataFrame()
                     continue
                 # 使用 regex=True 并抑制 UserWarning
@@ -4421,7 +4358,7 @@ class ConceptResolver:
                 if mismatched and (DEBUG_MODE or len(frame) > 0):
                     # 只在调试模式或有数据时记录
                     if DEBUG_MODE:
-                        print(f"   ⚠️ 单位警告 (允许{definition.units}): 发现不匹配单位 {mismatched}")
+                        logger.warning(f"单位警告 (允许{definition.units}): 发现不匹配单位 {mismatched}")
                     # 发出Python警告供日志记录
                     import warnings
                     warnings.warn(
@@ -4461,7 +4398,7 @@ class ConceptResolver:
                         frame = frame.drop(columns=['intime'], errors='ignore')
                 except Exception as e:
                     if DEBUG_MODE:
-                        print(f"   ⚠️ [MIMIC-III] source级时间标准化失败: {e}")
+                        logger.warning(f"[MIMIC-III] source级时间标准化失败: {e}")
                 
                 # 🔧 以下是被禁用的严格过滤逻辑（保留作为参考）
                 skip_unit_filter = True  # 与 R ricu 一致，不过滤数据
@@ -4949,7 +4886,7 @@ class ConceptResolver:
                                     combined = combined.drop(columns=['intime'])
                     except Exception as e:
                         if DEBUG_MODE:
-                            print(f"   ⚠️ [MIMIC-III] datetime→numeric 转换失败: {e}")
+                            logger.warning(f"[MIMIC-III] datetime→numeric 转换失败: {e}")
                 
                 # 优先使用 charttime，如果不存在则创建
                 if 'charttime' not in combined.columns:
@@ -5032,7 +4969,7 @@ class ConceptResolver:
                                 combined.loc[remaining_mask, 'charttime'] = rel_minutes / 60.0
                         except Exception as e:
                             if DEBUG_MODE:
-                                print(f"   ⚠️ [MIMIC-III] charttime mixed-type 规范化失败: {e}")
+                                logger.warning(f"[MIMIC-III] charttime mixed-type 规范化失败: {e}")
 
                 combined['charttime'] = pd.to_numeric(combined['charttime'], errors='coerce') if not pd.api.types.is_numeric_dtype(combined['charttime']) else combined['charttime']
 
@@ -5070,7 +5007,7 @@ class ConceptResolver:
                             combined.loc[_epoch_mask, 'charttime'] = rel_hours.values
                     except Exception as e:
                         if DEBUG_MODE:
-                            print(f"   ⚠️ [MIMIC-III] epoch charttime 规范化失败: {e}")
+                            logger.warning(f"[MIMIC-III] epoch charttime 规范化失败: {e}")
 
         # 🔧 CRITICAL FIX 2026-03-10: Multi-source concat produces object dtype for value column
         # When frames from different sources (e.g., respiratorycharting + lab) are concatenated,
@@ -5113,36 +5050,17 @@ class ConceptResolver:
                         if 'time' in key.lower() or key == 'charttime':
                             # Bug 32 fix: DuckDB返回float64(相对小时)，非DuckDB返回datetime64
                             # concat后变为object dtype — 统一为float
-                            original = combined[key]
-                            numeric_vals = pd.to_numeric(original, errors='coerce')
-                            dt_mask = numeric_vals.isna() & original.notna()
-                            if dt_mask.any():
-                                dt_vals = pd.to_datetime(original[dt_mask], errors='coerce')
-                                if dt_vals.notna().any():
-                                    # 加载 intime 以转换 datetime → 相对小时
-                                    intime_col = None
-                                    if 'intime' in combined.columns:
-                                        intime_col = pd.to_datetime(combined.loc[dt_mask, 'intime'], errors='coerce')
-                                    else:
-                                        try:
-                                            icu_tbl = data_source.load_table('icustays',
-                                                columns=[id_columns[0], 'intime'], verbose=False)
-                                            icu_df = icu_tbl.data if hasattr(icu_tbl, 'data') else icu_tbl
-                                            if pd.api.types.is_datetime64_any_dtype(icu_df['intime']):
-                                                if hasattr(icu_df['intime'].dt, 'tz') and icu_df['intime'].dt.tz is not None:
-                                                    icu_df['intime'] = icu_df['intime'].dt.tz_localize(None)
-                                            combined = combined.merge(
-                                                icu_df[[id_columns[0], 'intime']], on=id_columns[0], how='left')
-                                            intime_col = pd.to_datetime(combined.loc[dt_mask, 'intime'], errors='coerce')
-                                        except Exception:
-                                            pass
-                                    if intime_col is not None:
-                                        if hasattr(intime_col.dt, 'tz') and intime_col.dt.tz is not None:
-                                            intime_col = intime_col.dt.tz_localize(None)
-                                        if hasattr(dt_vals.dt, 'tz') and dt_vals.dt.tz is not None:
-                                            dt_vals = dt_vals.dt.tz_localize(None)
-                                        rel_hours = np.floor((dt_vals - intime_col).dt.total_seconds() / 3600.0)
-                                        numeric_vals.loc[dt_mask] = rel_hours
+                            combined, numeric_vals = coerce_mixed_time_column(
+                                combined,
+                                key,
+                                concept_id=concept_name,
+                                database=(
+                                    getattr(getattr(data_source, 'config', None), 'name', '')
+                                    or 'unknown'
+                                ),
+                                id_columns=id_columns,
+                                data_source=data_source,
+                            )
                             combined[key] = numeric_vals
         combined = combined.reset_index(drop=True)
         agg_value = self._coerce_final_aggregator(aggregator)
@@ -5604,6 +5522,14 @@ class ConceptResolver:
                         print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
         elif align_to_admission:
             # Just alignment, no interval/aggregation
+            # True win_tbl concepts bypass the interval branch above, where
+            # the concat-level duration declaration is normally restored.
+            # Restore that declaration before admission alignment so the
+            # duration cannot be mistaken for an already-hour-valued number.
+            if combined_dur_unit and "dur_var" in combined.columns:
+                from ..table.duration import set_dur_var_unit
+
+                set_dur_var_unit(combined, combined_dur_unit)
             combined = self._align_time_to_admission(
                 combined,
                 data_source,
@@ -6246,7 +6172,7 @@ class ConceptResolver:
             try:
                 data[index_column] = pd.to_datetime(data[index_column], errors='coerce', utc=True).dt.tz_localize(None)
             except Exception as e:
-                print(f"  ⚠️  警告: 无法将时间列 {index_column} 转换为datetime: {e}")
+                logger.warning(f"无法将时间列 {index_column} 转换为datetime: {e}")
                 return data
         
         try:
@@ -6569,7 +6495,7 @@ class ConceptResolver:
                             table.data[dur_col] = table.data[dur_col].dt.total_seconds() / 3600.0
                         elif pd.api.types.is_datetime64_any_dtype(table.data[dur_col]):
                             # If dur_var is datetime (shouldn't happen), warn
-                            logger.warning("⚠️  WinTbl '%s' 的 dur_var '%s' 是 datetime 类型，预期是 timedelta", name, dur_col)
+                            logger.warning("WinTbl '%s' 的 dur_var '%s' 是 datetime 类型，预期是 timedelta", name, dur_col)
                 
                 aligned_sub_tables[name] = table
             sub_tables = aligned_sub_tables
@@ -6751,7 +6677,7 @@ class ConceptResolver:
                             _declare_dur_var_hours(result.data)
                         elif pd.api.types.is_datetime64_any_dtype(result.data[dur_col]):
                             # 如果是 datetime（不应该，但保险起见），记录警告
-                            print(f"   ⚠️  警告: WinTbl 的 dur_var '{dur_col}' 是 datetime 类型，预期是 timedelta")
+                            logger.warning(f"WinTbl 的 dur_var '{dur_col}' 是 datetime 类型，预期是 timedelta")
             
             # Align time to ICU admission if requested
             if align_to_admission and not result.data.empty:
@@ -7867,7 +7793,7 @@ class ConceptResolver:
             missing_key_cols = [col for col in key_cols if col not in frame.columns]
             if missing_key_cols:
                 # 如果缺少关键列，跳过这个表
-                print(f"⚠️  警告: 表 '{name}' 缺少关键列 {missing_key_cols}，跳过合并")
+                logger.warning(f"表 '{name}' 缺少关键列 {missing_key_cols}，跳过合并")
                 continue
             
             if name not in frame.columns:
@@ -7875,7 +7801,7 @@ class ConceptResolver:
                 # 这种情况可能发生在keep_components=True时，回调返回了组件列而不是概念名称列
                 value_cols = [col for col in frame.columns if col not in key_cols]
                 if not value_cols:
-                    print(f"⚠️  警告: 表 '{name}' 没有值列，跳过合并")
+                    logger.warning(f"表 '{name}' 没有值列，跳过合并")
                     continue
             
             # 选择要保留的列：ID列 + 时间列 + 所有非关键列（包括概念值列和组件列）
@@ -7984,31 +7910,46 @@ class ConceptResolver:
         data_source: ICUDataSource,
         cache_key: str,
     ) -> Optional[ICUTable]:
-        """Load a concept from disk cache if available."""
-        if self.cache_dir is None:
+        """Load a concept from disk cache if the pickle opt-in was given.
+
+        Note the isinstance check below runs *after* ``pickle.load`` has
+        already executed the payload — it documents the expected shape, it
+        does not make an untrusted file safe. That is why the opt-in gate is
+        in front of it rather than behind it.
+        """
+        if self.cache_dir is None or not self.use_pickle:
             return None
-            
+
         try:
             import pickle
             from pathlib import Path
-            
-            # Create cache file path
-            cache_file = Path(self.cache_dir) / f"{cache_key}.pkl"
+
+            # Create cache file path. The suffix matches easyicu.api's cache so
+            # the two agree on which files carry executable content.
+            cache_file = Path(self.cache_dir) / f"{cache_key}.trusted.pkl"
             if not cache_file.exists():
                 return None
-                
+
             # Load from cache
             with open(cache_file, "rb") as f:
                 cached_data = pickle.load(f)
-                
+
             # Verify the cached data is an ICUTable or WinTbl/TsTbl/IdTbl
             if isinstance(cached_data, ICUTable) or hasattr(cached_data, 'data'):
                 return cached_data
-                
-        except Exception:
-            # If anything goes wrong, silently return None to force recomputation
-            pass
-            
+            logger.warning(
+                "Ignoring disk cache entry for concept %r: expected an "
+                "ICUTable, found %s",
+                concept_name, type(cached_data).__name__,
+            )
+        except Exception as exc:
+            # A miss must not be silent: a corrupt or unreadable cache entry
+            # otherwise reads as a cold cache and gets rewritten every call.
+            logger.warning(
+                "Disk cache read failed for concept %r (%s: %s); recomputing",
+                concept_name, type(exc).__name__, exc,
+            )
+
         return None
 
     def _store_in_disk_cache(
@@ -8018,27 +7959,30 @@ class ConceptResolver:
         cache_key: str,
         result: ICUTable,
     ) -> None:
-        """Store a concept result in disk cache."""
-        if self.cache_dir is None:
+        """Store a concept result in disk cache if the pickle opt-in was given."""
+        if self.cache_dir is None or not self.use_pickle:
             return
-            
+
         try:
             import pickle
             from pathlib import Path
-            
+
             # Ensure cache directory exists
             Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
-            
+
             # Create cache file path
-            cache_file = Path(self.cache_dir) / f"{cache_key}.pkl"
-            
+            cache_file = Path(self.cache_dir) / f"{cache_key}.trusted.pkl"
+
             # Store in cache
             with open(cache_file, "wb") as f:
                 pickle.dump(result, f)
-                
-        except Exception:
-            # If anything goes wrong, silently continue without caching
-            pass
+
+        except Exception as exc:
+            logger.warning(
+                "Disk cache write failed for concept %r (%s: %s); continuing "
+                "without caching",
+                concept_name, type(exc).__name__, exc,
+            )
 
     def _expand_dependencies(self, requested: List[str]) -> List[str]:
         """Return dependency-closed list of concept names."""
@@ -8858,6 +8802,7 @@ class ConceptResolver:
         
         # 🔧 FIX 2025-01-31: 根据数据源确定默认ID列
         default_id_col = 'stay_id'
+        db_name = ''
         if data_source is not None and hasattr(data_source, 'config'):
             db_name = getattr(data_source.config, 'name', '')
             if db_name in ['eicu', 'eicu_demo']:
@@ -8889,6 +8834,7 @@ class ConceptResolver:
         # row during the outer merge.  The table metadata is the authoritative
         # time binding and must travel with the frame until names are aligned.
         declared_time_columns: Dict[str, str] = {}
+        declared_duration_columns: Dict[str, str] = {}
         for name, table in tables.items():
             if isinstance(table, ICUTable):
                 df = table.data
@@ -8912,6 +8858,18 @@ class ConceptResolver:
                 declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
                 if declared_index and declared_index in df.columns:
                     declared_time_columns[name] = declared_index
+                # The MIMIC-III IMV repair needs its reconstructed duration to
+                # survive the public multi-concept merge. Keep this scoped to
+                # that newly bound source: changing all mech_vent WinTbls would
+                # alter the already-sealed MIIV/AUMC/SIC extraction contract.
+                declared_duration = getattr(table, 'dur_var', None)
+                if (
+                    name == "mech_vent"
+                    and db_name in {"mimic", "mimic_demo"}
+                    and declared_duration
+                    and declared_duration in df.columns
+                ):
+                    declared_duration_columns[name] = declared_duration
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
                     value_candidates = ['value', 'valuenum']
@@ -8990,6 +8948,24 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
+            # Only the newly bound MIMIC-III mech_vent source opts into interval
+            # preservation here. Its dur_var is an elapsed duration, while the
+            # source frame can retain an auxiliary absolute end timestamp.
+            declared_duration = declared_duration_columns.get(name)
+            if declared_duration and declared_duration in df.columns:
+                if declared_duration != "duration":
+                    df = df.drop(columns=["duration"], errors="ignore").rename(
+                        columns={declared_duration: "duration"}
+                    )
+                redundant_end_columns = [
+                    column
+                    for column in ("endtime", "stop")
+                    if column in df.columns
+                    and column != declared_time_columns.get(name)
+                ]
+                if redundant_end_columns:
+                    df = df.drop(columns=redundant_end_columns)
+                concept_data[name] = df
             # The table's declared index is authoritative.  Multi-source
             # concepts can retain an auxiliary column whose name happens to
             # equal the time key selected from an earlier concept.  For

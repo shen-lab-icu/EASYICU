@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 
 from easyicu.research_agent.execution.runners.landmark_association_figure_executor import (
+    _continuous_exposure_label,
     landmark_association_figure_executor_owns_step,
     run_landmark_association_figure,
 )
@@ -17,6 +19,7 @@ from easyicu.research_agent.execution.figure_plan_binding import (
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
 from easyicu.research_agent.planning.figure_plan_shaping import (
+    apply_article_figure_strategy_placements,
     close_empty_deterministic_figure_contracts,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -24,7 +27,7 @@ from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 INPUTS = (
     "table:generic_landmark_rcs_curve",
-    "table:absolute_risk_context",
+    "table:generic_adjusted_absolute_risk",
     "table:robustness_summary",
     "table:measurement_process",
 )
@@ -40,20 +43,26 @@ def _frames() -> dict[str, pd.DataFrame]:
     return {
         INPUTS[0]: pd.DataFrame(
             {
+                "exposure": ["biomarker_mg_dl"] * 3,
                 "biomarker_mg_dl": [1.0, 3.0, 5.0],
                 "reference_biomarker_mg_dl": [2.1, 2.1, 2.1],
                 "adjusted_odds_ratio": [0.76, 1.10, 1.96],
                 "ci_low": [0.72, 1.00, 1.89],
                 "ci_high": [0.81, 1.21, 2.03],
+                "exposure_density_n": [20, 60, 20],
+                "exposure_density_fraction": [0.2, 0.6, 0.2],
             }
         ),
         INPUTS[1]: pd.DataFrame(
             {
-                "label": ["Observed", "Observed", "Distribution"],
-                "estimate_type": ["prevalence", "outcome_risk", "distribution"],
-                "estimate": [0.54, 0.14, None],
-                "ci_low": [0.53, 0.13, None],
-                "ci_high": [0.55, 0.15, None],
+                "exposure": ["biomarker_mg_dl"] * 3,
+                "biomarker_mg_dl": [1.0, 3.0, 5.0],
+                "reference_biomarker_mg_dl": [2.1, 2.1, 2.1],
+                "adjusted_absolute_risk": [0.08, 0.12, 0.23],
+                "ci_low": [0.07, 0.10, 0.20],
+                "ci_high": [0.09, 0.14, 0.26],
+                "exposure_density_n": [20, 60, 20],
+                "exposure_density_fraction": [0.2, 0.6, 0.2],
             }
         ),
         INPUTS[2]: pd.DataFrame(
@@ -154,7 +163,9 @@ def test_composite_owner_accepts_a_case_neutral_curve_product(tmp_path: Path) ->
     )
 
 
-def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
+def test_renderer_exports_two_claim_led_panels_and_four_source_tables(
+    tmp_path: Path,
+) -> None:
     bindings = {}
     for key, frame in _frames().items():
         path = tmp_path / f"{key.partition(':')[2]}.csv"
@@ -175,9 +186,11 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     assert source["source_table"].nunique() == 1
     assert (tmp_path / "outputs" / "display_suite.figure_contract.json").is_file()
     svg = (tmp_path / "outputs" / "display_suite.svg").read_text(encoding="utf-8")
-    assert "Biomarker (mg/dL; reference 2.1)" in svg
-    assert "Cohort share" in svg
-    assert "Observed outcome risk" in svg
+    assert "Biomarker (mg/dL)" in svg
+    assert "Reference 2.1" in svg
+    assert "Exposure distribution" in svg
+    assert "Model-standardised outcome risk (%)" in svg
+    assert "Absolute risk" in svg
     contract = pd.read_json(
         tmp_path / "outputs" / "display_suite.figure_contract.json", typ="series"
     )
@@ -187,20 +200,15 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     assert [panel["role"] for panel in contract["panels"]] == [
         "primary_estimand",
         "descriptive_result",
-        "robustness",
-        "data_quality",
     ]
     assert [panel["metadata"]["chart_type"] for panel in contract["panels"]] == [
         "marginal_effect_panel",
-        "dot_interval_absolute_risk",
-        "sensitivity_coverage_matrix",
-        "availability_panel",
+        "absolute_risk_curve",
     ]
-    robustness_panel = contract["panels"][2]
-    assert robustness_panel["metadata"]["effect_comparison_authorized"] is False
-    assert robustness_panel["metadata"]["reason_code"] == (
-        "ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED"
-    )
+    assert summary["supplementary_panel_ids"] == [
+        "measurement_process",
+        "robustness_summary",
+    ]
     step = AnalysisStep(
         step_id="display_suite",
         planned_analysis_role="auxiliary",
@@ -221,6 +229,11 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
         )
         == []
     )
+
+
+def test_continuous_exposure_label_preserves_summary_and_clinical_unit() -> None:
+    assert _continuous_exposure_label("lact_max") == "Maximum lactate (mmol/L)"
+    assert _continuous_exposure_label("biomarker_mg_dl") == "Biomarker (mg/dL)"
 
 
 def test_approved_legacy_article_step_uses_sealed_renderer_without_plan_rewrite(
@@ -299,7 +312,7 @@ def test_approved_legacy_article_step_uses_sealed_renderer_without_plan_rewrite(
     assert (tmp_path / "outputs" / "assemble_article_displays.png").is_file()
 
 
-def test_renderer_moves_routine_measurement_panel_out_of_main_figure(
+def test_renderer_keeps_routine_audit_panels_out_of_main_figure(
     tmp_path: Path,
 ) -> None:
     bindings = {}
@@ -324,9 +337,11 @@ def test_renderer_moves_routine_measurement_panel_out_of_main_figure(
     assert [panel["role"] for panel in contract["panels"]] == [
         "primary_estimand",
         "descriptive_result",
-        "robustness",
     ]
-    assert summary["supplementary_panel_ids"] == ["measurement_process"]
+    assert summary["supplementary_panel_ids"] == [
+        "measurement_process",
+        "robustness_summary",
+    ]
     assert len(summary["source_data_files"]) == 4
     step = AnalysisStep(
         step_id="display_suite",
@@ -339,9 +354,10 @@ def test_renderer_moves_routine_measurement_panel_out_of_main_figure(
             panel.bind(figure_output="figure:display_suite").model_copy(
                 update={
                     "placement": (
-                        "supplementary"
-                        if panel.panel_id == "measurement_process"
-                        else "main"
+                        "main"
+                        if panel.panel_id
+                        in {"association_curve", "absolute_risk_curve"}
+                        else "supplementary"
                     )
                 }
             )
@@ -356,3 +372,81 @@ def test_renderer_moves_routine_measurement_panel_out_of_main_figure(
         )
         == []
     )
+
+
+def test_audit_only_coverage_is_supplementary_even_when_robustness_is_main() -> None:
+    step = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render the typed article display suite.",
+        inputs=list(INPUTS),
+        expected_outputs=["figure:display_suite"],
+        method="visualization",
+        figure_panels=[
+            panel.bind(figure_output="figure:display_suite")
+            for panel in landmark_association_composite_panels(INPUTS)
+        ],
+    )
+    strategy = SimpleNamespace(
+        role_strategies=[
+            SimpleNamespace(role="primary_estimand", placement="main"),
+            SimpleNamespace(role="descriptive_result", placement="main"),
+            SimpleNamespace(role="robustness", placement="main"),
+            SimpleNamespace(role="data_quality", placement="supplementary"),
+        ]
+    )
+
+    shaped = apply_article_figure_strategy_placements(
+        plan=AnalysisPlan(research_question="Association?", steps=[step]),
+        strategy=strategy,
+    )
+
+    placements = {
+        panel.panel_id: panel.placement for panel in shaped.steps[0].figure_panels
+    }
+    assert placements == {
+        "association_curve": "main",
+        "absolute_risk_curve": "main",
+        "robustness_summary": "supplementary",
+        "measurement_process": "supplementary",
+    }
+
+
+def test_main_landmark_figure_keeps_audit_panels_in_supplement(
+    tmp_path: Path,
+) -> None:
+    bindings = {}
+    for key, frame in _frames().items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    summary = run_landmark_association_figure(
+        out_dir=tmp_path / "outputs",
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": "display_suite", "inputs": bindings},
+        step_id="display_suite",
+        figure_product="display_suite",
+        input_keys=INPUTS,
+        panel_placements={
+            "robustness_summary": "supplementary",
+            "measurement_process": "supplementary",
+        },
+    )
+
+    contract = pd.read_json(
+        tmp_path / "outputs" / "display_suite.figure_contract.json", typ="series"
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+    ]
+    assert contract["height_mm"] == 78.0
+    assert summary["supplementary_panel_ids"] == [
+        "measurement_process",
+        "robustness_summary",
+    ]
+    assert len(summary["source_data_files"]) == 4
+    svg = (tmp_path / "outputs" / "display_suite.svg").read_text(encoding="utf-8")
+    assert "Sensitivity-analysis coverage" not in svg
+    assert "Measurement availability" not in svg

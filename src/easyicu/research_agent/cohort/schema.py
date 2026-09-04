@@ -1050,9 +1050,7 @@ def validate_plan_cohort_predicates_against_context(
 
 
 def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
-    """Downcast pandas nullable-extension and boolean-object columns to numpy
-    ``float64`` so downstream ``np.isfinite`` / ``to_numpy()`` in generated
-    analysis code never receives an object or extension array.
+    """Downcast pandas extension/object scalars to numpy ``isfinite``-safe dtypes.
 
     The universe builder emits per-concept aggregates as pandas *nullable*
     extension dtypes (``Int64`` / ``Float64`` / ``boolean``), or as object
@@ -1060,11 +1058,12 @@ def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
     Generated causal / prediction code does ``design_df[col].to_numpy()`` and
     feeds the result to ``np.isfinite``; on a nullable or object array numpy
     raises ``ufunc 'isfinite' not supported for the input types`` and a primary
-    estimate can be silently lost. Coercing these to ``float64`` (NA -> NaN) at
-    cohort-materialisation time leaves every column as either a numpy numeric or
-    a genuine string categorical -- the two shapes generated code already
-    handles. True string/categorical object columns (for example a demographic
-    category or admission type) are left untouched for dummy-encoding.
+    estimate can be silently lost. Nullable numeric columns therefore become
+    ``float64`` (NA -> NaN). Complete logical columns become numpy ``bool`` so
+    their sealed boolean domain is not silently rewritten as numeric 0/1;
+    logical columns with missing values still use ``float64`` because numpy has
+    no non-object boolean representation with NA. Genuine string categoricals
+    remain untouched for dummy-encoding.
     """
     import numpy as np
     import pandas as pd
@@ -1093,7 +1092,15 @@ def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
 
     out = frame.copy()
     for col in to_coerce:
-        out[col] = pd.to_numeric(out[col], errors="coerce").astype("float64")
+        series = out[col]
+        is_logical = pd.api.types.is_bool_dtype(series.dtype) or bool(
+            len(series.dropna())
+            and series.dropna().map(lambda v: isinstance(v, (bool, np.bool_))).all()
+        )
+        if is_logical and not bool(series.isna().any()):
+            out[col] = series.astype("bool")
+        else:
+            out[col] = pd.to_numeric(series, errors="coerce").astype("float64")
     return out
 
 
@@ -1520,7 +1527,8 @@ def _resolve_predicate_column(
 
     The universe wide table names id-level concepts bare (``age``, ``los_icu``,
     ``death``) and time-series concepts as ``<output>_<aggregation>``
-    (``aki_stage_max`` …). A predicate carries the *dictionary* ``concept_id``
+    (``aki_stage_reference_max`` …). A predicate carries the *dictionary*
+    ``concept_id``
     plus the requested ``aggregation``; resolve against the columns present,
     trying in order: an explicit Planner/context binding, the bare id, the wide
     ``<concept_id>_<aggregation>`` form, and unambiguous catalog-owned composite

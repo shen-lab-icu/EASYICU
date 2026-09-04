@@ -13,6 +13,10 @@ import hashlib
 import re
 from typing import Any, Mapping, Sequence
 
+from ..authority.reader_numeric_display import (
+    OVERPRECISE_READER_DECIMAL_RE,
+    round_reader_numeric_display,
+)
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
     "Abstract": (),
@@ -53,6 +57,9 @@ _READER_FACING_SECTIONS = frozenset(
 _EVIDENCE_LINK_RE = re.compile(r"\[[^\]]+\]\(evidence/[^\n)]*(?:\"[^\"]*\")?\)")
 _EVIDENCE_PLACEHOLDER_RE = re.compile(r"\{evidence:[^}\n]+\}")
 _CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
+_CLAIM_PLACEHOLDER_RE = re.compile(
+    r"\{claim:[A-Za-z0-9_-]+\.[a-z][a-z0-9_]*\}"
+)
 _CLAIM_DEFINITION_RE = re.compile(r"^\[\^claim_\d+\]:.*$", flags=re.M)
 _LITERATURE_CITATION_RE = re.compile(
     r"\[@[A-Za-z0-9_.:-]+(?:\s*;\s*@[A-Za-z0-9_.:-]+)*\]"
@@ -64,6 +71,24 @@ _INTERNAL_PHRASES = (
     "host-materialized",
     "machine digest",
     "source aware analysis set",
+)
+_INTERNAL_PHRASE_REPLACEMENTS = (
+    ("analysis role:", "analysis:"),
+    ("bound typed cohort", "analysis cohort"),
+    ("host-materialized", "precomputed"),
+    ("machine digest", "registered evidence"),
+    ("source aware analysis set", "analysis set"),
+)
+_INTERNAL_TOKEN_REPLACEMENTS = (
+    ("table_one", "Table 1"),
+    ("publication_figure_contract", "Figure 1"),
+    ("reportable_descriptive_results", "descriptive results"),
+    ("reportable_secondary_results", "secondary results"),
+    ("reportable_survival_results", "survival results"),
+    ("outcome_rate", "outcome incidence"),
+    ("primary_association", "primary association"),
+    ("model_performance", "model performance"),
+    ("source_aware_analysis_set", "analysis set"),
 )
 _NAMED_METRIC_TERMS = (
     "adjusted rand index",
@@ -85,7 +110,7 @@ _NAMED_METRIC_TERMS = (
     "risk ratio",
     "silhouette",
 )
-_OVERPRECISE_DECIMAL_RE = re.compile(r"(?<![A-Za-z0-9_])[-+]?\d+\.\d{5,}(?!\d)")
+_OVERPRECISE_DECIMAL_RE = OVERPRECISE_READER_DECIMAL_RE
 
 
 @dataclass(frozen=True)
@@ -176,6 +201,7 @@ def _strip_audit_markup(text: str) -> str:
     cleaned = _EVIDENCE_PLACEHOLDER_RE.sub("", cleaned)
     cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
     cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
+    cleaned = _CLAIM_PLACEHOLDER_RE.sub("", cleaned)
     cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
     return cleaned
 
@@ -288,13 +314,8 @@ def repair_reader_structure_from_existing_prose(
         body = _sections(repaired).get(section)
         if body is None:
             continue
-
-        def round_display(match: re.Match[str]) -> str:
-            nonlocal rounded_count
-            rounded_count += 1
-            return f"{float(match.group(0)):.3f}".rstrip("0").rstrip(".")
-
-        rounded = _OVERPRECISE_DECIMAL_RE.sub(round_display, body)
+        rounded, section_count = round_reader_numeric_display(body)
+        rounded_count += section_count
         if rounded != body:
             repaired = _replace_section_body(repaired, section, rounded)
     if rounded_count:
@@ -667,16 +688,172 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
 
 
 def _internal_excerpts(section_text: str) -> tuple[str, ...]:
+    # Literature keys and evidence metadata are audit syntax rather than
+    # reader prose.  Remove them before scanning so a legitimate citation key
+    # such as ``johnson_mimiciv_2023`` is not mistaken for a leaked runtime
+    # variable.  Any snake_case token left in the visible prose is an
+    # implementation identifier and must be rewritten by the section owner.
+    visible_text = _LITERATURE_CITATION_RE.sub("", _strip_audit_markup(section_text))
     excerpts: list[str] = []
-    for match in re.finditer(r"`([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)`", section_text):
+    for match in re.finditer(
+        r"`([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)`", visible_text
+    ):
         excerpts.append(match.group(0))
-    for match in re.finditer(r"\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b", section_text):
+    for match in re.finditer(
+        r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b", visible_text
+    ):
         excerpts.append(match.group(0))
-    lowered = section_text.casefold()
+    lowered = visible_text.casefold()
     for phrase in _INTERNAL_PHRASES:
         if phrase in lowered:
             excerpts.append(phrase)
     return tuple(dict.fromkeys(excerpts))
+
+
+def repair_reader_internal_phrases(
+    manuscript: str,
+    *,
+    reader_display_labels: Mapping[str, str] | None = None,
+    manuscript_language: str = "en",
+) -> tuple[str, tuple[dict[str, str], ...]]:
+    """Replace a small closed set of engineering phrases with reader prose.
+
+    These substitutions do not change a variable, method, number, contrast, or
+    evidence reference.  They therefore belong to the deterministic renderer,
+    not to another model retry.  Unknown raw identifiers remain fail-closed and
+    continue to require a section-owner rewrite.
+    """
+
+    repaired = str(manuscript or "")
+    repairs: list[dict[str, str]] = []
+    for internal, reader_facing in _INTERNAL_PHRASE_REPLACEMENTS:
+        pattern = re.compile(re.escape(internal), flags=re.I)
+        count = len(pattern.findall(repaired))
+        if not count:
+            continue
+        repaired = pattern.sub(reader_facing, repaired)
+        repairs.append(
+            {
+                "code": "MANUSCRIPT_INTERNAL_PHRASE_REPLACED",
+                "source": internal,
+                "replacement": reader_facing,
+                "count": str(count),
+            }
+        )
+    for internal, reader_facing in _INTERNAL_TOKEN_REPLACEMENTS:
+        pattern = re.compile(rf"`{re.escape(internal)}`", flags=re.I)
+        count = len(pattern.findall(repaired))
+        if not count:
+            continue
+        repaired = pattern.sub(reader_facing, repaired)
+        repairs.append(
+            {
+                "code": "MANUSCRIPT_INTERNAL_TOKEN_REPLACED",
+                "source": internal,
+                "replacement": reader_facing,
+                "count": str(count),
+            }
+        )
+    labels = {
+        str(key).strip(): " ".join(str(value).split())
+        for key, value in dict(reader_display_labels or {}).items()
+        if str(key).strip()
+        and " ".join(str(value).split())
+        and str(key).strip() != " ".join(str(value).split())
+    }
+    if str(manuscript_language or "en").lower().startswith("en"):
+        # Planner display labels follow the UI/question locale, while the
+        # manuscript may intentionally be English.  Never mechanically inject
+        # a CJK UI label into English prose; the Writer is responsible for the
+        # semantics-preserving translation it was explicitly prompted to use.
+        labels = {
+            key: value
+            for key, value in labels.items()
+            if not re.search(r"[\u3400-\u9fff]", value)
+        }
+    if labels:
+        # Claim/evidence/literature tokens are immutable audit syntax. Replace
+        # planner-authorized variable and level names only in visible prose.
+        audit_token = re.compile(
+            r"\{(?:evidence|claim):[^}\n]+\}|\[@[^\]\n]+\]"
+        )
+        pieces = audit_token.split(repaired)
+        tokens = audit_token.findall(repaired)
+        for key in sorted(labels, key=len, reverse=True):
+            label = labels[key]
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9_])`?{re.escape(key)}`?(?![A-Za-z0-9_])"
+            )
+            count = 0
+            for index, piece in enumerate(pieces):
+                piece, replacements = pattern.subn(label, piece)
+                pieces[index] = piece
+                count += replacements
+            if count:
+                repaired = "".join(
+                    part + (tokens[index] if index < len(tokens) else "")
+                    for index, part in enumerate(pieces)
+                )
+                pieces = audit_token.split(repaired)
+                tokens = audit_token.findall(repaired)
+                repairs.append(
+                    {
+                        "code": "MANUSCRIPT_READER_DISPLAY_LABEL_APPLIED",
+                        "source": key,
+                        "replacement": label,
+                        "count": str(count),
+                    }
+                )
+    return repaired, tuple(repairs)
+
+
+def repair_incompatible_reader_labels(
+    manuscript: str,
+    *,
+    reader_display_labels: Mapping[str, str] | None = None,
+    manuscript_language: str = "en",
+) -> tuple[str, tuple[dict[str, str], ...]]:
+    """Remove UI-locale labels that conflict with the manuscript language.
+
+    This post-binding repair is deliberately narrow: it never translates a
+    clinical concept or touches evidence coordinates.  For an English draft,
+    a foreign plain variable label falls back to its readable key, while a
+    foreign categorical level becomes ``exposure category <value>``.  The
+    surrounding, evidence-bound sentence retains the exact estimate and group
+    coordinate without leaking a raw runtime identifier.
+    """
+
+    repaired = str(manuscript or "")
+    if not str(manuscript_language or "en").lower().startswith("en"):
+        return repaired, ()
+    repairs: list[dict[str, str]] = []
+    for raw_key, raw_label in dict(reader_display_labels or {}).items():
+        key = str(raw_key or "").strip()
+        label = " ".join(str(raw_label or "").split())
+        if not key or not label or not re.search(r"[\u3400-\u9fff]", label):
+            continue
+        if "=" in key:
+            _base, level = key.rsplit("=", 1)
+            fallback = f"exposure category {level.strip()}"
+        elif re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", key):
+            fallback = key.replace("_", " ")
+        else:
+            # A compound implementation key is not safe reader prose.  It is
+            # normally translated by Writer and therefore needs no fallback.
+            continue
+        count = repaired.count(label)
+        if not count:
+            continue
+        repaired = repaired.replace(label, fallback)
+        repairs.append(
+            {
+                "code": "MANUSCRIPT_INCOMPATIBLE_DISPLAY_LABEL_REMOVED",
+                "source": label,
+                "replacement": fallback,
+                "count": str(count),
+            }
+        )
+    return repaired, tuple(repairs)
 
 
 def _sentences(text: str) -> tuple[str, ...]:
@@ -1036,6 +1213,8 @@ __all__ = [
     "audit_manuscript_quality",
     "expected_manuscript_display_labels",
     "repair_registered_display_callouts",
+    "repair_reader_internal_phrases",
+    "repair_incompatible_reader_labels",
     "repair_reader_structure_from_existing_prose",
     "render_reader_manuscript",
 ]

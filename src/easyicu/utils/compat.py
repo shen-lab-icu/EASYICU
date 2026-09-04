@@ -393,6 +393,13 @@ def expand_interval_rows(
         if span <= 0:
             records.append({id_col: stay_id, time_col: float(math.floor(start)), value_col: value})
             continue
+
+        # ``span`` is the validated expansion bound.  The old loop still used
+        # the uncapped source ``end`` below, so an absolute timestamp that
+        # accidentally reached this compatibility layer could allocate years
+        # of hourly rows despite ``max_span_hours``.  Iterate only to the
+        # effective end represented by the bound.
+        effective_end = start + span
         
         # 🔧 FIX: 使用 R seq(start, end, step) 的行为
         # R 的 seq(17.84, 20, 1) 产生 [17.84, 18.84, 19.84]
@@ -401,7 +408,7 @@ def expand_interval_rows(
         # 实现：从 start 开始，每次加 1，直到超过 end
         time_points = []
         current = start
-        while current <= end + 1e-9:  # 加小量避免浮点误差
+        while current <= effective_end + 1e-9:  # 加小量避免浮点误差
             time_points.append(math.floor(current))
             current += interval_hours
         

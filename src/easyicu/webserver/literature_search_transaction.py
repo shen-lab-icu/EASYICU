@@ -32,6 +32,7 @@ class LiteratureSearchTransaction:
     study_authority_binding: Optional[Mapping[str, Any]]
     updated_study: Optional[Mapping[str, Any]]
     bound_idea_run_id: str
+    searched_idea_was_accepted: bool
 
 
 def execute_literature_search(
@@ -41,6 +42,8 @@ def execute_literature_search(
     journal: str,
     requested_limit: int,
     bound_study_id: str,
+    candidate_run_id: str = "",
+    candidate_idea_id: str = "",
 ) -> LiteratureSearchTransaction:
     """Retrieve and bind the exact literature authority for one study state."""
 
@@ -56,11 +59,32 @@ def execute_literature_search(
     )
     bound_idea_run = str(idea_handoff.get("run_id") or "").strip()
     bound_idea_id = str(idea_handoff.get("idea_id") or "").strip()
+    requested_run = str(candidate_run_id or "").strip()
+    requested_idea = str(candidate_idea_id or "").strip()
+    if bool(requested_run) != bool(requested_idea):
+        raise LiteratureSearchTransactionError(
+            "idea_identity_incomplete",
+            "Both run_id and idea_id are required to search one mined candidate.",
+            owner="easyicu.webserver.ideas.mining",
+        )
+    if requested_run and bound_idea_run and (
+        requested_run != bound_idea_run or requested_idea != bound_idea_id
+    ):
+        raise LiteratureSearchTransactionError(
+            "idea_identity_conflicts_with_accepted_handoff",
+            "The requested candidate does not match the accepted Idea Mining handoff.",
+            owner="easyicu.webserver.ideas.handoff",
+        )
+    idea_run = requested_run or bound_idea_run
+    idea_id = requested_idea or bound_idea_id
+    searched_idea_was_accepted = bool(
+        idea_run and bound_idea_run and idea_run == bound_idea_run and idea_id == bound_idea_id
+    )
     try:
-        if bound_idea_run and bound_idea_id:
-            discovered, receipt_binding = _search_accepted_idea(
-                run_id=bound_idea_run,
-                idea_id=bound_idea_id,
+        if idea_run and idea_id:
+            discovered, receipt_binding = _search_idea_candidate(
+                run_id=idea_run,
+                idea_id=idea_id,
                 requested_limit=requested_limit,
             )
         else:
@@ -85,9 +109,7 @@ def execute_literature_search(
 
     generic_binding: Optional[Mapping[str, Any]] = None
     updated_study: Optional[Mapping[str, Any]] = None
-    if bool(discovered.get("search_performed")) and not (
-        bound_idea_run and bound_idea_id
-    ):
+    if bool(discovered.get("search_performed")) and not idea_run:
         generic_binding, updated_study = _bind_study_authority(
             study=study,
             discovered=discovered,
@@ -106,11 +128,12 @@ def execute_literature_search(
         ),
         study_authority_binding=generic_binding,
         updated_study=updated_study,
-        bound_idea_run_id=bound_idea_run,
+        bound_idea_run_id=idea_run,
+        searched_idea_was_accepted=searched_idea_was_accepted,
     )
 
 
-def _search_accepted_idea(
+def _search_idea_candidate(
     *, run_id: str, idea_id: str, requested_limit: int
 ) -> tuple[dict[str, Any], Mapping[str, Any]]:
     checked = idea_mining.check_prior_art(
@@ -144,6 +167,7 @@ def _search_accepted_idea(
                     + str(row.get("query") or "")
                 )
             )[:600],
+            "abstract_excerpt": str(row.get("abstract_excerpt") or "")[:1200],
             "design_excerpt": str(
                 row.get("design_excerpt") or row.get("abstract_excerpt") or ""
             )[:1200],
@@ -152,10 +176,33 @@ def _search_accepted_idea(
                 for value in list(row.get("publication_types") or [])[:12]
                 if str(value).strip()
             ],
-            "matched_queries": [str(row.get("query") or "")[:1500]]
-            if str(row.get("query") or "").strip()
-            else [],
-            "matched_query_strata": ["accepted_idea_prior_art"],
+            "matched_queries": [
+                str(value)[:1500]
+                for value in list(row.get("matched_queries") or [])[:6]
+                if str(value).strip()
+            ]
+            or (
+                [str(row.get("query") or "")[:1500]]
+                if str(row.get("query") or "").strip()
+                else []
+            ),
+            "matched_query_strata": [
+                str(value)[:80]
+                for value in list(row.get("matched_query_strata") or [])[:6]
+                if str(value).strip()
+            ]
+            or ["accepted_idea_prior_art"],
+            "retrieval_screen": (
+                dict(row.get("retrieval_screen") or {})
+                if isinstance(row.get("retrieval_screen"), Mapping)
+                else {}
+            ),
+            "relevance": str(
+                (row.get("retrieval_screen") or {}).get("rationale")
+                if isinstance(row.get("retrieval_screen"), Mapping)
+                else ""
+            )[:600]
+            or None,
         }
         for row in raw_candidates
     ]
@@ -164,7 +211,10 @@ def _search_accepted_idea(
             "status": prior.get("status"),
             "search_performed": prior.get("search_performed"),
             "queries_to_run": prior.get("queries_to_run") or [],
+            "query_strata": prior.get("query_strata") or [],
             "network_calls": prior.get("network_calls") or 0,
+            "retrieved_result_count": prior.get("retrieved_result_count") or 0,
+            "excluded_result_count": prior.get("excluded_result_count") or 0,
             "source_candidates": candidates,
         },
         idea_mining.prior_art_receipt_binding(run_id),

@@ -214,9 +214,12 @@
       const step = String(value || '').toLowerCase();
       if (step === 'submitted') return 'submitted';
       if (['provider', 'research_pipeline', 'run', 'runtime'].includes(step)) return 'setup';
-      if (['data_foundation', 'cohort', 'context', 'audit'].includes(step)) return 'inputs';
+      if (['data_foundation', 'cohort', 'context', 'audit', 'extraction', 'data'].includes(step)) return 'inputs';
       if (['hypothesis', 'literature', 'evidence'].includes(step)) return 'evidence';
       if (['planning', 'plan', 'scientific_review'].includes(step)) return 'plan';
+      if (['step', 'coder', 'runner', 'analysis'].includes(step)) return 'analysis';
+      if (['figure', 'visual_qa'].includes(step)) return 'figure';
+      if (['writer', 'latex', 'manuscript', 'report'].includes(step)) return 'report';
       if (step === 'terminal') return 'terminal';
       if (['event_stream', 'cancel_requested'].includes(step)) return 'attention';
       return 'progress';
@@ -236,6 +239,15 @@
       if (stage === 'plan') return done
         ? tr('Candidate research plan generated and contract-checked', '候选研究计划已生成并完成结构校验')
         : tr('Generating and checking the candidate research plan', '正在生成并校验候选研究计划');
+      if (stage === 'analysis') return done
+        ? tr('Approved analysis steps completed', '已完成批准的分析步骤')
+        : tr('Running the approved analysis steps', '正在执行批准的分析步骤');
+      if (stage === 'figure') return done
+        ? tr('Figures regenerated from registered result tables and visually checked', '已从登记结果表重新生成图件并完成视觉核查')
+        : tr('Regenerating and checking the analysis figures', '正在重新生成并核查分析图件');
+      if (stage === 'report') return done
+        ? tr('Evidence-bound article and manuscript exports regenerated', '已重新生成证据绑定文章与稿件导出')
+        : tr('Regenerating the evidence-bound article and manuscript exports', '正在重新生成证据绑定文章与稿件导出');
       if (stage === 'progress') return done
         ? tr('Research-task progress updated', '研究任务进度已更新')
         : tr('Research task is progressing', '研究任务正在推进');
@@ -247,6 +259,57 @@
       if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
       if (type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');
       const stage = pipelineStage(event && event.step);
+      if (stage === 'plan') {
+        const current = Number(event && event.current);
+        const total = Number(event && event.total);
+        const count = Number.isFinite(current) && Number.isFinite(total)
+          ? `${current}/${total}` : '';
+        const planningUnit = String(event && event.planning_unit || 'plan');
+        const retryPhase = String(event && event.retry_phase || '');
+        const unit = {
+          structure: tr('study structure', '研究结构'),
+          rules: tr('cohort and analysis rules', '队列与分析规则'),
+          step: tr('current executable step', '当前可执行步骤'),
+          plan: tr('candidate plan', '候选计划'),
+        }[planningUnit] || tr('candidate plan', '候选计划');
+        if (retryPhase === 'rejected') {
+          return tr(
+            `${unit} ${count || 'attempt'} did not pass validation; EasyICU is correcting it automatically`,
+            `${unit} ${count || '本次'} 未通过校验；EasyICU 正在自动修正`,
+          );
+        }
+        if (retryPhase === 'accepted') {
+          return tr(
+            `${unit} ${count || ''} passed validation`.trim(),
+            `${unit} ${count || ''} 已通过校验`.trim(),
+          );
+        }
+        if (retryPhase === 'started') {
+          return tr(
+            `Validating ${unit} ${count || ''}`.trim(),
+            `正在校验${unit} ${count || ''}`.trim(),
+          );
+        }
+        const message = String(event && (event.message || event.label) || '').toLowerCase();
+        if (message.includes('did not satisfy the scientific contract')) {
+          return tr(
+            `Candidate plan ${count || 'draft'} did not pass the scientific contract; EasyICU is revising it`,
+            `候选计划 ${count || '草案'} 未通过科学合同；EasyICU 正在自动修订`,
+          );
+        }
+        if (message.includes('passed contract validation')) {
+          return tr(
+            `Candidate plan ${count || 'draft'} passed contract validation`,
+            `候选计划 ${count || '草案'} 已通过科学合同校验`,
+          );
+        }
+        if (message.includes('generating plan draft')) {
+          return tr(
+            `Generating candidate plan ${count || 'draft'}`,
+            `正在生成候选计划 ${count || '草案'}`,
+          );
+        }
+      }
       return pipelineStageLabel(stage, String(event && event.status || 'running'));
     }
 
@@ -426,5 +489,5 @@
     return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
-  window.EU_GUIDED_PI_ACTIVITY = Object.freeze({ create });
+  window.EasyICU.guidedPi.declare('activity', { create });
 })();

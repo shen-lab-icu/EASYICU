@@ -142,7 +142,9 @@ def test_includes_an_explicit_unsupported_capability_probe():
 
 
 def test_behavior_probe_preserves_agent_method_owner_without_runner_injection():
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.planning.advanced_plan_contract import (
+        _enforce_advanced_plan_contract,
+    )
     from easyicu.research_agent.schema import (
         AnalysisPlan,
         AnalysisStep,
@@ -180,7 +182,9 @@ def test_behavior_probe_preserves_agent_method_owner_without_runner_injection():
 
 
 def test_behavior_probe_fails_closed_with_a_structured_owner_reason():
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.planning.advanced_plan_contract import (
+        _enforce_advanced_plan_contract,
+    )
     from easyicu.research_agent.schema import (
         AnalysisPlan,
         AnalysisStep,

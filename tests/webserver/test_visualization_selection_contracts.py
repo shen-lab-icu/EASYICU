@@ -24,10 +24,11 @@ def test_patient_visualization_selections_have_route_owned_markers() -> None:
 
 
 def test_cohort_visualization_selections_have_route_owned_markers() -> None:
-    source = _text("js/screens-viz.js")
-    assert "data-cohort-table-one" in source
-    assert "data-cohort-coverage-forest" in source
-    assert "cohortSofaMatrixGranularity = 'exact'" in source
+    view = _text("js/screens-viz-cohort-view.js")
+    route = _text("js/screens-viz-cohort.js")
+    assert "data-cohort-table-one" in view
+    assert "data-cohort-coverage-forest" in view
+    assert "sofaMatrixGranularity: 'exact'" in route
     assert "pairedExact" in _text("js/screens-viz-cohort-charts.js")
 
 

@@ -7,7 +7,10 @@ entry points.
 
 from __future__ import annotations
 
+import logging
+
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Union
@@ -44,6 +47,8 @@ def _get_all_patient_ids(
 
 
 # ============================================================================
+
+logger = logging.getLogger(__name__)
 # 全库提取 API — 按模块子进程隔离与实测内存自适应
 # ============================================================================
 
@@ -133,6 +138,230 @@ _STREAM_CALIBRATED_REFERENCE = {
     "sic": (27_386, 10 * 1024),
 }
 
+# Full-cohort, one-module-at-a-time measurements are stronger evidence than the
+# database-wide guard above.  These profiles admit the fastest path only for
+# the measured database/cohort/module scope.  Modules run sequentially in
+# isolated workers, so a multi-module request needs the maximum threshold, not
+# the sum.  ``required_available_mb`` is derived from peak process-tree RSS
+# with 10% launch headroom; for example blood_gas needs 1,824.1 MiB, so 2 GiB
+# currently available is enough for a full MIMIC-IV one-shot.
+_MEASURED_ONESHOT_HEADROOM = 1.10
+_MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "eicu": {
+        "demographics": {"cohort_stays": 200_859, "peak_rss_mb": 1_194.6, "seconds": 2.951},
+        "outcome": {"cohort_stays": 200_859, "peak_rss_mb": 1_114.3, "seconds": 2.624},
+        "blood_gas": {"cohort_stays": 200_859, "peak_rss_mb": 1_104.6, "seconds": 7.293},
+        "hematology": {"cohort_stays": 200_859, "peak_rss_mb": 3_024.5, "seconds": 18.537},
+        "chemistry": {"cohort_stays": 200_859, "peak_rss_mb": 5_381.2, "seconds": 38.103},
+        "vasopressors": {"cohort_stays": 200_859, "peak_rss_mb": 5_517.3, "seconds": 21.048},
+        "ventilator": {"cohort_stays": 200_859, "peak_rss_mb": 7_435.9, "seconds": 105.388},
+        "vitals": {"cohort_stays": 200_859, "peak_rss_mb": 5_362.4, "seconds": 158.082},
+        "renal": {"cohort_stays": 200_859, "peak_rss_mb": 6_354.4, "seconds": 438.054},
+        "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
+        "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
+        "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
+        "sofa2_score": {"cohort_stays": 200_859, "peak_rss_mb": 6_926.6, "seconds": 558.108},
+        "sepsis3_sofa2": {"cohort_stays": 200_859, "peak_rss_mb": 6_268.4, "seconds": 372.807},
+    },
+    "miiv": {
+        "demographics": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 808.484,
+            "seconds": 2.4,
+        },
+        "outcome": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 1_344.266,
+            "seconds": 2.5,
+        },
+        "blood_gas": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 1_658.219,
+            "seconds": 5.4,
+        },
+        "vasopressors": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 2_060.812,
+            "seconds": 13.2,
+        },
+        "hematology": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 2_620.938,
+            "seconds": 27.3,
+        },
+        "chemistry": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 2_651.5,
+            "seconds": 60.3,
+        },
+        "ventilator": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 1_633.75,
+            "seconds": 78.7,
+        },
+        "vitals": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 3_544.406,
+            "seconds": 107.3,
+        },
+        "renal": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 7_362.0,
+            "seconds": 281.666,
+        },
+        "respiratory": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 5_077.9,
+            "seconds": 73.137,
+        },
+        "medications": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 6_749.9,
+            "seconds": 88.702,
+        },
+        "neurological": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_604.9,
+            "seconds": 70.912,
+        },
+        "circulatory": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_721.5,
+            "seconds": 334.370,
+        },
+        "sepsis_shared": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_627.9,
+            "seconds": 21.724,
+        },
+        "other_scores": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_821.9,
+            "seconds": 190.594,
+        },
+        "sofa1_score": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 6_259.9,
+            "seconds": 165.533,
+        },
+        "sofa2_score": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 6_315.5,
+            "seconds": 437.698,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 5_749.6,
+            "seconds": 267.852,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 7_286.7,
+            "seconds": 428.684,
+        },
+    },
+    "mimic": {
+        "demographics": {"cohort_stays": 61_532, "peak_rss_mb": 1_008.5, "seconds": 12.177},
+        "outcome": {"cohort_stays": 61_532, "peak_rss_mb": 612.3, "seconds": 1.840},
+        "blood_gas": {"cohort_stays": 61_532, "peak_rss_mb": 1_936.3, "seconds": 8.244},
+        "hematology": {"cohort_stays": 61_532, "peak_rss_mb": 2_637.5, "seconds": 14.076},
+        "chemistry": {"cohort_stays": 61_532, "peak_rss_mb": 2_823.9, "seconds": 24.563},
+        "vasopressors": {"cohort_stays": 61_532, "peak_rss_mb": 7_415.4, "seconds": 111.911},
+        "ventilator": {"cohort_stays": 61_532, "peak_rss_mb": 2_220.9, "seconds": 91.871},
+        "vitals": {"cohort_stays": 61_532, "peak_rss_mb": 6_577.7, "seconds": 68.271},
+        "renal": {"cohort_stays": 61_532, "peak_rss_mb": 6_231.2, "seconds": 210.256},
+        "respiratory": {"cohort_stays": 61_532, "peak_rss_mb": 7_182.0, "seconds": 96.099},
+        "neurological": {"cohort_stays": 61_532, "peak_rss_mb": 6_044.1, "seconds": 39.021},
+        "circulatory": {"cohort_stays": 61_532, "peak_rss_mb": 6_159.8, "seconds": 447.094},
+        "sepsis_shared": {"cohort_stays": 61_532, "peak_rss_mb": 5_659.3, "seconds": 11.110},
+    }
+}
+
+# Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
+# separate measured batch profile. A successful batch peak authorises only the
+# recorded batch size (or a smaller one), never an unmeasured one-shot. This is
+# intentionally independent of ``MAX_EXTRACT_CHUNKS``: real eICU evidence shows
+# that respiratory/circulatory need five balanced patient batches at 8 GiB,
+# while three larger batches cross the same hard RSS limit.
+_MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "eicu": {
+        "respiratory": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 6_252.8,
+            "seconds": 251.704,
+        },
+        "circulatory": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 6_172.8,
+            "seconds": 494.721,
+        },
+        "other_scores": {
+            "cohort_stays": 200_859,
+            "batch_size": 67_000,
+            "peak_rss_mb": 6_512.3,
+            "seconds": 436.285,
+        },
+        "sofa1_score": {
+            "cohort_stays": 200_859,
+            "batch_size": 67_000,
+            "peak_rss_mb": 6_316.5,
+            "seconds": 512.467,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 200_859,
+            "batch_size": 67_000,
+            "peak_rss_mb": 6_294.5,
+            "seconds": 586.933,
+        },
+    },
+    "mimic": {
+        "medications": {
+            "cohort_stays": 61_532,
+            "batch_size": 31_000,
+            "peak_rss_mb": 7_236.8,
+            "seconds": 383.955,
+        },
+    },
+}
+
+
+@dataclass(frozen=True)
+class ExtractionResourcePlan:
+    """Typed, user-visible decision for one extraction request."""
+
+    mode: str
+    reason_code: str
+    batch_size: int
+    available_memory_mb: float
+    required_available_memory_mb: Optional[float]
+    measured_peak_rss_mb: Optional[float]
+    modules: tuple[str, ...]
+    advisory: Optional[str] = None
+    advisory_zh: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "mode": self.mode,
+            "reason_code": self.reason_code,
+            "batch_size": self.batch_size,
+            "available_memory_mb": round(self.available_memory_mb, 1),
+            "required_available_memory_mb": (
+                None
+                if self.required_available_memory_mb is None
+                else round(self.required_available_memory_mb, 1)
+            ),
+            "measured_peak_rss_mb": (
+                None
+                if self.measured_peak_rss_mb is None
+                else round(self.measured_peak_rss_mb, 1)
+            ),
+            "modules": list(self.modules),
+            "advisory": self.advisory,
+            "advisory_zh": self.advisory_zh,
+        }
+
 
 def _normalise_stream_database(database: str) -> str:
     """Return the canonical stream-planning database name."""
@@ -150,6 +379,75 @@ def _stream_calibration(database: str) -> Optional[tuple[int, float]]:
     """Return the conservative release calibration for one database alias."""
 
     return _STREAM_CALIBRATED_REFERENCE.get(_normalise_stream_database(database))
+
+
+def _measured_oneshot_requirement(
+    database: str,
+    modules: Optional[Sequence[str]],
+    num_patients: int,
+) -> Optional[tuple[float, float]]:
+    """Return ``(required_available_mb, measured_peak_mb)`` when fully covered.
+
+    A profile is never extrapolated beyond its measured cohort and a mixed
+    measured/unmeasured request is treated as unmeasured.  This keeps a light
+    module result from silently authorising a heavier module.
+    """
+
+    requested_modules = tuple(dict.fromkeys(str(module) for module in modules or ()))
+    if not requested_modules:
+        return None
+    profiles = _MEASURED_ONESHOT_PROFILES.get(
+        _normalise_stream_database(database), {}
+    )
+    selected = []
+    for module in requested_modules:
+        profile = profiles.get(module)
+        if profile is None or int(num_patients) > int(profile["cohort_stays"]):
+            return None
+        selected.append(profile)
+    measured_peak_mb = max(float(profile["peak_rss_mb"]) for profile in selected)
+    return measured_peak_mb * _MEASURED_ONESHOT_HEADROOM, measured_peak_mb
+
+
+def _measured_batch_recommendation(
+    database: str,
+    modules: Optional[Sequence[str]],
+    num_patients: int,
+) -> Optional[tuple[int, float, float]]:
+    """Return the fastest fully-covered measured batch recommendation.
+
+    The tuple is ``(batch_size, required_available_mb, measured_peak_mb)``.
+    One-shot-profiled modules do not constrain a mixed request's batch size;
+    every requested module must nevertheless have either a one-shot or batch
+    profile so an unmeasured module cannot borrow another module's authority.
+    """
+
+    requested_modules = tuple(dict.fromkeys(str(module) for module in modules or ()))
+    if not requested_modules:
+        return None
+    normalized_database = _normalise_stream_database(database)
+    oneshot_profiles = _MEASURED_ONESHOT_PROFILES.get(normalized_database, {})
+    batch_profiles = _MEASURED_BATCH_PROFILES.get(normalized_database, {})
+    selected_batches = []
+    for module in requested_modules:
+        batch_profile = batch_profiles.get(module)
+        oneshot_profile = oneshot_profiles.get(module)
+        profile = batch_profile or oneshot_profile
+        if profile is None or int(num_patients) > int(profile["cohort_stays"]):
+            return None
+        if batch_profile is not None:
+            selected_batches.append(batch_profile)
+    if not selected_batches:
+        return None
+    batch_size = min(int(profile["batch_size"]) for profile in selected_batches)
+    measured_peak_mb = max(
+        float(profile["peak_rss_mb"]) for profile in selected_batches
+    )
+    return (
+        min(int(num_patients), batch_size),
+        measured_peak_mb * _MEASURED_ONESHOT_HEADROOM,
+        measured_peak_mb,
+    )
 
 
 def _quantize_stream_capacity(capacity: float, quantum: int) -> int:
@@ -296,6 +594,7 @@ def _resolve_stream_batch_size(
     requested_batch_size: Optional[int] = None,
     *,
     available_memory_mb: Optional[float] = None,
+    modules: Optional[Sequence[str]] = None,
 ) -> int:
     """Choose a streamed-export batch from *currently available* memory.
 
@@ -336,6 +635,58 @@ def _resolve_stream_batch_size(
         available_memory_mb = get_available_memory_mb()
     available = max(0.0, float(available_memory_mb))
 
+    measured_requirement = _measured_oneshot_requirement(
+        database,
+        modules,
+        total,
+    )
+    if (
+        measured_requirement is not None
+        and available >= measured_requirement[0]
+    ):
+        return total
+    if measured_requirement is not None and available < measured_requirement[0]:
+        if total <= _STREAM_BATCH_MIN:
+            return total
+        from ..runtime.memory_manager import MAX_EXTRACT_CHUNKS
+
+        required_mb = measured_requirement[0]
+        required_chunks = (
+            MAX_EXTRACT_CHUNKS
+            if available <= 0
+            else int(required_mb / available)
+            + (1 if required_mb % available else 0)
+        )
+        # One-shot has already failed the threshold.  Use the fewest patient
+        # partitions supported by the measured ratio, while preserving the
+        # global <=3-scan speed contract.
+        planned_chunks = max(2, min(MAX_EXTRACT_CHUNKS, required_chunks))
+        batch_size = (total + planned_chunks - 1) // planned_chunks
+        batch_size = (
+            (batch_size + _STREAM_CALIBRATION_QUANTUM - 1)
+            // _STREAM_CALIBRATION_QUANTUM
+            * _STREAM_CALIBRATION_QUANTUM
+        )
+        return min(batch_size, total)
+
+    measured_batch = _measured_batch_recommendation(
+        database,
+        modules,
+        total,
+    )
+    if measured_batch is not None:
+        recommended_batch, required_mb, _ = measured_batch
+        if available >= required_mb:
+            return recommended_batch
+        scaled_capacity = recommended_batch * available / max(1.0, required_mb)
+        return min(
+            recommended_batch,
+            _quantize_stream_capacity(
+                scaled_capacity,
+                _STREAM_BATCH_QUANTUM,
+            ),
+        )
+
     reserve = max(
         float(_STREAM_BATCH_MIN_RESERVE_MB),
         available * _STREAM_BATCH_RESERVE_FRACTION,
@@ -360,7 +711,8 @@ def _resolve_stream_batch_size(
         )
 
     guarded_unmeasured_one_shot = (
-        available < _STREAM_ONESHOT_MIN_AVAILABLE_MB
+        measured_requirement is None
+        and available < _STREAM_ONESHOT_MIN_AVAILABLE_MB
         and _normalise_stream_database(database)
         in _STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES
     )
@@ -375,6 +727,181 @@ def _resolve_stream_batch_size(
     if guarded_unmeasured_one_shot and capacity >= total:
         capacity = (total + 1) // 2
     return min(capacity, total)
+
+
+def plan_extraction_resources(
+    database: str,
+    modules: Sequence[str],
+    num_patients: int,
+    requested_batch_size: Optional[int] = None,
+    *,
+    available_memory_mb: Optional[float] = None,
+) -> ExtractionResourcePlan:
+    """Choose the fastest evidence-supported extraction strategy.
+
+    Automatic patient batching is a fallback only.  A fully measured module
+    request runs one-shot whenever its measured process-tree peak plus 10%
+    headroom fits currently available memory.  Adequate-memory decisions carry
+    no advisory; only a degraded plan asks the user to free memory.
+    """
+
+    total = int(num_patients)
+    if total <= 0:
+        raise ValueError("num_patients must be positive")
+    selected_modules = tuple(dict.fromkeys(str(module) for module in modules))
+    if not selected_modules:
+        raise ValueError("modules must not be empty")
+    available = (
+        _available_memory_mb()
+        if available_memory_mb is None
+        else max(0.0, float(available_memory_mb))
+    )
+    batch_size = _resolve_stream_batch_size(
+        database,
+        total,
+        requested_batch_size,
+        available_memory_mb=available,
+        modules=selected_modules,
+    )
+    mode = "one_shot" if batch_size >= total else "patient_batches"
+
+    if requested_batch_size is not None:
+        return ExtractionResourcePlan(
+            mode=mode,
+            reason_code="explicit_batch_size",
+            batch_size=batch_size,
+            available_memory_mb=available,
+            required_available_memory_mb=None,
+            measured_peak_rss_mb=None,
+            modules=selected_modules,
+        )
+
+    measured_requirement = _measured_oneshot_requirement(
+        database,
+        selected_modules,
+        total,
+    )
+    if measured_requirement is not None:
+        required_mb, measured_peak_mb = measured_requirement
+        if mode == "one_shot":
+            return ExtractionResourcePlan(
+                mode=mode,
+                reason_code="measured_profile_fast_path",
+                batch_size=batch_size,
+                available_memory_mb=available,
+                required_available_memory_mb=required_mb,
+                measured_peak_rss_mb=measured_peak_mb,
+                modules=selected_modules,
+            )
+        available_gib = available / 1024.0
+        required_gib = required_mb / 1024.0
+        return ExtractionResourcePlan(
+            mode=mode,
+            reason_code="measured_profile_insufficient_memory",
+            batch_size=batch_size,
+            available_memory_mb=available,
+            required_available_memory_mb=required_mb,
+            measured_peak_rss_mb=measured_peak_mb,
+            modules=selected_modules,
+            advisory=(
+                f"Available memory {available_gib:.2f} GiB is below the measured "
+                f"one-shot threshold {required_gib:.2f} GiB. EasyICU will use "
+                "patient batches, which is slower. Close memory-heavy apps or "
+                "free memory to restore the fastest mode."
+            ),
+            advisory_zh=(
+                f"当前可用内存 {available_gib:.2f} GiB，低于本次提取的实测 "
+                f"one-shot 门槛 {required_gib:.2f} GiB。EasyICU 将按患者分批，"
+                "速度会变慢；关闭占内存程序或清理内存后可恢复最快模式。"
+            ),
+        )
+
+    measured_batch = _measured_batch_recommendation(
+        database,
+        selected_modules,
+        total,
+    )
+    if measured_batch is not None:
+        _, required_mb, measured_peak_mb = measured_batch
+        if available >= required_mb:
+            return ExtractionResourcePlan(
+                mode=mode,
+                reason_code="measured_profile_fastest_safe_batch",
+                batch_size=batch_size,
+                available_memory_mb=available,
+                required_available_memory_mb=required_mb,
+                measured_peak_rss_mb=measured_peak_mb,
+                modules=selected_modules,
+            )
+        available_gib = available / 1024.0
+        required_gib = required_mb / 1024.0
+        return ExtractionResourcePlan(
+            mode=mode,
+            reason_code="measured_profile_insufficient_memory",
+            batch_size=batch_size,
+            available_memory_mb=available,
+            required_available_memory_mb=required_mb,
+            measured_peak_rss_mb=measured_peak_mb,
+            modules=selected_modules,
+            advisory=(
+                f"Available memory {available_gib:.2f} GiB is below the measured "
+                f"fastest-batch threshold {required_gib:.2f} GiB. EasyICU will "
+                "use smaller patient batches, which is slower. Close memory-heavy "
+                "apps or free memory to restore the fastest verified batch size."
+            ),
+            advisory_zh=(
+                f"当前可用内存 {available_gib:.2f} GiB，低于实测最快批次门槛 "
+                f"{required_gib:.2f} GiB。EasyICU 将使用更小的患者批次，速度会变慢；"
+                "关闭占内存程序或清理内存后可恢复最快已验证批次。"
+            ),
+        )
+
+    required_mb = (
+        float(_STREAM_ONESHOT_MIN_AVAILABLE_MB)
+        if _normalise_stream_database(database)
+        in _STREAM_UNMEASURED_ONESHOT_GUARD_DATABASES
+        else None
+    )
+    if mode == "one_shot":
+        return ExtractionResourcePlan(
+            mode=mode,
+            reason_code="calibrated_fast_path",
+            batch_size=batch_size,
+            available_memory_mb=available,
+            required_available_memory_mb=required_mb,
+            measured_peak_rss_mb=None,
+            modules=selected_modules,
+        )
+
+    available_gib = available / 1024.0
+    threshold_text = (
+        f"{required_mb / 1024.0:.0f} GiB"
+        if required_mb is not None
+        else "the safe threshold"
+    )
+    threshold_text_zh = (
+        f"{required_mb / 1024.0:.0f} GiB" if required_mb is not None else "安全门槛"
+    )
+    return ExtractionResourcePlan(
+        mode=mode,
+        reason_code="unmeasured_profile_memory_guard",
+        batch_size=batch_size,
+        available_memory_mb=available,
+        required_available_memory_mb=required_mb,
+        measured_peak_rss_mb=None,
+        modules=selected_modules,
+        advisory=(
+            f"Available memory is {available_gib:.2f} GiB; this module set has no "
+            f"full-cohort measurement below {threshold_text}. EasyICU will use "
+            "patient batches, which is slower. Close memory-heavy apps or free "
+            "memory before retrying the fastest mode."
+        ),
+        advisory_zh=(
+            f"当前可用内存为 {available_gib:.2f} GiB；这组模块在 {threshold_text_zh} "
+            "以下还没有全队列实测依据。EasyICU 将按患者分批，速度会变慢；"
+            "关闭占内存程序或清理内存后可再尝试最快模式。"
+        ),
+    )
 
 
 def _next_stream_retry_batch_size(current_batch_size: int) -> int:
@@ -1103,6 +1630,19 @@ def _stream_module_batches_to_parquet(
                     reorder=False,
                 )
                 if frame is not None:
+                    if id_col in frame.columns:
+                        outside_batch = frame[id_col].notna() & ~frame[id_col].isin(
+                            batch_ids
+                        )
+                        if bool(outside_batch.any()):
+                            outside_count = int(
+                                frame.loc[outside_batch, id_col].nunique()
+                            )
+                            raise ValueError(
+                                f"{module_name}: streamed batch returned "
+                                f"{outside_count} {id_col} values outside the "
+                                "requested patient partition"
+                            )
                     produced_concepts.update(
                         concept for concept in concepts if concept in frame.columns
                     )
@@ -2629,6 +3169,8 @@ def _native_export_file_sha256(path: Path) -> str:
 
 _NATIVE_EXPORT_ARROW_BATCH_ROWS = 262_144
 _NATIVE_EXPORT_DUCKDB_MEMORY_MB = 512
+_NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET = 1_000_000
+_NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_MAX = 64
 _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS = 1_000_000
 _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_BYTES = 512 * 1024 * 1024
 _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
@@ -2964,6 +3506,19 @@ def _native_export_duckdb_consolidate_row_grain(
         for concept in physical_values
         if _native_export_storage_kind(concept, dictionary) == "string"
     ]
+    duplicate_key_rows = int(before_audit["duplicate_key_rows_before"])
+    conflict_partition_count = min(
+        _NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_MAX,
+        max(
+            1,
+            (
+                duplicate_key_rows
+                + _NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET
+                - 1
+            )
+            // _NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET,
+        ),
+    )
     aggregate_expressions = []
     for concept in physical_values:
         column = quote_identifier(concept)
@@ -3021,31 +3576,34 @@ def _native_export_duckdb_consolidate_row_grain(
                         f"{quote_identifier('_conflict_' + concept)} > 1"
                         for concept in string_concepts
                     )
-                    conflict_row = connection.execute(
-                        f"""
-                        WITH duplicate_keys AS (
-                            SELECT stay_id, charttime
-                            FROM read_parquet(?)
-                            GROUP BY stay_id, charttime
-                            HAVING count(*) > 1
-                        ), conflicts AS (
-                            SELECT
-                                s.stay_id,
-                                s.charttime,
-                                {conflict_counts}
-                            FROM read_parquet(?) AS s
-                            JOIN duplicate_keys AS d
-                              ON s.stay_id IS NOT DISTINCT FROM d.stay_id
-                             AND s.charttime IS NOT DISTINCT FROM d.charttime
-                            GROUP BY s.stay_id, s.charttime
-                        )
-                        SELECT *
-                        FROM conflicts
-                        WHERE {conflict_predicate}
-                        LIMIT 1
-                        """,
-                        [str(path), str(path)],
-                    ).fetchone()
+                    conflict_row = None
+                    for conflict_partition in range(conflict_partition_count):
+                        conflict_row = connection.execute(
+                            f"""
+                            WITH conflicts AS (
+                                SELECT
+                                    s.stay_id,
+                                    s.charttime,
+                                    count(*)::BIGINT AS _key_rows,
+                                    {conflict_counts}
+                                FROM read_parquet(?) AS s
+                                WHERE hash(s.stay_id, s.charttime) % ? = ?
+                                GROUP BY s.stay_id, s.charttime
+                            )
+                            SELECT * EXCLUDE (_key_rows)
+                            FROM conflicts
+                            WHERE _key_rows > 1
+                              AND ({conflict_predicate})
+                            LIMIT 1
+                            """,
+                            [
+                                str(path),
+                                conflict_partition_count,
+                                conflict_partition,
+                            ],
+                        ).fetchone()
+                        if conflict_row is not None:
+                            break
                     if conflict_row is not None:
                         stay_id, charttime, *counts = conflict_row
                         conflict_index = next(
@@ -3160,6 +3718,7 @@ def _native_export_duckdb_consolidate_row_grain(
             "rows_consolidated": int(before_audit["duplicate_excess_rows_before"]),
             "publication_backend": ("duckdb_bounded_spillable_row_grain_consolidation"),
             "consolidation_memory_limit_mb": memory_mb,
+            "string_conflict_audit_partitions": conflict_partition_count,
         }
     )
     return after_audit, concept_non_null
@@ -3702,6 +4261,7 @@ def _publish_native_export_v2(
     max_patients: Optional[int],
     result: Dict,
     concept_projection: Optional[Mapping[str, Sequence[str]]] = None,
+    require_stay_time_bounds: bool = False,
 ) -> Dict[str, object]:
     """Seal completed grouped-module files as one native-v2 package.
 
@@ -3803,6 +4363,22 @@ def _publish_native_export_v2(
         stay_time_upper_bounds = _native_export_stay_time_upper_bounds(
             pd.read_parquet(outcome_source)
         )
+    longitudinal_modules = [
+        module for module in published_modules if module not in {"demographics", "outcome"}
+    ]
+    if require_stay_time_bounds and longitudinal_modules and not stay_time_upper_bounds:
+        raise ValueError(
+            "native_export_v2 requires outcome.parquet with usable los_icu time "
+            "bounds before publishing longitudinal modules; include outcome in "
+            f"the same extraction package (modules={longitudinal_modules})"
+        )
+    time_window_authority = {
+        "required": bool(require_stay_time_bounds),
+        "source": (
+            "outcome.los_icu" if stay_time_upper_bounds else "fallback_only"
+        ),
+        "bounded_stays": int(len(stay_time_upper_bounds)),
+    }
     eicu_tidal_volume_age_lookup = None
     if normalized_database == "eicu" and "ventilator" in published_modules:
         eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(output_root)
@@ -4096,6 +4672,7 @@ def _publish_native_export_v2(
                 "concepts": len(concept_plan[module]),
                 "concept_ids": concept_plan[module],
                 "physical_concept_ids": requested_concept_plan[module],
+                "producer_rows": source_rows,
                 "rows": published_rows,
                 "physical_schema": physical_schema,
                 "parquet_sha256": parquet_sha256,
@@ -4177,8 +4754,12 @@ def _publish_native_export_v2(
             "time_origin": "icu_admission",
             "time_unit": "h",
             "time_window_policy": (
-                "longitudinal modules: ICU episode with 24h pre/post allowance; "
-                "outcome: stay-level at ICU admission"
+                "longitudinal modules: ICU episode with 24h pre/post allowance "
+                "bound by outcome.los_icu; outcome: stay-level at ICU admission"
+                if stay_time_upper_bounds
+                else "longitudinal modules: 24h pre-admission and 366-day safety "
+                "fallback without outcome.los_icu authority; outcome: stay-level "
+                "at ICU admission"
             ),
             "concept_order": "module_catalog",
             "unavailable_representation": "typed_all_null_placeholder",
@@ -4199,6 +4780,8 @@ def _publish_native_export_v2(
         "module_peak_rss_mb": module_peak_rss_mb,
         "module_peak_working_set_mb": module_peak_working_set_mb,
         "stream_retry_history": list(result.get("stream_retry_history", [])),
+        "resource_plan": result.get("resource_plan"),
+        "time_window_authority": time_window_authority,
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
         "unavailable_concepts": unavailable_concepts,
@@ -4255,10 +4838,10 @@ def extract_database(
       * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
         arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
         EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
-      * 流式导出对低于 24 GiB 的 MIMIC-III、MIMIC-IV 和 AUMC 先运行按实测
-        峰值校准的大 pilot，不再未经验证就 one-shot；SIC/HiRID 若保守峰值可
-        放入预留后预算则保留 one-shot。每个模块再根据首批真实工作集调整后续
-        批次，上限为 67,000 stays。
+      * 自动策略以最快为目标：若所选模块已有全队列实测，且当前可用内存可容纳
+        实测进程树峰值 + 10% 余量，则直接 one-shot；内存不足才按患者分批并返回
+        结构化提醒。未实测的 MIMIC-III、MIMIC-IV 和 AUMC 模块组继续使用 24 GiB
+        保护线。每个流式模块再根据首批真实工作集调整后续批次，上限 67,000 stays。
       * 参考实测：MIMIC-III 全量 61,532 stays 的 SOFA-2 六分量 ~6 分钟。
 
     Args:
@@ -4268,10 +4851,10 @@ def extract_database(
         modules: 要提取的模块列表（None = 全部 19 个模块）
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
-        batch_size: 模块内患者分批大小。None(默认) = 非流式提取时五个较小
-            数据库一次性、完整 eICU 按稳定内存预算使用 1–3 个大批次；流式
-            提取时按当前可用内存连续计算首批，并根据首批实测工作集调整后续
-            批次（上限 67,000 stays）。仅在需要覆盖默认策略时显式传值。
+        batch_size: 模块内患者分批大小。None(默认) = 优先采用所选模块的实测
+            one-shot 最快路径；只有当前可用内存低于安全门槛时才分批。流式提取
+            会根据首批实测工作集调整后续批次（上限 67,000 stays）。仅在需要
+            覆盖默认策略时显式传值。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -4327,6 +4910,21 @@ def extract_database(
         data_path = _get_default_db_path(database)
         if data_path is None:
             data_path = get_default_data_path()
+
+    # Resolve the requested module scope before memory planning.  The old
+    # database-only guard could not distinguish a 1.66-GiB blood_gas request
+    # from an unmeasured 19-module request, which caused needless batching.
+    if modules is None:
+        modules = list(EXTRACT_MODULE_ORDER)
+    else:
+        modules = list(modules)
+        for module in modules:
+            if module not in EXTRACT_MODULES:
+                raise ValueError(
+                    f"未知模块 '{module}'，可选: {list(EXTRACT_MODULES.keys())}"
+                )
+    if not modules:
+        raise ValueError("modules must not be empty")
     data_path = str(data_path)
 
     # 磁盘溢写 / 批处理中间文件的默认落点：**输出目录旁的 .easyicu_spill/**，而不是
@@ -4368,46 +4966,52 @@ def extract_database(
 
     num_patients = len(all_ids)
 
-    # 流式导出先选择一个有证据的首批，而不是按数据库大小猜测 one-shot。
-    # 2026-08-03 实测显示小队列也可能很重（AUMC 23,106 stays 约 29.31 GiB），
-    # 所以低于 24 GiB 时高风险库先按数据库校准 pilot；SIC/HiRID 等较低风险库
-    # 仅在保守峰值能放入预留后预算时保留 one-shot。每个模块再用首批 working-set
-    # 自适应。显式用户 batch 仍保持固定；launcher 可以显式传计划值并单独打开
-    # adaptive_stream_batches，使 provenance 与真实首批完全一致。
+    # The resource plan is the single policy used by API, launcher, and Web.
+    # Automatic batching is a last-resort degradation, never the default for a
+    # measured module that fits currently available memory.
     if adaptive_stream_batches and not stream_output_batches:
         raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
 
-    if stream_output_batches:
-        automatic_stream_batch = batch_size is None
-        batch_size = _resolve_stream_batch_size(
-            database,
-            num_patients,
-            batch_size,
-        )
+    automatic_batch = batch_size is None
+    resource_plan = plan_extraction_resources(
+        database,
+        modules,
+        num_patients,
+        batch_size,
+    )
+    batch_size = resource_plan.batch_size
+    if (
+        len(modules) > 1
+        and resource_plan.reason_code == "measured_profile_fast_path"
+    ):
+        # The profiles were measured one module per isolated worker.  Do not
+        # silently combine their working sets merely because total RAM is high.
+        group_modules = False
+
+    if (
+        stream_output_batches
+        and automatic_batch
+        and resource_plan.mode == "one_shot"
+    ):
+        # A single streamed partition gives up source/cache reuse without any
+        # memory benefit.  Use the true one-shot path when the measured profile
+        # authorises it.
+        stream_output_batches = False
+        _adaptive_stream_batches = False
+        _auto_one_shot = True
+    elif stream_output_batches:
         _adaptive_stream_batches = (
-            automatic_stream_batch
+            automatic_batch
             if adaptive_stream_batches is None
             else bool(adaptive_stream_batches)
         )
         _auto_one_shot = False
-    elif batch_size is None:
+    elif resource_plan.mode == "one_shot":
         _adaptive_stream_batches = False
-        batch_size = max(num_patients + 1, 2_000_000)
         _auto_one_shot = True
     else:
         _adaptive_stream_batches = False
         _auto_one_shot = False
-
-    # 确定要提取的模块
-    if modules is None:
-        modules = list(EXTRACT_MODULE_ORDER)
-    else:
-        # 保持用户指定顺序，但验证模块名
-        for m in modules:
-            if m not in EXTRACT_MODULES:
-                raise ValueError(
-                    f"未知模块 '{m}'，可选: {list(EXTRACT_MODULES.keys())}"
-                )
 
     # 创建输出目录
     if native_export_v2 is None:
@@ -4441,6 +5045,8 @@ def extract_database(
         else:
             batch_description = f"batch_size={batch_size}"
         print(f"   批策略: {batch_description}")
+        if resource_plan.advisory_zh:
+            print(f"   ⚠️  {resource_plan.advisory_zh}")
         print(f"   RSS: {rss:.0f}MB, 输出: {output_dir or '仅内存'}")
         print(f"{'=' * 60}")
 
@@ -4451,6 +5057,7 @@ def extract_database(
         "adaptive_stream_batches": _adaptive_stream_batches,
         "stream_retry_history": [],
         "stream_output_batches": stream_output_batches,
+        "resource_plan": resource_plan.to_dict(),
         "modules": {},
         "total_elapsed": 0,
         "output_dir": output_dir,
@@ -4876,6 +5483,7 @@ def extract_database(
             modules=modules,
             max_patients=max_patients,
             result=result,
+            require_stay_time_bounds=True,
         )
 
     total_elapsed = time.time() - t_start
@@ -4898,9 +5506,9 @@ def extract_database(
             f"   RSS: {rss:.0f}MB" + (f"  |  输出: {output_dir}" if output_dir else "")
         )
         if all_errors:
-            print(f"   ⚠️ {len(all_errors)} 错误: {all_errors[:5]}")
+            logger.warning(f"{len(all_errors)} 错误: {all_errors[:5]}")
         if all_warnings:
-            print(f"   ⚠️ {len(all_warnings)} 警告: {all_warnings[:5]}")
+            logger.warning(f"{len(all_warnings)} 警告: {all_warnings[:5]}")
         print(f"{'=' * 60}")
 
     return result

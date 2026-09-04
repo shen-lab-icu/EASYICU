@@ -178,5 +178,5 @@
     });
   }
 
-  window.EU_GUIDED_PI_PROVIDER_CONTROL = Object.freeze({ create });
+  window.EasyICU.guidedPi.declare('providerControl', { create });
 })();

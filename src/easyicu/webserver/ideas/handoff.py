@@ -67,6 +67,7 @@ def accept_canonical_handoff(
     plan: Mapping[str, Any],
     handoff: Mapping[str, Any],
     prior_art_binding: Optional[Mapping[str, Any]],
+    readiness_binding: Optional[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Validate and atomically project one canonical idea into StudyContext."""
 
@@ -75,6 +76,17 @@ def accept_canonical_handoff(
         raise CanonicalHandoffAcceptanceError(
             "canonical_idea_handoff_digest_required",
             "The selected Idea Mining handoff has no valid canonical digest.",
+        )
+    readiness = (
+        readiness_binding if isinstance(readiness_binding, Mapping) else {}
+    )
+    if not readiness.get("execution_ready_for_confirmation"):
+        raise CanonicalHandoffAcceptanceError(
+            "canonical_idea_execution_readiness_required",
+            (
+                "The Idea Mining handoff requires current differentiated prior art "
+                "and ready source-bound feasibility before acceptance."
+            ),
         )
     canonical = (
         handoff.get("canonical_handoff")
@@ -152,6 +164,26 @@ def accept_canonical_handoff(
             "go_no_go": str(handoff.get("go_no_go") or ""),
             "go_no_go_reason": str(handoff.get("go_no_go_reason") or "")[:500],
             **dict(prior_art_binding or {}),
+            "prior_art_adjudication_schema_version": str(
+                readiness.get("prior_art_adjudication_schema_version") or ""
+            ),
+            "prior_art_adjudication_sha256": str(
+                readiness.get("prior_art_adjudication_sha256") or ""
+            ),
+            "prior_art_decision": str(readiness.get("prior_art_decision") or ""),
+            "source_feasibility_schema_version": str(
+                readiness.get("source_feasibility_schema_version") or ""
+            ),
+            "source_feasibility_sha256": str(
+                readiness.get("source_feasibility_sha256") or ""
+            ),
+            "source_feasibility_status": str(
+                readiness.get("source_feasibility_status") or ""
+            ),
+            "idea_definition_sha256": str(
+                readiness.get("idea_definition_sha256") or ""
+            ),
+            "source_path_hash": str(readiness.get("source_path_hash") or ""),
         },
         "current_stage": "study_setup",
         "last_route": "guided",

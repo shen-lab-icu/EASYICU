@@ -34,6 +34,12 @@ def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
     budget_relative = "pi_copilot/node_app/src/shell-budget.mjs"
     assert f"src/easyicu/webserver/{budget_relative}" in manifest
     assert f'"{budget_relative}"' in pyproject
+    finalizer_relative = "pi_copilot/node_app/src/post-tool-finalization.mjs"
+    assert f"src/easyicu/webserver/{finalizer_relative}" in manifest
+    assert f'"{finalizer_relative}"' in pyproject
+    lifecycle_relative = "pi_copilot/node_app/src/session-lifecycle.mjs"
+    assert f"src/easyicu/webserver/{lifecycle_relative}" in manifest
+    assert f'"{lifecycle_relative}"' in pyproject
     skill_relative = "pi_copilot/node_app/src/skills/web-prototype/SKILL.md"
     assert f"src/easyicu/webserver/{skill_relative}" in manifest
     assert f'"{skill_relative}"' in pyproject
@@ -60,9 +66,17 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     )
     (source / "README.md").write_text("runtime", encoding="utf-8")
     (source / "THIRD_PARTY_NOTICES.md").write_text("MIT", encoding="utf-8")
+    (source / "tool_catalog.json").write_text(
+        '{"schema_version":"easyicu.pi-tool-catalog/2","_arguments":[],"tools":[]}',
+        encoding="utf-8",
+    )
     (source / "src" / "main.mjs").write_text("", encoding="utf-8")
     (source / "src" / "event-projection.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "post-tool-finalization.mjs").write_text(
+        "", encoding="utf-8"
+    )
     (source / "src" / "shell-budget.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "session-lifecycle.mjs").write_text("", encoding="utf-8")
     (source / "src" / "skills" / "web-prototype").mkdir(parents=True)
     (source / "src" / "skills" / "web-prototype" / "SKILL.md").write_text(
         "# Web prototype\n",
@@ -131,6 +145,7 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     )
 
     assert runtime_is_installed(target, source=source)
+    assert (target / "tool_catalog.json").is_file()
     manifest = json.loads(
         (target / "runtime-manifest.json").read_text(encoding="utf-8")
     )
@@ -191,6 +206,10 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
         encoding="utf-8",
     )
     (target / "src" / "main.mjs").write_text("tampered", encoding="utf-8")
+    assert runtime_is_installed(target, source=source) is False
+
+    (target / "src" / "main.mjs").write_text("", encoding="utf-8")
+    (target / "tool_catalog.json").write_text("{}", encoding="utf-8")
     assert runtime_is_installed(target, source=source) is False
 
     before = runtime_manifest(source)["runtime_manifest_sha256"]

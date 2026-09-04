@@ -235,7 +235,7 @@ def test_compare_works_end_to_end_on_synthetic_frozen_suite(ra, synthetic_cohort
     # Relative import — tests/research_agent/ is a package (has __init__.py)
     # but tests/ is not, so the absolute "tests.research_agent..." form
     # fails to resolve. Relative import sidesteps that.
-    from .test_scientific_regression import _compute_cohort_stats
+    from tests.research_agent.core.test_scientific_regression import _compute_cohort_stats
 
     stats = _compute_cohort_stats(synthetic_cohort)
     suite = ra.default_icu_agent_bench_suite()

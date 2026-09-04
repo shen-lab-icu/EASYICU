@@ -818,7 +818,7 @@ def test_web_transport_policy_two_500s_fail_closed_after_two_attempts(monkeypatc
 
     assert completions.calls == 2
     assert client.last_transport_attempts == 2
-    assert getattr(raised.value, "easyicu_transport_attempts") == 2
+    assert raised.value.easyicu_transport_attempts == 2
 
 
 def test_web_transport_policy_does_not_retry_non_allowlisted_status(monkeypatch, ra):

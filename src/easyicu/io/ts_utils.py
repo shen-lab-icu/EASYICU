@@ -192,6 +192,32 @@ def change_interval(
         return table
 
     df = table.data.copy() if copy else table.data
+
+    # ``first`` means the earliest source observation, not whichever row an
+    # unordered parquet/DuckDB scan happens to return first.  Sort before time
+    # rounding so sub-interval chronology remains available.  Exact-time
+    # conflicts use the canonical value representation as a deterministic
+    # final tie-break; identical values need no further ordering contract.
+    if aggregation == "first":
+        stable_order = [
+            column
+            for column in [*table.id_columns, table.index_column]
+            if column in df.columns
+        ]
+        value_tie_break = None
+        if table.value_column and table.value_column in df.columns:
+            value_tie_break = "__easyicu_first_value_order"
+            while value_tie_break in df.columns:
+                value_tie_break = f"_{value_tie_break}"
+            df[value_tie_break] = df[table.value_column].astype("string")
+            stable_order.append(value_tie_break)
+        df = df.sort_values(
+            stable_order,
+            kind="mergesort",
+            na_position="last",
+        ).reset_index(drop=True)
+        if value_tie_break is not None:
+            df = df.drop(columns=value_tie_break)
     
     # 🔧 FIX: 窗口概念由调用者明确指定，不再基于列名自动检测
     # 这修复了 AUMC drugitems 表的 'stop' 列被错误识别为窗口结束列的问题
@@ -1001,8 +1027,8 @@ def fill_gaps(
             return None
         if isinstance(limits_obj, pd.DataFrame):
             return limits_obj.copy()
-        if hasattr(limits_obj, "data") and isinstance(getattr(limits_obj, "data"), pd.DataFrame):
-            return getattr(limits_obj, "data").copy()
+        if hasattr(limits_obj, "data") and isinstance(limits_obj.data, pd.DataFrame):
+            return limits_obj.data.copy()
         if _is_sequence_like(limits_obj):
             seq = list(limits_obj)
             if len(seq) != 2:

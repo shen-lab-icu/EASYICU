@@ -95,11 +95,17 @@ def test_html_escaping_has_exactly_one_implementation() -> None:
         path.name
         for path in sorted((STATIC / "js").glob("*.js"))
         if path.name != "html-escape.js"
-        and re.search(r"^[ \t]*function esc\(", path.read_text(encoding="utf-8"), re.M)
+        # The re-rolled copies did not all spell it `esc`: three modules had
+        # drifted to `escapeHtml`, and one of those to a `(ctx, value)` shape.
+        # Match the concept, not one name, or the guard passes while the
+        # duplication it exists to stop is sitting next door.
+        and re.search(
+            r"^[ \t]*function esc(apeHtml)?\(", path.read_text(encoding="utf-8"), re.M
+        )
     ]
     assert offenders == [], (
-        "these modules define a local esc() instead of destructuring the shared "
-        f"owner (`const {{ esc }} = window.EU_HTML;`): {offenders}"
+        "these modules define a local esc()/escapeHtml() instead of destructuring "
+        f"the shared owner (`const {{ esc }} = window.EU_HTML;`): {offenders}"
     )
 
 

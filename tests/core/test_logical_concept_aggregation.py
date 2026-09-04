@@ -12,7 +12,8 @@ from easyicu.concept.expr_parser import _default_aggregator_for_dtype
 from easyicu.concept.parser import default_aggregator_for_dtype
 from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
 from easyicu.resources import load_data_sources
-from easyicu.table import ICUTable
+from easyicu.table import ICUTable, WinTbl
+from easyicu.table.duration import UNIT_HOURS, get_dur_var_unit
 from easyicu.io.ts_utils import change_interval
 from easyicu.utils import compat
 
@@ -49,6 +50,36 @@ def test_bool_auto_aggregation_is_occurrence_not_count_or_majority() -> None:
 
     assert result["rrt"].tolist() == [True]
     assert str(result["rrt"].dtype) == "bool"
+
+
+def test_categorical_first_is_stable_by_source_time_then_value() -> None:
+    rows = [
+        {"stay_id": 1, "charttime": 0.75, "vent_mode": "standby"},
+        {"stay_id": 1, "charttime": 0.25, "vent_mode": "unspecified"},
+        {"stay_id": 1, "charttime": 0.25, "vent_mode": "pressure"},
+    ]
+
+    def aggregate(frame: pd.DataFrame) -> pd.DataFrame:
+        table = ICUTable(
+            data=frame,
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="vent_mode",
+        )
+        return change_interval(
+            table,
+            interval=pd.Timedelta(hours=1),
+            aggregation="first",
+            time_unit="hours",
+        ).data
+
+    forward = aggregate(pd.DataFrame(rows))
+    reversed_order = aggregate(pd.DataFrame(list(reversed(rows))))
+
+    assert forward[["stay_id", "charttime", "vent_mode"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 0.0, "vent_mode": "pressure"}
+    ]
+    pd.testing.assert_frame_equal(forward, reversed_order)
 
 
 def test_r_style_merge_retains_owner_receipt_sidecars() -> None:
@@ -183,6 +214,240 @@ def test_miiv_rrt_keeps_charted_points_and_expands_procedure_windows() -> None:
 
     assert result["charttime"].tolist() == [2.0, 4.0, 5.0, 6.0]
     assert result["rrt"].tolist() == [True, True, True, True]
+
+
+def test_wintbl_merge_uses_declared_duration_not_absolute_endtime() -> None:
+    """MIMIC-III IMV duration must override redundant source end timestamps."""
+
+    class DataSource:
+        config = load_data_sources().get("mimic")
+
+    ventilation = WinTbl(
+        data=pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [2.0, 5.0],
+                "dur_var": [2.0, 1.0],
+                # This source helper is deliberately on an absolute clock.
+                "endtime": [
+                    pd.Timestamp("2180-01-01 04:00:00"),
+                    pd.Timestamp("2180-01-01 06:00:00"),
+                ],
+                "mech_vent": ["invasive", "noninvasive"],
+            }
+        ),
+        id_vars=["stay_id"],
+        index_var="charttime",
+        dur_var="dur_var",
+        dur_unit="hours",
+    )
+    marker = ICUTable(
+        data=pd.DataFrame({"stay_id": [1], "charttime": [0.0], "marker": [1.0]}),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="marker",
+    )
+
+    result = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
+        {"mech_vent": ventilation, "marker": marker},
+        ["mech_vent", "marker"],
+        pd.Timedelta(hours=1),
+        data_source=DataSource(),
+    )
+
+    observed = result.loc[result["mech_vent"].notna(), "charttime"].tolist()
+    assert observed == [2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_existing_miiv_mech_vent_keeps_historical_merge_contract() -> None:
+    """The MIMIC-III repair must not change already-sealed MIIV intervals."""
+
+    class DataSource:
+        config = load_data_sources().get("miiv")
+
+    ventilation = WinTbl(
+        data=pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [2.0, 5.0],
+                "dur_var": [2.0, 1.0],
+                "mech_vent": ["invasive", "noninvasive"],
+            }
+        ),
+        id_vars=["stay_id"],
+        index_var="charttime",
+        dur_var="dur_var",
+        dur_unit="hours",
+    )
+    marker = ICUTable(
+        data=pd.DataFrame({"stay_id": [1], "charttime": [0.0], "marker": [1.0]}),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="marker",
+    )
+
+    result = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
+        {"mech_vent": ventilation, "marker": marker},
+        ["mech_vent", "marker"],
+        pd.Timedelta(hours=1),
+        data_source=DataSource(),
+    )
+
+    observed = result.loc[result["mech_vent"].notna(), "charttime"].tolist()
+    assert observed == [2.0, 5.0]
+
+
+def test_unrelated_wintbl_keeps_historical_sparse_merge_contract() -> None:
+    """An IMV repair must not expand unrelated window concepts."""
+
+    treatment = WinTbl(
+        data=pd.DataFrame(
+            {
+                "stay_id": [1],
+                "charttime": [2.0],
+                "dur_var": [2.0],
+                "endtime": [pd.Timestamp("2180-01-01 04:00:00")],
+                "rrt": [True],
+            }
+        ),
+        id_vars=["stay_id"],
+        index_var="charttime",
+        dur_var="dur_var",
+        dur_unit="hours",
+    )
+    marker = ICUTable(
+        data=pd.DataFrame({"stay_id": [1], "charttime": [0.0], "marker": [1.0]}),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="marker",
+    )
+
+    result = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
+        {"rrt": treatment, "marker": marker},
+        ["rrt", "marker"],
+        pd.Timedelta(hours=1),
+        data_source=None,
+    )
+
+    observed = result.loc[result["rrt"].notna(), "charttime"].tolist()
+    assert observed == [2.0]
+
+
+def test_true_window_concept_preserves_duration_unit_during_alignment() -> None:
+    class DataSource:
+        config = load_data_sources().get("mimic")
+        base_path = None
+
+        def __init__(self) -> None:
+            intime = pd.Timestamp("2180-01-01 00:00:00")
+            self.frames = {
+                "procedureevents_mv": pd.DataFrame(
+                    {
+                        "icustay_id": [1, 1],
+                        "starttime": [
+                            intime + pd.Timedelta(hours=2),
+                            intime + pd.Timedelta(hours=5),
+                        ],
+                        "endtime": [
+                            intime + pd.Timedelta(hours=4),
+                            intime + pd.Timedelta(hours=6),
+                        ],
+                        "itemid": [225792, 225794],
+                        "cancelreason": [0, 0],
+                    }
+                ),
+                "icustays": pd.DataFrame(
+                    {
+                        "icustay_id": [1],
+                        "intime": [intime],
+                        "outtime": [intime + pd.Timedelta(days=1)],
+                        "los": [1.0],
+                    }
+                ),
+            }
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            del columns, verbose
+            frame = self.frames[table_name].copy()
+            for filter_spec in filters or []:
+                frame = filter_spec.apply(frame)
+            defaults = self.config.get_table(table_name).defaults
+            return ICUTable(
+                data=frame,
+                id_columns=[defaults.id_var],
+                index_column=defaults.index_var,
+                value_column=(
+                    defaults.val_var if defaults.val_var in frame.columns else None
+                ),
+                time_columns=[
+                    column
+                    for column in defaults.time_vars or []
+                    if column in frame.columns
+                ],
+            )
+
+    definition = ConceptDefinition(
+        name="mech_vent",
+        class_name="fct_cncpt",
+        target="win_tbl",
+        levels=["invasive", "noninvasive"],
+        sources={
+            "mimic": [
+                ConceptSource.from_mapping(
+                    {
+                        "table": "procedureevents_mv",
+                        "sub_var": "itemid",
+                        "value_var": "itemid",
+                        "ids": [225792, 225794],
+                        "dur_var": "endtime",
+                        "extra_vars": ["cancelreason"],
+                        "cancel_var": "cancelreason",
+                        "callback": "mimiciii_explicit_ventilation_interval",
+                    }
+                )
+            ]
+        },
+    )
+
+    loaded = ConceptResolver(
+        ConceptDictionary({"mech_vent": definition})
+    ).load_concepts(
+        ["mech_vent"],
+        DataSource(),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )
+    result = loaded["mech_vent"]
+
+    assert result.data[result.index_column].tolist() == [2.0, 5.0]
+    assert result.data["dur_var"].tolist() == [2.0, 1.0]
+    assert result.data["mech_vent"].tolist() == ["invasive", "noninvasive"]
+    assert get_dur_var_unit(result.data) == UNIT_HOURS
+
+
+def test_interval_expansion_enforces_its_declared_span_cap() -> None:
+    source = pd.DataFrame(
+        {
+            "id": [1],
+            "time": [0.0],
+            "endtime": [100.0],
+            "mech_vent": ["invasive"],
+        }
+    )
+
+    result = compat.expand_interval_rows(
+        source,
+        "mech_vent",
+        id_col="id",
+        time_col="time",
+        value_col="mech_vent",
+        max_span_hours=2,
+    )
+
+    assert result["time"].tolist() == [0.0, 1.0, 2.0]
 
 
 def test_eicu_rrt_coalesces_treatment_and_intake_output_offsets() -> None:

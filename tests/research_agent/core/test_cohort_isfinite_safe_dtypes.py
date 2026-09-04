@@ -11,9 +11,11 @@ Generated causal code does ``design_df[col].to_numpy()`` and feeds the result to
 table dies, ``adjusted_effect`` is ``None``, and the primary estimate is lost
 (the headline then mis-binds to an audit step's junk scalar).
 
-``coerce_isfinite_safe_dtypes`` downcasts those columns to ``float64`` (NA ->
-NaN) at cohort-materialisation time, while leaving genuine string categoricals
-(``sex``, admission type) untouched for dummy-encoding.
+``coerce_isfinite_safe_dtypes`` downcasts nullable numeric/logical columns with
+NA to ``float64`` (NA -> NaN) at cohort-materialisation time. Complete logical
+columns remain numpy ``bool`` so the physical analysis cohort does not drift
+from its sealed boolean domain. Genuine string categoricals (``sex``, admission
+type) remain untouched for dummy-encoding.
 """
 
 from __future__ import annotations
@@ -70,6 +72,22 @@ def test_nullable_columns_become_float64_with_nan_preserved():
     bool_vals = out["nullable_bool"].to_numpy()
     assert bool_vals[0] == 1.0 and bool_vals[2] == 0.0
     assert np.isnan(bool_vals[1])
+
+
+def test_complete_logical_columns_preserve_boolean_domain():
+    frame = pd.DataFrame(
+        {
+            "nullable_bool": pd.array([True, False, True], dtype="boolean"),
+            "object_bool": pd.Series([True, False, True], dtype=object),
+        }
+    )
+
+    out = coerce_isfinite_safe_dtypes(frame)
+
+    for col in frame.columns:
+        assert out[col].dtype == np.bool_, (col, out[col].dtype)
+        assert out[col].tolist() == [True, False, True]
+        np.isfinite(out[col].to_numpy())
 
 
 def test_string_categoricals_are_left_untouched():

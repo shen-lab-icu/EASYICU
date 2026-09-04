@@ -556,6 +556,28 @@
    ]
   }
  },
+ "icu_unit_type": {
+  "target": "id_tbl",
+  "class_name": "fct_cncpt",
+  "description": "ICU unit type",
+  "category": "demographics",
+  "sources": {
+   "eicu": [
+    {
+     "table": "patient",
+     "val_var": "unittype",
+     "class_name": "col_itm"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "patient",
+     "val_var": "unittype",
+     "class_name": "col_itm"
+    }
+   ]
+  }
+ },
  "age": {
   "unit": "years",
   "min": 0,
@@ -7186,6 +7208,28 @@
   "callback": "acute_rrt_input",
   "target": "ts_tbl"
  },
+ "crrt_mode_input": {
+  "class_name": "lgl_cncpt",
+  "description": "MIMIC-IV CRRT-mode documentation used only by the pinned MIT-LCP source-native AKI profile",
+  "clinical_status": "source_native_profile_input",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "MIT-LCP mimic-code crrt.sql itemid 227290",
+  "definition_version": "d20b49a71ebb8cafc6febb0821432778592192d5",
+  "clinical_contract_id": "kdigo_aki_2012",
+  "category": "renal",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": 227290,
+     "callback": "transform_fun(set_val(TRUE))"
+    }
+   ]
+  }
+ },
  "kdigo_creatinine_input": {
   "class_name": "rec_cncpt",
   "description": "Phenotype-specific serum-creatinine input for KDIGO AKI",
@@ -7220,19 +7264,20 @@
  },
  "kdigo_aki": {
   "class_name": "rec_cncpt",
-  "description": "KDIGO Acute Kidney Injury staging (0-3) based on creatinine and urine output",
+  "description": "Public-reference KDIGO staging plus a source-native comparison or explicit unavailability receipt",
   "clinical_status": "validated_definition",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,
-  "definition_source": "KDIGO 2012 AKI guideline",
-  "definition_version": "2012",
+  "definition_source": "KDIGO 2012; MIT-LCP mimic-code pinned reference; EasyICU source-native profile registry",
+  "definition_version": "reference_and_source_native_v2",
   "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
    "kdigo_creatinine_input",
    "kdigo_urine_input",
    "weight",
-   "acute_rrt_input"
+   "acute_rrt_input",
+   "crrt_mode_input"
   ],
   "callback": "kdigo_aki",
   "target": "ts_tbl"
@@ -8727,6 +8772,43 @@
      "callback": "combine_callbacks(hirid_vent,\n                                           apply_map(c(`1` = 'invasive',\n                                                       `2` = 'invasive',\n                                                       `3` = 'noninvasive',\n                                                       `4` = 'noninvasive',\n                                                       `5` = 'noninvasive',\n                                                       `6` = 'noninvasive')))"
     }
    ],
+   "eicu": [
+    {
+     "ids": [
+      "Oral ETT",
+      "Nasal ETT",
+      "Double-Lumen Tube",
+      "Cricothyrotomy"
+     ],
+     "table": "respiratorycare",
+     "sub_var": "airwaytype",
+     "value_var": "airwaytype",
+     "index_var": "ventstartoffset",
+     "callback": "eicu_invasive_airway_evidence",
+     "_comment": "Explicit invasive-airway initiation evidence. Pre-ICU starts are left-censored to ICU entry. Tracheostomy alone is excluded because it does not establish active ventilation; respCareStatusOffset is an entry/status time and is not treated as extubation."
+    },
+    {
+     "ids": [
+      "O2 Device",
+      "Oxygen Delivery Method"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "value_var": "respchartvalue",
+     "index_var": "respchartoffset",
+     "callback": "eicu_respiratory_device_ventilation_evidence",
+     "_comment": "Point evidence from explicitly named respiratory devices; Ventilator/Mechanical ventilator/ETT are invasive, while BiPAP/CPAP are non-invasive. No continuity is inferred between charted points."
+    },
+    {
+     "regex": "(?i)(mechanical ventilation|non[- ]?invasive ventilation)",
+     "table": "treatment",
+     "sub_var": "treatmentstring",
+     "value_var": "treatmentstring",
+     "index_var": "treatmentoffset",
+     "callback": "eicu_treatment_ventilation_evidence",
+     "_comment": "Point evidence from the eICU treatment hierarchy. Explicit non-invasive descendants remain non-invasive; other mechanical-ventilation paths are invasive. No duration is manufactured from treatment documentation."
+    }
+   ],
    "miiv": [
     {
      "ids": [
@@ -8737,6 +8819,212 @@
      "sub_var": "itemid",
      "dur_var": "endtime",
      "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      1,
+      60,
+      218,
+      221,
+      223,
+      436,
+      437,
+      444,
+      445,
+      448,
+      449,
+      450,
+      459,
+      467,
+      501,
+      502,
+      503,
+      505,
+      506,
+      535,
+      543,
+      639,
+      640,
+      654,
+      667,
+      668,
+      669,
+      670,
+      671,
+      672,
+      681,
+      682,
+      683,
+      684,
+      686,
+      720,
+      1211,
+      1340,
+      1486,
+      1600,
+      1655,
+      2000,
+      3459,
+      5865,
+      5866,
+      220339,
+      223848,
+      223849,
+      224419,
+      224684,
+      224685,
+      224686,
+      224687,
+      224695,
+      224696,
+      224697,
+      224700,
+      224701,
+      224702,
+      224705,
+      224706,
+      224707,
+      224709,
+      224738,
+      224746,
+      224747,
+      224750,
+      226732,
+      226873,
+      227187
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "index_var": "charttime",
+     "extra_vars": [
+      "error"
+     ],
+     "callback": "mimiciii_chart_ventilation_intervals",
+     "_comment": "Invasive ventilation episodes reconstructed from the official MIT-LCP MIMIC-III classification/duration logic: ventilator settings continue an episode within 8 hours; oxygen therapy or extubation ends it. Explicit MetaVision extubation procedures are included by the callback."
+    },
+    {
+     "ids": [
+      225792,
+      225794
+     ],
+     "table": "procedureevents_mv",
+     "sub_var": "itemid",
+     "value_var": "itemid",
+     "dur_var": "endtime",
+     "extra_vars": [
+      "cancelreason",
+      "statusdescription"
+     ],
+     "cancel_var": "cancelreason",
+     "status_var": "statusdescription",
+     "callback": "mimiciii_explicit_ventilation_interval",
+     "_comment": "Supplementary exact MetaVision procedure intervals; 225792=invasive and 225794=non-invasive. Cancelled, rewritten and zero-length procedures are excluded."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      1,
+      60,
+      218,
+      221,
+      223,
+      436,
+      437,
+      444,
+      445,
+      448,
+      449,
+      450,
+      459,
+      467,
+      501,
+      502,
+      503,
+      505,
+      506,
+      535,
+      543,
+      639,
+      640,
+      654,
+      667,
+      668,
+      669,
+      670,
+      671,
+      672,
+      681,
+      682,
+      683,
+      684,
+      686,
+      720,
+      1211,
+      1340,
+      1486,
+      1600,
+      1655,
+      2000,
+      3459,
+      5865,
+      5866,
+      220339,
+      223848,
+      223849,
+      224419,
+      224684,
+      224685,
+      224686,
+      224687,
+      224695,
+      224696,
+      224697,
+      224700,
+      224701,
+      224702,
+      224705,
+      224706,
+      224707,
+      224709,
+      224738,
+      224746,
+      224747,
+      224750,
+      226732,
+      226873,
+      227187
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "index_var": "charttime",
+     "extra_vars": [
+      "error"
+     ],
+     "callback": "mimiciii_chart_ventilation_intervals",
+     "_comment": "Invasive ventilation episodes reconstructed from the official MIT-LCP MIMIC-III classification/duration logic: ventilator settings continue an episode within 8 hours; oxygen therapy or extubation ends it. Explicit MetaVision extubation procedures are included by the callback."
+    },
+    {
+     "ids": [
+      225792,
+      225794
+     ],
+     "table": "procedureevents_mv",
+     "sub_var": "itemid",
+     "value_var": "itemid",
+     "dur_var": "endtime",
+     "extra_vars": [
+      "cancelreason",
+      "statusdescription"
+     ],
+     "cancel_var": "cancelreason",
+     "status_var": "statusdescription",
+     "callback": "mimiciii_explicit_ventilation_interval",
+     "_comment": "Supplementary exact MetaVision procedure intervals; 225792=invasive and 225794=non-invasive. Cancelled, rewritten and zero-length procedures are excluded."
     }
    ],
    "sic": [
@@ -13543,6 +13831,10 @@
   ],
   "description": "canonical Sepsis-3 criterion using the original SOFA score",
   "outcome_type": "binary",
+  "levels": [
+   0,
+   1
+  ],
   "clinical_status": "validated_definition",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,

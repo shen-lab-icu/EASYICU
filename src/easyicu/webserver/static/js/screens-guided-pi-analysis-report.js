@@ -13,21 +13,16 @@
     'manuscript_provenance.json',
     'quality_gate.json',
     'figure_gallery.json',
+    'result_tables.json',
   ];
 
-  async function load(api, projectId, runId) {
+  async function load(api, projectId, runId, resource) {
     if (!api || typeof api.loadPiCopilotResearchArtifact !== 'function') {
       throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
     }
-    const loaded = await Promise.all(SOURCE_ARTIFACTS.map(async name => {
-      try {
-        return [name, await api.loadPiCopilotResearchArtifact(projectId, runId, name)];
-      } catch (error) {
-        if (name === 'figure_gallery.json') return [name, null];
-        throw error;
-      }
-    }));
-    const rows = Object.fromEntries(loaded);
+    const loader = window.EasyICU.guidedPi.require('reportArtifacts');
+    if (!loader || typeof loader.load !== 'function') throw new Error('The report artifact loader is unavailable.');
+    const rows = await loader.load(api, projectId, runId, SOURCE_ARTIFACTS, resource, ['figure_gallery.json']);
     const provenance = rows['manuscript_provenance.json'];
     return {
       payload: {
@@ -37,6 +32,7 @@
         manuscript_provenance: (provenance && provenance.payload) || {},
         quality_gate: (rows['quality_gate.json'] && rows['quality_gate.json'].payload) || {},
         figure_gallery: (rows['figure_gallery.json'] && rows['figure_gallery.json'].payload) || {},
+        result_tables: (rows['result_tables.json'] && rows['result_tables.json'].payload) || {},
       },
       governance: (provenance && provenance.governance) || null,
     };
@@ -101,8 +97,14 @@
   function render(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const context = p.run_context && typeof p.run_context === 'object' ? p.run_context : {};
+    const sourceManifest = p.source_manifest && typeof p.source_manifest === 'object' ? p.source_manifest : {};
     const provenance = p.manuscript_provenance && typeof p.manuscript_provenance === 'object' ? p.manuscript_provenance : {};
-    const rows = claims(p);
+    const manuscriptReady = !!(sourceManifest.readiness && sourceManifest.readiness.manuscript_ready === true);
+    const resultSummary = window.EasyICU.guidedPi.optional('resultSummary');
+    const registeredSummary = resultSummary
+      ? resultSummary.summarize(p.result_tables || {})
+      : { claims: [], exposureLevels: [] };
+    const rows = claims(p).concat(registeredSummary.claims || []);
     const sourceN = findClaim(rows, [/^cohort\.n_stays$/]);
     const eligibleN = findClaim(rows, [/^n_total$/]);
     const completeN = findClaim(rows, [/^n_complete_case$/, /complete_case_n$/]);
@@ -138,17 +140,17 @@
       <section class="gpi-analysis-metrics" aria-label="${esc(tr('Key registered results', '核心登记结果'))}">
         ${metric(tr('Source ICU stays', '来源 ICU stay'), display(sourceN), tr('Before eligibility filtering', '纳入条件筛选前'), sourceN)}
         ${metric(tr('Eligible stays', '符合条件 stay'), display(eligibleN), tr('Registered denominator', '已登记分母'), eligibleN)}
-        ${metric(tr('Complete-case model', '完整病例模型'), display(completeN), eventN ? `${display(eventN)} ${tr('model events', '个模型事件')}` : tr('Primary model sample', '主要模型样本'), completeN)}
+        ${metric(tr('Complete-data rows', '完整变量行'), display(completeN), eventN ? `${display(eventN)} ${tr('registered events', '个登记结局事件')}` : tr('Rows complete for all requested variables', '所有请求变量完整的记录'), completeN)}
         ${metric(tr('Overall outcome risk', '总体结局风险'), display(overallRisk), descriptiveEvents ? `${display(descriptiveEvents)} / ${display(eligibleN)}` : tr('Descriptive result', '描述性结果'), overallRisk)}
       </section>
       <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>01</span><div><small>${esc(tr('Design and population', '设计与研究人群'))}</small><h3>${esc(tr('Registered analysis frame', '已登记分析框架'))}</h3></div></div><div class="gpi-analysis-two-col"><p>${esc(tr('The exact study design and population definitions remain bound to the approved plan and run context. This report displays registered denominators without inferring a different cohort, exposure, outcome, time window or adjustment set.', '准确的研究设计与人群定义继续绑定已批准计划和运行上下文。本报告只展示已登记分母，不推断不同的队列、暴露、结局、时间窗或调整集。'))}</p><div class="gpi-analysis-values">${evidenceValue(tr('Source cohort', '来源队列'), sourceN)}${evidenceValue(tr('Eligible analysis set', '符合条件的分析集'), eligibleN)}${evidenceValue(tr('Complete cases', '完整病例'), completeN)}</div></div></section>
-      <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>02</span><div><small>${esc(tr('Results', '分析结果'))}</small><h3>${esc(tr('Primary association and absolute-risk context', '主要关联与绝对风险背景'))}</h3></div></div>${presentation ? `<div class="gpi-analysis-presentation-note"><strong>${esc(tr('Digest-verified presentation figures', '摘要核验后的展示图'))}</strong><span>${esc(tr('Re-rendered from registered source tables; original run figures and digests are unchanged.', '根据已登记源数据表重新排版；原始运行图件及其摘要保持不变。'))}</span></div>` : ''}${gallery || `<p>${esc(tr('No embedded figure is available.', '暂无可嵌入图件。'))}</p>`}</section>
+      <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>02</span><div><small>${esc(tr('Results', '分析结果'))}</small><h3>${esc(effect ? tr('Primary association and absolute-risk context', '主要关联与绝对风险背景') : tr('Exposure distribution and outcome-risk context', '暴露分布与结局风险背景'))}</h3></div></div>${presentation ? `<div class="gpi-analysis-presentation-note"><strong>${esc(tr('Digest-verified presentation figures', '摘要核验后的展示图'))}</strong><span>${esc(tr('Re-rendered from registered source tables; original run figures and digests are unchanged.', '根据已登记源数据表重新排版；原始运行图件及其摘要保持不变。'))}</span></div>` : ''}${gallery || `<p>${esc(tr('No embedded figure is available.', '暂无可嵌入图件。'))}</p>`}</section>
       <section class="gpi-analysis-section is-interpretation"><div class="gpi-analysis-section-head"><span>03</span><div><small>${esc(tr('Result interpretation', '结果解读'))}</small><h3>${esc(tr('Clinical and statistical meaning', '临床与统计含义'))}</h3></div></div><ol>${interpretation.map(value => `<li>${esc(value)}</li>`).join('')}</ol>${discussion.length ? `<details><summary>${esc(tr('Show evidence-bound discussion text', '展开证据绑定的 Discussion 文本'))}</summary>${discussion.map(value => `<p>${esc(value)}</p>`).join('')}</details>` : ''}</section>
       <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>04</span><div><small>${esc(tr('Robustness and data quality', '稳健性与数据质量'))}</small><h3>${esc(tr('What was checked—and how to read it', '检查了什么，以及应如何理解'))}</h3></div></div><ul><li>${esc(tr('Displayed denominators and estimates come from registered evidence; unavailable values remain unavailable.', '展示的分母和估计值来自已登记证据；不可用的数值继续保持不可用。'))}</li><li>${esc(tr('Measurement opportunity, missingness and applicability must be interpreted using the run-specific audit artifacts.', '测量机会、缺失性和适用性必须依据本次运行的审计产物解读。'))}</li><li>${esc(tr('Primary and sensitivity rows must not be treated as independent or equivalent unless the registered analysis says so.', '除非已登记分析明确说明，否则不得把主要分析与敏感性分析视为相互独立或等价。'))}</li></ul></section>
       <section class="gpi-analysis-section is-limit"><div class="gpi-analysis-section-head"><span>05</span><div><small>${esc(tr('Limitations', '局限性'))}</small><h3>${esc(tr('What this report cannot prove', '这份报告不能证明什么'))}</h3></div></div>${limitations.length ? limitations.map(value => `<p>${esc(value)}</p>`).join('') : `<p>${esc(tr('Interpretation is limited to the design, data, estimand and evidence scope registered by this run. This report alone cannot establish causation, clinical validity or external generalizability.', '解释范围受本次运行登记的设计、数据、estimand 和证据边界限制；仅凭本报告不能确立因果关系、临床有效性或外部可推广性。'))}</p>`}</section>
-      <nav class="gpi-analysis-links" aria-label="${esc(tr('Traceable report artifacts', '可追溯报告产物'))}"><span>${esc(tr('Open underlying artifact', '打开底层产物'))}</span>${artifactButton('result_tables.json', tr('Result tables', '结果表'))}${artifactButton('figure_gallery.json', tr('Figure gallery', '图件画廊'))}${artifactButton('manuscript_provenance.json', tr('Evidence-bound article', '证据绑定文章'))}${artifactButton('quality_gate.json', tr('Quality gate', '质量闸门'))}</nav>
+      <nav class="gpi-analysis-links" aria-label="${esc(tr('Traceable report artifacts', '可追溯报告产物'))}"><span>${esc(tr('Open underlying artifact', '打开底层产物'))}</span>${artifactButton('result_tables.json', tr('Result tables', '结果表'))}${artifactButton('figure_gallery.json', tr('Figure gallery', '图件画廊'))}${artifactButton('manuscript_provenance.json', manuscriptReady ? tr('Evidence-bound article', '证据绑定文章') : tr('Manuscript generation diagnosis', '稿件生成诊断'))}${artifactButton('quality_gate.json', tr('Quality gate', '质量闸门'))}</nav>
     </div>`;
   }
 
-  window.EU_GUIDED_PI_ANALYSIS_REPORT = { load, render };
+  window.EasyICU.guidedPi.declare('analysisReport', { load, render });
 })();

@@ -28,9 +28,11 @@ from easyicu.research_agent.planning.dependence_authority import (
     context_dependence_authority,
 )
 from easyicu.research_agent.planning.scientific_review import (
+    _continuous_linearity_facts,
     _endpoint_resolved,
     _sensitivity_facts,
     build_plan_scientific_review,
+    post_baseline_exposure,
     remediation_route_for_finding,
     repeat_units_possible,
     repeated_unit_design_closed,
@@ -265,6 +267,32 @@ def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id() -> Non
     assert facts["executed_spec_ids"] == ["complete_case_primary"]
     assert facts["missing_spec_ids"] == []
     assert facts["typed_executable"] == ["missing"]
+
+
+def test_compiler_bound_functional_form_step_is_a_distinct_typed_axis() -> None:
+    from easyicu.research_agent.contracts.association_execution import (
+        ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    )
+
+    functional_form = AnalysisStep(
+        step_id="functional_form_check",
+        planned_analysis_role="sensitivity",
+        intent="Compare the prespecified nonlinear and linear covariate forms.",
+        method="restricted_cubic_spline_sensitivity",
+        inputs=["table:adjusted_association_estimates", "age"],
+        expected_outputs=["table:functional_form_sensitivity"],
+        sensitivity_spec_ids=["candidate_age_functional_form"],
+        scientific_capability=ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    )
+    plan = _plan().model_copy(update={"steps": [*_plan().steps, functional_form]})
+
+    facts = _sensitivity_facts(_context(), plan)
+
+    assert "functional_form" in facts["executable"]
+    assert "functional_form" in facts["typed_executable"]
+    assert _continuous_linearity_facts(plan)[
+        "functional_form_sensitivity_executable"
+    ] is True
 
 
 def test_signed_landmark_primary_credits_its_typed_runtime_coordinates() -> None:
@@ -667,6 +695,89 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     assert (
         "not assessed until execution"
         in (review.facts["score_interpretation"]["figures"])
+    )
+
+
+def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None:
+    """Metadata-only candidate planning must not lose exposure opportunity.
+
+    The outer feature window is not a clinical-definition anchor, but it does
+    prove that a primary feature can be collected after ICU admission.  A
+    logistic association plan must therefore be held for a landmark or other
+    executable temporal design even before the final wide descriptor exists.
+    """
+
+    context = _context().model_copy(
+        update={
+            "variables": [
+                ConceptDescriptor(
+                    name="exposure", role=VariableRole.OTHER, dtype="int64"
+                ),
+                *[item for item in _context().variables if item.name != "exposure"],
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "confirmations": {"feature_time_window": True},
+                        "materialization_window": {
+                            "role": "outer_observation_window",
+                            "anchor": "ICU admission",
+                            "hours": 24,
+                        },
+                    }
+                ),
+            ),
+        }
+    )
+
+    assert post_baseline_exposure(context) == (
+        True,
+        "outer_materialization:icu_admission[0,24]h",
+    )
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in {
+        item.code for item in review.findings
+    }
+
+
+def test_time_varying_intent_is_a_runtime_blocker_not_a_new_user_decision() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                sensitivity_specs=[
+                    {
+                        "spec_id": "time_varying_exposure",
+                        "axis": "timing",
+                        "strategy": "time_varying",
+                        "execution_variables": ["exposure"],
+                    }
+                ],
+            )
+        }
+    )
+
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "TIME_VARYING_RUNTIME_UNAVAILABLE"
+    )
+
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.requires_user_authorization is False
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in {
+        item.code for item in review.findings
+    }
+    assert "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY" not in {
+        item.code for item in review.findings
+    }
+    assert review.facts["sensitivity"]["unsupported_spec_ids"] == [
+        "time_varying_exposure"
+    ]
+    assert "TIME_VARYING_RUNTIME_UNAVAILABLE" not in render_agent_plan_revision_contract(
+        review
     )
 
 
@@ -1944,6 +2055,39 @@ def test_signed_landmark_runtime_group_input_closes_repeated_stay_design() -> No
     )
 
     assert repeated_unit_design_closed(context, plan) is True
+
+
+def test_signed_landmark_without_runtime_group_is_not_closed_by_table_one() -> None:
+    context = _context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[
+            _traditional_table_one_step(),
+            AnalysisStep(
+                step_id="signed_landmark_primary",
+                planned_analysis_role="primary",
+                intent="Run the signed landmark model.",
+                inputs=["dataset:analysis_cohort", "exposure", "death"],
+                expected_outputs=["table:landmark_rcs_curve"],
+                method="signed_landmark_restricted_cubic_spline",
+                scientific_capability="association_landmark_spline_v1",
+                icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+            ),
+        ],
+    )
+
+    assert repeated_unit_design_closed(context, plan) is False
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" in {
+        finding.code for finding in review.findings
+    }
 
 
 def test_one_step_cannot_close_models_while_leaving_marginal_cis_unclosed() -> None:

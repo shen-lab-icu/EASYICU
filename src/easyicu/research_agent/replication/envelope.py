@@ -558,7 +558,7 @@ class ReproRecordingClient:
         self.last_usage = dict(usage) if usage is not None else None
         if hasattr(self._inner, "last_finish_reason"):
             try:
-                self.last_finish_reason = getattr(self._inner, "last_finish_reason")
+                self.last_finish_reason = self._inner.last_finish_reason
             except Exception:
                 pass
         return response, usage

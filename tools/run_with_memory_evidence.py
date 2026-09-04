@@ -98,6 +98,8 @@ def _evidence_payload(
     samples: int,
     status: str,
     exit_code: int | None,
+    rss_limit_mb: float | None,
+    stopped_for_rss: bool,
 ) -> dict[str, Any]:
     return {
         "schema_version": "easyicu_process_tree_memory_evidence_v1",
@@ -112,12 +114,40 @@ def _evidence_payload(
         "peak_process_count": peak_process_count,
         "sample_interval_seconds": max(0.05, interval),
         "samples": samples,
+        "rss_limit_mb": rss_limit_mb,
+        "stopped_for_rss": stopped_for_rss,
     }
 
 
-def run(command: Sequence[str], *, output: Path, interval: float) -> int:
+def _stop_process_tree(root: psutil.Process) -> None:
+    try:
+        processes = [*root.children(recursive=True), root]
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        processes = [root]
+    for process in processes:
+        try:
+            process.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    _, alive = psutil.wait_procs(processes, timeout=5)
+    for process in alive:
+        try:
+            process.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+
+def run(
+    command: Sequence[str],
+    *,
+    output: Path,
+    interval: float,
+    rss_limit_mb: float | None = None,
+) -> int:
     if not command:
         raise ValueError("a command is required after --")
+    if rss_limit_mb is not None and rss_limit_mb <= 0:
+        raise ValueError("rss_limit_mb must be positive")
     started_wall = time.monotonic()
     started_at = _utc_now()
     child = subprocess.Popen(list(command))
@@ -126,6 +156,7 @@ def run(command: Sequence[str], *, output: Path, interval: float) -> int:
     peak_pss_mb = 0.0
     peak_process_count = 0
     samples = 0
+    stopped_for_rss = False
     last_checkpoint = started_wall
     while True:
         rss_mb, pss_mb, process_count = _process_tree_memory_mb(root)
@@ -135,6 +166,12 @@ def run(command: Sequence[str], *, output: Path, interval: float) -> int:
         samples += 1
         exit_code = child.poll()
         if exit_code is not None:
+            break
+        if rss_limit_mb is not None and rss_mb >= rss_limit_mb:
+            stopped_for_rss = True
+            _stop_process_tree(root)
+            child.wait()
+            exit_code = 137
             break
         now = time.monotonic()
         if now - last_checkpoint >= 5.0:
@@ -151,6 +188,8 @@ def run(command: Sequence[str], *, output: Path, interval: float) -> int:
                     samples=samples,
                     status="running",
                     exit_code=None,
+                    rss_limit_mb=rss_limit_mb,
+                    stopped_for_rss=False,
                 ),
             )
             last_checkpoint = now
@@ -164,8 +203,14 @@ def run(command: Sequence[str], *, output: Path, interval: float) -> int:
         peak_process_count=peak_process_count,
         interval=interval,
         samples=samples,
-        status="complete" if exit_code == 0 else "failed",
+        status=(
+            "rss_limit_exceeded"
+            if stopped_for_rss
+            else "complete" if exit_code == 0 else "failed"
+        ),
         exit_code=int(exit_code),
+        rss_limit_mb=rss_limit_mb,
+        stopped_for_rss=stopped_for_rss,
     )
     _atomic_write_json(output, payload)
     return int(exit_code)
@@ -175,6 +220,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--interval", type=float, default=0.25)
+    parser.add_argument("--rss-limit-mb", type=float)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.command and args.command[0] == "--":
@@ -186,7 +232,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    return run(args.command, output=args.output, interval=args.interval)
+    return run(
+        args.command,
+        output=args.output,
+        interval=args.interval,
+        rss_limit_mb=args.rss_limit_mb,
+    )
 
 
 if __name__ == "__main__":

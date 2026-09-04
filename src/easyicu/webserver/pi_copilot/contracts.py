@@ -54,6 +54,7 @@ PLANNER_CHECKPOINT_GATE_REASONS: frozenset[str] = frozenset(
         "research_pipeline_planner_efficiency_budget_exhausted",
         "research_pipeline_plan_contract_exhausted",
         "research_pipeline_progressive_compile_failed",
+        "research_pipeline_planner_provider_unavailable",
     }
 )
 
@@ -68,18 +69,25 @@ PLANNER_CHECKPOINT_GATE_REASONS: frozenset[str] = frozenset(
 #: and a reader who assumes one set has been copied into two places will "fix"
 #: the difference and break either budget-resume or checkpoint seeding.
 PLAN_RESUME_OFFER_GATE_REASONS: frozenset[str] = frozenset(
-    {"research_pipeline_planner_efficiency_budget_exhausted"}
+    {
+        "research_pipeline_planner_efficiency_budget_exhausted",
+        "research_pipeline_planner_provider_unavailable",
+    }
 )
 
 #: A retry button remains valid only when the preserved inner pipeline still
 #: owns a failed, approved execution checkpoint.  The Web wrapper may record a
 #: transient retry-bridge failure after the original execution failure; that
 #: wrapper error must not erase the operator's route back to the same immutable
-#: plan.  Configuration, path and checkpoint errors are deliberately absent.
+#: plan. A missing legacy seed remains replayable because the retry owner now
+#: reconstructs only bounded historical profile variants and requires an exact
+#: checkpoint digest match before execution. Path, supersession, invalid-seed,
+#: and checkpoint errors remain deliberately absent.
 EXECUTION_RETRY_REPLAYABLE_GATE_REASONS: frozenset[str] = frozenset(
     {
         "research_agent_pipeline_failed_closed",
         "research_pipeline_execution_failed",
+        "research_pipeline_execution_retry_recovery_seed_missing",
         "research_pipeline_execution_retry_unexpected_plan_review",
     }
 )
@@ -436,6 +444,7 @@ class ToolExecutionContext:
         *,
         session: PiSessionRecord,
         user_message: str = "",
+        idea_source: Optional[Mapping[str, Any]] = None,
         allowed_actions: Iterable[str] = (),
         grant: Optional[HostTurnGrant] = None,
         authority_validator: Optional[AuthorityValidator] = None,
@@ -448,6 +457,10 @@ class ToolExecutionContext:
         # bounded, PHI-screened value as user-intent authority; the model
         # cannot supply or rewrite it through tool arguments.
         self.user_message = str(user_message or "")
+        # Bounded metadata from the existing Idea source/PDF owner. The model
+        # may read this receipt, but tools use this host-held copy instead of
+        # trusting model-reconstructed provenance.
+        self.idea_source = dict(idea_source or {})
         self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
         self.authority_validator = authority_validator
         self.workspace_root = (

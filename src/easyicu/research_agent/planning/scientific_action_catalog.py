@@ -304,7 +304,7 @@ def _compile_action(
         produces=method.produces,
         runner=method.runner,
         kernel_imports=tuple(
-            str(getattr(kernels[module], "import_path"))
+            str(kernels[module].import_path)
             for module in method.kernel_modules
         ),
         software_packages=method.software_packages,

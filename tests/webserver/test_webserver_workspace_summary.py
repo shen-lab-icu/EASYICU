@@ -1699,7 +1699,7 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     assert loaded_body["privacy"]["external_llm_calls"] == 0
 
 
-def test_idea_mining_real_export_and_prior_art_unlock_agent_run_gate(
+def test_real_export_and_retrieval_alone_do_not_unlock_agent_run_gate(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
@@ -1790,12 +1790,11 @@ def test_idea_mining_real_export_and_prior_art_unlock_agent_run_gate(
     confirmations = planned.json()["plan"]["required_user_confirmations"]
     assert "prepare or register a usable EasyICU export" not in confirmations
     assert "prior-art review opt-in or explicit decision to skip" not in confirmations
-    assert (
-        planned.json()["plan"]["execution_gate"][
-            "agent_run_ready_after_human_confirmation"
-        ]
-        is True
-    )
+    gate = planned.json()["plan"]["execution_gate"]
+    assert gate["agent_run_ready_after_human_confirmation"] is False
+    assert "prior_art_not_differentiated" in gate["blocker_codes"]
+    assert "source_feasibility_not_ready" in gate["blocker_codes"]
+    assert "study_definition_not_confirmed" in gate["blocker_codes"]
 
     handoff = client.post(
         "/api/ideas/handoff",
@@ -1815,8 +1814,9 @@ def test_idea_mining_real_export_and_prior_art_unlock_agent_run_gate(
     assert seed["active_export_contract"]["demo_like"] is False
     assert seed["prior_art_review"]["status"] == "searched"
     assert seed["prior_art_review"]["result_count"] == 1
-    assert seed["execution_gate"]["blockers"] == []
-    assert seed["execution_gate"]["agent_run_ready_after_human_confirmation"] is True
+    assert seed["execution_gate"]["agent_run_ready_after_human_confirmation"] is False
+    assert "prior_art_not_differentiated" in seed["execution_gate"]["blocker_codes"]
+    assert "source_feasibility_not_ready" in seed["execution_gate"]["blocker_codes"]
     assert any(run["label"] == "prior-art review" for run in seed["runs"])
     seed_dump = json.dumps(seed, ensure_ascii=False)
     assert str(export_dir) not in seed_dump
@@ -1832,15 +1832,8 @@ def test_idea_mining_real_export_and_prior_art_unlock_agent_run_gate(
             "project_seed_dir": seed["project_dir"],
         },
     )
-    assert started.status_code == 200
-    snapshot = _wait_for_job(client, started.json()["job_id"])
-    assert snapshot["status"] == "done"
-    result = snapshot["result"]
-    assert result["summary"]["stays"] == 3
-    assert result["gate"]["status"] == "analysis_only"
-    assert result["project_dir"].startswith(str(Path(seed["project_dir"]) / "runs"))
-    assert result["uploads"] == 0
-    assert result["tokens"] == 0
+    assert started.status_code == 400
+    assert started.json()["detail"]["error"] == "agent_project_execution_gate_blocked"
 
 
 def test_idea_mining_large_module_uses_metadata_only_feature_stats(
@@ -1904,7 +1897,7 @@ def test_idea_mining_large_module_uses_metadata_only_feature_stats(
     assert sample.status_code == 200
     sample_body = sample.json()
     assert sample_body["schema_version"] == (
-        "easyicu.web_idea_bounded_sample_feasibility/1"
+        "easyicu.web_idea_bounded_sample_feasibility/2"
     )
     assert sample_body["claim_level"] == "feasibility_sample_not_reportable"
     sample_stats = {row["concept_id"]: row for row in sample_body["feature_statistics"]}

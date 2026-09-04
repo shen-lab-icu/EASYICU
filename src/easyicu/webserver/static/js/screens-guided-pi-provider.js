@@ -106,5 +106,5 @@
     return `<div class="gpi-provider-summary ${ready ? 'ready' : 'warn'}"><span class="gpi-dot"></span><div><strong>${tr('Copilot + Research Agent', 'Copilot + Research Agent')}</strong><small>${esc(label)}</small></div><button class="gpi-link" type="button" data-gpi-config>${tr('Change', '更改')}</button></div>`;
   }
 
-  window.EU_GUIDED_PI_PROVIDER = Object.freeze({ renderSetup, renderBindingSummary });
+  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderBindingSummary });
 })();

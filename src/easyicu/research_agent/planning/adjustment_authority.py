@@ -16,7 +16,10 @@ be able to bypass the same scientific authority that constrained a fresh plan.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
+
+from ..authority.declared_levels import observed_levels_for
+from ..research_context.typed import declared_domain_for_variable
 
 
 # A repeated concept is materialized into explicit value summaries before the
@@ -24,6 +27,12 @@ from typing import Any, Literal, Optional
 # covariate identity.  Measurement/count/time companions are deliberately not
 # included: ``charlson_n`` or ``charlson_measured`` is not the Charlson score.
 _VALUE_AGGREGATION_SUFFIXES = ("_first", "_mean", "_max", "_min")
+_MODEL_TERM_INELIGIBLE_ROLES = frozenset(
+    {"id", "time", "index", "meta", "outcome"}
+)
+_MODEL_TERM_DYNAMIC_ROLES = frozenset(
+    {"vital", "lab", "intervention", "ordinal_score", "composite_score"}
+)
 
 
 def _matches_declared_covariate(declared: str, observed: str) -> bool:
@@ -158,6 +167,69 @@ class AdjustmentSetAuthority:
         )
 
 
+def adjusted_model_term_planning_authority(
+    context: Any,
+    variable_names: Sequence[str],
+) -> dict[str, Any]:
+    """Project model-term eligibility for a bounded Planner prompt.
+
+    This metadata-only projection cannot select an adjustment set or infer
+    clinical timing. It exposes which catalog variables the current typed
+    authority permits as model terms and the encodings supported by their
+    sealed domains.
+    """
+
+    adjustment = AdjustmentSetAuthority.from_context(context)
+    temporal_roles = adjustment.operational_temporal_roles
+    authorized_time_zero = frozenset(
+        name
+        for name in adjustment.operational_covariates
+        if adjustment.selection == "exact"
+        and temporal_roles.get(name) in {"baseline_static", "at_or_before_time_zero"}
+    )
+    primary_exposure = str(context.primary_exposure or "").strip()
+    outcome = str(context.target_outcome or "").strip()
+    variables = {item.name: item for item in context.variables}
+    eligible: list[dict[str, Any]] = []
+    excluded: list[dict[str, str]] = []
+    for name in dict.fromkeys(str(value or "").strip() for value in variable_names):
+        if not name or name in {primary_exposure, outcome}:
+            continue
+        variable = variables.get(name)
+        if variable is None:
+            continue
+        role = str(getattr(variable.role, "value", variable.role) or "")
+        if role in _MODEL_TERM_INELIGIBLE_ROLES:
+            excluded.append({"name": name, "reason": f"semantic_role:{role}"})
+            continue
+        if role in _MODEL_TERM_DYNAMIC_ROLES and name not in authorized_time_zero:
+            excluded.append({"name": name, "reason": "time_zero_authority_missing"})
+            continue
+        observed = observed_levels_for(name=name, variables=variables)
+        declared, declared_basis = declared_domain_for_variable(variable)
+        closed_domain = observed or list(declared or ())
+        eligible.append(
+            {
+                "name": name,
+                "semantic_role": role,
+                "allowed_codings": [
+                    "binary" if len(closed_domain) == 2 else "categorical"
+                ]
+                if closed_domain
+                else ["continuous"],
+                "closed_domain_size": len(closed_domain) or None,
+                "domain_authority": "observed" if observed else declared_basis,
+            }
+        )
+    return {
+        "selection": adjustment.selection,
+        "primary_exposure": primary_exposure,
+        "outcome": outcome,
+        "eligible_covariates": eligible,
+        "excluded_covariates": excluded,
+    }
+
+
 def validate_plan_against_adjustment_authority(*, plan: Any, context: Any) -> None:
     """Public fail-closed boundary used by planning and execution."""
 
@@ -167,5 +239,6 @@ def validate_plan_against_adjustment_authority(*, plan: Any, context: Any) -> No
 __all__ = [
     "AdjustmentAuthorityError",
     "AdjustmentSetAuthority",
+    "adjusted_model_term_planning_authority",
     "validate_plan_against_adjustment_authority",
 ]

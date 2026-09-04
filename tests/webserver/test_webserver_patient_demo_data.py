@@ -25,6 +25,7 @@ def test_patient_seeded_demo_uses_clinical_table_shape() -> None:
     demo_js = _static_js("screens-viz-demo.js")
     demo_drilldown_js = _static_js("screens-viz-demo-drilldown.js")
     viz_js = _static_js("screens-viz.js")
+    patient_js = _static_js("screens-viz-patient.js")
     index_html = _static_html("index.html")
 
     assert (
@@ -48,10 +49,10 @@ def test_patient_seeded_demo_uses_clinical_table_shape() -> None:
     )
     assert "function buildPatientDrilldown(selectedRef)" in demo_drilldown_js
     assert "function buildPatientDrilldown(selectedRef)" not in viz_js
-    assert "featureOwner.augmentLanes(rawLanes, drill)" in viz_js
-    assert "const lanes = patientCatalogLanes(" in viz_js
-    assert "drill && drill.feature_coverage" in viz_js
-    assert "2026-01-01" not in viz_js
+    assert "featureOwner.augmentLanes(rawLanes, drill)" in patient_js
+    assert "const lanes = patientCatalogLanes(" in patient_js
+    assert "drill && drill.feature_coverage" in patient_js
+    assert "2026-01-01" not in patient_js
 
     assert "js/screens-viz-demo.js?" in index_html
     assert "js/screens-viz-demo-drilldown.js?" in index_html

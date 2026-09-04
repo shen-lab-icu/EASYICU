@@ -88,6 +88,224 @@ def test_aumc_urine_output_repairs_decimal_errors_before_outlier_filter():
     assert pd.isna(result["value"].iloc[3])
 
 
+def test_mimiciii_chart_ventilation_uses_reference_gap_and_stop_rules():
+    frame = pd.DataFrame(
+        {
+            "icustay_id": [1, 1, 1, 1, 1, 2, 3, 3],
+            "charttime": pd.to_datetime(
+                [
+                    "2180-01-01 00:00",
+                    "2180-01-01 04:00",
+                    "2180-01-01 05:00",
+                    "2180-01-01 06:00",
+                    "2180-01-01 07:00",
+                    "2180-01-01 00:00",
+                    "2180-01-01 00:00",
+                    "2180-01-01 01:00",
+                ]
+            ),
+            "itemid": [60, 60, 467, 60, 60, 60, 720, 60],
+            "mech_vent": [
+                "5",
+                "5",
+                "Cannula",
+                "5",
+                "5",
+                "5",
+                "Other/Remarks",
+                "5",
+            ],
+            "error": [None, None, None, None, None, None, None, 1],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "mimiciii_chart_ventilation_intervals",
+            sub_var="itemid",
+            value_var="value",
+            index_var="charttime",
+        ),
+        concept_name="mech_vent",
+    )
+
+    assert result["icustay_id"].tolist() == [1, 1]
+    assert result["charttime"].tolist() == [
+        pd.Timestamp("2180-01-01 00:00"),
+        pd.Timestamp("2180-01-01 06:00"),
+    ]
+    assert result["dur_var"].tolist() == [240.0, 60.0]
+    assert result["mech_vent"].tolist() == ["invasive", "invasive"]
+
+
+def test_mimiciii_chart_ventilation_includes_procedure_extubation_markers():
+    class DataSource:
+        class Config:
+            name = "mimic"
+
+        config = Config()
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            assert table_name == "procedureevents_mv"
+            assert columns == ["icustay_id", "starttime", "itemid"]
+            del filters, verbose
+            return pd.DataFrame(
+                {
+                    "icustay_id": [1],
+                    "starttime": [pd.Timestamp("2180-01-01 05:00")],
+                    "itemid": [227194],
+                }
+            )
+
+    frame = pd.DataFrame(
+        {
+            "icustay_id": [1, 1, 1, 1],
+            "charttime": pd.to_datetime(
+                [
+                    "2180-01-01 00:00",
+                    "2180-01-01 04:00",
+                    "2180-01-01 10:00",
+                    "2180-01-01 12:00",
+                ]
+            ),
+            "itemid": [60, 60, 60, 60],
+            "mech_vent": ["5", "5", "5", "5"],
+            "error": [None, None, None, None],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "mimiciii_chart_ventilation_intervals",
+            sub_var="itemid",
+            value_var="value",
+            index_var="charttime",
+        ),
+        concept_name="mech_vent",
+        data_source=DataSource(),
+    )
+
+    assert result["charttime"].tolist() == [
+        pd.Timestamp("2180-01-01 00:00"),
+        pd.Timestamp("2180-01-01 10:00"),
+    ]
+    assert result["dur_var"].tolist() == [300.0, 120.0]
+
+
+def test_mimiciii_explicit_ventilation_excludes_cancelled_rewritten_and_zero_rows():
+    frame = pd.DataFrame(
+        {
+            "mech_vent": [225792, 225794, 225792, 225792, 225792],
+            "cancelreason": [0, 0, 1, 0, 0],
+            "statusdescription": [
+                "FinishedRunning",
+                "Stopped",
+                "FinishedRunning",
+                "FinishedRunning",
+                "Rewritten",
+            ],
+            "dur_var": [720.0, 60.0, 120.0, 0.0, 30.0],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "mimiciii_explicit_ventilation_interval",
+            value_var="itemid",
+            params={
+                "cancel_var": "cancelreason",
+                "status_var": "statusdescription",
+            },
+        ),
+        concept_name="mech_vent",
+    )
+
+    assert result["mech_vent"].tolist() == ["invasive", "noninvasive"]
+    assert result["dur_var"].tolist() == [720.0, 60.0]
+
+
+def test_eicu_invasive_airway_emits_start_points_without_manufactured_duration():
+    frame = pd.DataFrame(
+        {
+            "patientunitstayid": [1, 2, 3, 4, 1],
+            "mech_vent": [
+                "Oral ETT",
+                "Tracheostomy",
+                "Nasal ETT",
+                "Cricothyrotomy",
+                "Oral ETT",
+            ],
+            "ventstartoffset": [120, 0, -60, None, 120],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "eicu_invasive_airway_evidence",
+            value_var="airwaytype",
+            index_var="ventstartoffset",
+        ),
+        concept_name="mech_vent",
+    )
+
+    assert len(result) == 2
+    by_stay = result.set_index("patientunitstayid")
+    assert set(by_stay["mech_vent"]) == {"invasive"}
+    assert by_stay.loc[1, "ventstartoffset"] == 120
+    assert by_stay.loc[3, "ventstartoffset"] == 0
+    assert "dur_var" not in result.columns
+
+
+def test_eicu_device_and_treatment_callbacks_keep_invasive_and_niv_distinct():
+    device = pd.DataFrame(
+        {
+            "mech_vent": ["Ventilator", "Mechanical ventilator", "ETT", "CPAP", "Room air"]
+        }
+    )
+    device_result = _apply_callback(
+        device,
+        _src(
+            "eicu_respiratory_device_ventilation_evidence",
+            value_var="respchartvalue",
+        ),
+        concept_name="mech_vent",
+    )
+    assert device_result["mech_vent"].tolist() == [
+        "invasive",
+        "invasive",
+        "invasive",
+        "noninvasive",
+    ]
+
+    treatment = pd.DataFrame(
+        {
+            "mech_vent": [
+                "pulmonary|ventilation and oxygenation|mechanical ventilation",
+                "pulmonary|ventilation and oxygenation|mechanical ventilation|non-invasive ventilation",
+                "pulmonary|ventilation and oxygenation|non-invasive ventilation",
+                "pulmonary|ventilation and oxygenation|oxygen therapy (< 40%)",
+            ]
+        }
+    )
+    treatment_result = _apply_callback(
+        treatment,
+        _src(
+            "eicu_treatment_ventilation_evidence",
+            value_var="treatmentstring",
+        ),
+        concept_name="mech_vent",
+    )
+    assert treatment_result["mech_vent"].tolist() == [
+        "invasive",
+        "noninvasive",
+        "noninvasive",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

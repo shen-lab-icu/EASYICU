@@ -33,13 +33,14 @@ def test_entry_owner_is_loaded_before_extraction_without_duplicate_route_owner()
     assert "S.entry =" not in extraction
 
 
-def test_home_leads_with_three_user_intents_and_keeps_demo_secondary() -> None:
+def test_home_leads_with_copilot_and_keeps_expert_tools_secondary() -> None:
     home = _home_owner()
 
-    assert "I have a paper or topic" in home
-    assert "I have a clear research question" in home
+    assert "Start with EasyICU Copilot" in home
+    assert "one sentence, article URL, or PDF" in home
     assert "I have local ICU data" in home
-    assert "Mine a feasible question in Idea Mining" in home
+    assert "candidate innovation directions with literature and data boundaries" in home
+    assert "Mine a feasible question in Idea Mining" not in home
     assert "Validate and extract analysis-ready tables" in home
     assert "data-home-new-study" in home
 
@@ -111,13 +112,13 @@ def test_sidebar_follows_research_lifecycle_and_agent_comes_last() -> None:
 
     discovery = sidebar.index("Discovery & Plan")
     guided = sidebar.index('data-nav="guided"')
-    ideas = sidebar.index('data-nav="ideas"')
     data_review = sidebar.index("Data & Review")
     workspace = sidebar.index('class="wsnav"')
     analysis = sidebar.index("Analysis & Evidence")
     agent = sidebar.index('class="cp-entry agent-entry')
 
-    assert discovery < guided < ideas < data_review < workspace < analysis < agent
+    assert discovery < guided < data_review < workspace < analysis < agent
+    assert 'data-nav="ideas"' not in sidebar
 
 
 def test_data_workspace_breadcrumb_is_a_non_clickable_group_label() -> None:

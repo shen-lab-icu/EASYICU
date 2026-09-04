@@ -460,8 +460,8 @@ def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
     source = SimpleNamespace(
         config=config,
         base_path=tmp_path,
-        _resolve_bucket_directory=lambda name: None,
-        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_bucket_directory=lambda name: None,
+        resolve_flat_parquet_directory=lambda name: tmp_path,
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -516,8 +516,8 @@ def test_bucket_loader_honours_source_sub_var_over_table_default(tmp_path):
     source = SimpleNamespace(
         config=config,
         base_path=tmp_path,
-        _resolve_bucket_directory=lambda name: None,
-        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_bucket_directory=lambda name: None,
+        resolve_flat_parquet_directory=lambda name: tmp_path,
         _get_parquet_columns_for_files=lambda files: set(
             pd.read_parquet(files[0]).columns
         ),
@@ -561,8 +561,8 @@ def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
     source = SimpleNamespace(
         config=config,
         base_path=tmp_path,
-        _resolve_bucket_directory=lambda name: None,
-        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_bucket_directory=lambda name: None,
+        resolve_flat_parquet_directory=lambda name: tmp_path,
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -727,7 +727,7 @@ def test_wide_table_column_chunks_reassemble_identical_grid(
         config=SimpleNamespace(
             get_table=lambda name: SimpleNamespace(defaults=defaults),
         ),
-        _resolve_loader_from_disk=lambda name: parquet,
+        resolve_loader_from_disk=lambda name: parquet,
     )
     monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "2")
 
@@ -795,8 +795,8 @@ def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
         config=config,
         base_path=tmp_path,
         load_table=load_table,
-        _resolve_bucket_directory=lambda name: None,
-        _resolve_flat_parquet_directory=lambda name: labevents_dir,
+        resolve_bucket_directory=lambda name: None,
+        resolve_flat_parquet_directory=lambda name: labevents_dir,
         _get_parquet_columns_for_files=lambda files: set(
             pd.read_parquet(files[0]).columns
         ),
@@ -837,8 +837,8 @@ def test_transformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(tmp
     source = SimpleNamespace(
         config=config,
         base_path=tmp_path,
-        _resolve_bucket_directory=lambda name: None,
-        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_bucket_directory=lambda name: None,
+        resolve_flat_parquet_directory=lambda name: tmp_path,
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -889,8 +889,8 @@ def test_untransformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(
     source = SimpleNamespace(
         config=config,
         base_path=tmp_path,
-        _resolve_bucket_directory=lambda name: None,
-        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_bucket_directory=lambda name: None,
+        resolve_flat_parquet_directory=lambda name: tmp_path,
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -938,8 +938,8 @@ def test_untransformed_bounds_keep_empty_non_unit_suspect_batch(tmp_path):
     source = SimpleNamespace(
         config=config,
         base_path=tmp_path,
-        _resolve_bucket_directory=lambda name: None,
-        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_bucket_directory=lambda name: None,
+        resolve_flat_parquet_directory=lambda name: tmp_path,
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",

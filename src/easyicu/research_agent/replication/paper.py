@@ -35,6 +35,10 @@ from ..schema import (
     ReplicationDeviationReport,
     ResearchContext,
 )
+from ..reporting.manuscript_state import (
+    ManuscriptState,
+    render_not_generated,
+)
 
 SUPPORTED_CONCEPT_ALIASES: Dict[str, Tuple[str, ...]] = {
     "sofa2": ("sofa-2", "sofa 2", "sofa2", "sofa"),
@@ -1408,7 +1412,10 @@ def write_fail_closed_paper_package(
     )
     manuscript_path = run_dir / "manuscript_scaffold_bound.md"
     manuscript_path.write_text(
-        "# Manuscript scaffold not generated\n\nStrict fail-closed policy blocked paper replication drafting.\n",
+        render_not_generated(
+            ManuscriptState.blocked("replication_fail_closed"),
+            "Strict fail-closed policy blocked paper replication drafting.",
+        ),
         encoding="utf-8",
     )
 

@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 
@@ -67,6 +68,401 @@ def test_selected_module_refresh_rejects_duplicate_data_path_overrides() -> None
     refresher = _load_refresher()
     with pytest.raises(refresher.ModuleRefreshError, match="Duplicate"):
         refresher._parse_data_path_overrides(["miiv=/tmp/one", "miiv=/tmp/two"])
+
+
+def test_selected_database_scope_is_nonempty_valid_and_canonical() -> None:
+    refresher = _load_refresher()
+    assert refresher._validate_databases(["mimic", "eicu", "mimic"]) == (
+        "eicu",
+        "mimic",
+    )
+    with pytest.raises(refresher.ModuleRefreshError, match="At least one"):
+        refresher._validate_databases([])
+    with pytest.raises(refresher.ModuleRefreshError, match="Unknown"):
+        refresher._validate_databases(["not-a-database"])
+
+
+def test_data_path_resolution_checks_only_selected_databases(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    eicu = tmp_path / "eicu"
+    mimic = tmp_path / "mimic"
+    eicu.mkdir()
+    mimic.mkdir()
+    manifest = {
+        "data_paths": {
+            "eicu": str(eicu),
+            "mimic": str(mimic),
+            "miiv": str(tmp_path / "deliberately-missing-miiv"),
+        }
+    }
+
+    assert refresher._resolve_data_paths(
+        manifest, {}, ("eicu", "mimic")
+    ) == {"eicu": str(eicu.resolve()), "mimic": str(mimic.resolve())}
+
+
+def test_database_subset_resume_is_refused_without_transaction_receipt(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    with pytest.raises(refresher.ModuleRefreshError, match="fresh candidate"):
+        refresher.refresh_candidate(
+            source_run_root=tmp_path / "source",
+            output_root=tmp_path / "candidate",
+            modules=["respiratory"],
+            data_path_overrides={},
+            batch_size=1,
+            databases=["eicu", "mimic"],
+            resume=True,
+        )
+
+
+def test_legacy_lineage_inference_requires_exact_six_database_receipts() -> None:
+    refresher = _load_refresher()
+    provenance = {
+        "schema_version": refresher.LEGACY_SCHEMA_VERSION,
+        "publication_easyicu_git_dirty": False,
+        "refreshed_modules": ["renal"],
+        "raw_database_reread": True,
+        "raw_data_paths": {
+            database: f"/raw/{database}" for database in refresher.DATABASES
+        },
+        "per_database_runtime": {
+            database: {"modules": {"renal": {}}}
+            for database in refresher.DATABASES
+        },
+    }
+    assert refresher._database_refresh_scope(
+        provenance, label="legacy"
+    ) == {database: ["renal"] for database in refresher.DATABASES}
+
+    del provenance["per_database_runtime"]["miiv"]["modules"]["renal"]
+    with pytest.raises(refresher.ModuleRefreshError, match="miiv"):
+        refresher._database_refresh_scope(provenance, label="legacy")
+
+
+def test_targeted_refresh_extracts_only_selected_but_republishes_all_databases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresher = _load_refresher()
+    source = tmp_path / "source"
+    candidate = tmp_path / "candidate"
+    raw_eicu = tmp_path / "raw-eicu"
+    raw_mimic = tmp_path / "raw-mimic"
+    raw_eicu.mkdir()
+    raw_mimic.mkdir()
+    data_paths = {
+        database: str(tmp_path / f"missing-{database}")
+        for database in refresher.DATABASES
+    }
+    data_paths.update({"eicu": str(raw_eicu), "mimic": str(raw_mimic)})
+    source_module_metrics = {
+        database: {
+            module: {
+                "elapsed_seconds": 10.0,
+                "peak_rss_mb": 20.0,
+                "peak_working_set_mb": 30.0,
+                "rows": 1,
+                "parquet_bytes": 1,
+                "parquet_sha256": "0" * 64,
+            }
+            for module in refresher.MODULES
+        }
+        for database in refresher.DATABASES
+    }
+    legacy_refresh = {
+        "schema_version": refresher.LEGACY_SCHEMA_VERSION,
+        "publication_easyicu_git_commit": "d" * 40,
+        "publication_easyicu_git_dirty": False,
+        "requested_modules": ["renal"],
+        "refreshed_modules": ["renal"],
+        "raw_database_reread": True,
+        "raw_data_paths": dict(data_paths),
+        "per_database_runtime": {
+            database: {
+                "database": database,
+                "data_path": data_paths[database],
+                "modules": {
+                    "renal": {
+                        "elapsed_seconds": 11.0,
+                        "peak_rss_mb": 21.0,
+                        "peak_working_set_mb": 31.0,
+                    }
+                },
+            }
+            for database in refresher.DATABASES
+        },
+    }
+    source_manifest = {
+        "data_paths": data_paths,
+        "sources": {
+            database: {"module_metrics": source_module_metrics[database]}
+            for database in refresher.DATABASES
+        },
+        "module_refresh": legacy_refresh,
+    }
+    source.mkdir()
+    (source / "run_manifest.json").write_text(
+        json.dumps(source_manifest), encoding="utf-8"
+    )
+    (source / "module_refresh_provenance.json").write_text(
+        json.dumps(legacy_refresh), encoding="utf-8"
+    )
+    (source / "run_metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "verified",
+                "easyicu_commit": "d" * 40,
+                "source_manifest_sha256": {
+                    database: "c" * 64 for database in refresher.DATABASES
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source / "database_extraction_timing.csv").write_text(
+        "database,total_rows,total_parquet_bytes\n", encoding="utf-8"
+    )
+    for database in refresher.DATABASES:
+        database_root = source / "exports" / database
+        database_root.mkdir(parents=True)
+        (database_root / "_manifest.json").write_text(
+            json.dumps({"database": database, "unchanged": True}),
+            encoding="utf-8",
+        )
+
+    extracted: list[str] = []
+    republished: list[str] = []
+    semantic_audited: list[str] = []
+
+    monkeypatch.setattr(
+        refresher.REPUBLICATION, "_require_clean_checkout", lambda: "a" * 40
+    )
+    monkeypatch.setattr(
+        refresher.REPUBLICATION,
+        "_validate_source",
+        lambda _source: source_manifest,
+    )
+    monkeypatch.setattr(
+        refresher.REPUBLICATION, "_sha256_file", lambda _path: "b" * 64
+    )
+    monkeypatch.setattr(
+        refresher.REPUBLICATION,
+        "_source_database_receipt",
+        lambda _root: {
+            "native_manifest_sha256": "c" * 64,
+            "easyicu_git_commit": "d" * 40,
+            "easyicu_git_dirty": False,
+        },
+    )
+    monkeypatch.setattr(
+        refresher.REPUBLICATION,
+        "_rebind_extraction_timing_receipts",
+        lambda *_args, **_kwargs: None,
+    )
+
+    selected_modules = refresher._expand_module_dependency_closure(["respiratory"])
+
+    def fake_refresh_one_database(**kwargs):
+        database = str(kwargs["database"])
+        extracted.append(database)
+        return {
+            "database": database,
+            "data_path": kwargs["data_path"],
+            "num_patients": 1,
+            "batch_size": 1,
+            "total_elapsed_seconds": 1.0,
+            "modules": {
+                module: {
+                    "elapsed_seconds": 1.0,
+                    "peak_rss_mb": 2.0,
+                    "peak_working_set_mb": 3.0,
+                }
+                for module in selected_modules
+            },
+        }
+
+    def fake_republish_database(_root, *, database, **_kwargs):
+        republished.append(database)
+        return {
+            "database": database,
+            "runtime_provenance": {"easyicu_git_commit": "a" * 40},
+            "source_extraction_provenance": {
+                "publication_only": True,
+                "raw_database_reread": False,
+            },
+            "module_timings_seconds": {
+                module: 0.0 for module in refresher.MODULES
+            },
+            "module_peak_rss_mb": {
+                module: 0.0 for module in refresher.MODULES
+            },
+            "module_peak_working_set_mb": {
+                module: 0.0 for module in refresher.MODULES
+            },
+            "files": [
+                {
+                    "module": module,
+                    "rows": 1,
+                    "parquet_bytes": 2,
+                    "parquet_sha256": "e" * 64,
+                }
+                for module in refresher.MODULES
+            ],
+        }
+
+    monkeypatch.setattr(
+        refresher, "_refresh_one_database", fake_refresh_one_database
+    )
+    monkeypatch.setattr(
+        refresher.REPUBLICATION, "_republish_database", fake_republish_database
+    )
+    monkeypatch.setattr(
+        refresher,
+        "_validate_publication_only_database_semantics",
+        lambda _source, candidate_root, **_kwargs: (
+            semantic_audited.append(candidate_root.name)
+            or {"status": "PASS", "modules": {}}
+        ),
+    )
+
+    result = refresher.refresh_candidate(
+        source_run_root=source,
+        output_root=candidate,
+        modules=["respiratory"],
+        data_path_overrides={},
+        batch_size=1,
+        databases=["mimic", "eicu"],
+    )
+
+    assert result == candidate
+    assert extracted == ["eicu", "mimic"]
+    assert republished == list(refresher.DATABASES)
+    assert semantic_audited == ["aumc", "hirid", "miiv", "sic"]
+    assert json.loads(
+        (source / "exports" / "miiv" / "_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {"database": "miiv", "unchanged": True}
+    candidate_miiv = json.loads(
+        (candidate / "exports" / "miiv" / "_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert candidate_miiv["source_extraction_provenance"] == {
+        "publication_only": True,
+        "raw_database_reread": False,
+        "refreshed_modules": [],
+        "current_refreshed_modules": [],
+        "inherited_refreshed_modules": ["renal"],
+        "cumulative_refreshed_modules": ["renal"],
+        "reused_modules": list(refresher.MODULES),
+        "selected_module_refresh_scope": (
+            "publication_only_for_six_database_commit_harmonization"
+        ),
+        "transformation": (
+            "canonical native-v2 republication without raw-data reread; "
+            "logical contents must match the source release"
+        ),
+    }
+    provenance = json.loads(
+        (candidate / "module_refresh_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["schema_version"].endswith("_v2")
+    assert provenance["selected_databases"] == ["eicu", "mimic"]
+    assert provenance["latest_refresh_databases"] == ["eicu", "mimic"]
+    assert provenance["raw_database_reread_scope"] == "selected_databases_only"
+    assert provenance["cumulative_raw_database_reread_scope"] == (
+        "all_six_databases"
+    )
+    assert provenance["raw_data_paths"] == data_paths
+    assert provenance["requested_modules"] == ["respiratory", "renal"]
+    assert "renal" in provenance["refreshed_modules"]
+    assert provenance["latest_requested_modules"] == ["respiratory"]
+    assert provenance["inherited_refreshed_modules"] == ["renal"]
+    assert provenance["per_database_refreshed_modules"]["miiv"] == ["renal"]
+    assert provenance["per_database_refreshed_modules"]["eicu"] == [
+        module
+        for module in refresher.MODULES
+        if module in set(selected_modules) or module == "renal"
+    ]
+    assert provenance["parent_module_refresh_provenance"] == {
+        "path": str(source / "module_refresh_provenance.json"),
+        "sha256": "b" * 64,
+        "schema_version": refresher.LEGACY_SCHEMA_VERSION,
+        "publication_easyicu_git_commit": "d" * 40,
+    }
+    assert set(provenance["publication_only_semantic_audit"]) == {
+        "aumc",
+        "hirid",
+        "miiv",
+        "sic",
+    }
+    rebound_run_manifest = json.loads(
+        (candidate / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert rebound_run_manifest["module_refresh"] == provenance
+    assert rebound_run_manifest["sources"]["miiv"]["module_metrics"]["renal"][
+        "elapsed_seconds"
+    ] == 11.0
+    assert rebound_run_manifest["sources"]["eicu"]["module_metrics"][
+        "respiratory"
+    ]["elapsed_seconds"] == 1.0
+    for database in refresher.DATABASES:
+        native = json.loads(
+            (candidate / "exports" / database / "_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        source_record = rebound_run_manifest["sources"][database]
+        assert source_record["native_manifest_sha256"] == "b" * 64
+        files = {entry["module"]: entry for entry in native["files"]}
+        for module in refresher.MODULES:
+            metric = source_record["module_metrics"][module]
+            assert metric["rows"] == files[module]["rows"]
+            assert metric["parquet_bytes"] == files[module]["parquet_bytes"]
+            assert metric["parquet_sha256"] == files[module]["parquet_sha256"]
+            assert metric["elapsed_seconds"] == native[
+                "module_timings_seconds"
+            ][module]
+            assert metric["peak_rss_mb"] == native["module_peak_rss_mb"][module]
+            assert metric["peak_working_set_mb"] == native[
+                "module_peak_working_set_mb"
+            ][module]
+
+
+def test_publication_only_semantic_audit_ignores_order_but_detects_values(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    source = tmp_path / "source"
+    candidate = tmp_path / "candidate"
+    source.mkdir()
+    candidate.mkdir()
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2],
+            "charttime": [0.0, 1.0, 0.0],
+            "respiratory_rate": [12.0, None, 18.0],
+            "state": ["a", "b", None],
+        }
+    )
+    frame.to_parquet(source / "respiratory.parquet", index=False)
+    frame.iloc[::-1].to_parquet(candidate / "respiratory.parquet", index=False)
+
+    audit = refresher._validate_publication_only_database_semantics(
+        source, candidate, modules=("respiratory",)
+    )
+    assert audit["status"] == "PASS"
+    assert audit["modules"]["respiratory"]["rows"] == 3
+
+    changed = frame.copy()
+    changed.loc[0, "respiratory_rate"] = 99.0
+    changed.to_parquet(candidate / "respiratory.parquet", index=False)
+    with pytest.raises(refresher.ModuleRefreshError, match="changed logical"):
+        refresher._validate_publication_only_database_semantics(
+            source, candidate, modules=("respiratory",)
+        )
 
 
 def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
@@ -198,3 +594,24 @@ def test_resume_reuses_only_complete_files_detached_from_source(
     )
 
     assert result["recovery_mode"].startswith("explicit_resume")
+
+
+def test_score_content_gate_rejects_all_null_sofa_totals(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0.0, 1.0], "sofa2": [None, None]}
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    with pytest.raises(refresher.ModuleRefreshError, match="0 non-null"):
+        refresher._validate_refreshed_score_content(
+            tmp_path, ("sofa2_score",)
+        )
+
+
+def test_score_content_gate_streams_non_null_sofa_totals(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0.0, 1.0], "sofa": [None, 4.0]}
+    ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
+
+    refresher._validate_refreshed_score_content(tmp_path, ("sofa1_score",))

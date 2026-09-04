@@ -9,8 +9,31 @@
   function sessionHasHistory(session) {
     if (!session || typeof session !== 'object') return false;
     return Number(session.message_count || 0) > 0
+      || Number(session.history_turn_count || 0) > 0
       || Boolean(String(session.last_message_job_id || '').trim())
       || Boolean(String(session.active_message_job_id || '').trim());
+  }
+
+  function sourceIsConfirmed(session) {
+    const authorization = session && session.data_source_authorization;
+    return ['confirmed', 'legacy_confirmed'].includes(String(authorization && authorization.status || ''));
+  }
+
+  function historyDepth(session) {
+    return Math.max(
+      Number(session && session.message_count || 0),
+      Number(session && session.history_turn_count || 0),
+    );
+  }
+
+  function bestHistoricalSession(sessions) {
+    return rows(sessions).filter(sessionHasHistory).sort((left, right) => {
+      const sourceDifference = Number(sourceIsConfirmed(right)) - Number(sourceIsConfirmed(left));
+      if (sourceDifference) return sourceDifference;
+      const depthDifference = historyDepth(right) - historyDepth(left);
+      if (depthDifference) return depthDifference;
+      return 0;
+    })[0] || null;
   }
 
   function preferredSessionId(sessions, rememberedSessionId, requestedAgentMode, requestedLanguage) {
@@ -28,8 +51,12 @@
     });
     const remembered = String(rememberedSessionId || '').trim();
     const rememberedRow = saved.find(row => String(row && row.session_id || '') === remembered);
-    const historicalRow = saved.find(sessionHasHistory);
-    if (rememberedRow && (sessionHasHistory(rememberedRow) || !historicalRow)) return remembered;
+    const historicalRow = bestHistoricalSession(saved);
+    if (rememberedRow && sessionHasHistory(rememberedRow) && (
+      sourceIsConfirmed(rememberedRow)
+      || !historicalRow
+      || (!sourceIsConfirmed(historicalRow) && historyDepth(rememberedRow) >= historyDepth(historicalRow))
+    )) return remembered;
     if (historicalRow) return String(historicalRow.session_id || '');
     return rememberedRow
       ? String(rememberedRow.session_id || '')
@@ -200,11 +227,11 @@
     });
   }
 
-  window.EU_GUIDED_PI_REPLAY = {
+  window.EasyICU.guidedPi.declare('replay', {
     hydrate,
     lifecycleTurns,
     childJobPresentation,
     preferredSessionId,
     retryFailedExecution,
-  };
+  });
 })();

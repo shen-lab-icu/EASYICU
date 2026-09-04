@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(process.argv[2], 'utf8');
+const modulesSource = fs.readFileSync(process.argv[2], 'utf8');
+const source = fs.readFileSync(process.argv[3], 'utf8');
 const escape = value => String(value == null ? '' : value)
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -13,8 +14,9 @@ const context = {
   globalThis: { pwned: false },
 };
 vm.createContext(context);
+vm.runInContext(modulesSource, context);
 vm.runInContext(source, context);
-const renderer = context.window.EU_GUIDED_PI_EVIDENCE_PREVIEW;
+const renderer = context.window.EasyICU.guidedPi.require('evidencePreview');
 
 const code = renderer.render({
   renderer: 'code', previewable: true, kind: 'code', evidence_id: 'code_1',

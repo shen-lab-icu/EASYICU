@@ -12,9 +12,40 @@ from easyicu.webserver.pi_copilot.contracts import (
 from easyicu.webserver.routes import pi_copilot as route_module
 
 
+def test_literature_source_review_route_returns_bounded_typed_evidence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        route_module.idea_mining,
+        "review_literature_source",
+        lambda pmid: {
+            "ok": True,
+            "pmid": pmid,
+            "article_kind": "systematic_review",
+            "abstract_excerpt": "A bounded abstract.",
+            "full_text": {"status": "unavailable"},
+        },
+    )
+
+    response = TestClient(app).get("/api/copilot/pi/literature/sources/12345")
+
+    assert response.status_code == 200
+    assert response.json()["article_kind"] == "systematic_review"
+
+
 class FakeService:
     def runtime_status(self) -> dict:
         return {"ok": True, "runtime": {"status": "ready"}}
+
+    def resource_status(self) -> dict:
+        return {
+            "ok": True,
+            "memory": {"pressure": "normal"},
+            "storage": {"unreferenced_files": 2},
+        }
+
+    def maintain_session_storage(self, **kwargs) -> dict:
+        return {"ok": True, "received": kwargs}
 
     def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
         """The API-key branch of session creation compiles a binding first."""
@@ -157,6 +188,9 @@ class FakeService:
     def archive_child_job(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def record_host_action(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
     def abort_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
@@ -195,6 +229,31 @@ def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) ->
     )
     assert unknown.status_code == 422
     assert created.json()["received"]["project_id"] == "guided-project-1"
+
+
+def test_resource_status_and_storage_maintenance_are_typed(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    status = client.get("/api/copilot/pi/resource-status")
+    assert status.status_code == 200
+    assert status.json()["memory"]["pressure"] == "normal"
+
+    audited = client.post(
+        "/api/copilot/pi/session-maintenance",
+        json={"action": "audit"},
+    )
+    assert audited.status_code == 200
+    assert audited.json()["received"] == {
+        "action": "audit",
+        "confirm": False,
+        "quarantine_id": None,
+    }
+    assert client.post(
+        "/api/copilot/pi/session-maintenance",
+        json={"action": "quarantine", "confirm": "true"},
+    ).status_code == 422
 
 
 def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None:
@@ -339,7 +398,9 @@ def test_project_workspace_file_and_preview_routes_are_bounded(monkeypatch) -> N
     )
 
 
-def test_workspace_preview_surfaces_stale_checked_bytes_as_conflict(monkeypatch) -> None:
+def test_workspace_preview_surfaces_stale_checked_bytes_as_conflict(
+    monkeypatch,
+) -> None:
     class StalePreviewService(FakeService):
         def get_workspace_preview(self, **kwargs) -> dict:
             raise PiCopilotError(
@@ -424,7 +485,9 @@ def test_project_research_evidence_route_requires_id_and_digest(monkeypatch) -> 
     assert invalid.status_code in {404, 422}
 
 
-def test_project_data_package_prepare_route_returns_preview_resource(monkeypatch) -> None:
+def test_project_data_package_prepare_route_returns_preview_resource(
+    monkeypatch,
+) -> None:
     fake = FakeService()
     monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
     client = TestClient(app)
@@ -438,7 +501,9 @@ def test_project_data_package_prepare_route_returns_preview_resource(monkeypatch
     assert response.json()["resource"]["kind"] == "data_package_review"
 
 
-def test_project_data_workbench_prepare_route_returns_native_snapshot(monkeypatch) -> None:
+def test_project_data_workbench_prepare_route_returns_native_snapshot(
+    monkeypatch,
+) -> None:
     fake = FakeService()
     monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
     client = TestClient(app)
@@ -603,6 +668,45 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
         == "confirm_fresh_plan_generation"
     )
 
+    discovery_entry = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "我目前还没有具体研究方向",
+            "turn_intent": "idea_discovery_entry",
+        },
+    )
+    assert discovery_entry.status_code == 200
+    assert (
+        discovery_entry.json()["received"]["message_intent"]
+        == "idea_discovery_entry"
+    )
+
+    idea_entry = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "请用 Idea Mining 帮我发掘这个想法",
+            "turn_intent": "idea_mining_entry",
+        },
+    )
+    assert idea_entry.status_code == 200
+    assert idea_entry.json()["received"]["message_intent"] == "idea_mining_entry"
+
+    idea_selection = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "选择方向1：组织结构差异",
+            "turn_intent": "idea_mining_candidate_selection",
+        },
+    )
+    assert idea_selection.status_code == 200
+    assert (
+        idea_selection.json()["received"]["message_intent"]
+        == "idea_mining_candidate_selection"
+    )
+
     assert (
         client.post(
             "/api/copilot/pi/sessions/pi-test/message",
@@ -628,8 +732,7 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
     )
     assert regenerated.status_code == 200
     assert (
-        regenerated.json()["received"]["regeneration_intent"]
-        == "user_edited_message"
+        regenerated.json()["received"]["regeneration_intent"] == "user_edited_message"
     )
     assert (
         regenerated.json()["received"]["message_intent"]
@@ -728,8 +831,10 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
 
     pin_path = "/api/copilot/pi/sessions/pi-test/presentation"
     child_path = "/api/copilot/pi/sessions/pi-test/child-jobs/job-child-1/archive"
+    action_path = "/api/copilot/pi/sessions/pi-test/host-actions"
     assert client.post(pin_path, json={"pinned": True}).status_code == 422
     assert client.post(child_path, json={}).status_code == 422
+    assert client.post(action_path, json={}).status_code == 422
 
     pinned = client.post(
         pin_path,
@@ -738,6 +843,15 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
     archived = client.post(
         child_path,
         json={"project_id": "guided-project-2"},
+    )
+    action = client.post(
+        action_path,
+        json={
+            "project_id": "guided-project-2",
+            "action_code": "generate_plan",
+            "action_key": "job-child-1",
+            "child_job_id": "job-child-1",
+        },
     )
     assert pinned.status_code == 200
     assert pinned.json()["received"] == {
@@ -749,6 +863,44 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
         "project_id": "guided-project-2",
         "job_id": "job-child-1",
     }
+    assert action.status_code == 200
+    assert action.json()["received"] == {
+        "project_id": "guided-project-2",
+        "action_code": "generate_plan",
+        "action_key": "job-child-1",
+        "child_job_id": "job-child-1",
+    }
+    automatic_revision = client.post(
+        action_path,
+        json={
+            "project_id": "guided-project-2",
+            "action_code": "auto_revise_plan",
+            "action_key": "job-child-2",
+            "child_job_id": "job-child-2",
+        },
+    )
+    assert automatic_revision.status_code == 200
+    assert automatic_revision.json()["received"] == {
+        "project_id": "guided-project-2",
+        "action_code": "auto_revise_plan",
+        "action_key": "job-child-2",
+        "child_job_id": "job-child-2",
+    }
+    for action_code in (
+        "review_result_tables",
+        "review_figures",
+        "review_manuscript",
+        "review_scientific_review",
+    ):
+        response = client.post(
+            action_path,
+            json={
+                "project_id": "guided-project-2",
+                "action_code": action_code,
+                "action_key": f"run-1:{action_code}",
+            },
+        )
+        assert response.status_code == 200
 
 
 def test_owner_error_keeps_stable_code_and_owner(monkeypatch) -> None:

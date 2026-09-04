@@ -447,6 +447,27 @@ def test_pipeline_binds_signed_runtime_after_generic_input_closure() -> None:
     )
 
 
+def test_pipeline_reselects_deterministic_figures_after_signed_runtime_binding() -> None:
+    """Late host products must be visible in the plan offered for review."""
+
+    from easyicu.research_agent import pipeline as pipeline_module
+    from easyicu.research_agent.planning import figure_plan_shaping
+
+    source = inspect.getsource(
+        pipeline_module.ResearchAgentPipeline._validate_and_persist_plan
+    )
+    bind_at = source.index("self._scientific_runtime_authorities.bind_plan")
+    owner_at = source.index("_figure_plan.apply_runtime_bound_figure_contracts", bind_at)
+    owner_source = inspect.getsource(
+        figure_plan_shaping.apply_runtime_bound_figure_contracts
+    )
+    renderer_at = owner_source.index("select_deterministic_result_renderers")
+    panel_at = owner_source.index("apply_deterministic_figure_panels")
+
+    assert bind_at < owner_at
+    assert renderer_at < panel_at
+
+
 def test_execute_rebinds_signed_runtime_before_registering_input_closure() -> None:
     from easyicu.research_agent.execution import phase
 

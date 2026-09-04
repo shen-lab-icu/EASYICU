@@ -323,8 +323,10 @@ def _calls_in(source, callee):
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == callee
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == callee)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == callee)
+        )
     ]
 
 

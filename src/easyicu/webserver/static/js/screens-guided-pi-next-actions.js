@@ -13,6 +13,12 @@
   // the bounded lines after an explicit next-step heading, so accept both
   // forms while still rejecting repeated rule markers such as `---`.
   const CHOICE = /^\s*[-*](?![-*])\s*(.+?)\s*$/;
+  const RESEARCH_ENTRY_CLARIFIER = /我先确认一下你的目标/;
+  const RESEARCH_ENTRY_CHOICES = [
+    /^先发掘或评估可能方向[。.]?$/,
+    /^按当前问题进入研究方案[。.]?$/,
+    /^我还不确定[，,\s]*先帮我判断[。.]?$/,
+  ];
 
   function plainLabel(value) {
     return String(value || '')
@@ -243,6 +249,31 @@
       };
     }
 
+    // The research-entry turn is host-routed and tool-disabled. Some models
+    // preserve its three exact bullets but omit the requested 下一步 heading.
+    // Keep that narrow clarification clickable through this existing owner;
+    // do not generalize arbitrary trailing lists into actions.
+    if (RESEARCH_ENTRY_CLARIFIER.test(source)) {
+      const choices = [];
+      let firstChoiceAt = -1;
+      lines.forEach((line, index) => {
+        const match = line.match(CHOICE);
+        if (!match) return;
+        const label = plainLabel(match[1]);
+        if (!RESEARCH_ENTRY_CHOICES.some(pattern => pattern.test(label))) return;
+        if (firstChoiceAt < 0) firstChoiceAt = index;
+        choices.push(label);
+      });
+      if (choices.length === RESEARCH_ENTRY_CHOICES.length) {
+        return {
+          body: lines.slice(0, firstChoiceAt).join('\n').trim(),
+          prompt: '请选择一种开始方式。',
+          choices,
+          explicit: true,
+        };
+      }
+    }
+
     return {
       body: source,
       prompt: '',
@@ -353,5 +384,5 @@
     return `<section class="gpi-next-step" aria-label="${title}"><strong>${title}</strong><p>${esc(prompt)}</p>${actions}</section>`;
   }
 
-  window.EU_GUIDED_PI_NEXT_ACTIONS = { bodyText, project, render, renderPast, governedPlanGrants };
+  window.EasyICU.guidedPi.declare('nextActions', { bodyText, project, render, renderPast, governedPlanGrants });
 })();

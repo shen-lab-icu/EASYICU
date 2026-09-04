@@ -280,3 +280,29 @@ def test_landmark_and_cluster_choices_become_separate_executable_steps() -> None
         "landmark_24h",
         "repeated_stays_cluster_robust",
     }
+
+
+def test_time_varying_choice_is_not_projected_without_a_registered_runtime() -> None:
+    context = _context()
+    preferences = UserPreferences.model_validate(
+        {
+            **context.user_preferences.model_dump(mode="json"),
+            "sensitivity_specs": [
+                {
+                    "spec_id": "time_varying_exposure",
+                    "axis": "timing",
+                    "strategy": "time_varying",
+                    "execution_variables": ["exposure"],
+                }
+            ],
+        }
+    )
+    context = context.model_copy(update={"user_preferences": preferences})
+
+    shaped, findings = ensure_prespecified_sensitivity_steps(
+        plan=_plan(),
+        context=context,
+    )
+
+    assert shaped.steps == _plan().steps
+    assert findings == []

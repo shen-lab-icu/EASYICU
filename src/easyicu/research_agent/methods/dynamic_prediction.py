@@ -295,7 +295,7 @@ def evaluate_landmark_probabilities(
         raise ValueError("target horizons must be positive and finite")
     if working[[outcome_col, probability_col]].isna().any().any():
         raise ValueError("prediction evaluation requires observed labels and probabilities")
-    if not set(working[outcome_col].unique()).issubset({0, 1, 0.0, 1.0}):
+    if not set(working[outcome_col].unique()).issubset({0, 1}):
         raise ValueError("prediction outcomes must be binary")
     probabilities = working[probability_col]
     if (~np.isfinite(probabilities)).any() or probabilities.lt(0).any() or probabilities.gt(1).any():

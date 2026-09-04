@@ -7,6 +7,8 @@ import sys
 
 from easyicu.research_agent.reporting.manuscript_quality import (
     audit_manuscript_quality,
+    repair_incompatible_reader_labels,
+    repair_reader_internal_phrases,
     repair_registered_display_callouts,
     repair_reader_structure_from_existing_prose,
     render_reader_manuscript,
@@ -142,6 +144,106 @@ def test_complete_reader_facing_manuscript_passes() -> None:
         "Results": ("age", "sex"),
     }
     assert not audit.findings
+
+
+def test_internal_phrase_repair_changes_only_closed_reader_vocabulary() -> None:
+    source = (
+        "The machine digest described a host-materialized cohort; "
+        "the `reportable_descriptive_results` block was available, while "
+        "`lact_max` remained an unsupported raw identifier."
+    )
+
+    repaired, repairs = repair_reader_internal_phrases(source)
+
+    assert repaired == (
+        "The registered evidence described a precomputed cohort; "
+        "the descriptive results block was available, while "
+        "`lact_max` remained an unsupported raw identifier."
+    )
+    assert len(repairs) == 3
+    assert "`lact_max`" in repaired
+
+
+def test_reader_label_repair_preserves_audit_tokens_and_replaces_visible_ids() -> None:
+    source = (
+        "The sep3_sofa1_max=1 group had a registered result "
+        "{evidence:sep3_sofa1_max} and "
+        "{claim:exposure_outcome_distribution.observed_absolute_risk_level_1}."
+    )
+
+    repaired, repairs = repair_reader_internal_phrases(
+        source,
+        reader_display_labels={
+            "sep3_sofa1_max": "Sepsis-3 status",
+            "sep3_sofa1_max=1": "patients meeting Sepsis-3 criteria",
+        },
+    )
+
+    assert repaired.startswith("The patients meeting Sepsis-3 criteria group")
+    assert "{evidence:sep3_sofa1_max}" in repaired
+    assert (
+        "{claim:exposure_outcome_distribution.observed_absolute_risk_level_1}"
+        in repaired
+    )
+    assert any(
+        item["code"] == "MANUSCRIPT_READER_DISPLAY_LABEL_APPLIED"
+        for item in repairs
+    )
+
+
+def test_english_reader_does_not_inject_cjk_ui_labels() -> None:
+    source = "In-hospital death was assessed for sep3_sofa1_max=1."
+
+    repaired, repairs = repair_reader_internal_phrases(
+        source,
+        reader_display_labels={
+            "death": "院内死亡",
+            "sep3_sofa1_max=1": "达到 Sepsis-3 判定标准",
+        },
+        manuscript_language="en",
+    )
+
+    assert repaired == source
+    assert not any(
+        item["code"] == "MANUSCRIPT_READER_DISPLAY_LABEL_APPLIED"
+        for item in repairs
+    )
+
+
+def test_post_binding_language_repair_removes_foreign_ui_labels() -> None:
+    source = (
+        "In-hospital 院内死亡 was 10% for 达到 Sepsis-3 判定标准 "
+        "{evidence:result}."
+    )
+
+    repaired, repairs = repair_incompatible_reader_labels(
+        source,
+        reader_display_labels={
+            "death": "院内死亡",
+            "sep3_sofa1_max=1": "达到 Sepsis-3 判定标准",
+        },
+        manuscript_language="en",
+    )
+
+    assert repaired == (
+        "In-hospital death was 10% for exposure category 1 "
+        "{evidence:result}."
+    )
+    assert len(repairs) == 2
+
+
+def test_claim_placeholders_are_audit_syntax_not_reader_internal_terms() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        "{claim:exposure_outcome_distribution.observed_absolute_risk_level_1}",
+        1,
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_INTERNAL_TERM_EXPOSED" not in {
+        finding.code for finding in audit.findings
+    }
 
 
 def test_registered_displays_must_be_called_out_in_results() -> None:
@@ -340,6 +442,27 @@ def test_internal_runtime_terms_are_also_rejected_in_methods() -> None:
     )
     assert finding.severity == "error"
     assert "`sep3_sofa2_max`" in finding.excerpts
+
+
+def test_unquoted_lowercase_runtime_identifier_is_rejected_but_citation_key_is_not() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        (
+            "The observed risk for sep3_sofa1_max=1 was higher "
+            "[@johnson_mimiciv_2023]."
+        ),
+        1,
+    )
+
+    audit = audit_manuscript_quality(text)
+    finding = next(
+        item
+        for item in audit.findings
+        if item.code == "MANUSCRIPT_INTERNAL_TERM_EXPOSED"
+    )
+
+    assert "sep3_sofa1_max" in finding.excerpts
+    assert "johnson_mimiciv_2023" not in finding.excerpts
 
 
 def test_unnamed_point_estimate_is_rejected() -> None:

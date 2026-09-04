@@ -277,6 +277,73 @@ def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
     assert stay_audit["normalized_stay_level_rows"] == 2
 
 
+def test_native_publication_requires_outcome_bounds_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"vitals": ["hr"]})
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "hr": [72.0]}
+    ).to_parquet(tmp_path / "vitals.parquet", index=False)
+
+    with pytest.raises(ValueError, match="outcome.*los_icu.*time bounds"):
+        api._publish_native_export_v2(
+            database="miiv",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["vitals"],
+            max_patients=None,
+            result=_completed_result("vitals"),
+            require_stay_time_bounds=True,
+        )
+
+    assert not (tmp_path / "_manifest.json").exists()
+
+
+def test_native_manifest_distinguishes_producer_and_published_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"outcome": ["los_icu"], "vitals": ["hr"]},
+    )
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "los_icu": [1.0]}
+    ).to_parquet(tmp_path / "outcome.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 100.0],
+            "hr": [72.0, 80.0],
+        }
+    ).to_parquet(tmp_path / "vitals.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["outcome", "vitals"],
+        max_patients=None,
+        result={
+            "modules": {
+                "outcome": {"errors": []},
+                "vitals": {"errors": []},
+            }
+        },
+        require_stay_time_bounds=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    vitals = next(entry for entry in manifest["files"] if entry["module"] == "vitals")
+    assert vitals["producer_rows"] == 2
+    assert vitals["rows"] == 1
+    assert manifest["time_window_authority"] == {
+        "required": True,
+        "source": "outcome.los_icu",
+        "bounded_stays": 1,
+    }
+
+
 def test_native_outcome_preserves_death_time_before_normalising_charttime() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     source = pd.DataFrame(
@@ -845,40 +912,42 @@ def test_native_arrow_schema_normalises_backend_large_strings() -> None:
     assert normalized.metadata == {b"owner": b"native-v2"}
 
 
-def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
+def test_native_schema_preserves_aki_v2_reference_native_and_evidence_receipts() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     receipt_columns = [
-        "aki_assessable",
-        "aki_severe",
-        "aki_severe_creat",
-        "aki_severe_uo",
-        "aki_severe_rrt",
-        "aki_severe_assessable",
-        "aki_severe_ascertainment",
-        "aki_ascertainment",
-        "aki_assessment_reason",
-        "observation_window_coverage",
-        "creatinine_ascertainment",
-        "urine_ascertainment",
-        "rrt_ascertainment",
+        "aki_reference",
+        "aki_severe_reference",
+        "aki_source_native",
+        "aki_severe_source_native",
+        "aki_reference_uses_future",
+        "aki_source_native_uses_future",
+        "aki_reference_profile",
+        "aki_reference_status",
+        "aki_source_native_profile",
+        "aki_source_native_status",
+        "kidney_observation_window_coverage",
+        "creatinine_evidence_status",
+        "urine_evidence_status",
+        "rrt_evidence_status",
     ]
     frame = pd.DataFrame(
         {
             "stay_id": [101, 102],
             "charttime": [0.0, 1.0],
-            "aki_assessable": [1, 0],
-            "aki_severe": [1, None],
-            "aki_severe_creat": [1, 0],
-            "aki_severe_uo": [0, None],
-            "aki_severe_rrt": [0, None],
-            "aki_severe_assessable": [1, 0],
-            "aki_severe_ascertainment": ["positive", "indeterminate"],
-            "aki_ascertainment": ["positive", "indeterminate"],
-            "aki_assessment_reason": ["positive", "indeterminate"],
-            "observation_window_coverage": ["complete", "partial"],
-            "creatinine_ascertainment": ["positive", "negative"],
-            "urine_ascertainment": ["negative", "indeterminate"],
-            "rrt_ascertainment": ["negative", "indeterminate"],
+            "aki_reference": [1, 0],
+            "aki_severe_reference": [1, 0],
+            "aki_source_native": [1, None],
+            "aki_severe_source_native": [0, None],
+            "aki_reference_uses_future": [0, 0],
+            "aki_source_native_uses_future": [0, 0],
+            "aki_reference_profile": ["ref-v1", "ref-v1"],
+            "aki_reference_status": ["evaluated", "evaluated"],
+            "aki_source_native_profile": ["native-v1", "native-v1"],
+            "aki_source_native_status": ["evaluated", "not_available"],
+            "kidney_observation_window_coverage": ["complete", "partial"],
+            "creatinine_evidence_status": ["positive", "negative"],
+            "urine_evidence_status": ["negative", "indeterminate"],
+            "rrt_evidence_status": ["negative", "indeterminate"],
         }
     )
 
@@ -890,21 +959,22 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
     )
 
     boolean_columns = [
-        "aki_assessable",
-        "aki_severe",
-        "aki_severe_creat",
-        "aki_severe_uo",
-        "aki_severe_rrt",
-        "aki_severe_assessable",
+        "aki_reference",
+        "aki_severe_reference",
+        "aki_source_native",
+        "aki_severe_source_native",
+        "aki_reference_uses_future",
+        "aki_source_native_uses_future",
     ]
     category_columns = [
-        "aki_severe_ascertainment",
-        "aki_ascertainment",
-        "aki_assessment_reason",
-        "observation_window_coverage",
-        "creatinine_ascertainment",
-        "urine_ascertainment",
-        "rrt_ascertainment",
+        "aki_reference_profile",
+        "aki_reference_status",
+        "aki_source_native_profile",
+        "aki_source_native_status",
+        "kidney_observation_window_coverage",
+        "creatinine_evidence_status",
+        "urine_evidence_status",
+        "rrt_evidence_status",
     ]
     assert all(str(canonical[column].dtype) == "boolean" for column in boolean_columns)
     assert all(str(canonical[column].dtype) == "string" for column in category_columns)
@@ -1085,6 +1155,71 @@ def test_longitudinal_conflicting_strings_fail_closed() -> None:
             canonical,
             module="neurological",
             requested_concepts=["avpu"],
+            dictionary=dictionary,
+        )
+
+
+def test_sofa2_cns_positive_score_does_not_override_receipt_conflict() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    precise = "sofa2_cns_delirium_tx_ascertainment"
+    alias = "sofa2_cns_ascertainment"
+    concepts = ["sofa2_cns", precise, alias]
+    source = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            "sofa2_cns": [3.0, 0.0],
+            "sofa2_cns_observed": [True, False],
+            "sofa2_cns_available": [True, False],
+            precise: ["not_score_relevant", "proxy_only"],
+            f"{precise}_observed": [True, True],
+            f"{precise}_available": [True, True],
+            alias: ["not_score_relevant", "proxy_only"],
+            f"{alias}_observed": [True, True],
+            f"{alias}_available": [True, True],
+        }
+    )
+    canonical = api._canonicalise_native_export_frame(
+        source,
+        module="sofa2_score",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+
+    with pytest.raises(ValueError, match=f"conflicting string concept '{precise}'"):
+        api._consolidate_native_export_row_grain(
+            canonical,
+            module="sofa2_score",
+            requested_concepts=concepts,
+            dictionary=dictionary,
+        )
+
+
+def test_sofa2_cns_nonpositive_receipt_conflict_still_fails_closed() -> None:
+    dictionary = api.load_dictionary(include_sofa2=True)
+    receipt = "sofa2_cns_delirium_tx_ascertainment"
+    concepts = ["sofa2_cns", receipt]
+    canonical = api._canonicalise_native_export_frame(
+        pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [0.0, 0.0],
+                "sofa2_cns": [0.0, 0.0],
+                "sofa2_cns_available": [True, False],
+                receipt: ["complete", "proxy_only"],
+                f"{receipt}_available": [True, True],
+            }
+        ),
+        module="sofa2_score",
+        requested_concepts=concepts,
+        dictionary=dictionary,
+    )
+
+    with pytest.raises(ValueError, match=f"conflicting string concept '{receipt}'"):
+        api._consolidate_native_export_row_grain(
+            canonical,
+            module="sofa2_score",
+            requested_concepts=concepts,
             dictionary=dictionary,
         )
 
@@ -1460,3 +1595,52 @@ def test_large_duplicate_grain_duckdb_path_rejects_string_conflicts(
     assert not (tmp_path / ".neurological.native-v2.tmp.parquet").exists()
     assert not (tmp_path / ".neurological.native-v2.duckdb.tmp.parquet").exists()
     assert not (tmp_path / ".neurological.native-v2.arrow.tmp.parquet").exists()
+
+
+def test_large_sofa2_cns_positive_score_conflict_fails_closed_with_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    precise = "sofa2_cns_delirium_tx_ascertainment"
+    alias = "sofa2_cns_ascertainment"
+    concepts = ["sofa2_cns", precise, alias]
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sofa2_score": concepts})
+    monkeypatch.setattr(api, "_NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS", 1)
+    monkeypatch.setattr(
+        api, "_NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET", 1
+    )
+    path = tmp_path / "sofa2_score.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            "sofa2_cns": [3.0, 0.0],
+            "sofa2_cns_observed": [True, False],
+            "sofa2_cns_available": [True, False],
+            precise: ["not_score_relevant", "proxy_only"],
+            f"{precise}_observed": [True, True],
+            f"{precise}_available": [True, True],
+            alias: ["not_score_relevant", "proxy_only"],
+            f"{alias}_observed": [True, True],
+            f"{alias}_available": [True, True],
+        }
+    ).to_parquet(path, index=False)
+
+    original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(
+        ValueError,
+        match=f"conflicting string concept '{precise}'",
+    ):
+        api._publish_native_export_v2(
+            database="miiv",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["sofa2_score"],
+            max_patients=None,
+            result=_completed_result("sofa2_score"),
+        )
+
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == original_digest
+    assert not (tmp_path / "_manifest.json").exists()
+    assert not (tmp_path / ".sofa2_score.native-v2.tmp.parquet").exists()
+    assert not (tmp_path / ".sofa2_score.native-v2.duckdb.tmp.parquet").exists()
+    assert not (tmp_path / ".sofa2_score.native-v2.arrow.tmp.parquet").exists()

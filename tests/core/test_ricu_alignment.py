@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -31,7 +33,7 @@ from easyicu.runtime.pooling import (
     should_pool_raw,
 )
 from easyicu.concept.callbacks import ConceptCallbackContext, _callback_vent_ind
-from easyicu.table import ICUTable
+from easyicu.table import ICUTable, WinTbl
 from easyicu.utils.time_units import (
     MINUTES_PER_HOUR,
     minutes_to_hours,
@@ -291,6 +293,199 @@ class TestVentIndDtypeAlignment:
         assert str(out.data["icustay_id"].dtype) == "Int64"
         assert out.data["charttime"].tolist() == [1.0, 2.0, 3.0]
         assert out.data["vent_ind"].tolist() == [True, True, True]
+
+    @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
+    def test_eicu_mech_vent_points_are_not_expanded_into_six_hour_windows(
+        self, database
+    ):
+        mech = ICUTable(
+            pd.DataFrame(
+                {
+                    "patientunitstayid": [10, 10],
+                    "charttime": [1.25, 8.5],
+                    "mech_vent": ["invasive", "noninvasive"],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="mech_vent",
+        )
+        ctx = ConceptCallbackContext(
+            concept_name="vent_ind",
+            target="win_tbl",
+            interval=pd.Timedelta(hours=1),
+            resolver=None,
+            data_source=SimpleNamespace(config=SimpleNamespace(name=database)),
+            patient_ids=None,
+        )
+
+        out = _callback_vent_ind({"mech_vent": mech}, ctx)
+
+        assert not hasattr(out, "dur_var")
+        assert out.data.to_dict("records") == [
+            {"patientunitstayid": 10, "charttime": 1.25, "vent_ind": True},
+            {"patientunitstayid": 10, "charttime": 8.5, "vent_ind": True},
+        ]
+
+    def test_eicu_point_contract_fails_closed_if_a_duration_appears(self):
+        mech = ICUTable(
+            pd.DataFrame(
+                {
+                    "patientunitstayid": [10],
+                    "charttime": [1.25],
+                    "duration": [6.0],
+                    "mech_vent": ["invasive"],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="mech_vent",
+        )
+        ctx = ConceptCallbackContext(
+            concept_name="vent_ind",
+            target="win_tbl",
+            interval=pd.Timedelta(hours=1),
+            resolver=None,
+            data_source=SimpleNamespace(config=SimpleNamespace(name="eicu")),
+            patient_ids=None,
+        )
+
+        with pytest.raises(ValueError, match="point-evidence contract"):
+            _callback_vent_ind({"mech_vent": mech}, ctx)
+
+    def test_eicu_empty_mech_evidence_never_falls_back_to_vent_start(self):
+        empty_mech = ICUTable(
+            pd.DataFrame(
+                columns=["patientunitstayid", "charttime", "mech_vent"]
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="mech_vent",
+        )
+        start = ICUTable(
+            pd.DataFrame(
+                {
+                    "patientunitstayid": [10],
+                    "charttime": [8.0],
+                    "vent_start": [True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="vent_start",
+        )
+        ctx = ConceptCallbackContext(
+            concept_name="vent_ind",
+            target="win_tbl",
+            interval=pd.Timedelta(hours=1),
+            resolver=None,
+            data_source=SimpleNamespace(config=SimpleNamespace(name="eicu")),
+            patient_ids=None,
+        )
+
+        out = _callback_vent_ind(
+            {"mech_vent": empty_mech, "vent_start": start}, ctx
+        )
+
+        assert out.data.empty
+
+    def test_eicu_missing_mech_dependency_fails_closed(self):
+        start = ICUTable(
+            pd.DataFrame(
+                {
+                    "patientunitstayid": [10],
+                    "charttime": [8.0],
+                    "vent_start": [True],
+                }
+            ),
+            id_columns=["patientunitstayid"],
+            index_column="charttime",
+            value_column="vent_start",
+        )
+        ctx = ConceptCallbackContext(
+            concept_name="vent_ind",
+            target="win_tbl",
+            interval=pd.Timedelta(hours=1),
+            resolver=None,
+            data_source=SimpleNamespace(config=SimpleNamespace(name="eicu")),
+            patient_ids=None,
+        )
+
+        with pytest.raises(ValueError, match="point-evidence mech_vent dependency"):
+            _callback_vent_ind({"vent_start": start}, ctx)
+
+    def test_eicu_point_result_is_invariant_to_batch_boundaries(self):
+        frame = pd.DataFrame(
+            {
+                "patientunitstayid": [10, 10, 20],
+                "charttime": [1.25, 8.5, 3.0],
+                "mech_vent": ["invasive", "noninvasive", "invasive"],
+            }
+        )
+        ctx = ConceptCallbackContext(
+            concept_name="vent_ind",
+            target="win_tbl",
+            interval=pd.Timedelta(hours=1),
+            resolver=None,
+            data_source=SimpleNamespace(config=SimpleNamespace(name="eicu")),
+            patient_ids=None,
+        )
+
+        def derive(data):
+            table = ICUTable(
+                data.copy(),
+                id_columns=["patientunitstayid"],
+                index_column="charttime",
+                value_column="mech_vent",
+            )
+            return _callback_vent_ind({"mech_vent": table}, ctx).data
+
+        whole = derive(frame)
+        split = pd.concat(
+            [derive(frame[frame["patientunitstayid"] == stay_id]) for stay_id in [10, 20]],
+            ignore_index=True,
+        )
+
+        pd.testing.assert_frame_equal(
+            whole.sort_values(["patientunitstayid", "charttime"]).reset_index(drop=True),
+            split.sort_values(["patientunitstayid", "charttime"]).reset_index(drop=True),
+        )
+
+    def test_mimic_mech_vent_interval_keeps_its_observed_duration(self):
+        mech = WinTbl(
+            pd.DataFrame(
+                {
+                    "icustay_id": [10],
+                    "charttime": [1.0],
+                    "dur_var": [2.0],
+                    "mech_vent": ["invasive"],
+                }
+            ),
+            id_vars=["icustay_id"],
+            index_var="charttime",
+            dur_var="dur_var",
+            dur_unit="hours",
+        )
+        ctx = ConceptCallbackContext(
+            concept_name="vent_ind",
+            target="win_tbl",
+            interval=pd.Timedelta(hours=1),
+            resolver=None,
+            data_source=SimpleNamespace(config=SimpleNamespace(name="mimic")),
+            patient_ids=None,
+        )
+
+        out = _callback_vent_ind({"mech_vent": mech}, ctx)
+
+        assert isinstance(out, WinTbl)
+        assert out.data.to_dict("records") == [
+            {
+                "icustay_id": 10,
+                "starttime": 1,
+                "dur_var": 2.0,
+                "vent_ind": True,
+            }
+        ]
 
 
 # --------------------------------------------------------------------------- #

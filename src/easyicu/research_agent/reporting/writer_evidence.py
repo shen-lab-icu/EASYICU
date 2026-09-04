@@ -392,13 +392,60 @@ def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
         value = summary.get(key)
         if value is not None and not isinstance(value, (dict, list)):
             return value
-        nested = [
-            nested_value
-            for path, nested_value in _flatten_scalar_dict(dict(summary)).items()
-            if path.endswith(".p_value")
-        ]
+        nested = []
+        for path, nested_value in _flatten_scalar_dict(dict(summary)).items():
+            if not path.endswith(".p_value"):
+                continue
+            # A functional-form comparison tests non-linearity/model shape;
+            # it is not the primary exposure-outcome association test. Keep
+            # it under an explicit named field below instead of promoting the
+            # only nested p-value to a generic primary p-value.
+            if "functional_form_comparison" in path.split("."):
+                continue
+            nested.append(nested_value)
         return nested[0] if len(nested) == 1 else None
     return _first_present_scalar(summary, (key,))
+
+
+def _functional_form_nonlinearity_p_value(summary: Mapping[str, Any]) -> Any:
+    for path in (
+        ("functional_form_comparison",),
+        ("scientific_runtime_receipt", "functional_form_comparison"),
+    ):
+        current: Any = summary
+        for key in path:
+            current = current.get(key) if isinstance(current, Mapping) else None
+        if not isinstance(current, Mapping):
+            continue
+        value = current.get("nonlinearity_p_value", current.get("p_value"))
+        if value is not None and not isinstance(value, (dict, list)):
+            return value
+    return None
+
+
+def _registered_population_flow(summary: Mapping[str, Any]) -> Dict[str, int] | None:
+    receipt = summary.get("scientific_runtime_receipt")
+    flow = receipt.get("population_flow") if isinstance(receipt, Mapping) else None
+    if not isinstance(flow, Mapping):
+        return None
+    projected: Dict[str, int] = {}
+    for key, value in flow.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        number = int(value)
+        if number < 0 or float(value) != number:
+            continue
+        projected[str(key)] = number
+    if "source_cohort" not in projected or not any(
+        key in projected
+        for key in (
+            "valid_exposure_primary_population",
+            "complete_case_model_population",
+            "alive_and_under_observation_at_landmark",
+        )
+    ):
+        return None
+    return projected
 
 
 def _has_envelope_writer_authority(
@@ -575,8 +622,9 @@ def _render_writer_evidence_digest(
                     "research_question": context.research_question,
                     "cohort_name": context.cohort.cohort_name,
                     "database": context.cohort.database,
-                    "n_stays": context.cohort.n_stays,
-                    "n_patients": context.cohort.n_patients,
+                    "source_export_n_stays": context.cohort.n_stays,
+                    "source_export_n_patients": context.cohort.n_patients,
+                    "source_population_role": "pre_analysis_source_export",
                     "target_outcome": context.target_outcome,
                 },
                 ensure_ascii=False,
@@ -611,6 +659,12 @@ def _render_writer_evidence_digest(
             scalar = _preferred_writer_scalar(summary, key)
             if scalar is not None:
                 digest_row[key] = scalar
+        functional_form_p = _functional_form_nonlinearity_p_value(summary)
+        if functional_form_p is not None:
+            digest_row["functional_form_nonlinearity_p_value"] = functional_form_p
+        population_flow = _registered_population_flow(summary)
+        if population_flow is not None:
+            digest_row["registered_population_flow"] = population_flow
         if "primary_predictor" in summary:
             digest_row["primary_predictor"] = str(summary["primary_predictor"])
         elif "predictor" in summary:

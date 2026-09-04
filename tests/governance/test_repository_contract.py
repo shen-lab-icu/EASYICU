@@ -132,13 +132,16 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "static/assets/demo/*.html",
         "static/assets/demo/*.pdf",
         "static/vendor/echarts/*",
+        "pi_copilot/tool_catalog.json",
         "pi_copilot/node_app/package.json",
         "pi_copilot/node_app/package-lock.json",
         "pi_copilot/node_app/README.md",
         "pi_copilot/node_app/THIRD_PARTY_NOTICES.md",
         "pi_copilot/node_app/src/main.mjs",
         "pi_copilot/node_app/src/event-projection.mjs",
+        "pi_copilot/node_app/src/post-tool-finalization.mjs",
         "pi_copilot/node_app/src/shell-budget.mjs",
+        "pi_copilot/node_app/src/session-lifecycle.mjs",
         "pi_copilot/node_app/src/skills/web-prototype/SKILL.md",
     ]
     assert "recursive-include src/easyicu/webserver/static *.html *.css *.js" in manifest

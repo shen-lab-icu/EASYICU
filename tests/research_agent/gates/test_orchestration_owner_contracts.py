@@ -125,13 +125,15 @@ def test_planner_retry_projection_exposes_only_bounded_progress() -> None:
     args, kwargs = observed[0]
     assert args == (
         "planning",
-        "Plan draft 2/3 did not satisfy the scientific contract; retrying.",
+        "Plan draft attempt 2/3 did not satisfy its contract; retrying.",
     )
     assert kwargs == {
         "current": 2,
         "total": 3,
         "status": "running",
         "run_id": "run-safe",
+        "planning_unit": "plan",
+        "retry_phase": "rejected",
         "validation_stage": "schema_validation",
         "validation_issues": [
             {
@@ -151,6 +153,31 @@ def test_planner_retry_projection_exposes_only_bounded_progress() -> None:
     assert "private-validator-detail" not in repr(observed)
     assert "private-coordinate" not in repr(observed)
     assert "private-input-key" not in repr(observed)
+
+
+def test_progressive_planner_retry_projection_names_the_internal_unit() -> None:
+    observed: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    callback = planner_retry_progress_callback(
+        lambda *args, **kwargs: observed.append((args, kwargs)),
+        run_id="run-progressive",
+    )
+
+    callback(
+        StructuredRetryProgress(
+            role="progressive_planner_step_materialization",
+            phase="started",
+            attempt=1,
+            total_attempts=3,
+        )
+    )
+
+    args, kwargs = observed[0]
+    assert args == (
+        "planning",
+        "Current executable plan step validation attempt 1/3 started.",
+    )
+    assert kwargs["planning_unit"] == "step"
+    assert kwargs["retry_phase"] == "started"
 
 
 def test_runtime_authority_pair_preserves_the_owner_error() -> None:

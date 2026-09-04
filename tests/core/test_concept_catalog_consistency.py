@@ -154,7 +154,11 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # sensitivity and clause-specific/legacy ascertainment outputs. 288 -> 293.
     # 2026-08-12: +six nullable severe-AKI endpoint/receipt outputs. 293 -> 299.
     # 2026-08-22: +three fixed-horizon event/censoring-time companions. 304 -> 307.
-    assert len(CONCEPT_DICTIONARY) == 307
+    # 2026-09-01: replace 19 historical AKI/strict outputs with 35 explicit
+    # public-reference, source-native, and evidence-receipt fields. 307 -> 323.
+    # 2026-09-04: +eICU ICU-unit type as a typed demographics coordinate.
+    # 323 -> 324.
+    assert len(CONCEPT_DICTIONARY) == 324
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -254,13 +258,13 @@ def test_composite_output_sources_are_valid() -> None:
         assert source_concept in dict_concepts or source_concept in special_sources
 
     assert {
-        "aki_assessable",
-        "aki_ascertainment",
-        "aki_assessment_reason",
-        "observation_window_coverage",
-        "creatinine_ascertainment",
-        "urine_ascertainment",
-        "rrt_ascertainment",
+        "aki_stage_reference",
+        "aki_stage_source_native",
+        "aki_source_native_status",
+        "kidney_observation_window_coverage",
+        "creatinine_evidence_status",
+        "urine_evidence_status",
+        "rrt_evidence_status",
     } <= {
         output
         for output, source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
@@ -727,6 +731,42 @@ def test_mimic_legacy_vital_channels_keep_semantic_boundaries() -> None:
         assert 220227 in o2sat_ids
         assert {226860, 226861, 226862, 226863, 226865}.isdisjoint(spo2_ids)
         assert {226860, 226861, 226862, 226863, 226865}.isdisjoint(o2sat_ids)
+
+
+def test_mech_vent_has_reference_mimiciii_intervals_and_eicu_point_evidence() -> None:
+    concept = _load_json("concept-dict.json")
+    sources = concept["mech_vent"]["sources"]
+
+    for dataset in ("mimic", "mimic_demo"):
+        chart, procedure = sources[dataset]
+        assert chart["table"] == "chartevents"
+        assert chart["index_var"] == "charttime"
+        assert {60, 467, 640, 720, 223848, 223849, 226732}.issubset(
+            set(chart["ids"])
+        )
+        assert chart["callback"] == "mimiciii_chart_ventilation_intervals"
+        assert procedure["table"] == "procedureevents_mv"
+        assert set(procedure["ids"]) == {225792, 225794}
+        assert procedure["dur_var"] == "endtime"
+        assert procedure["cancel_var"] == "cancelreason"
+        assert procedure["status_var"] == "statusdescription"
+        assert procedure["callback"] == "mimiciii_explicit_ventilation_interval"
+
+    airway, device, treatment = sources["eicu"]
+    assert airway["table"] == "respiratorycare"
+    assert airway["index_var"] == "ventstartoffset"
+    assert "dur_var" not in airway
+    assert set(airway["ids"]) == {
+        "Oral ETT",
+        "Nasal ETT",
+        "Double-Lumen Tube",
+        "Cricothyrotomy",
+    }
+    assert airway["callback"] == "eicu_invasive_airway_evidence"
+    assert device["table"] == "respiratorycharting"
+    assert device["callback"] == "eicu_respiratory_device_ventilation_evidence"
+    assert treatment["table"] == "treatment"
+    assert treatment["callback"] == "eicu_treatment_ventilation_evidence"
 
 
 def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:

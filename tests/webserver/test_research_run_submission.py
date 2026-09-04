@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -8,6 +9,116 @@ from pydantic import ValidationError
 
 from easyicu.webserver import research_run_submission
 from easyicu.webserver.routes import agent as agent_route
+
+
+def test_host_candidate_plan_control_recovers_server_owned_planner_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_route,
+        "build_project_workflow_projection",
+        lambda **_kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(
+                next_action_code="provider_ready_to_generate_plan"
+            )
+        ),
+    )
+
+    assert agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "fresh",
+        }
+    )
+    assert not agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "auto",
+        }
+    )
+
+    monkeypatch.setattr(
+        agent_route,
+        "build_project_workflow_projection",
+        lambda **_kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(
+                next_action_code="plan_scientific_changes_required"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        agent_route,
+        "_package_bound_plan_history_present",
+        lambda _study_context_id: False,
+    )
+    assert agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "auto",
+            "plan_revision_source_run_id": "run-review-required",
+        }
+    )
+
+    monkeypatch.setattr(
+        agent_route,
+        "build_project_workflow_projection",
+        lambda **_kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(
+                next_action_code="failed_pipeline_requires_fresh_plan"
+            )
+        ),
+    )
+    assert agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "fresh",
+        }
+    )
+
+    monkeypatch.setattr(
+        agent_route,
+        "build_project_workflow_projection",
+        lambda **_kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(next_action_code="plan_configuration_superseded")
+        ),
+    )
+    monkeypatch.setattr(
+        agent_route,
+        "_package_bound_plan_history_present",
+        lambda _study_context_id: False,
+    )
+    assert agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "fresh",
+        }
+    )
+
+
+def test_failed_plan_regeneration_stays_package_bound_after_data_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_route,
+        "build_project_workflow_projection",
+        lambda **_kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(
+                next_action_code="failed_pipeline_requires_fresh_plan"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        agent_route,
+        "_package_bound_plan_history_present",
+        lambda _study_context_id: True,
+    )
+
+    assert not agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "fresh",
+        }
+    )
 
 
 def test_pipeline_route_delegates_to_submission_owner(

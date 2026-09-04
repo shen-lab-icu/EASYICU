@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -515,6 +516,24 @@ def test_review_proves_eligible_denominator_grouping_and_landmark_inputs(
             },
         ),
     )
+    monkeypatch.setattr(
+        readiness_owner.raw_source_authority,
+        "resolve_raw_mimic_iv_source_binding",
+        lambda **_kwargs: SimpleNamespace(
+            public_receipt=lambda: {
+                "schema_version": "easyicu.registered_export_raw_source_authority/1",
+                "authority_ref": "test/raw-mimiciv/v1",
+                "source_paths_returned": False,
+                "hospital_mortality_followup": {
+                    "outcome": "death",
+                    "event_time_column": "death_time_hours",
+                    "observation_duration_column": "hospital_followup_time_hours",
+                    "unit": "hours",
+                    "materializer": "mimic_iv_hospital_death_or_discharge_censor",
+                },
+            }
+        ),
+    )
     study = {
         **_study(source_path),
         "cohort": {"label": "Adults", "age_min": 18, "exclude_readmissions": False},
@@ -560,8 +579,8 @@ def test_review_proves_eligible_denominator_grouping_and_landmark_inputs(
     assert readiness["patient_grouping"]["output_identity_column"] == (
         "patient_stay_id"
     )
-    assert readiness["outcome_event_time"]["materialized_column"] == "death_time"
-    assert readiness["observation_duration"]["unit"] == "days"
+    assert readiness["outcome_event_time"]["materialized_column"] == "death_time_hours"
+    assert readiness["observation_duration"]["unit"] == "hours"
     assert readiness["readmission_indicator"]["status"] == "ready"
     assert source_path not in json.dumps(payload)
 
@@ -628,6 +647,118 @@ def test_required_landmark_time_missing_blocks_package_review(
     assert payload["status"] == "blocked"
     assert "landmark_outcome_event_time_unavailable" in payload["blocking_findings"]
     assert "landmark_exposure_time_unavailable" in payload["blocking_findings"]
+
+
+def test_time_varying_mortality_requires_followup_contract(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = str(tmp_path / "registered")
+
+    def read_concept(_root, concept_id):
+        return pd.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "charttime": [8.0, 12.0],
+                concept_id: [1.0, 0.0] if concept_id == "death" else [2.0, 3.0],
+            }
+        )
+
+    monkeypatch.setattr(readiness_owner, "read_exported_concept", read_concept)
+    payload = readiness_owner.build_data_package_execution_readiness(
+        {
+            "execution_concepts": {"outcome": "death", "primary_exposure": "lact"},
+            "sensitivity_specs": [
+                {
+                    "spec_id": "time_varying_exposure",
+                    "axis": "timing",
+                    "strategy": "time_varying",
+                    "execution_variables": ["lact"],
+                }
+            ],
+        },
+        source_path=source_path,
+        catalog_by_id={"los_icu": object()},
+        registered_denominator=2,
+    )
+
+    readiness = payload["runtime_readiness"]
+    assert readiness["status"] == "blocked"
+    assert readiness["outcome_event_time"] == {
+        "status": "unavailable",
+        "source_concept": "death",
+        "reason_code": "time_varying_hospital_mortality_followup_contract_unavailable",
+        "source_authority_reason_code": "raw_source_authority_unavailable",
+    }
+    assert readiness["observation_duration"] == {
+        "status": "unavailable",
+        "source_concept": None,
+        "unit": None,
+        "reason_code": "time_varying_hospital_mortality_followup_contract_unavailable",
+        "source_authority_reason_code": "raw_source_authority_unavailable",
+    }
+    assert readiness["required_findings"] == [
+        "time_varying_runtime_unavailable",
+        "time_varying_hospital_mortality_followup_contract_unavailable",
+    ]
+    assert source_path not in json.dumps(payload)
+
+
+def test_time_varying_mortality_keeps_runtime_blocked_after_followup_binds(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = str(tmp_path / "registered")
+    monkeypatch.setattr(
+        readiness_owner,
+        "read_exported_concept",
+        lambda _root, concept_id: pd.DataFrame(
+            {"stay_id": [1], "charttime": [8.0], concept_id: [2.0]}
+        ),
+    )
+    monkeypatch.setattr(
+        readiness_owner.raw_source_authority,
+        "resolve_raw_mimic_iv_source_binding",
+        lambda **_kwargs: SimpleNamespace(
+            public_receipt=lambda: {
+                "schema_version": "easyicu.registered_export_raw_source_authority/1",
+                "authority_ref": "test/raw-mimiciv/v1",
+                "source_paths_returned": False,
+                "hospital_mortality_followup": {
+                    "outcome": "death",
+                    "event_time_column": "death_time_hours",
+                    "observation_duration_column": "hospital_followup_time_hours",
+                    "unit": "hours",
+                    "materializer": "mimic_iv_hospital_death_or_discharge_censor",
+                },
+            }
+        ),
+    )
+
+    payload = readiness_owner.build_data_package_execution_readiness(
+        {
+            "data_source": {"path": source_path, "database": "miiv"},
+            "execution_concepts": {"outcome": "death", "primary_exposure": "lact"},
+            "sensitivity_specs": [
+                {
+                    "spec_id": "time_varying_exposure",
+                    "axis": "timing",
+                    "strategy": "time_varying",
+                    "execution_variables": ["lact"],
+                }
+            ],
+        },
+        source_path=source_path,
+        catalog_by_id={},
+        registered_denominator=1,
+    )
+
+    readiness = payload["runtime_readiness"]
+    assert readiness["status"] == "blocked"
+    assert readiness["outcome_event_time"]["materialized_column"] == "death_time_hours"
+    assert readiness["observation_duration"]["materialized_column"] == (
+        "hospital_followup_time_hours"
+    )
+    assert readiness["required_findings"] == ["time_varying_runtime_unavailable"]
+    assert source_path not in json.dumps(payload)
 
 
 def test_review_snapshot_reopens_after_live_study_advances(tmp_path) -> None:

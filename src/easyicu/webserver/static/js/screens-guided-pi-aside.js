@@ -19,7 +19,7 @@
     const displayProjectTitle = host.displayProjectTitle;
 
     function syncProjectWorkflowAside() {
-      const demo = host.demoMode() && window.EU_GUIDED_PI_DEMO;
+      const demo = host.demoMode() && window.EasyICU.guidedPi.optional('demo');
       const workflow = demo && typeof demo.workflow === 'function' ? demo.workflow() : host.workflow();
       if (host.shell() !== 'pi' || (!host.demoMode() && !projectId())) return;
       const aside = document.getElementById('gdStudyAside');
@@ -55,6 +55,7 @@
         approved_plan_setup_receipt: tr('The approved plan records the study setup used for this analysis', '已批准的计划记录了本次分析采用的研究配置'),
         active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
         plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
+        provider_ready_to_generate_plan: tr('Question and data source are ready; generate a candidate plan for review', '问题和数据源已就绪，可以生成候选计划供审阅'),
         agent_plan_ready: tr('The digest-bound analysis plan is ready', '摘要绑定分析计划已就绪'),
         operator_plan_approval_required: tr('Review and approve the digest-bound plan before analysis', '请在分析前审核并批准摘要绑定的计划'),
         plan_execution_upgrade_required: tr('Generate one package-bound plan before analysis', '需要先生成一份与数据包绑定的可执行计划'),
@@ -114,5 +115,5 @@
     return { syncProjectWorkflowAside };
   }
 
-  window.EU_GUIDED_PI_ASIDE = { create };
+  window.EasyICU.guidedPi.declare('aside', { create });
 })();

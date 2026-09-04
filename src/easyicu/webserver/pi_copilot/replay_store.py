@@ -164,6 +164,107 @@ class PiConversationReplayStore:
             payload["turns"] = turns
             self._write(payload)
 
+    def record_host_action(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+        action_id: str,
+        action_code: str,
+        action_key: Optional[str] = None,
+        child_job_id: Optional[str] = None,
+        status: str = "running",
+    ) -> Dict[str, Any]:
+        """Persist one typed host action in the same chronological replay.
+
+        These actions are explicit button clicks owned by the EasyICU host, not
+        model-authored transcript entries.  Keeping the enum and child-job
+        coordinate here lets the browser reopen the interaction without
+        inventing a user prompt or an assistant answer.
+        """
+
+        if status not in {"running", "done", "failed", "cancelled"}:
+            raise ValueError(f"invalid host action status: {status}")
+        with self._lock:
+            payload = self._read(session_id, project_id)
+            existing = next(
+                (
+                    row
+                    for row in payload["turns"]
+                    if isinstance(row, dict) and row.get("job_id") == action_id
+                ),
+                None,
+            )
+            if existing is not None:
+                normalized_key = str(action_key or "").strip()
+                if normalized_key and not existing.get("action_key"):
+                    existing["action_key"] = normalized_key
+                    self._write(payload)
+                return dict(existing)
+            now = utc_now()
+            turn = {
+                "job_id": action_id,
+                "kind": "host_action",
+                "action_code": str(action_code),
+                "action_key": str(action_key or "").strip() or None,
+                "child_job_id": str(child_job_id or "") or None,
+                "status": status,
+                "started_at": now,
+                "ended_at": None if status == "running" else now,
+                "allowed_actions": [],
+                "events": [],
+            }
+            payload["turns"].append(turn)
+            self._write(payload)
+            return dict(turn)
+
+    def finish_host_actions_for_child_job(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+        child_job_id: str,
+        status: str,
+    ) -> None:
+        if status not in {"done", "failed", "cancelled", "interrupted"}:
+            raise ValueError(f"invalid child job status: {status}")
+        with self._lock:
+            payload = self._read(session_id, project_id)
+            changed = False
+            for turn in payload["turns"]:
+                if (
+                    isinstance(turn, dict)
+                    and turn.get("kind") == "host_action"
+                    and turn.get("child_job_id") == child_job_id
+                ):
+                    turn["status"] = status
+                    turn["ended_at"] = utc_now()
+                    changed = True
+            if changed:
+                self._write(payload)
+
+    def running_host_action_child_job_ids(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+    ) -> list[str]:
+        """Return active-branch child jobs still presented as running."""
+
+        with self._lock:
+            payload = self._read(session_id, project_id)
+        return list(
+            dict.fromkeys(
+                str(turn.get("child_job_id") or "").strip()
+                for turn in payload["turns"]
+                if isinstance(turn, dict)
+                and not turn.get("superseded")
+                and turn.get("kind") == "host_action"
+                and turn.get("status") == "running"
+                and str(turn.get("child_job_id") or "").strip()
+            )
+        )
+
     def append_event(
         self,
         *,
@@ -232,13 +333,19 @@ class PiConversationReplayStore:
                 for row in payload["turns"]
                 if isinstance(row, dict) and not row.get("superseded")
             ]
-            if turn_index > len(active):
+            model_turns = [
+                row for row in active if row.get("kind") != "host_action"
+            ]
+            if turn_index > len(model_turns):
                 raise PiCopilotError(
                     "pi_replay_branch_invalid",
                     "The Copilot replay branch is inconsistent with the transcript.",
                     status_code=409,
                 )
-            for row in active[turn_index:]:
+            cutoff = len(active)
+            if turn_index < len(model_turns):
+                cutoff = active.index(model_turns[turn_index])
+            for row in active[cutoff:]:
                 row["superseded"] = True
                 row["superseded_at"] = utc_now()
             self._write(payload)
@@ -260,11 +367,14 @@ class PiConversationReplayStore:
         with self._lock:
             payload = self._read(session_id, project_id)
             referenced = any(
-                str(event.get("job_id") or "") == job_id
+                str(turn.get("child_job_id") or "") == job_id
+                or any(
+                    str(event.get("job_id") or "") == job_id
+                    for event in (turn.get("events") or [])
+                    if isinstance(event, dict)
+                )
                 for turn in payload["turns"]
                 if isinstance(turn, dict)
-                for event in (turn.get("events") or [])
-                if isinstance(event, dict)
             )
             already_archived = any(
                 isinstance(row, dict) and row.get("job_id") == job_id
@@ -337,6 +447,11 @@ class PiConversationReplayStore:
             for event in (turn.get("events") or [])
             if isinstance(event, Mapping) and str(event.get("job_id") or "").strip()
         }
+        active_child_job_ids.update(
+            str(turn.get("child_job_id") or "").strip()
+            for turn in active_turns
+            if str(turn.get("child_job_id") or "").strip()
+        )
         active_child_jobs = [
             row
             for row in payload["child_jobs"]

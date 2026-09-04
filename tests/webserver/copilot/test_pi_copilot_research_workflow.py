@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 import pandas as pd
@@ -45,6 +45,10 @@ from easyicu.webserver.literature_projection import (
 )
 from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot import cohort_eligibility
+from easyicu.webserver.pi_copilot import workflow as workflow_module
+from easyicu.webserver.pi_copilot.literature_tool_projection import (
+    compile_literature_tool_projection,
+)
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     PiCopilotError,
@@ -109,46 +113,6 @@ def _record_pipeline_submission(
     )
 
 
-def _confirmed_cohort_decision(
-    option_id: str,
-    *,
-    study_context_id: str,
-    study_context_revision: int,
-    current_cohort: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    base = dict(current_cohort or {})
-    target = cohort_eligibility.selection_cohort_for_option(
-        {"cohort": base}, option_id
-    )
-    scope = study_context_owner.normalize_primary_cohort_scope(
-        {"cohort": target}
-    )
-    session_id = f"pi-{study_context_id}"
-    seed = (
-        f"{session_id}:{study_context_id}:{study_context_revision - 1}:"
-        f"{option_id}:{scope.sha256}"
-    )
-    event = cohort_eligibility.build_selection_event(
-        option_id=option_id,
-        study_context_id=study_context_id,
-        expected_revision=study_context_revision - 1,
-        session_id=session_id,
-        user_turn_id=f"turn-{session_id}",
-        event_id=hashlib.sha256(f"event:{seed}".encode()).hexdigest(),
-        one_use_grant_id=hashlib.sha256(f"grant:{seed}".encode()).hexdigest(),
-        primary_cohort_contract_sha256=scope.sha256,
-        actor_id_sha256=hashlib.sha256(f"actor:{session_id}".encode()).hexdigest(),
-        selected_at="2026-08-29T12:00:00Z",
-    )
-    authority = cohort_eligibility.confirmation_authority_for_option(
-        option_id,
-        study_context_id=study_context_id,
-        study_context_revision=study_context_revision,
-        current_cohort=base,
-        selection_event=event,
-        confirmed_at="2026-08-29T12:00:00Z",
-    )
-    return target, authority
 
 
 def test_typed_selected_design_requires_complete_reviewable_recommendation() -> None:
@@ -185,54 +149,6 @@ def test_typed_selected_design_requires_complete_reviewable_recommendation() -> 
     assert agent_pipeline_runs._plan_has_complete_reviewable_recommendation({})
 
 
-def _complete_study() -> dict[str, Any]:
-    cohort, authority = _confirmed_cohort_decision(
-        "no_eligibility_filter",
-        study_context_id="study-workflow",
-        study_context_revision=4,
-        current_cohort={"max_patients": 2000},
-    )
-    return {
-        "id": "study-workflow",
-        "revision": 4,
-        "question": "Does an aggregate ICU feature predict mortality?",
-        "data_source": {
-            "path": "/private/prepared/source",
-            "database": "mimiciv",
-        },
-        "cohort": cohort,
-        "cohort_eligibility_authority": authority,
-        "modules": ["vitals", "outcome"],
-        "outcome": "In-hospital mortality",
-        "primary_exposure": "heart_rate",
-        "covariates": ["age", "sex"],
-        "covariate_selection": "exact",
-        "covariate_rationales": {
-            "age": "Age is a baseline demographic confounder selected before analysis.",
-            "sex": "Sex is a baseline demographic confounder selected before analysis.",
-        },
-        "covariate_temporal_roles": {
-            "age": "baseline_static",
-            "sex": "baseline_static",
-        },
-        "execution_concepts": {
-            "outcome": "death",
-            "primary_exposure": "heart_rate",
-            "covariates": ["age", "sex"],
-        },
-        "analysis_design": {
-            "analysis_unit": "icu_stay",
-            "variance_estimator": "model_based",
-        },
-        "time_window": {"hours": 24, "anchor": "ICU admission"},
-        "confirmations": {
-            "feature_time_window": True,
-            "export_format": True,
-            "extraction_completed": True,
-        },
-        "export_format": "parquet",
-        "analysis_goal": "Descriptive prognostic association",
-    }
 
 
 def _write_pipeline_export(root: Path, *, database: str = "miiv") -> Path:
@@ -303,7 +219,11 @@ def _assume_execution_runtime_ready(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda kind, **_kwargs: runner_module.RunnerAvailability(
             kind=kind, available=True, image="easyicu-research-agent:test"
         ),
-    )
+)
+from tests.webserver.copilot.research_workflow_fixtures import (
+    complete_study as _complete_study,
+    confirmed_cohort_decision as _confirmed_cohort_decision,
+)
 
 
 def test_web_cancellation_is_a_typed_progress_control_signal() -> None:
@@ -349,10 +269,25 @@ def _allow_current_scientific_review(monkeypatch: pytest.MonkeyPatch) -> None:
         agent_pipeline_runs,
         "_load_pending_scientific_review",
         lambda *_args, **_kwargs: {
-            "schema_version": "easyicu.plan_scientific_review/2",
+            "schema_version": "easyicu.plan_scientific_review/4",
             "approval_allowed": True,
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("budget_mode", "expected"),
+    [
+        ("planner_canary", (240.0, 480.0)),
+        ("candidate_plan", (240.0, 480.0)),
+        ("full_reviewed", (None, None)),
+    ],
+)
+def test_provider_request_timeouts_preserve_a_separate_hard_stop(
+    budget_mode: str,
+    expected: tuple[float | None, float | None],
+) -> None:
+    assert agent_pipeline_runs._provider_request_timeouts_for_budget(budget_mode) == expected
 
 
 @pytest.mark.parametrize(
@@ -389,15 +324,14 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
     )
     monkeypatch.setattr(
         agent_runs,
-        "read_run_review",
-        lambda _project_dir: {
-            "ok": True,
-            "artifact_payloads": {
+        "read_run_record",
+        lambda _project_dir: SimpleNamespace(
+            artifact_payloads={
                 "scientific_plan_review.json": _nonapprovable_review_payload(
                     finding_code=finding_code
                 )
-            },
-        },
+            }
+        ),
     )
 
     contract = agent_pipeline_runs._compile_plan_revision_contract(
@@ -411,6 +345,139 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
         assert "generate a fresh plan" in contract
     else:
         assert contract == ""
+
+
+def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = _complete_study()
+    study.update(
+        {
+            "question": "Is lact associated with death?",
+            "covariates": ["age"],
+            "covariate_selection": "exact",
+            "execution_concepts": {"covariates": ["age"]},
+        }
+    )
+    source_run_id = "run-candidate"
+    project_dir = tmp_path / "candidate-wrapper"
+    inner_run = project_dir / "pipeline" / source_run_id
+    inner_run.mkdir(parents=True)
+    capsule = {
+        "scientific_identity": {
+            "question": study["question"],
+            "database": "miiv",
+            "primary_exposure": "lact",
+            "target_outcome": "death",
+            "user_preferences": {"covariates": ["age"]},
+        }
+    }
+    capsule_raw = json.dumps(capsule).encode()
+    (inner_run / "run_input_capsule.json").write_bytes(capsule_raw)
+    (inner_run / "human_review_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "state": "pending",
+                "run_input_capsule_sha256": hashlib.sha256(
+                    capsule_raw
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    pipeline_input = project_dir / "pipeline_input"
+    pipeline_input.mkdir()
+    pd.DataFrame(columns=["lact", "death", "age"]).to_parquet(
+        pipeline_input / "planner_catalog.parquet",
+        index=False,
+    )
+    (pipeline_input / "planner_catalog_receipt.json").write_text(
+        json.dumps({"selected_concepts": ["lact", "death", "age"]}),
+        encoding="utf-8",
+    )
+    review = PlanScientificReview(
+        status="analysis_only",
+        approval_allowed=True,
+        top_journal_candidate=False,
+        score=85,
+        dimension_scores={"study_design": 85},
+        findings=[],
+        context_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        literature_sha256="c" * 64,
+        figure_strategy_sha256="d" * 64,
+        generated_at="2026-09-03T00:00:00Z",
+    ).model_dump(mode="json")
+    monkeypatch.setattr(
+        agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {
+            "runs": [
+                {
+                    "run_id": source_run_id,
+                    "project_dir": str(project_dir),
+                    "scientific_configuration_sha256": (
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        agent_runs,
+        "read_run_review",
+        lambda _project_dir: {
+            "ok": True,
+            "artifact_payloads": {
+                "scientific_plan_review.json": review,
+                "agent_plan.json": {
+                    "analysis_type": "association_study",
+                    "cohort": {"selection_mode": "all_input_rows"},
+                    "steps": [
+                        {
+                            "step_id": "primary_model",
+                            "method": "association",
+                            "planned_analysis_role": "primary",
+                            "inputs": ["lact", "death", "age"],
+                            "expected_outputs": ["table:estimate"],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_metadata_only_planning_coordinates",
+        lambda **_kwargs: {
+            "primary_exposure": "lact",
+            "target_outcome": "death",
+        },
+    )
+
+    authority = agent_pipeline_runs._load_candidate_plan_materialization_authority(
+        study=study,
+        project_root=str(tmp_path),
+        source_run_id=source_run_id,
+        database="miiv",
+        covariates=("age",),
+    )
+
+    assert authority is not None
+    assert authority.primary_exposure == "lact"
+    assert authority.target_outcome == "death"
+    assert "source_plan_sha256: " + "b" * 64 in authority.contract
+    assert "primary_model" in authority.contract
+
+
+def test_public_composite_concept_resolves_to_one_materialization_source() -> None:
+    by_id = {"sep3_sofa1": object()}
+
+    assert research_launch_scientific._source_concept_for_operational_column(
+        "sep3",
+        by_id=by_id,
+    ) == "sep3_sofa1"
 
 
 def test_identified_local_database_can_generate_a_candidate_plan() -> None:
@@ -468,7 +535,7 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
         active_job=None,
         latest_run=None,
     )
-    assert empty.current_stage == "question"
+    assert empty.current_stage == "idea"
     assert empty.missing_setup_fields == [
         "question",
         "data_source",
@@ -480,7 +547,9 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
         "export_format",
         "modules",
     ]
-    assert next(row for row in empty.stages if row.id == "idea").status == "blocked"
+    assert [row.id for row in empty.stages[:2]] == ["idea", "question"]
+    assert next(row for row in empty.stages if row.id == "idea").status == "ready"
+    assert empty.next_action_code == "idea_mining_available"
 
     default_only_export = {
         **_complete_study(),
@@ -559,6 +628,7 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
             "run_type": "full",
             "engine": "easyicu.research_agent.pipeline",
             "gate_status": "analysis_only",
+            "gate_checks": {"manuscript_ready": True},
             "artifact_names": [
                 "agent_plan.json",
                 "evidence_ledger.json",
@@ -790,7 +860,7 @@ def test_workflow_requires_explicit_feature_time_window_confirmation() -> None:
     assert "confirmations.feature_time_window" not in confirmed.missing_setup_fields
 
 
-def test_pipeline_factory_rejects_missing_typed_analysis_design_before_job(
+def test_full_pipeline_factory_rejects_missing_typed_analysis_design_before_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     foundation_called = False
@@ -813,6 +883,7 @@ def test_pipeline_factory_rejects_missing_typed_analysis_design_before_job(
             study_context=study,
             project_root=None,
             provider={"provider": "openai", "external": True},
+            budget_mode="full_reviewed",
         )
 
     assert exc.value.code == "research_pipeline_analysis_design_required"
@@ -821,6 +892,22 @@ def test_pipeline_factory_rejects_missing_typed_analysis_design_before_job(
         "variance_estimator",
     ]
     assert foundation_called is False
+
+
+def test_legacy_descriptive_decision_receipt_closes_typed_launch_design() -> None:
+    study = {
+        **_complete_study(),
+        "analysis_design": {},
+        "confirmations": {
+            **_complete_study()["confirmations"],
+            "plan_timing_descriptive_only": True,
+        },
+    }
+
+    assert agent_pipeline_runs.validate_analysis_design_for_execution(study) == {
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "none_counts_only",
+    }
 
 
 def _design_free_study(export: Path) -> dict[str, Any]:
@@ -1134,6 +1221,33 @@ def test_planner_proposal_prefers_owner_issued_event_status_coordinate() -> None
         source_concept="death",
         acquisition=acquisition,
     ) == "death_max"
+
+
+def test_planner_proposal_resolves_unique_composite_output_from_declared_source() -> None:
+    acquisition = SimpleNamespace(
+        analysis_columns={"sep3_sofa1": "sep3_sofa1_max"},
+        materialized_columns=("sep3_sofa1_max",),
+    )
+
+    assert agent_pipeline_runs._resolve_planner_proposed_primary_exposure(
+        source_concept="sep3",
+        acquisition=acquisition,
+    ) == "sep3_sofa1_max"
+
+
+def test_planner_proposal_rejects_ambiguous_composite_outputs() -> None:
+    acquisition = SimpleNamespace(
+        analysis_columns={
+            "aki_stage": "aki_stage_max",
+            "aki_severe": "aki_severe_max",
+        },
+        materialized_columns=("aki_stage_max", "aki_severe_max"),
+    )
+
+    assert agent_pipeline_runs._resolve_planner_proposed_primary_exposure(
+        source_concept="kdigo_aki",
+        acquisition=acquisition,
+    ) is None
 
 
 def test_materialized_target_outcome_uses_owner_issued_event_status_coordinate() -> None:
@@ -1609,6 +1723,7 @@ def test_pipeline_factory_rejects_clinical_anchor_as_materialization_anchor(
 
 
 def test_pipeline_factory_rejects_unaddressed_repeat_stay_dependence_before_job(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     foundation_called = False
@@ -1635,8 +1750,11 @@ def test_pipeline_factory_rejects_unaddressed_repeat_stay_dependence_before_job(
         agent_pipeline_runs.make_research_pipeline_run_runner(
             export_path="/typed/demo",
             study_context=study,
-            project_root=None,
+            project_root=str(tmp_path / "projects"),
             provider={"provider": "openai", "external": True},
+            provider_environment={"OPENAI_API_KEY": "test-key"},
+            credential_source="pi_verified",
+            budget_mode="full_reviewed",
         )
 
     assert exc.value.code == ("research_pipeline_repeated_stay_dependence_unaddressed")
@@ -1701,6 +1819,33 @@ def test_landmark_sensitivity_keeps_trajectory_for_counts_only_design() -> None:
                 "strategy": "landmark",
                 "landmark_hours": 24,
                 "require_alive_at_landmark": True,
+            }
+        ],
+    }
+
+    assert agent_pipeline_runs._analysis_requires_longitudinal_trajectory(
+        study,
+        validated_design={
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+    ) is True
+
+
+def test_time_varying_sensitivity_keeps_trajectory_for_counts_only_design() -> None:
+    study = {
+        **_complete_study(),
+        "analysis_design": {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+        "sensitivity_specs": [
+            {
+                "spec_id": "time_varying_exposure",
+                "axis": "timing",
+                "strategy": "time_varying",
+                "execution_variables": ["lact"],
             }
         ],
     }
@@ -1851,6 +1996,7 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
                         "study_authority_change": [
                             "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
                         ],
+                        "runtime_capability": [],
                         "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
                         "independent_review": [],
                     }
@@ -1861,6 +2007,7 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
 
     assert snapshot.next_action_code == "plan_scientific_changes_required"
     assert snapshot.plan_review_summary == {
+        "run_id": "run-science-review",
         "status": "changes_required",
         "score": 58,
         "top_journal_candidate": False,
@@ -1891,6 +2038,7 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
             "study_authority_change": [
                 "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
             ],
+            "runtime_capability": [],
             "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
             "independent_review": [],
         },
@@ -1926,6 +2074,7 @@ def test_plan_review_separates_system_proposals_from_user_authorization() -> Non
                     "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
                     "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
                 ],
+                "runtime_capability": [],
                 "external_evidence": [],
                 "independent_review": [],
             }
@@ -1969,6 +2118,7 @@ def test_plan_review_separates_system_proposals_from_user_authorization() -> Non
             "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
         ],
         "study_authority_change": ["ADJUSTMENT_SET_NOT_USER_CONFIRMED"],
+        "runtime_capability": [],
         "external_evidence": [],
         "independent_review": [],
     }
@@ -2022,6 +2172,39 @@ def test_workflow_never_offers_approval_for_stale_or_unresumable_plan(
     assert by_id["plan"].reason_code == expected_reason
     assert by_id["analysis"].status == "blocked"
     assert by_id["analysis"].reason_code == expected_reason
+
+
+def test_cohort_reconfirmation_precedes_superseded_plan_regeneration() -> None:
+    study = _complete_study()
+    study["revision"] += 1
+    study["cohort_eligibility_authority"] = {}
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-superseded-plan",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "run_status": "human_review_pending",
+            "pending_review_reason_codes": ["plan_scientific_changes_required"],
+            "scientific_configuration_sha256": "a" * 64,
+            "artifact_names": [
+                "agent_plan.json",
+                "scientific_plan_review.json",
+                "source_run_manifest.json",
+            ],
+        },
+        plan_review_authority={
+            "run_id": "run-superseded-plan",
+            "resumable_here": True,
+            "scientific_configuration_sha256": "a" * 64,
+        },
+    )
+
+    assert snapshot.current_stage == "setup"
+    assert snapshot.next_action_code == "cohort_eligibility_confirmation_required"
 
 
 def test_fresh_planning_job_takes_precedence_over_superseded_plan() -> None:
@@ -2194,6 +2377,33 @@ def test_efficiency_budget_failure_offers_owned_checkpoint_resume() -> None:
     assert by_id["plan"].status == "ready"
     assert by_id["plan"].reason_code == "planner_checkpoint_resume_available"
     assert by_id["analysis"].status == "blocked"
+
+
+def test_candidate_provider_http_failure_offers_owned_checkpoint_resume() -> None:
+    study = _complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(study)
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-provider-http",
+            "study_id": study["id"],
+            "scientific_configuration_sha256": digest,
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "gate_reason": "research_pipeline_planner_provider_unavailable",
+            "run_status": "failed",
+            "development_planner_checkpoint_available": True,
+            "artifact_names": [
+                "evidence_ledger.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    assert snapshot.next_action_code == "planner_checkpoint_resume_available"
 
 
 def test_contract_exhaustion_with_checkpoint_requires_a_fresh_plan() -> None:
@@ -2374,7 +2584,42 @@ def test_validated_analysis_advances_even_when_publication_gate_stays_closed() -
     assert by_id["analysis"].status == "complete"
     assert by_id["analysis"].reason_code == "validated_analysis_ready"
     assert by_id["interpretation"].status == "review_required"
-    assert by_id["manuscript"].status == "review_required"
+    assert by_id["manuscript"].status == "blocked"
+
+
+def test_validated_analysis_advances_before_manuscript_numeric_provenance_closes() -> None:
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(),
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-analysis-only-no-manuscript",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "gate_reason": "research_agent_pipeline_failed_closed",
+            "gate_checks": {
+                "execution_complete": True,
+                "analysis_validated": True,
+                "evidence_complete": False,
+                "numeric_verified": False,
+            },
+            "run_status": "blocked",
+            "artifact_names": [
+                "agent_plan.json",
+                "evidence_ledger.json",
+                "result_tables.json",
+                "figure_gallery.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert snapshot.current_stage == "interpretation"
+    assert by_id["analysis"].status == "complete"
+    assert by_id["interpretation"].status == "review_required"
+    assert by_id["manuscript"].status == "blocked"
 
 
 def test_completed_numeric_outputs_do_not_force_a_fresh_plan_during_validation_repair() -> None:
@@ -2757,6 +3002,58 @@ def test_result_interpretation_card_keeps_unverified_numbers_blocked() -> None:
     assert card.claim_ceiling == "unsupported"
 
 
+def test_result_interpretation_card_exposes_validated_analysis_tables_as_analysis_only() -> None:
+    card = build_result_interpretation_card(
+        run_id="run_validated_analysis_only",
+        review={
+            "gate": {
+                "status": "blocked",
+                "reason": "research_agent_pipeline_failed_closed",
+                "checks": [
+                    {"id": "execution_complete", "passed": True},
+                    {"id": "analysis_validated", "passed": True},
+                    {
+                        "id": "numeric_verified",
+                        "passed": False,
+                        "reason": "numeric_verified_not_satisfied",
+                    },
+                ],
+            },
+            "readiness": {"status": "blocked", "reportable": False},
+        },
+        manuscript=None,
+        result_tables={
+            "tables": [
+                {
+                    "name": "distribution.csv",
+                    "label": "Validated aggregate distribution",
+                    "headers": [
+                        "n_rows",
+                        "exposure_denominator",
+                        "exposure_pct",
+                        "outcome_events",
+                        "outcome_denominator",
+                        "outcome_rate_pct",
+                    ],
+                    "rows": [["100", "100", "40.0", "8", "40", "20.0"]],
+                }
+            ]
+        },
+        scientific_readiness={
+            "status": "analysis_only",
+            "claim_ceiling": "analysis_only",
+            "facts": {"analysis": {"analysis_validated": True}},
+        },
+    )
+
+    assert card.status == "analysis_only"
+    assert card.claim_ceiling == "analysis_only"
+    assert card.result_tables[0].entries == [
+        ["100", "100", "40.0", "8", "40", "20.0"]
+    ]
+    assert "numeric_verified_not_satisfied" in card.limitations
+
+
 def test_interpretation_and_manuscript_tools_bound_large_agent_drafts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2950,6 +3247,118 @@ def test_idea_tool_never_accepts_a_host_path_from_the_model() -> None:
             context,
         )
     assert rejected.value.code == "pi_tool_unknown_arguments"
+
+
+def test_pi_idea_mining_uses_metadata_only_owner_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, Any] = {}
+
+    def mine(body: dict[str, Any]) -> dict[str, Any]:
+        received.update(body)
+        return {
+            "run_id": "idea_metadata_only",
+            "selected_idea_id": "idea_candidate",
+            "idea_ledger": [
+                {
+                    "idea_id": "idea_candidate",
+                    "idea_title": "Candidate",
+                    "exposure_or_predictor": "Cumulative fluid balance",
+                    "mapped_concepts": [],
+                    "design_support": {
+                        "study_families": ["association", "time_to_event"],
+                        "time_zero": "Ventilation start or readiness landmark",
+                        "observation_window": "Pre-landmark measurements",
+                        "exposure_family": "Baseline or time-varying factor",
+                        "eligibility_candidates": [
+                            "Distinguish extubation from durable liberation"
+                        ],
+                        "outcome_family": (
+                            "Successful liberation, extubation failure, or "
+                            "ventilation duration"
+                        ),
+                        "estimand_family": "Probability or time to liberation",
+                        "sensitivity_analyses": [
+                            "Alternative durable-liberation gap"
+                        ],
+                        "stop_conditions": [
+                            "Outcome timing cannot be ordered relative to the landmark"
+                        ],
+                        "authority": "advisory_design_support_only",
+                    },
+                }
+            ],
+            "pre_experiment": {"status": "blocked", "reportable": False},
+        }
+
+    monkeypatch.setattr(tool_module.idea_mining, "mine_ideas", mine)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-idea-metadata-only"),
+        allowed_actions={"idea"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_mine_ideas", {"topic": "Adult ICU fluid balance"}, context
+    )
+
+    assert result["code"] == "easyicu_idea_mined"
+    assert received["metadata_only"] is True
+    design_support = result["details"]["idea_mining"]["idea"]["design_support"]
+    assert design_support["study_families"] == ["association", "time_to_event"]
+    assert design_support["eligibility_candidates"] == [
+        "Distinguish extubation from durable liberation"
+    ]
+    assert design_support["time_zero"] == "Ventilation start or readiness landmark"
+    assert design_support["exposure_family"] == "Baseline or time-varying factor"
+    assert design_support["sensitivity_analyses"] == [
+        "Alternative durable-liberation gap"
+    ]
+
+
+def test_pi_idea_mining_reuses_host_parsed_pdf_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, Any] = {}
+
+    def mine(body: dict[str, Any]) -> dict[str, Any]:
+        received.update(body)
+        return {
+            "run_id": "idea_pdf_source",
+            "selected_idea_id": "idea_pdf_candidate",
+            "idea_ledger": [
+                {
+                    "idea_id": "idea_pdf_candidate",
+                    "idea_title": "PDF-derived candidate",
+                    "mapped_concepts": [],
+                }
+            ],
+            "pre_experiment": {"status": "blocked", "reportable": False},
+        }
+
+    monkeypatch.setattr(tool_module.idea_mining, "mine_ideas", mine)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-idea-pdf"),
+        allowed_actions={"idea"},
+        idea_source={
+            "source_type": "pdf",
+            "title": "Attached paper",
+            "excerpt": "Bounded locally parsed excerpt",
+            "source_file_name": "paper.pdf",
+            "source_file_sha256": "a" * 64,
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_mine_ideas", {"topic": "Find ideas from this paper"}, context
+    )
+
+    assert result["code"] == "easyicu_idea_mined"
+    assert received["source_type"] == "pdf"
+    assert received["title"] == "Attached paper"
+    assert received["excerpt"] == "Bounded locally parsed excerpt"
+    assert received["source_file_name"] == "paper.pdf"
+    assert received["source_file_sha256"] == "a" * 64
+    assert received["metadata_only"] is True
 
 
 def test_curated_literature_projection_is_honest_and_does_not_backfill_plan_links() -> (
@@ -3551,9 +3960,9 @@ def test_generic_literature_authority_returns_compact_rebind_receipt(
     assert literature["study_literature_authority"] == persisted
     assert literature["exact_queries_bound_in_host_receipt"] is True
     assert literature["query_previews_truncated"] is True
-    assert len(literature["articles"]) == 8
+    assert len(literature["articles"]) == 6
     assert all("matched_queries" not in row for row in literature["articles"])
-    assert len(result["details"]["resources"]) <= 8
+    assert len(result["details"]["resources"]) <= 6
     assert "study" not in result["details"]
     assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) < 20_000
     with pytest.raises(PiCopilotError) as stale:
@@ -3652,9 +4061,353 @@ def test_literature_search_binds_prior_art_to_an_accepted_idea(
                 "Sepsis is life-threatening organ dysfunction caused by a "
                 "dysregulated host response to infection."
             ),
+            "abstract_excerpt": (
+                "Sepsis is life-threatening organ dysfunction caused by a "
+                "dysregulated host response to infection."
+            ),
         }
     ]
     assert "re-accepted" in result["summary"]
+
+
+def test_literature_search_can_review_a_mined_candidate_before_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: {})
+    captured: dict[str, Any] = {}
+
+    def checked(body: dict[str, Any]) -> dict[str, Any]:
+        captured.update(body)
+        return {
+            "prior_art": {
+                "status": "searched",
+                "search_performed": True,
+                "network_calls": 2,
+                "queries_to_run": ["fluid balance AND ventilator liberation"],
+                "query_strata": [
+                    {
+                        "id": "clinical_landscape",
+                        "query": "fluid balance AND ventilator liberation",
+                        "returned_count": 3,
+                        "retained_count": 1,
+                    },
+                    {
+                        "id": "direct_observational_candidates",
+                        "query": "fluid balance AND cohort",
+                        "returned_count": 1,
+                        "retained_count": 1,
+                    },
+                ],
+                "results": [
+                    {
+                        "pmid": "27626706",
+                        "title": "Weaning according to a new definition",
+                        "source": "American Journal of Respiratory and Critical Care Medicine",
+                        "year": 2017,
+                        "query": "fluid balance AND ventilator liberation",
+                        "matched_queries": [
+                            "fluid balance AND ventilator liberation",
+                            "fluid balance AND cohort",
+                        ],
+                        "matched_query_strata": [
+                            "clinical_landscape",
+                            "direct_observational_candidates",
+                        ],
+                    }
+                ],
+            }
+        }
+
+    monkeypatch.setattr(tool_module.idea_mining, "check_prior_art", checked)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "prior_art_receipt_binding",
+        lambda run_id: {
+            "prior_art_binding_schema_version": "easyicu.idea-prior-art-binding/2",
+            "prior_art_sha256": "a" * 64,
+            "prior_art_status": "searched",
+            "prior_art_result_count": 1,
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_search_literature",
+        {
+            "topic": "早期液体平衡与机械通气脱机",
+            "run_id": "idea-run-liberation",
+            "idea_id": "idea-liberation",
+        },
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-candidate-literature"),
+            allowed_actions={"literature"},
+        ),
+    )
+
+    assert result["status"] == "ok"
+    assert captured == {
+        "run_id": "idea-run-liberation",
+        "idea_id": "idea-liberation",
+        "allow_network": True,
+    }
+    literature = result["details"]["literature_search"]
+    assert literature["idea_plan_refresh_required"] is True
+    assert literature["idea_handoff_refresh_required"] is False
+    assert literature["bound_idea_run_id"] == "idea-run-liberation"
+    assert literature["retrieval_map"]["clinical_landscape"] == 3
+    assert literature["retrieval_map"]["direct_observational_candidates"] == 1
+    assert literature["retrieval_map"]["authority"] == "retrieval_signal_only"
+    assert literature["articles"][0]["matched_query_strata"] == [
+        "clinical_landscape",
+        "direct_observational_candidates",
+    ]
+    assert "prepare its Idea Plan next" in result["summary"]
+
+
+def test_prepare_idea_handoff_returns_one_reopenable_plan_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "prior_art_receipt_binding",
+        lambda run_id: None,
+    )
+
+    def fake_plan(body: dict[str, Any]) -> dict[str, Any]:
+        captured.append(body)
+        return {
+            "plan": {
+                "research_question": "Does early fluid balance relate to durable liberation?",
+                "analysis_family": "association",
+                "population": "Ventilated adult ICU patients",
+                "exposure": "fluid_balance_cumulative",
+                "outcome": "Extubation without reintubation within 48 hours",
+                "plan_status": "draft_plan_requires_user_review",
+            }
+        }
+
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "plan_idea",
+        fake_plan,
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "create_handoff",
+        lambda body: {
+            "run_id": "idea-run-liberation",
+            "idea_id": "idea-liberation",
+            "candidate_topic": "Early fluid balance and ventilator liberation",
+            "go_no_go": "hold",
+            "go_no_go_reason": "Outcome definition requires confirmation.",
+            "canonical_handoff_sha256": "b" * 64,
+            "agent_seed": {
+                "study_id": "fluid-liberation",
+                "question": "Does early fluid balance relate to durable liberation?",
+            },
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_prepare_idea_handoff",
+        {
+            "run_id": "idea-run-liberation",
+            "idea_id": "idea-liberation",
+            "plan_edits": "Use a 48-hour durable liberation outcome.",
+            "plan_fields": {
+                "outcome": "Extubation without reintubation within 48 hours",
+                "time_window": "ICU hours 0-24; durability 48 hours",
+            },
+        },
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-idea-plan-preview"),
+            allowed_actions={"idea"},
+        ),
+    )
+
+    assert result["code"] == "easyicu_idea_handoff_prepared"
+    assert captured[0]["plan_fields"]["outcome"] == (
+        "Extubation without reintubation within 48 hours"
+    )
+    assert result["details"]["idea_handoff"]["plan"]["outcome"] == (
+        "Extubation without reintubation within 48 hours"
+    )
+    assert result["details"]["resource"] == {
+        "kind": "idea_plan",
+        "run_id": "idea-run-liberation",
+        "artifact": "idea_plan.json",
+        "label": "Idea Mining plan preview",
+        "media_type": "application/json",
+        "authority_class": "idea_mining_planning_only",
+    }
+
+
+def test_adjudicate_idea_literature_persists_confirmed_definition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "plan_idea",
+        lambda body: calls.append(dict(body)) or {"plan": {}},
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "adjudicate_prior_art",
+        lambda body: {
+            "run_id": body["run_id"],
+            "idea_id": body["idea_id"],
+            "decision": body["decision"],
+            "rationale": body["rationale"],
+            "screening": {"retrieval_candidate_count": 3},
+            "comparison_axes": [{"axis": "population_and_setting"}],
+            "authority": {"human_confirmed": True},
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "prior_art_adjudication_binding",
+        lambda run_id, idea_id: {
+            "prior_art_decision": "differentiated",
+            "prior_art_adjudication_sha256": "a" * 64,
+        },
+    )
+    plan_fields = {
+        "research_question": "Question",
+        "population": "Adult ICU patients",
+        "exposure": "Early lactate",
+        "outcome": "Hospital mortality",
+        "time_zero": "ICU admission",
+        "time_window": "0-24 hours",
+    }
+    result = tool_module.execute_tool(
+        "easyicu_adjudicate_idea_literature",
+        {
+            "run_id": "idea-run",
+            "idea_id": "idea-one",
+            "decision": "differentiated",
+            "rationale": "The endpoint and time zero differ from direct comparators.",
+            "plan_fields": plan_fields,
+        },
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-adjudication"),
+            allowed_actions={"idea"},
+        ),
+    )
+
+    assert result["code"] == "easyicu_idea_literature_adjudicated"
+    assert result["details"]["execution_can_advance"] is True
+    assert calls[0]["plan_fields"] == plan_fields
+
+
+def test_assess_idea_feasibility_uses_bound_source_and_returns_no_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = {"id": "source-real", "path": str(tmp_path), "database": "miiv"}
+    desc = {"ok": True, "path": str(tmp_path), "files": []}
+    monkeypatch.setattr(
+        tool_module, "_bound_registered_export", lambda context: (source, desc)
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.build_available_catalog",
+        lambda path: AvailableCatalog(
+            source=str(path),
+            concepts=[
+                CatalogConcept(concept_id="lact"),
+                CatalogConcept(concept_id="death"),
+                CatalogConcept(concept_id="mech_vent"),
+            ],
+        ),
+    )
+    captured: list[tuple[dict[str, Any], Any]] = []
+
+    def assess(body: dict[str, Any], *, export: Any) -> dict[str, Any]:
+        captured.append((dict(body), export))
+        return {
+            "run_id": body["run_id"],
+            "idea_id": body["idea_id"],
+            "status": "ready",
+            "claim_level": "feasibility_sample_not_reportable",
+            "source": {"source_id": "source-real", "path_hash": "a" * 16},
+            "cohort": {"entities": 100},
+            "feature_statistics": [],
+            "concept_bindings": body["concept_bindings"],
+            "required_concepts": ["lact", "death", "mech_vent"],
+            "design_answerability": {
+                "time_zero_reconstructable": True,
+                "temporal_ordering_reconstructable": True,
+                "joint_observed_entities": 80,
+            },
+            "missing_required_concepts": [],
+            "blockers": [],
+            "interpretation": [],
+            "privacy": {"patient_rows_returned": False},
+        }
+
+    monkeypatch.setattr(tool_module.idea_mining, "bounded_sample_feasibility", assess)
+    result = tool_module.execute_tool(
+        "easyicu_assess_idea_feasibility",
+        {
+            "run_id": "idea-run",
+            "idea_id": "idea-one",
+            "concept_bindings": {
+                "primary_exposure": "lact",
+                "outcome": "death",
+                "time_zero": "mech_vent",
+                "covariates": [],
+            },
+        },
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-feasibility"),
+            allowed_actions={"idea"},
+        ),
+    )
+
+    assert result["code"] == "easyicu_idea_feasibility_assessed"
+    assert result["details"]["execution_ready_for_plan_preview"] is True
+    assert captured[0][1] == (source, desc)
+    assert captured[0][0]["require_adjudication"] is True
+    assert str(tmp_path) not in json.dumps(result)
+
+
+def test_prepare_idea_handoff_blocks_zero_result_literature_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "prior_art_receipt_binding",
+        lambda run_id: {
+            "prior_art_status": "searched_no_matches",
+            "prior_art_result_count": 0,
+        },
+    )
+    plan_called = False
+
+    def unexpected_plan(body: dict[str, Any]) -> dict[str, Any]:
+        nonlocal plan_called
+        plan_called = True
+        return {}
+
+    monkeypatch.setattr(tool_module.idea_mining, "plan_idea", unexpected_plan)
+
+    result = tool_module.execute_tool(
+        "easyicu_prepare_idea_handoff",
+        {
+            "run_id": "idea-run-zero-results",
+            "idea_id": "idea-zero-results",
+        },
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-zero-result-handoff"),
+            allowed_actions={"idea"},
+        ),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "idea_literature_zero_results_requires_refinement"
+    assert result["details"]["handoff_allowed"] is False
+    assert result["details"]["prior_art_result_count"] == 0
+    assert plan_called is False
 
 
 def test_bound_literature_projection_stays_bounded_with_long_abstracts(
@@ -3710,14 +4463,58 @@ def test_bound_literature_projection_stays_bounded_with_long_abstracts(
     )
 
     assert result["status"] == "ok"
-    assert 5 < len(result["details"]["resources"]) <= 8
-    assert any(row.get("pmid") == "17938396" for row in result["details"]["resources"])
+    assert len(result["details"]["resources"]) == 5
+    assert all(
+        row.get("pmid") != "17938396" for row in result["details"]["resources"]
+    )
     assert len(result["details"]["literature_search"]["articles"]) == 5
     assert all(
         len(row["evidence_excerpt"]) <= 360
+        and len(row["abstract_excerpt"]) <= 900
         for row in result["details"]["literature_search"]["articles"]
     )
     assert len(json.dumps(result)) < 20_000
+
+
+def test_literature_projection_preserves_a_late_null_result() -> None:
+    abstract = (
+        ("Background and methods. " * 45)
+        + "Weekend hypotension was treated less often than weekday daytime. "
+        + "No association between weekday daytime and weekday nighttime treatment was found."
+    )
+
+    projection = compile_literature_tool_projection(
+        discovered={"status": "searched", "search_performed": True},
+        candidates=[
+            {
+                "pmid": "26975737",
+                "title": "ICU staffing and hypotension treatment",
+                "abstract_excerpt": abstract,
+            }
+        ],
+        idea_receipt_binding=None,
+        study_authority_binding=None,
+        bound_idea_run_id="idea-direct-fit",
+    )
+
+    excerpt = projection["literature_search"]["articles"][0]["abstract_excerpt"]
+    assert len(excerpt) <= 900
+    assert "Weekend hypotension was treated less often" in excerpt
+    assert "No association between weekday daytime and weekday nighttime" in excerpt
+
+
+def test_zero_topic_hits_do_not_project_method_sources_as_search_results() -> None:
+    projection = compile_literature_tool_projection(
+        discovered={"status": "searched_no_matches", "search_performed": True},
+        candidates=[],
+        idea_receipt_binding=None,
+        study_authority_binding=None,
+        bound_idea_run_id="idea-zero-topic-hits",
+    )
+
+    assert projection["resource"] is None
+    assert projection["resources"] == []
+    assert projection["literature_search"]["methodology"]["sources"]
 
 
 def test_literature_source_resource_rejects_unverified_or_unsafe_links() -> None:
@@ -3728,6 +4525,20 @@ def test_literature_source_resource_rejects_unverified_or_unsafe_links() -> None
     assert literature_source_resource({"title": "No identifier"}) is None
 
 
+def _execution_ready_idea_binding() -> dict[str, Any]:
+    return {
+        "execution_ready_for_confirmation": True,
+        "prior_art_adjudication_schema_version": "easyicu.web_idea_prior_art_adjudication/1",
+        "prior_art_adjudication_sha256": "1" * 64,
+        "prior_art_decision": "differentiated",
+        "source_feasibility_schema_version": "easyicu.web_idea_bounded_sample_feasibility/2",
+        "source_feasibility_sha256": "2" * 64,
+        "source_feasibility_status": "ready",
+        "idea_definition_sha256": "3" * 64,
+        "source_path_hash": "4" * 16,
+    }
+
+
 def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3735,6 +4546,11 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
     current.update({"title": "Old study", "revision": 9, "active_job_id": None})
     writes: list[tuple[dict[str, Any], dict[str, Any]]] = []
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "idea_execution_readiness_binding",
+        lambda *args, **kwargs: _execution_ready_idea_binding(),
+    )
     monkeypatch.setattr(
         tool_module.idea_mining,
         "plan_idea",
@@ -3816,6 +4632,14 @@ def test_accept_idea_handoff_binds_digest_and_projects_study_fields(
         "accepted_at": "2026-08-11T12:00:00Z",
         "go_no_go": "recommend",
         "go_no_go_reason": "Concepts are available in the selected export.",
+        "prior_art_adjudication_schema_version": "easyicu.web_idea_prior_art_adjudication/1",
+        "prior_art_adjudication_sha256": "1" * 64,
+        "prior_art_decision": "differentiated",
+        "source_feasibility_schema_version": "easyicu.web_idea_bounded_sample_feasibility/2",
+        "source_feasibility_sha256": "2" * 64,
+        "source_feasibility_status": "ready",
+        "idea_definition_sha256": "3" * 64,
+        "source_path_hash": "4" * 16,
     }
     assert options["expected_revision"] == 9
     with pytest.raises(PiCopilotError) as stale:
@@ -3830,6 +4654,11 @@ def test_accept_idea_handoff_does_not_turn_every_mentioned_feature_into_a_covari
     current.update({"revision": 3, "active_job_id": None})
     writes: list[dict[str, Any]] = []
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "idea_execution_readiness_binding",
+        lambda *args, **kwargs: _execution_ready_idea_binding(),
+    )
     monkeypatch.setattr(
         tool_module.idea_mining,
         "plan_idea",
@@ -3898,6 +4727,11 @@ def test_accept_idea_handoff_requires_digest_bound_concept_modules(
 ) -> None:
     current = {**_complete_study(), "revision": 2, "active_job_id": None}
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "idea_execution_readiness_binding",
+        lambda *args, **kwargs: _execution_ready_idea_binding(),
+    )
     monkeypatch.setattr(tool_module.idea_mining, "plan_idea", lambda body: {"plan": {}})
     monkeypatch.setattr(
         tool_module.idea_mining,
@@ -3943,6 +4777,11 @@ def test_accept_idea_handoff_clears_comparator_when_predictor_changes(
     }
     writes: list[dict[str, Any]] = []
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "idea_execution_readiness_binding",
+        lambda *args, **kwargs: _execution_ready_idea_binding(),
+    )
     monkeypatch.setattr(
         tool_module.idea_mining,
         "plan_idea",
@@ -4003,6 +4842,11 @@ def test_accept_idea_handoff_fails_closed_without_canonical_digest(
 ) -> None:
     current = {**_complete_study(), "revision": 2, "active_job_id": None}
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: current)
+    monkeypatch.setattr(
+        tool_module.idea_mining,
+        "idea_execution_readiness_binding",
+        lambda *args, **kwargs: _execution_ready_idea_binding(),
+    )
     monkeypatch.setattr(tool_module.idea_mining, "plan_idea", lambda body: {"plan": {}})
     monkeypatch.setattr(
         tool_module.idea_mining,
@@ -4494,8 +5338,72 @@ def test_full_run_uses_verified_pi_provider_and_prepared_source_authority(
     assert request.study_context_id == "study-workflow"
     assert request.provider == "openai"
     assert request.credential_source == "pi_verified"
+    assert request.intent == "candidate_plan"
     assert request.planner_start_mode == "auto"
     assert submitted[0]["account_environment"] is None
+
+
+def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A changed plan choice must not acquire reviewed-analysis authority."""
+
+    study = _complete_study()
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: study)
+    monkeypatch.setattr(
+        tool_module,
+        "_select_run",
+        lambda _context: {
+            "study_id": study["id"],
+            "run_id": "run-superseded-plan",
+            "run_status": "human_review_pending",
+            "pending_review_reason_codes": ["operator_plan_approval_required"],
+            "scientific_configuration_sha256": "a" * 64,
+            "artifact_names": ["agent_plan.json"],
+        },
+    )
+
+    def replacement_run(
+        context: ToolExecutionContext,
+        params: Mapping[str, Any],
+        *,
+        plan_revision_source_run_id: str = "",
+        planner_start_mode: str = "auto",
+        run_intent: research_run_submission.RunIntent | None = None,
+    ) -> dict[str, Any]:
+        captured.update(
+            context=context,
+            params=dict(params),
+            plan_revision_source_run_id=plan_revision_source_run_id,
+            planner_start_mode=planner_start_mode,
+            run_intent=run_intent,
+        )
+        return {"status": "ok", "code": "candidate_plan_submitted"}
+
+    monkeypatch.setattr(tool_module, "_run", replacement_run)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-superseded-plan",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id=study["id"],
+                study_revision=study["revision"],
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_request_replan",
+        {"reason": "The study authority changed.", "strategy": "fresh"},
+        context,
+    )
+
+    assert result["code"] == "candidate_plan_submitted"
+    assert captured["params"] == {"run_type": "full"}
+    assert captured["planner_start_mode"] == "fresh"
+    assert captured["run_intent"] == "candidate_plan"
 
 
 def test_candidate_plan_approval_starts_package_bound_run_instead_of_resuming_canary(
@@ -4592,6 +5500,7 @@ def test_failed_package_bound_run_retry_does_not_return_to_preview_canary(
     )
 
     assert result["code"] == "easyicu_full_run_submitted"
+    assert submitted[0]["request"].intent == "reviewed_analysis"
     assert submitted[0]["request"].planner_start_mode == "auto"
 
 
@@ -4888,6 +5797,45 @@ def _foundation_profile() -> dict[str, Any]:
         "required_feature_concepts": (),
         "require_outcome": True,
         "primary_exposure_source_concept": "heart_rate",
+    }
+
+
+def test_metadata_only_checkpoint_keeps_full_materialization_roster() -> None:
+    foundation = _foundation_profile()
+    metadata_checkpoint = research_launch_resume._DevelopmentResumeAcquisition(
+        kind="metadata_only_planning_catalog",
+        selected_concepts=("heart_rate", "death"),
+    )
+
+    roster = agent_pipeline_runs._materialization_concept_roster(
+        foundation_profile=foundation,
+        development_resume_acquisition=metadata_checkpoint,
+    )
+
+    assert roster == {
+        "outcome_concepts": ("death",),
+        "required_feature_concepts": (),
+        "static_concepts": ("age", "sex"),
+    }
+
+
+def test_materialized_checkpoint_restores_its_exact_concept_roster() -> None:
+    materialized_checkpoint = research_launch_resume._DevelopmentResumeAcquisition(
+        kind="materialized_patient_universe",
+        feature_concepts=("sofa",),
+        outcome_concepts=("death",),
+        static_concepts=("age",),
+    )
+
+    roster = agent_pipeline_runs._materialization_concept_roster(
+        foundation_profile=_foundation_profile(),
+        development_resume_acquisition=materialized_checkpoint,
+    )
+
+    assert roster == {
+        "outcome_concepts": ("death",),
+        "required_feature_concepts": ("sofa",),
+        "static_concepts": ("age",),
     }
 
 
@@ -6114,6 +7062,22 @@ def test_pipeline_failure_projects_codex_hard_timeout_as_provider_timeout(
     assert "provider detail" not in json.dumps(payload)
 
 
+def test_candidate_planner_provider_http_failure_preserves_resume_route() -> None:
+    class APIStatusError(RuntimeError):
+        pass
+
+    failure = APIStatusError("provider response content must not cross the boundary")
+
+    assert agent_pipeline_runs._pipeline_failure_code(
+        failure,
+        budget_mode="planner_canary",
+    ) == "research_pipeline_planner_provider_unavailable"
+    assert (
+        agent_pipeline_runs._pipeline_failure_code(failure)
+        == "research_pipeline_execution_failed"
+    )
+
+
 def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6219,7 +7183,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             None,
             "easyicu-research-agent:1.0.0",
             "npj_dm_e1_demo_dev",
-            "20260819",
+            "20260903",
         ),
         (
             "full_reviewed",
@@ -6227,7 +7191,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             "easyicu-research-agent:isolated-exact-head",
             "easyicu-research-agent:isolated-exact-head",
             "npj_dm_e1_demo_dev",
-            "20260819",
+            "20260903",
         ),
         (
             "full_reviewed",
@@ -6235,7 +7199,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             " \n",
             "easyicu-research-agent:e1-demo-local",
             "npj_dm_e1_demo_dev",
-            "20260819",
+            "20260903",
         ),
     ],
 )
@@ -6372,11 +7336,14 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     result = runner(Job())
 
     assert calls["acquire"]["question"] == _complete_study()["question"]
-    expected_provider_timeout = 120.0 if budget_mode != "full_reviewed" else None
+    expected_provider_timeout = 240.0 if budget_mode != "full_reviewed" else None
+    expected_provider_hard_timeout = (
+        480.0 if budget_mode != "full_reviewed" else None
+    )
     assert calls["provider_build"]["request_timeout"] == expected_provider_timeout
     assert (
         calls["provider_build"]["request_hard_timeout"]
-        == expected_provider_timeout
+        == expected_provider_hard_timeout
     )
     from easyicu.research_agent.providers.hard_stop import HardStopClient
 
@@ -7126,7 +8093,7 @@ def test_pi_verified_provider_environment_is_full_pipeline_only(
             run_type="full",
             external_llm_opt_in=True,
         )
-    assert getattr(wrong_engine.value, "detail") == {
+    assert wrong_engine.value.detail == {
         "error": "pi_provider_research_pipeline_only"
     }
 
@@ -7137,7 +8104,7 @@ def test_pi_verified_provider_environment_is_full_pipeline_only(
             run_type="full",
             external_llm_opt_in=True,
         )
-    assert getattr(direct_fallback.value, "detail") == {
+    assert direct_fallback.value.detail == {
         "error": "research_pipeline_pi_verified_credentials_required"
     }
 
@@ -7185,7 +8152,7 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
             request=_request(),
         )
 
-    assert getattr(raised.value, "detail")["error"] in {
+    assert raised.value.detail["error"] in {
         "research_pipeline_manifest_required",
         "no_export_files",
     }
@@ -7379,7 +8346,7 @@ def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
             request=_request(),
         )
 
-    assert getattr(raised.value, "detail") == {
+    assert raised.value.detail == {
         "error": "research_pipeline_budget_mode_server_owned"
     }
 
@@ -7398,7 +8365,7 @@ def test_pipeline_development_execution_mode_is_server_owned(
     monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "true")
     with pytest.raises(Exception) as raised:
         agent_route._server_research_pipeline_budget_mode()
-    assert getattr(raised.value, "detail") == {
+    assert raised.value.detail == {
         "error": "research_pipeline_development_mode_invalid"
     }
 
@@ -7528,7 +8495,7 @@ def test_planner_canary_cannot_be_approved_into_execution(
             request=_request(),
         )
 
-    assert getattr(raised.value, "detail") == {
+    assert raised.value.detail == {
         "error": "research_pipeline_planner_canary_execution_blocked"
     }
 
@@ -8255,6 +9222,56 @@ def test_web_study_context_compiles_typed_sensitivity_authority() -> None:
     ]
 
 
+def test_web_study_context_drops_legacy_primary_cluster_duplicate() -> None:
+    study = {
+        **_complete_study(),
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        },
+        "sensitivity_specs": [
+            {
+                "spec_id": "repeated_stays_cluster_robust",
+                "axis": "repeated_stays",
+                "strategy": "cluster_robust",
+            },
+            {
+                "spec_id": "non_readmission_only",
+                "axis": "repeated_stays",
+                "strategy": "non_readmission_restriction",
+                "execution_variables": ["icu_readmission"],
+            },
+        ],
+    }
+
+    compiled = agent_pipeline_runs._research_user_preferences(study)
+    validated = UserPreferences.model_validate(compiled)
+
+    assert [spec.spec_id for spec in validated.sensitivity_specs] == [
+        "non_readmission_only"
+    ]
+
+
+def test_descriptive_timing_choice_declines_landmark_in_typed_preferences() -> None:
+    study = {
+        **_complete_study(),
+        "confirmations": {
+            **_complete_study()["confirmations"],
+            "plan_timing_descriptive_only": True,
+        },
+    }
+
+    compiled = agent_pipeline_runs._research_user_preferences(study)
+    validated = UserPreferences.model_validate(compiled)
+
+    assert json.loads(validated.timing_and_design or "{}") == {
+        "analysis_scope": "descriptive_distribution_only",
+        "association_timing": "not_authorized",
+        "landmark": "not_authorized",
+    }
+
+
 def test_web_data_foundation_resolves_only_issued_operational_exposure() -> None:
     acquisition = SimpleNamespace(
         analysis_columns={"sep3_sofa2": "sep3_sofa2_max"},
@@ -8597,6 +9614,57 @@ def test_web_typed_descriptive_family_overrides_free_text_risk_contrast_routing(
     assert constraints["analysis_design"]["analysis_family"] == (
         "descriptive_epidemiology"
     )
+
+
+def test_web_descriptive_timing_choice_compiles_closed_analysis_family() -> None:
+    study = {
+        **_complete_study(),
+        "question": "How common is Sepsis-3 and what is mortality in each group?",
+        "analysis_goal": "描述暴露与结局分布，不估计时间对齐后的关联",
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        },
+        "confirmations": {
+            "extraction_completed": True,
+            "plan_timing_descriptive_only": True,
+        },
+    }
+
+    compiled = agent_pipeline_runs._research_user_preferences(study)
+    validated = UserPreferences.model_validate(compiled)
+
+    assert validated.inferred_analysis_family == "descriptive_epidemiology"
+    constraints = json.loads(str(validated.data_constraints))
+    assert constraints["analysis_design"] == {
+        "analysis_family": "descriptive_epidemiology",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "none_counts_only",
+    }
+
+
+def test_legacy_descriptive_receipt_compiles_complete_counts_only_contract() -> None:
+    study = {
+        **_complete_study(),
+        "analysis_design": {},
+        "analysis_goal": "描述暴露与结局分布，不估计时间对齐后的关联",
+        "confirmations": {
+            **_complete_study()["confirmations"],
+            "plan_timing_descriptive_only": True,
+        },
+    }
+
+    compiled = agent_pipeline_runs._research_user_preferences(study)
+    validated = UserPreferences.model_validate(compiled)
+    constraints = json.loads(str(validated.data_constraints))
+
+    assert validated.inferred_analysis_family == "descriptive_epidemiology"
+    assert constraints["analysis_design"] == {
+        "analysis_family": "descriptive_epidemiology",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "none_counts_only",
+    }
 
 
 def test_web_materialization_window_never_declares_clinical_time_zero() -> None:

@@ -419,12 +419,32 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         for item in (gate.get("checks") or [])
         if isinstance(item, Mapping) and str(item.get("id") or "").strip()
     }
+    artifacts = result.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, list) else []
+    artifact_names = {
+        str(row.get("name") or "").strip()
+        for row in artifacts
+        if isinstance(row, Mapping)
+    }
+    analysis_artifacts_present = bool(
+        "result_tables.json" in artifact_names
+        or "figure_gallery.json" in artifact_names
+    )
+    # ``numeric_verified`` is the manuscript-to-table provenance gate.  It is
+    # intentionally false for an analysis-only run that stops before a fully
+    # evidence-bound manuscript, so it must not erase completed and
+    # automatically validated result tables/figures from the Web workflow.
+    # The separate numeric/evidence/reportable fields continue to keep
+    # publication claims fail-closed.
     analysis_results_available = bool(
         gate_checks.get("execution_complete") is True
-        and gate_checks.get("numeric_verified") is True
+        and analysis_artifacts_present
         and (
             gate_checks.get("analysis_validated") is True
-            or gate_checks.get("evidence_complete") is True
+            or (
+                gate_checks.get("numeric_verified") is True
+                and gate_checks.get("evidence_complete") is True
+            )
         )
     )
     diagnostic_only = (
@@ -439,8 +459,6 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         "source_run_manifest.json",
         "evidence_ledger.json",
     }
-    artifacts = result.get("artifacts")
-    artifacts = artifacts if isinstance(artifacts, list) else []
     artifact_refs = []
     for row in artifacts[:80]:
         if not isinstance(row, Mapping):
@@ -503,6 +521,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "analysis_validated": gate_checks.get("analysis_validated") is True,
             "numeric_verified": gate_checks.get("numeric_verified") is True,
             "evidence_complete": gate_checks.get("evidence_complete") is True,
+            "manuscript_ready": gate_checks.get("manuscript_ready") is True,
             "analysis_results_available": analysis_results_available,
             "reportable": bool(gate.get("reportable")),
             "human_review_pending": bool(result.get("human_review_pending")),
@@ -545,6 +564,7 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 "analysis_validated",
                 "numeric_verified",
                 "evidence_complete",
+                "manuscript_ready",
                 "analysis_results_available",
                 "reportable",
             }
@@ -566,7 +586,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             url,
         ):
             return None
-        return {
+        resource = {
             "kind": kind,
             "url": url,
             "label": _bounded_text(value.get("label"), 160),
@@ -577,6 +597,19 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "pmid": _bounded_text(value.get("pmid"), 32),
             "authority_class": stable_code(value.get("authority_class")),
         }
+        retrieval_fit = stable_code(value.get("retrieval_fit"))
+        if retrieval_fit in {
+            "direct_retrieval_fit",
+            "adjacent_retrieval_fit",
+            "unclassified",
+        }:
+            resource["retrieval_fit"] = retrieval_fit
+            resource["retrieval_rationale"] = _bounded_text(
+                value.get("retrieval_rationale"), 600
+            )
+        if value.get("relevance"):
+            resource["relevance"] = _bounded_text(value.get("relevance"), 600)
+        return resource
     if kind in {
         "research_artifact",
         "research_document",
@@ -599,6 +632,21 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "label": _bounded_text(value.get("label") or artifact, 160),
             "media_type": _bounded_text(value.get("media_type"), 120),
             "sha256": digest,
+        }
+    if kind == "idea_plan":
+        run_id = stable_code(value.get("run_id"))
+        artifact = _bounded_text(value.get("artifact"), 160)
+        if not run_id or artifact != "idea_plan.json":
+            return None
+        return {
+            "kind": kind,
+            "run_id": run_id,
+            "artifact": artifact,
+            "label": _bounded_text(
+                value.get("label") or "Idea Mining plan preview", 160
+            ),
+            "media_type": "application/json",
+            "authority_class": "idea_mining_planning_only",
         }
     if kind == "data_package_review":
         study_id = stable_code(value.get("study_context_id"))
@@ -826,6 +874,92 @@ def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]
     ]
     if resources:
         payload["resources"] = resources
+    idea_mining = event.get("idea_mining")
+    if isinstance(idea_mining, Mapping):
+        idea = idea_mining.get("idea")
+        feasibility = idea_mining.get("feasibility")
+        if isinstance(idea, Mapping):
+            concepts = [
+                {
+                    key: _bounded_text(row.get(key), 180)
+                    for key in (
+                        "concept_id",
+                        "label",
+                        "module",
+                        "role",
+                        "status",
+                    )
+                    if row.get(key) is not None
+                }
+                | (
+                    {"available": bool(row.get("available"))}
+                    if isinstance(row.get("available"), bool)
+                    else {}
+                )
+                for row in list(idea.get("mapped_concepts") or [])[:24]
+                if isinstance(row, Mapping)
+            ]
+            payload["idea_mining"] = {
+                "run_id": stable_code(idea_mining.get("run_id")),
+                "selected_idea_id": stable_code(
+                    idea_mining.get("selected_idea_id")
+                ),
+                "idea": {
+                    key: _bounded_text(idea.get(key), 1600)
+                    for key in (
+                        "idea_title",
+                        "population",
+                        "exposure_or_predictor",
+                        "outcome",
+                        "analysis_family",
+                        "rationale",
+                        "go_no_go",
+                        "go_no_go_reason",
+                        "next_action",
+                        "plan_status",
+                    )
+                    if idea.get(key) is not None
+                }
+                | {
+                    "mapped_concepts": concepts,
+                    "unresolved_slots": [
+                        _bounded_text(value, 120)
+                        for value in list(idea.get("unresolved_slots") or [])[:8]
+                    ],
+                    "design_support": (
+                        {
+                            key: idea["design_support"].get(key)
+                            for key in (
+                                "card_id",
+                                "version",
+                                "file_sha256",
+                                "trust_level",
+                                "review_status",
+                                "summary",
+                                "population",
+                                "time_zero",
+                                "outcome_family",
+                                "requires_confirmation",
+                                "stop_conditions",
+                                "citations",
+                                "authority",
+                            )
+                            if idea["design_support"].get(key) is not None
+                        }
+                        if isinstance(idea.get("design_support"), Mapping)
+                        else {}
+                    ),
+                },
+                "feasibility": (
+                    {
+                        "status": stable_code(feasibility.get("status")),
+                        "reason": _bounded_text(feasibility.get("reason"), 1600),
+                        "reportable": feasibility.get("reportable") is True,
+                    }
+                    if isinstance(feasibility, Mapping)
+                    else {}
+                ),
+            }
     return ensure_safe_projection(payload)
 
 

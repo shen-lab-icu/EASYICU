@@ -153,7 +153,7 @@ def llm_signature(llm: Any) -> str:
         return f"fallback-authority:{_canonical_sha256(payload)}"
     if hasattr(llm, "for_role") and isinstance(getattr(llm, "_roles", None), dict):
         role_signatures: Dict[str, str] = {}
-        for role in getattr(llm, "_roles"):
+        for role in llm._roles:
             try:
                 role_signatures[str(role)] = llm_signature(llm.for_role(role))
             except KeyError:
