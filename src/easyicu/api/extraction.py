@@ -220,8 +220,7 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         # repair; the deterministic worker envelope only reduces their lower-
         # layer concurrency/cache limits. Keep the three historically heavy
         # owners (respiratory, ventilator and other_scores) out of this table;
-        # respiratory and ventilator now have current 8-GiB batch evidence
-        # below, while other_scores remains guarded pending measurement.
+        # all three now have current 8-GiB batch evidence below.
         "demographics": {"cohort_stays": 23_106, "peak_rss_mb": 210.1, "seconds": 0.4},
         "outcome": {"cohort_stays": 23_106, "peak_rss_mb": 193.5, "seconds": 0.3},
         "blood_gas": {"cohort_stays": 23_106, "peak_rss_mb": 2_207.2, "seconds": 11.7},
@@ -452,6 +451,16 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "batch_size": 8_000,
             "peak_rss_mb": 6_025.4,
             "seconds": 392.6,
+        },
+        # The 12k rounded two-partition candidate crossed the 7,447-MiB hard
+        # stop. The 8k candidate completed all three same-process streamed
+        # partitions with a 7,069.1-MiB external peak and exact logical
+        # equality to the sealed 2,580,685-row native table.
+        "other_scores": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 7_069.1,
+            "seconds": 436.3,
         },
     },
     "eicu": {
