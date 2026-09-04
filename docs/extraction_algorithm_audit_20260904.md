@@ -5,7 +5,9 @@
 This audit covers the EasyICU selected-module refresh used to repair invasive
 ventilation evidence in eICU and MIMIC-III and its downstream SOFA/Sepsis
 closure. Extraction is paused: the post-IMV eICU SOFA-2 path disproved the old
-resource profile, so no new release is authorised by this document yet.
+resource profile, and the audit found a pre-existing SOFA publication defect
+that affects all six databases. No new release is authorised by this document
+yet.
 
 No result in this audit authorises changing an AKI definition, cohort, time
 window, or analysis endpoint. It changes extraction scheduling and closes one
@@ -62,6 +64,14 @@ the remaining defect to cross-batch allocator retention rather than a
 31,000-stay working set. None of these failed runs authorises a production
 batch size.
 
+After exact per-batch process isolation was added, a full 31,000-stay-batch
+run completed all seven batches and all three selected eICU modules. Its
+high-frequency internal sampler nevertheless measured a 7,479.3 MiB peak,
+above the 7,447 MiB admission limit; the slower external sampler missed this
+brief peak and reported 7,404.8 MiB. The 31,000 profile therefore remains
+rejected. No lower candidate is to be measured until the semantic repairs in
+the next section pass their full test gate.
+
 The code review found three algorithmic peak owners:
 
 1. `sofa2_score` requests the aggregate and its six component outputs. The
@@ -89,11 +99,53 @@ silently dropped. The near-flat peaks across the failed 67k/50k/40k attempts
 therefore pointed to redundant materialisation and allocator lifecycle, not a
 justification for an arbitrary 5,000-stay split.
 
-These changes deliberately do not alter thresholds, time windows, missing-data
+The isolation changes do not alter thresholds, time windows, missing-data
 policy, public columns or row-grain semantics. The isolation writer has
 regression coverage for partition order, frozen-schema alignment, atomic
 failure cleanup and exact target scoping. Focused regression tests must pass
-before a hard-limited performance run is allowed.
+before another hard-limited performance run is allowed.
+
+## SOFA publication and Sepsis dependency finding
+
+The native-v2 publisher previously resolved duplicate `(stay_id, charttime)`
+rows by independently taking the median of every numeric column. That rule is
+valid for ordinary continuous measurements, but not for an ordinal organ
+severity score and its derived total. Across the sealed six-database release,
+SOFA-1 total/component mismatches were found in every database; SOFA-2 had the
+same defect wherever the total was available. M1 is directly affected because
+it derives `sofa_nonrenal = sofa - sofa_renal`.
+
+The repaired algorithm is:
+
+1. For a duplicate ICU-hour, consolidate each SOFA organ component with
+   `max(non-null)` (the worst observed state), matching the score callback's
+   trailing-window maximum.
+2. For SOFA-2, only values with an owner-issued availability receipt can enter
+   that maximum.
+3. Recompute SOFA-1 as the sum of the six consolidated components, retaining
+   the established SOFA-1 missing-as-zero policy.
+4. Recompute SOFA-2 only when all six consolidated components are available;
+   rebuild aggregate observed/available receipts from the component receipts.
+5. Before deriving Sepsis-3, perform the same component-first consolidation on
+   producer artifacts. Never compute a delta over arbitrary duplicate-row
+   order or over an independently aggregated old total.
+
+Both the pandas fallback and bounded DuckDB/Arrow publisher paths implement
+the same rule, and the rule is recorded in each module's row-grain manifest as
+`score_component=max_non_null_worst_state` and
+`derived_score_total=recomputed_after_component_consolidation`.
+
+The selected-refresh publisher also had an independent recovery defect: it
+could finish all expensive modules and then fail because the selected staging
+directory did not contain `outcome.los_icu`, which is required only as the
+time-bound authority. Recovery now copies and SHA-verifies the sealed outcome
+artifact, recognises complete pre-native producer staging, and republishes it
+without rereading raw data. The copied outcome remains a dependency and is not
+declared as refreshed.
+
+The already completed 31,000-stay candidate was recovered this way without raw
+reread, but it was produced before the SOFA consistency repair and remains an
+audit-only, unsealable candidate.
 
 ## Clinical-semantics finding (not silently changed)
 
@@ -129,9 +181,11 @@ endpoint.
 ### Remaining non-optimal work
 
 1. **Score dependency scans.** Isolated `sofa1`, `sofa2` and Sepsis-3 execution
-   favors memory safety but can reread overlapping dependency Parquets. Grouping
-   them could reduce I/O, but the combined peak has not been validated under the
-   8 GiB contract.
+   favors memory safety but can reread overlapping dependency Parquets. The
+   Sepsis pass now projects only suspected infection, six component scores and
+   the necessary SOFA-2 availability receipts rather than reading every score
+   sidecar. Grouping whole modules could reduce more I/O, but the combined peak
+   has not been validated under the 8 GiB contract.
 2. **Source rescans in patient batches.** A batch-only module may re-enter the
    same raw table for each patient partition. Predicate pruning helps when the
    physical layout is favorable, but eICU profiling showed that more contiguous
@@ -175,6 +229,9 @@ endpoint.
 ## Acceptance gates before promotion
 
 - Resource-plan unit tests and selected-refresh tests pass.
+- SOFA-1 and SOFA-2 totals exactly match their post-consolidation component
+  contracts in all six databases, and Sepsis labels are derived from those
+  coherent timelines.
 - Respiratory native-v2 tests prove unsupported `supp_o2` is cleared while
   FiO2- or ventilation-supported rows remain unchanged.
 - The cross-database QC recomputes semantic-row accounting and fails on a
@@ -187,11 +244,11 @@ endpoint.
 
 ## Decision
 
-The targeted rebuild remains paused. First run the focused and full relevant
-test suites and prove output invariance. The next hard-limited experiment is
-31,000 stays, because one such batch already completed before accumulation in
-the former long-lived process; 40,000 already failed within its first batch and
-must not be treated as the first candidate. If 31,000 completes the full cohort,
-larger candidates below 40,000 may be tested to find the fewest safe partitions.
-Only the largest successful candidate may enter the measured profile.
-MIMIC-III profiling and any broader release rebuild come afterwards.
+The targeted rebuild remains paused. First complete the focused and full
+relevant test suites, then perform a publication-only six-database SOFA impact
+audit and determine whether all Sepsis-3 derivatives require regeneration.
+Only after that semantic closure may a lower eICU batch candidate be measured;
+31,000 is already rejected, so 30,000 is the highest sensible next candidate.
+It is admitted only if process-tree RSS plus the required headroom fits the
+8,192 MiB contract. MIMIC-III profiling and the broader release rebuild come
+afterwards. No candidate may change `current` before downstream review.

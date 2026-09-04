@@ -21,6 +21,7 @@ from ..base import BaseICULoader, detect_database_type, get_default_data_path
 from ..concept.catalog import CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
+from ..scores.sofa2_aggregate import SOFA2_COMPONENT_NAMES
 from .cohort import get_all_patient_ids_impl
 from .concepts import (
     _concepts_need_sofa2,
@@ -2263,6 +2264,71 @@ def _require_timed_positive_suspicion(
     )
 
 
+def _consolidate_special_score_dependency(
+    frame,
+    *,
+    score_name: str,
+    id_col: str,
+    time_col: str,
+):
+    """Build one score per stay/time before applying a Sepsis delta window.
+
+    Streamed score artifacts are producer outputs, not yet native-v2 files.
+    Multiple component rows may therefore share a key. A Sepsis delta over
+    those arbitrary within-key row orders can create a false same-time rise;
+    collapse component severity first and derive the total second.
+    """
+
+    import pandas as pd
+
+    if score_name == "sofa":
+        components = list(_SOFA1_COMPONENT_NAMES)
+        required = {id_col, time_col, *components}
+        missing = required.difference(frame.columns)
+        if missing:
+            raise ValueError(
+                f"SOFA-1 Sepsis dependency lacks columns: {sorted(missing)}"
+            )
+        grouped = (
+            frame[[id_col, time_col, *components]]
+            .groupby([id_col, time_col], as_index=False, sort=False, dropna=False)
+            .max()
+        )
+        grouped[score_name] = grouped[components].sum(axis=1, skipna=True)
+        return grouped[[id_col, time_col, score_name]]
+
+    if score_name != "sofa2":
+        raise ValueError(f"Unsupported Sepsis score dependency: {score_name}")
+    components = list(SOFA2_COMPONENT_NAMES)
+    available = [f"{component}_available" for component in components]
+    required = {id_col, time_col, *components, *available}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(
+            f"SOFA-2 Sepsis dependency lacks columns: {sorted(missing)}"
+        )
+    working = frame[[id_col, time_col, *components, *available]].copy()
+    for component, receipt in zip(components, available):
+        valid = working[receipt].astype("boolean").fillna(False)
+        working[component] = pd.to_numeric(
+            working[component], errors="coerce"
+        ).where(valid)
+    grouped = working.groupby(
+        [id_col, time_col],
+        as_index=False,
+        sort=False,
+        dropna=False,
+    ).agg({**{component: "max" for component in components}, **{receipt: "max" for receipt in available}})
+    complete = grouped[components].notna().all(axis=1) & grouped[available].astype(
+        "boolean"
+    ).fillna(False).all(axis=1)
+    grouped[score_name] = grouped[components].sum(
+        axis=1,
+        min_count=len(components),
+    ).where(complete)
+    return grouped[[id_col, time_col, score_name]]
+
+
 def _stream_special_extraction_batches(
     special_modules: List[str],
     database: str,
@@ -2327,7 +2393,12 @@ def _stream_special_extraction_batches(
     module_memory_sampler = _RSSPeakSampler().start()
     source_root = Path(published_output_dir)
 
-    def _read_dependency(module_name: str, ids: List) -> "pd.DataFrame":
+    def _read_dependency(
+        module_name: str,
+        ids: List,
+        *,
+        value_columns: Sequence[str],
+    ) -> "pd.DataFrame":
         source = source_root / f"{module_name}.parquet"
         if not source.is_file():
             # A normal module can complete successfully with zero rows (for
@@ -2348,12 +2419,33 @@ def _stream_special_extraction_batches(
                 and not manifest.get("saved")
             ):
                 raise FileNotFoundError(f"missing streamed dependency module: {source}")
-            return pd.DataFrame(columns=[id_col, *EXTRACT_MODULES.get(module_name, [])])
-        return (
-            ds.dataset(source, format="parquet")
-            .to_table(filter=ds.field(id_col).isin(ids))
-            .to_pandas()
+            return pd.DataFrame(columns=[id_col, *value_columns])
+        dataset = ds.dataset(source, format="parquet")
+        time_column = next(
+            (
+                name
+                for name in (
+                    "charttime",
+                    "time",
+                    "starttime",
+                    "datetime",
+                    "Offset",
+                    "measuredat_minutes",
+                    "measuredat",
+                )
+                if name in dataset.schema.names
+            ),
+            None,
         )
+        projected = [
+            column
+            for column in dict.fromkeys([id_col, time_column, *value_columns])
+            if column is not None and column in dataset.schema.names
+        ]
+        return dataset.to_table(
+            columns=projected,
+            filter=ds.field(id_col).isin(ids),
+        ).to_pandas()
 
     def _append_frame(concept: str, frame) -> None:
         if frame is None or frame.empty:
@@ -2368,60 +2460,105 @@ def _stream_special_extraction_batches(
         writers[concept].write_table(table)
         rows[concept] += len(frame)
 
-    def _suspicion_timeline(susp, time_col: str):
-        """Return validated, event-timed suspected-infection flags."""
-        _require_timed_positive_suspicion(
-            susp,
-            id_col=id_col,
-            time_col=time_col,
-            database=database,
+    def _time_column(frame):
+        return next(
+            (
+                name
+                for name in (
+                    "charttime",
+                    "time",
+                    "starttime",
+                    "datetime",
+                    "Offset",
+                    "measuredat_minutes",
+                    "measuredat",
+                )
+                if name in frame.columns
+            ),
+            None,
         )
-        if time_col not in susp.columns:
-            return pd.DataFrame(columns=[id_col, time_col, "susp_inf"])
-        return susp[[id_col, time_col, "susp_inf"]]
+
+    def _suspicion_timeline(susp, *, source_time_col, target_time_col: str):
+        """Project a validated SI timeline onto the score's time-column name."""
+
+        if source_time_col is None:
+            return pd.DataFrame(columns=[id_col, target_time_col, "susp_inf"])
+        projected = susp[[id_col, source_time_col, "susp_inf"]].copy()
+        if source_time_col != target_time_col:
+            projected = projected.rename(columns={source_time_col: target_time_col})
+        return projected
 
     try:
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
-            susp = _read_dependency("sepsis_shared", ids)
+            susp = _read_dependency(
+                "sepsis_shared",
+                ids,
+                value_columns=("susp_inf",),
+            )
             # No strict infection evidence means Sepsis-3 is structurally
             # unavailable, not a cohort-wide negative label.  Leave both
             # derived modules empty so the native publisher can emit typed
             # structural placeholders.
             if susp.empty:
                 continue
-            sofa1 = _read_dependency("sofa1_score", ids) if need_sofa1 else None
-            sofa2 = _read_dependency("sofa2_score", ids) if need_sofa2 else None
             if "susp_inf" not in susp.columns:
                 errors.append("streamed Sepsis dependency sepsis_shared lacks susp_inf")
                 continue
-
-            def _score_time_column(score):
-                return next(
-                    (
-                        name
-                        for name in (
-                            "charttime",
-                            "time",
-                            "starttime",
-                            "datetime",
-                            "Offset",
-                            "measuredat_minutes",
-                            "measuredat",
-                        )
-                        if name in score.columns
-                    ),
-                    None,
+            suspicion_time_col = _time_column(susp)
+            _require_timed_positive_suspicion(
+                susp,
+                id_col=id_col,
+                time_col=suspicion_time_col or "charttime",
+                database=database,
+            )
+            # A batch without a positive timed SI event cannot yield Sepsis-3.
+            # Avoid reading either multi-million-row score dependency for it.
+            if not bool(susp["susp_inf"].eq(True).fillna(False).any()):
+                continue
+            sofa1 = (
+                _read_dependency(
+                    "sofa1_score",
+                    ids,
+                    value_columns=_SOFA1_COMPONENT_NAMES,
                 )
+                if need_sofa1
+                else None
+            )
+            sofa2 = (
+                _read_dependency(
+                    "sofa2_score",
+                    ids,
+                    value_columns=(
+                        *SOFA2_COMPONENT_NAMES,
+                        *(
+                            f"{component}_available"
+                            for component in SOFA2_COMPONENT_NAMES
+                        ),
+                    ),
+                )
+                if need_sofa2
+                else None
+            )
 
-            if need_sofa1 and sofa1 is not None and "sofa" in sofa1.columns:
+            if need_sofa1 and sofa1 is not None:
                 from ..scores.sepsis import sep3 as _sep3
 
-                time_col = _score_time_column(sofa1)
+                time_col = _time_column(sofa1)
                 if time_col is None:
                     errors.append("streamed SOFA-1 dependency lacks a time index")
                 else:
-                    susp1 = _suspicion_timeline(susp, time_col)
+                    sofa1 = _consolidate_special_score_dependency(
+                        sofa1,
+                        score_name="sofa",
+                        id_col=id_col,
+                        time_col=time_col,
+                    )
+                    susp1 = _suspicion_timeline(
+                        susp,
+                        source_time_col=suspicion_time_col,
+                        target_time_col=time_col,
+                    )
                     frame = _sep3(
                         sofa1[[id_col, time_col, "sofa"]],
                         susp1,
@@ -2431,14 +2568,24 @@ def _stream_special_extraction_batches(
                     if "sep3_sofa1" in frame.columns:
                         frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
                     _append_frame("sep3_sofa1", frame)
-            if need_sofa2 and sofa2 is not None and "sofa2" in sofa2.columns:
+            if need_sofa2 and sofa2 is not None:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
 
-                time_col = _score_time_column(sofa2)
+                time_col = _time_column(sofa2)
                 if time_col is None:
                     errors.append("streamed SOFA-2 dependency lacks a time index")
                 else:
-                    susp2 = _suspicion_timeline(susp, time_col)
+                    sofa2 = _consolidate_special_score_dependency(
+                        sofa2,
+                        score_name="sofa2",
+                        id_col=id_col,
+                        time_col=time_col,
+                    )
+                    susp2 = _suspicion_timeline(
+                        susp,
+                        source_time_col=suspicion_time_col,
+                        target_time_col=time_col,
+                    )
                     frame = _sep3_sofa2(
                         sofa2[[id_col, time_col, "sofa2"]],
                         susp2,
@@ -2909,6 +3056,14 @@ _NATIVE_EXPORT_ID_COLUMNS = (
 )
 
 _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
+_SOFA1_COMPONENT_NAMES = (
+    "sofa_resp",
+    "sofa_coag",
+    "sofa_liver",
+    "sofa_cardio",
+    "sofa_cns",
+    "sofa_renal",
+)
 
 # Event status and event time are different physical claims.  The outcome
 # module is published at the stay-level ICU-admission coordinate (charttime=0),
@@ -3106,7 +3261,11 @@ def _canonicalise_native_export_frame(
                 )
             canonical[concept] = numeric.astype("float64")
 
-    return canonical
+    return _recompute_native_derived_score_aggregates_frame(
+        canonical,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
 
 
 def _restore_native_export_storage_dtypes(
@@ -3136,6 +3295,215 @@ def _restore_native_export_storage_dtypes(
     return frame
 
 
+def _native_sofa2_aggregate_dependencies_present(
+    requested_concepts: Sequence[str],
+    columns: Sequence[str],
+) -> bool:
+    """Return whether a native frame can deterministically rebuild SOFA-2."""
+
+    required = set(SOFA2_COMPONENT_NAMES)
+    required_receipts = {
+        f"{component}_{suffix}"
+        for component in SOFA2_COMPONENT_NAMES
+        for suffix in ("observed", "available")
+    }
+    return (
+        "sofa2" in requested_concepts
+        and required.issubset(requested_concepts)
+        and required.union(required_receipts).issubset(columns)
+        and {"sofa2", "sofa2_observed", "sofa2_available"}.issubset(columns)
+    )
+
+
+def _recompute_native_sofa1_aggregate_frame(
+    frame,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    """Rebuild SOFA-1 from its consolidated organ components."""
+
+    if not (
+        module == "sofa1_score"
+        and "sofa" in requested_concepts
+        and set(_SOFA1_COMPONENT_NAMES).issubset(requested_concepts)
+        and {"sofa", *_SOFA1_COMPONENT_NAMES}.issubset(frame.columns)
+    ):
+        return frame
+    # The established SOFA-1 callback uses rowSums(..., na.rm=TRUE): a missing
+    # organ contributes zero, including the all-missing row.
+    frame["sofa"] = frame[list(_SOFA1_COMPONENT_NAMES)].sum(
+        axis=1,
+        skipna=True,
+    ).astype("float64")
+    return frame
+
+
+def _recompute_native_sofa2_aggregate_frame(
+    frame,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    """Rebuild a derived SOFA-2 total after row-level transformations.
+
+    Native publication can merge several source rows into one ICU-hour key.
+    Medians of a precomputed total are not generally equal to the sum of the
+    independently consolidated components. The six component values and their
+    owner receipts therefore remain authoritative at this boundary.
+    """
+
+    if module != "sofa2_score" or not _native_sofa2_aggregate_dependencies_present(
+        requested_concepts,
+        frame.columns,
+    ):
+        return frame
+
+    components = list(SOFA2_COMPONENT_NAMES)
+    observed = [f"{component}_observed" for component in components]
+    available = [f"{component}_available" for component in components]
+    component_valid = frame[components].notna().all(axis=1)
+    all_available = frame[available].astype("boolean").fillna(False).all(axis=1)
+    all_observed = frame[observed].astype("boolean").fillna(False).all(axis=1)
+    complete = component_valid & all_available
+    frame["sofa2"] = (
+        frame[components]
+        .sum(axis=1, min_count=len(components))
+        .where(complete)
+        .astype("float64")
+    )
+    frame["sofa2_available"] = complete.astype("boolean")
+    frame["sofa2_observed"] = (complete & all_observed).astype("boolean")
+    return frame
+
+
+def _recompute_native_sofa2_aggregate_arrow(
+    table,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    """Arrow-bounded counterpart of the pandas SOFA-2 aggregate rebuild."""
+
+    if module != "sofa2_score" or not _native_sofa2_aggregate_dependencies_present(
+        requested_concepts,
+        table.column_names,
+    ):
+        return table
+
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    first_component, *remaining_components = SOFA2_COMPONENT_NAMES
+    first_values = table[first_component]
+    complete = pc.and_(
+        pc.fill_null(table[f"{first_component}_available"], False),
+        pc.is_valid(first_values),
+    )
+    all_observed = pc.fill_null(
+        table[f"{first_component}_observed"], False
+    )
+    total = pc.fill_null(first_values, 0.0)
+    for component in remaining_components:
+        values = table[component]
+        available = pc.fill_null(table[f"{component}_available"], False)
+        observed = pc.fill_null(table[f"{component}_observed"], False)
+        complete = pc.and_(complete, pc.and_(available, pc.is_valid(values)))
+        all_observed = pc.and_(all_observed, observed)
+        total = pc.add(total, pc.fill_null(values, 0.0))
+    total = pc.if_else(complete, total, pa.scalar(None, type=pa.float64()))
+    replacements = {
+        "sofa2": total,
+        "sofa2_observed": pc.and_(complete, all_observed),
+        "sofa2_available": complete,
+    }
+    for name, values in replacements.items():
+        index = table.column_names.index(name)
+        table = table.set_column(index, table.schema.field(name), values)
+    return table
+
+
+def _recompute_native_sofa1_aggregate_arrow(
+    table,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    """Arrow-bounded counterpart of the pandas SOFA-1 aggregate rebuild."""
+
+    if not (
+        module == "sofa1_score"
+        and "sofa" in requested_concepts
+        and set(_SOFA1_COMPONENT_NAMES).issubset(requested_concepts)
+        and {"sofa", *_SOFA1_COMPONENT_NAMES}.issubset(table.column_names)
+    ):
+        return table
+
+    import pyarrow.compute as pc
+
+    first_component, *remaining_components = _SOFA1_COMPONENT_NAMES
+    total = pc.fill_null(table[first_component], 0.0)
+    for component in remaining_components:
+        total = pc.add(total, pc.fill_null(table[component], 0.0))
+    index = table.column_names.index("sofa")
+    return table.set_column(index, table.schema.field("sofa"), total)
+
+
+def _recompute_native_derived_score_aggregates_frame(
+    frame,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    frame = _recompute_native_sofa1_aggregate_frame(
+        frame,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
+    return _recompute_native_sofa2_aggregate_frame(
+        frame,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
+
+
+def _recompute_native_derived_score_aggregates_arrow(
+    table,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    table = _recompute_native_sofa1_aggregate_arrow(
+        table,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
+    return _recompute_native_sofa2_aggregate_arrow(
+        table,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
+
+
+def _native_longitudinal_aggregation_policy(module: str) -> Dict[str, str]:
+    """Describe the exact duplicate-key rule sealed into native-v2 receipts."""
+
+    policy = {
+        "boolean": "any_non_null_preserving_all_null",
+        "numeric": "median_non_null_preserving_all_null",
+        "owner_receipted_numeric": (
+            "median_owner_available_non_null_preserving_all_unavailable"
+        ),
+        "string": "single_non_null_value_or_fail_on_conflict",
+    }
+    if module in {"sofa1_score", "sofa2_score"}:
+        policy["score_component"] = "max_non_null_worst_state"
+        policy["derived_score_total"] = (
+            "recomputed_after_component_consolidation"
+        )
+    return policy
+
+
 def _consolidate_native_export_row_grain(
     frame,
     *,
@@ -3154,8 +3522,10 @@ def _consolidate_native_export_row_grain(
 
     Every other module has the null-equal key ``(stay_id, charttime)``. Exact
     key collisions are consolidated by the physical type family: logical any,
-    numeric median, and a single non-null string value. Conflicting strings are
-    publication errors because silently choosing one would invent a category.
+    numeric median, and a single non-null string value. SOFA component ordinals
+    use the worst state and their totals are then re-derived. Conflicting
+    strings are publication errors because silently choosing one would invent
+    a category.
     """
     import numpy as np
     import pandas as pd
@@ -3352,6 +3722,13 @@ def _consolidate_native_export_row_grain(
                             f"{distinct.astype(str).tolist()!r}"
                         )
                     record[concept] = distinct.iloc[0]
+                elif concept in {*_SOFA1_COMPONENT_NAMES, *SOFA2_COMPONENT_NAMES}:
+                    # Component scores already represent severity ordinals.
+                    # Same-hour duplicates therefore collapse to the worst
+                    # state, matching the callback's trailing-window max.
+                    record[concept] = float(
+                        pd.to_numeric(values, errors="raise").max()
+                    )
                 else:
                     record[concept] = float(
                         pd.to_numeric(values, errors="raise").median()
@@ -3368,6 +3745,11 @@ def _consolidate_native_export_row_grain(
     else:
         consolidated = working
 
+    consolidated = _recompute_native_derived_score_aggregates_frame(
+        consolidated,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
     physical_values = _native_export_physical_value_columns(requested_concepts)
     consolidated = consolidated[["stay_id", "charttime", *physical_values]].reset_index(
         drop=True
@@ -3395,14 +3777,7 @@ def _consolidate_native_export_row_grain(
         "duplicate_excess_rows_before": duplicate_excess,
         "rows_consolidated": duplicate_excess,
         "duplicate_excess_rows_after": duplicate_after,
-        "aggregation_policy": {
-            "boolean": "any_non_null_preserving_all_null",
-            "numeric": "median_non_null_preserving_all_null",
-            "owner_receipted_numeric": (
-                "median_owner_available_non_null_preserving_all_unavailable"
-            ),
-            "string": "single_non_null_value_or_fail_on_conflict",
-        },
+        "aggregation_policy": _native_longitudinal_aggregation_policy(module),
     }
     return consolidated, audit
 
@@ -3700,14 +4075,7 @@ def _native_export_arrow_row_grain_audit(
         "duplicate_excess_rows_before": duplicate_excess,
         "rows_consolidated": 0,
         "duplicate_excess_rows_after": duplicate_excess,
-        "aggregation_policy": {
-            "boolean": "any_non_null_preserving_all_null",
-            "numeric": "median_non_null_preserving_all_null",
-            "owner_receipted_numeric": (
-                "median_owner_available_non_null_preserving_all_unavailable"
-            ),
-            "string": "single_non_null_value_or_fail_on_conflict",
-        },
+        "aggregation_policy": _native_longitudinal_aggregation_policy(module),
         "publication_backend": "pyarrow_record_batches",
         "uniqueness_backend": "duckdb_bounded_spillable_hash_aggregate",
         "uniqueness_memory_limit_mb": memory_mb,
@@ -3782,6 +4150,14 @@ def _native_export_duckdb_consolidate_row_grain(
                 f"first({column} ORDER BY _row_order) "
                 f"FILTER (WHERE {column} IS NOT NULL)::VARCHAR AS {alias}"
             )
+        elif concept in SOFA2_COMPONENT_NAMES:
+            available = quote_identifier(f"{concept}_available")
+            expression = (
+                f"(max({column}) FILTER (WHERE {available} IS TRUE))"
+                f"::DOUBLE AS {alias}"
+            )
+        elif concept in _SOFA1_COMPONENT_NAMES:
+            expression = f"max({column})::DOUBLE AS {alias}"
         elif concept in requested_concepts and concept.startswith("sofa2"):
             available = quote_identifier(f"{concept}_available")
             expression = (
@@ -3922,6 +4298,11 @@ def _native_export_duckdb_consolidate_row_grain(
                 use_threads=False,
             ):
                 table = pa.Table.from_batches([batch]).cast(target_schema, safe=True)
+                table = _recompute_native_derived_score_aggregates_arrow(
+                    table,
+                    module=module,
+                    requested_concepts=requested_concepts,
+                )
                 for concept in requested_concepts:
                     column = table[concept]
                     concept_non_null[concept] += int(len(column) - column.null_count)

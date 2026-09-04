@@ -550,6 +550,9 @@ def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
     candidate = tmp_path / "candidate"
     destination = candidate / "exports" / "hirid"
     destination.mkdir(parents=True)
+    source_database = tmp_path / "source" / "hirid"
+    source_database.mkdir(parents=True)
+    (source_database / "outcome.parquet").write_bytes(b"sealed-outcome")
     calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(refresher, "_module_is_canonical_refresh", lambda *_: True)
@@ -557,7 +560,7 @@ def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
     def fake_extract_database(*args, **kwargs):
         calls.append(kwargs)
         staging = Path(kwargs["output_dir"])
-        staging.mkdir(parents=True)
+        staging.mkdir(parents=True, exist_ok=True)
         (staging / "renal.parquet").write_bytes(b"parquet-placeholder")
         (staging / "renal.manifest.json").write_text(json.dumps({}))
         return {
@@ -579,7 +582,7 @@ def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
     refresher._refresh_one_database(
         database="hirid",
         data_path=str(tmp_path),
-        source_database_root=tmp_path / "source" / "hirid",
+        source_database_root=source_database,
         candidate_root=candidate,
         modules=("renal",),
         batch_size=None,
@@ -598,13 +601,16 @@ def test_resume_never_treats_destination_schema_as_raw_reread(
     candidate = tmp_path / "candidate"
     destination = candidate / "exports" / "miiv"
     destination.mkdir(parents=True)
+    source_database = tmp_path / "source" / "miiv"
+    source_database.mkdir(parents=True)
+    (source_database / "outcome.parquet").write_bytes(b"sealed-outcome")
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(refresher, "_module_is_canonical_refresh", lambda *_: True)
 
     def fake_extract_database(*args, **kwargs):
         calls.append(kwargs)
         staging = Path(kwargs["output_dir"])
-        staging.mkdir(parents=True)
+        staging.mkdir(parents=True, exist_ok=True)
         (staging / "respiratory.parquet").write_bytes(b"parquet-placeholder")
         (staging / "respiratory.manifest.json").write_text(json.dumps({}))
         return {
@@ -625,7 +631,7 @@ def test_resume_never_treats_destination_schema_as_raw_reread(
     refresher._refresh_one_database(
         database="miiv",
         data_path=str(tmp_path),
-        source_database_root=tmp_path / "source" / "miiv",
+        source_database_root=source_database,
         candidate_root=candidate,
         modules=("respiratory",),
         batch_size=None,
@@ -633,6 +639,126 @@ def test_resume_never_treats_destination_schema_as_raw_reread(
     )
 
     assert len(calls) == 1
+
+
+def test_selected_longitudinal_refresh_stages_exact_outcome_dependency(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    source = tmp_path / "source"
+    staging = tmp_path / "staging"
+    source.mkdir()
+    outcome = source / "outcome.parquet"
+    outcome.write_bytes(b"sealed-outcome-bytes")
+
+    staged = refresher._stage_outcome_time_bound_dependency(
+        source_database_root=source,
+        staging_root=staging,
+        modules=("respiratory",),
+    )
+
+    assert staged == staging / "outcome.parquet"
+    assert staged.read_bytes() == outcome.read_bytes()
+    assert not staged.samefile(outcome)
+    assert refresher.REPUBLICATION._sha256_file(staged) == (
+        refresher.REPUBLICATION._sha256_file(outcome)
+    )
+    assert refresher._stage_outcome_time_bound_dependency(
+        source_database_root=source,
+        staging_root=staging,
+        modules=("outcome",),
+    ) is None
+
+
+def test_selected_longitudinal_refresh_fails_before_raw_read_without_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresher = _load_refresher()
+    candidate = tmp_path / "candidate"
+    (candidate / "exports" / "eicu").mkdir(parents=True)
+    source_database = tmp_path / "source" / "eicu"
+    source_database.mkdir(parents=True)
+    monkeypatch.setattr(
+        refresher,
+        "extract_database",
+        lambda *args, **kwargs: pytest.fail("raw extraction must not start"),
+    )
+
+    with pytest.raises(
+        refresher.ModuleRefreshError,
+        match="sealed outcome time-bound dependency",
+    ):
+        refresher._refresh_one_database(
+            database="eicu",
+            data_path=str(tmp_path),
+            source_database_root=source_database,
+            candidate_root=candidate,
+            modules=("sepsis3_sofa2",),
+            batch_size=1,
+            reuse_completed_export=False,
+        )
+
+
+def test_completed_producer_staging_is_native_published_without_reextracting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresher = _load_refresher()
+    source = tmp_path / "source" / "eicu"
+    candidate_root = tmp_path / "candidate"
+    staging = candidate_root / ".module_refresh_staging" / "eicu"
+    destination = candidate_root / "exports" / "eicu"
+    source.mkdir(parents=True)
+    staging.mkdir(parents=True)
+    destination.mkdir(parents=True)
+    pd.DataFrame({"stay_id": [1], "los_icu": [24.0]}).to_parquet(
+        source / "outcome.parquet", index=False
+    )
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [1.0], "sep3_sofa2": [True]}
+    ).to_parquet(staging / "sepsis3_sofa2.parquet", index=False)
+    (staging / "sepsis3_sofa2.manifest.json").write_text(
+        json.dumps(
+            {
+                "module": "sepsis3_sofa2",
+                "saved": {"sep3_sofa2": {}},
+                "errors": [],
+                "elapsed_sec": 7.2,
+                "peak_rss_mb": 12.0,
+                "peak_working_set_mb": 10.0,
+            }
+        )
+    )
+    publish_calls: list[dict[str, object]] = []
+
+    def fake_publish(**kwargs):
+        publish_calls.append(kwargs)
+        (Path(kwargs["output_dir"]) / "_manifest.json").write_text(
+            json.dumps({"schema_version": "easyicu_native_export_v2"})
+        )
+
+    monkeypatch.setattr(refresher, "_publish_native_export_v2", fake_publish)
+    monkeypatch.setattr(
+        refresher,
+        "extract_database",
+        lambda *args, **kwargs: pytest.fail("completed staging was recomputed"),
+    )
+
+    result = refresher._refresh_one_database(
+        database="eicu",
+        data_path=str(tmp_path),
+        source_database_root=source,
+        candidate_root=candidate_root,
+        modules=("sepsis3_sofa2",),
+        batch_size=31_000,
+        reuse_completed_export=False,
+    )
+
+    assert len(publish_calls) == 1
+    assert publish_calls[0]["require_stay_time_bounds"] is True
+    assert not staging.exists()
+    assert (destination / "sepsis3_sofa2.parquet").is_file()
+    assert not (destination / "outcome.parquet").exists()
+    assert result["recovery_mode"] == "completed_staging_promoted"
 
 
 def test_resume_reuses_only_complete_files_detached_from_source(
@@ -674,9 +800,28 @@ def test_resume_reuses_only_complete_files_detached_from_source(
 
 def test_score_content_gate_rejects_all_null_sofa_totals(tmp_path: Path) -> None:
     refresher = _load_refresher()
-    pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": [0.0, 1.0], "sofa2": [None, None]}
-    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+    components = [
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ]
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 1.0],
+            "sofa2": [None, None],
+            **{component: [None, None] for component in components},
+        }
+    )
+    for component in components:
+        frame[f"{component}_observed"] = False
+        frame[f"{component}_available"] = False
+    frame["sofa2_observed"] = False
+    frame["sofa2_available"] = False
+    frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
 
     with pytest.raises(refresher.ModuleRefreshError, match="0 non-null"):
         refresher._validate_refreshed_score_content(
@@ -686,8 +831,78 @@ def test_score_content_gate_rejects_all_null_sofa_totals(tmp_path: Path) -> None
 
 def test_score_content_gate_streams_non_null_sofa_totals(tmp_path: Path) -> None:
     refresher = _load_refresher()
+    components = [
+        "sofa_resp",
+        "sofa_coag",
+        "sofa_liver",
+        "sofa_cardio",
+        "sofa_cns",
+        "sofa_renal",
+    ]
     pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": [0.0, 1.0], "sofa": [None, 4.0]}
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 1.0],
+            "sofa": [0.0, 4.0],
+            **{
+                component: [0.0, 4.0 if component == "sofa_resp" else 0.0]
+                for component in components
+            },
+        }
     ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
 
     refresher._validate_refreshed_score_content(tmp_path, ("sofa1_score",))
+
+
+def test_score_content_gate_rejects_independently_aggregated_sofa_total(
+    tmp_path: Path,
+) -> None:
+    refresher = _load_refresher()
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa": [4.0],
+            "sofa_resp": [4.0],
+            "sofa_coag": [4.0],
+            "sofa_liver": [0.0],
+            "sofa_cardio": [0.0],
+            "sofa_cns": [0.0],
+            "sofa_renal": [0.0],
+        }
+    ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
+
+    with pytest.raises(refresher.ModuleRefreshError, match="total/receipts"):
+        refresher._validate_refreshed_score_content(tmp_path, ("sofa1_score",))
+
+
+def test_score_content_gate_checks_sofa2_aggregate_receipts(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    components = [
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ]
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2": [4.0],
+            **{
+                component: [4.0 if component == "sofa2_resp" else 0.0]
+                for component in components
+            },
+        }
+    )
+    for component in components:
+        frame[f"{component}_observed"] = True
+        frame[f"{component}_available"] = True
+    frame["sofa2_observed"] = True
+    frame["sofa2_available"] = False
+    frame.to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    with pytest.raises(refresher.ModuleRefreshError, match="total/receipts"):
+        refresher._validate_refreshed_score_content(tmp_path, ("sofa2_score",))

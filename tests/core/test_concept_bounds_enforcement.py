@@ -9,6 +9,40 @@ import easyicu
 from easyicu.api import extraction as api
 
 
+def _write_complete_score_dependencies(source: Path, time) -> None:
+    """Write component-complete producer artifacts for streamed Sepsis tests."""
+
+    sofa1_components = list(api._SOFA1_COMPONENT_NAMES)
+    sofa1 = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": time,
+            **{
+                component: [0.0, 3.0 if component == "sofa_resp" else 0.0]
+                for component in sofa1_components
+            },
+        }
+    )
+    sofa1["sofa"] = sofa1[sofa1_components].sum(axis=1)
+    sofa1.to_parquet(source / "sofa1_score.parquet", index=False)
+
+    sofa2_components = list(api.SOFA2_COMPONENT_NAMES)
+    sofa2 = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": time,
+            **{
+                component: [0.0, 3.0 if component == "sofa2_resp" else 0.0]
+                for component in sofa2_components
+            },
+        }
+    )
+    for component in sofa2_components:
+        sofa2[f"{component}_available"] = True
+    sofa2["sofa2"] = sofa2[sofa2_components].sum(axis=1)
+    sofa2.to_parquet(source / "sofa2_score.parquet", index=False)
+
+
 def test_enforce_concept_bounds_drops_only_numeric_out_of_range(monkeypatch):
     monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", {"test_signal": (0.0, 10.0)})
     df = pd.DataFrame(
@@ -703,12 +737,7 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
             "infection_icd": pd.Series([True, True, True], dtype="boolean"),
         }
     ).to_parquet(source / "sepsis_shared.parquet", index=False)
-    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
-        source / "sofa1_score.parquet", index=False
-    )
-    pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
-    ).to_parquet(source / "sofa2_score.parquet", index=False)
+    _write_complete_score_dependencies(source, time)
 
     api._stream_special_extraction_batches(
         ["sepsis3_sofa1", "sepsis3_sofa2"],
@@ -737,12 +766,7 @@ def test_streamed_special_export_rejects_positive_null_time_suspicion(tmp_path):
     pd.DataFrame(
         {"stay_id": [1], "charttime": [None], "susp_inf": [True]}
     ).to_parquet(source / "sepsis_shared.parquet", index=False)
-    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
-        source / "sofa1_score.parquet", index=False
-    )
-    pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
-    ).to_parquet(source / "sofa2_score.parquet", index=False)
+    _write_complete_score_dependencies(source, time)
 
     with pytest.raises(
         ValueError,
@@ -797,6 +821,39 @@ def test_streamed_special_export_accepts_declared_empty_infection_dependency(
     assert manifest["saved"] == {}
     assert not (output / "sep3_sofa1.parquet").exists()
     assert not (output / "sep3_sofa2.parquet").exists()
+
+
+def test_streamed_special_export_skips_score_reads_without_positive_infection(
+    tmp_path,
+) -> None:
+    """A negative SI batch cannot yield Sepsis and needs no score scan."""
+
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "charttime": [0.0, 0.0],
+            "susp_inf": pd.Series([False, False], dtype="boolean"),
+        }
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert manifest["saved"] == {}
 
 
 def test_streamed_special_export_uses_outer_batch_instead_of_fixed_2000(
@@ -867,3 +924,59 @@ def test_nonstream_special_export_reuses_already_published_scores(
     assert calls[0][0][3] == {"stay_id": [1, 2]}
     assert calls[0][0][4] == 2_000_000
     assert calls[0][1]["published_output_dir"] == str(source)
+
+
+def test_special_sofa1_dependency_collapses_components_before_total() -> None:
+    """Same-time component maxima must prevent a false SOFA delta."""
+
+    components = list(api._SOFA1_COMPONENT_NAMES)
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 0.0, 1.0],
+            **{component: [0.0, 0.0, 0.0] for component in components},
+        }
+    )
+    frame.loc[0, "sofa_resp"] = 4.0
+    frame.loc[1, "sofa_coag"] = 4.0
+    frame.loc[2, "sofa_resp"] = 4.0
+    frame.loc[2, "sofa_coag"] = 2.0
+
+    result = api._consolidate_special_score_dependency(
+        frame,
+        score_name="sofa",
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result["sofa"].tolist() == [8.0, 6.0]
+
+
+def test_special_sofa2_dependency_respects_component_availability() -> None:
+    """Unavailable values cannot enter a total; evidence may unite by hour."""
+
+    components = list(api.SOFA2_COMPONENT_NAMES)
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 0.0, 1.0],
+            **{component: [0.0, 0.0, 0.0] for component in components},
+        }
+    )
+    for component in components:
+        frame[f"{component}_available"] = True
+    frame.loc[0, "sofa2_resp"] = 4.0
+    frame.loc[1, "sofa2_coag"] = 3.0
+    frame.loc[0, "sofa2_coag_available"] = False
+    frame.loc[1, "sofa2_resp_available"] = False
+    frame.loc[2, "sofa2_renal_available"] = False
+
+    result = api._consolidate_special_score_dependency(
+        frame,
+        score_name="sofa2",
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result.loc[result["charttime"].eq(0.0), "sofa2"].item() == 7.0
+    assert pd.isna(result.loc[result["charttime"].eq(1.0), "sofa2"].item())

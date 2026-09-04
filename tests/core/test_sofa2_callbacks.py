@@ -53,6 +53,8 @@ def test_sofa2_aggregate_merges_scores_and_owner_receipts_once(monkeypatch):
         for name in components
     }
     assert result["sofa2"].tolist() == [0]
+    assert result["sofa2_observed"].tolist() == [1]
+    assert result["sofa2_available"].tolist() == [1]
 
 
 def test_single_pass_score_receipt_merge_matches_the_previous_two_pass_result():
@@ -513,6 +515,8 @@ def test_sofa2_aggregate_counts_component_receipts_not_score_non_nullness():
     assert result["sofa2_n_observed_components"].tolist() == [5]
     assert result["sofa2_n_available_components"].tolist() == [5]
     assert result["sofa2_n_components"].tolist() == [5]
+    assert result["sofa2_observed"].tolist() == [0]
+    assert result["sofa2_available"].tolist() == [0]
 
 
 @pytest.mark.clinical_conformance
