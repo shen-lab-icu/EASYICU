@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -162,8 +163,41 @@ def test_shared_review_bundle_writer_rolls_back_partial_commit(
             resource_receipt={"within_frozen_budget": True},
         )
 
-    assert output.is_dir()
-    assert list(output.iterdir()) == []
+    assert not output.exists()
+
+
+def test_shared_review_bundle_writer_serializes_competing_publishers(
+    tmp_path: Path,
+) -> None:
+    material = EasyICUReviewMaterial(
+        plan={"population": "adult ICU"},
+        cohort={"n": 42},
+        results={"estimate": 1.2},
+        diagnostics={"complete": True},
+        report="The estimate was 1.2.",
+        headline_evidence=(),
+        artifact_inventory={"main result": ["03_results.json"]},
+    )
+    output = tmp_path / "competing-bundle"
+
+    def publish() -> str:
+        try:
+            write_easyicu_review_bundle(
+                material,
+                output_dir=output,
+                mandatory_artifacts=("main result",),
+                resource_receipt={"within_frozen_budget": True},
+            )
+        except Exception as exc:
+            return type(exc).__name__
+        return "published"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(lambda _index: publish(), range(2)))
+
+    assert outcomes.count("published") == 1
+    assert len(outcomes) == 2
+    assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
 
 
 def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(

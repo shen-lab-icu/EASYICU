@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Any, Mapping, Sequence
 
 from .review_bundle_semantics import (
@@ -99,10 +101,93 @@ def _validate_destination(output_dir: Path) -> Path:
     return destination
 
 
-def _prepare_destination(output_dir: Path) -> Path:
-    destination = _validate_destination(output_dir)
-    destination.mkdir(parents=True, exist_ok=True)
-    return destination
+class _ReviewBundlePublication:
+    """Reserve, stage, verify, and atomically install one bundle."""
+
+    def __init__(self, output_dir: Path) -> None:
+        self.destination = Path(output_dir)
+        self._staging: Path | None = None
+        self._lock_path: Path | None = None
+        self._lock_descriptor: int | None = None
+
+    def __enter__(self) -> _ReviewBundlePublication:
+        _validate_destination(self.destination)
+        parent = self.destination.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        lock_path = parent / f".{self.destination.name}.review-bundle.lock"
+        if lock_path.is_symlink():
+            raise ReviewBundleWriteError("review-bundle lock may not be a symlink")
+        try:
+            descriptor = os.open(
+                lock_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError as exc:
+            raise ReviewBundleWriteError(
+                "review-bundle destination is already reserved"
+            ) from exc
+        except OSError as exc:
+            raise ReviewBundleWriteError(
+                "review-bundle destination cannot be reserved"
+            ) from exc
+        self._lock_path = lock_path
+        self._lock_descriptor = descriptor
+        try:
+            _validate_destination(self.destination)
+            self._staging = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{self.destination.name}.review-bundle-stage-",
+                    dir=parent,
+                )
+            )
+        except BaseException:
+            self._release()
+            raise
+        return self
+
+    def install(self, payloads: Mapping[str, bytes]) -> Path:
+        if self._staging is None:
+            raise RuntimeError("review-bundle publication is not reserved")
+        for name in CANONICAL_FILES:
+            _write_new_file(self._staging, name, payloads[name])
+        staged_names = {entry.name for entry in self._staging.iterdir()}
+        if staged_names != set(CANONICAL_FILES):
+            raise ReviewBundleWriteError("staged review bundle is incomplete")
+        for name in CANONICAL_FILES:
+            if (self._staging / name).read_bytes() != payloads[name]:
+                raise ReviewBundleWriteError(
+                    f"staged review bundle payload changed: {name}"
+                )
+        _validate_destination(self.destination)
+        try:
+            os.replace(self._staging, self.destination)
+            self._staging = None
+            parent_descriptor = os.open(self.destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent_descriptor)
+            finally:
+                os.close(parent_descriptor)
+        except OSError as exc:
+            raise ReviewBundleWriteError(
+                "review-bundle destination cannot be installed atomically"
+            ) from exc
+        return self.destination
+
+    def _release(self) -> None:
+        if self._lock_descriptor is not None:
+            os.close(self._lock_descriptor)
+            self._lock_descriptor = None
+        if self._lock_path is not None:
+            self._lock_path.unlink(missing_ok=True)
+            self._lock_path = None
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        del exc_type, exc, traceback
+        if self._staging is not None:
+            shutil.rmtree(self._staging, ignore_errors=True)
+            self._staging = None
+        self._release()
 
 
 class ReviewBundleWriter:
@@ -235,15 +320,8 @@ def _write_review_bundle(
     }
     payloads["07_run_receipt.json"] = _canonical_json(receipt)
 
-    destination = _prepare_destination(output_dir)
-    try:
-        for name in CANONICAL_FILES:
-            _write_new_file(destination, name, payloads[name])
-    except BaseException:
-        for name in CANONICAL_FILES:
-            (destination / name).unlink(missing_ok=True)
-        raise
-    return destination
+    with _ReviewBundlePublication(output_dir) as publication:
+        return publication.install(payloads)
 
 
 def write_review_bundle(
