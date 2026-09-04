@@ -82,7 +82,7 @@
     {
       "role": "review_bundle_contract",
       "path": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
-      "sha256": "22b0a13bf3c192f384686b41f2506596e2520a9d6e18b30efbd4c54765ddb4a8"
+      "sha256": "81e7dd382b590c391aecaa3b507c0a0c1b531d4cf7bad3ef2866309e0ed12fde"
     },
     {
       "role": "preregistration_plan",

@@ -17,7 +17,12 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
-from .review_bundle_semantics import CANONICAL_FILES
+from .review_bundle_semantics import (
+    CANONICAL_FILES,
+    RESOURCE_RECEIPT_FIELDS,
+    ReviewResourceReceipt,
+    TerminalOutcome,
+)
 
 
 ACTION_SPACE_PATH = Path(__file__).resolve().parent / "action_space_v1.json"
@@ -472,6 +477,18 @@ def normalize_review_bundle(
             output = normalized_report.replace("\r\n", "\n").encode("utf-8")
         else:
             receipt = _load_json_object(raw, name)
+            expected_receipt_fields = {
+                *RESOURCE_RECEIPT_FIELDS,
+                "terminal_status",
+                "failure_category",
+                "agent_asserted_mandatory_artifact_presence",
+                "substantive_output_files",
+            }
+            if set(receipt) != expected_receipt_fields:
+                raise ReviewBundleNormalizationError(
+                    "REVIEW_BUNDLE_RECEIPT_FIELD_SET_INVALID",
+                    repr(sorted(receipt)),
+                )
             missing = [field for field in _RECEIPT_VISIBLE_FIELDS if field not in receipt]
             if missing:
                 raise ReviewBundleNormalizationError(
@@ -482,15 +499,23 @@ def normalize_review_bundle(
                 "agent_asserted_mandatory_artifact_presence"
             ]
             substantive_output_files = receipt["substantive_output_files"]
-            if (
-                not isinstance(receipt["terminal_status"], str)
-                or not receipt["terminal_status"].strip()
-                or not isinstance(receipt["within_frozen_budget"], bool)
-                or (
-                    receipt["failure_category"] is not None
-                    and not isinstance(receipt["failure_category"], str)
+            try:
+                TerminalOutcome.parse(
+                    receipt["terminal_status"],
+                    receipt["failure_category"],
                 )
-                or not isinstance(artifact_presence, dict)
+                ReviewResourceReceipt.from_snapshot(receipt)
+            except ValueError as exc:
+                raise ReviewBundleNormalizationError(
+                    "REVIEW_BUNDLE_RECEIPT_FIELD_INVALID",
+                    name,
+                ) from exc
+            if (
+                receipt["resource_receipt_schema_version"]
+                != "easyicu.figure2_resource_receipt/1"
+                or (
+                    not isinstance(artifact_presence, dict)
+                )
                 or not artifact_presence
                 or any(
                     not isinstance(label, str)

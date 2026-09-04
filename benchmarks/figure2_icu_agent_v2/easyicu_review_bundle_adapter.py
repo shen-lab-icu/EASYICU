@@ -18,6 +18,7 @@ from .review_bundle_writer import (
     ReviewBundleWriteError,
     write_review_bundle,
 )
+from .review_bundle_semantics import ReviewResourceReceipt, TerminalOutcome
 
 
 class EasyICUReviewBundleError(ValueError):
@@ -116,9 +117,8 @@ def write_easyicu_review_bundle(
     *,
     output_dir: Path,
     mandatory_artifacts: Sequence[str],
-    resource_receipt: Mapping[str, Any],
-    terminal_status: str = "completed",
-    failure_category: str | None = None,
+    resource_receipt: ReviewResourceReceipt,
+    outcome: TerminalOutcome | None = None,
 ) -> Path:
     """Write one immutable canonical bundle from finalized EasyICU material."""
     try:
@@ -127,8 +127,7 @@ def write_easyicu_review_bundle(
             output_dir=output_dir,
             mandatory_artifacts=mandatory_artifacts,
             resource_receipt=resource_receipt,
-            terminal_status=terminal_status,
-            failure_category=failure_category,
+            outcome=outcome,
         )
     except ReviewBundleWriteError as exc:
         raise EasyICUReviewBundleError(str(exc)) from exc

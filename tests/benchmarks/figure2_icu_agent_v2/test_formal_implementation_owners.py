@@ -40,6 +40,9 @@ from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     ReviewBlindingContext,
     normalize_review_bundle,
 )
+from benchmarks.figure2_icu_agent_v2.review_bundle_semantics import (
+    ReviewResourceReceipt,
+)
 from benchmarks.figure2_icu_agent_v2 import review_bundle_writer
 from easyicu.research_agent.schema import PipelineResult
 from benchmarks.figure2_icu_agent_v2.multi_host_acceptance import (
@@ -115,7 +118,10 @@ def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -
         material,
         output_dir=tmp_path / "bundle",
         mandatory_artifacts=("main result",),
-        resource_receipt={"within_frozen_budget": True, "provider_tokens": 10},
+        resource_receipt=ReviewResourceReceipt(
+            within_frozen_budget=True,
+            provider_tokens=10,
+        ),
     )
 
     assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
@@ -160,7 +166,7 @@ def test_shared_review_bundle_writer_rolls_back_partial_commit(
             material,
             output_dir=output,
             mandatory_artifacts=("main result",),
-            resource_receipt={"within_frozen_budget": True},
+            resource_receipt=ReviewResourceReceipt(within_frozen_budget=True),
         )
 
     assert not output.exists()
@@ -186,7 +192,9 @@ def test_shared_review_bundle_writer_serializes_competing_publishers(
                 material,
                 output_dir=output,
                 mandatory_artifacts=("main result",),
-                resource_receipt={"within_frozen_budget": True},
+                resource_receipt=ReviewResourceReceipt(
+                    within_frozen_budget=True
+                ),
             )
         except Exception as exc:
             return type(exc).__name__
@@ -215,7 +223,13 @@ def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
             return 12.0
 
         def accounting_summary(self):
-            return {"provider_reported": {"n_calls": 3}}
+            return {
+                "conservative_upper_bound": {
+                    "n_calls": 3,
+                    "total_tokens": 120,
+                    "estimated_cost_usd": 0.01,
+                }
+            }
 
     runner = object.__new__(FormalEasyICURunner)
     runner._pipeline = _Pipeline()
@@ -249,7 +263,13 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
 
     class _HardStop:
         def accounting_summary(self):
-            return {"provider_reported": {"n_calls": 1}}
+            return {
+                "conservative_upper_bound": {
+                    "n_calls": 1,
+                    "total_tokens": 40,
+                    "estimated_cost_usd": 0.005,
+                }
+            }
 
     runner = object.__new__(FormalEasyICURunner)
     runner._pipeline = _Pipeline()
