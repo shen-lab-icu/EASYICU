@@ -11,6 +11,9 @@ import benchmarks.figure2_icu_agent_v2.formal_provider_gate as formal_provider_g
 import benchmarks.figure2_icu_agent_v2.formal_authority as formal_authority
 import benchmarks.figure2_icu_agent_v2.review_bundle_normalizer as review_bundle_normalizer
 from benchmarks.figure2_icu_agent_v2.design_v2_1 import DesignContractError
+from benchmarks.figure2_icu_agent_v2.formal_collaborator_adapter import (
+    FormalEasyICUCollaboratorAdapter,
+)
 from benchmarks.figure2_icu_agent_v2.formal_release_identity import (
     FormalReleaseIdentityError,
     REGISTERED_SOURCE_PATHS,
@@ -19,6 +22,7 @@ from benchmarks.figure2_icu_agent_v2.formal_release_identity import (
     validate_registered_source_identity,
 )
 from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
+    FormalAuthorizedHardStopClient,
     FormalCallCoordinate,
     FormalProviderBudgetMissingError,
     complete_formal_provider_call,
@@ -37,6 +41,7 @@ from easyicu.research_agent.authority.provider_hard_stop import (
     ProviderHardStopLedger,
     ProviderHardStopLimits,
 )
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     CANONICAL_FILES,
@@ -491,6 +496,109 @@ def test_easyicu_router_denies_before_transport_without_registered_signer(
     assert client.called is False
 
 
+def test_easyicu_formal_adapter_projects_complete_provider_surface(
+    tmp_path: Path,
+) -> None:
+    task_id = "qualification12_a_01"
+    limits = ProviderHardStopLimits(
+        max_provider_attempts_per_run=4,
+        max_provider_attempts_per_batch=4,
+        max_total_tokens_per_run=200_000,
+        max_total_tokens_per_batch=200_000,
+        max_estimated_cost_usd_per_batch=1.0,
+        max_wall_clock_seconds_per_task=60.0,
+        input_cost_usd_per_million_tokens=0.1,
+        output_cost_usd_per_million_tokens=0.1,
+    )
+    task_budget = ProviderHardStopLedger(
+        path=tmp_path / "collaborator-hard-stop.json",
+        task_ids=(task_id,),
+        limits=limits,
+        batch_id="collaborator-projection-test",
+    ).start_task(task_id)
+    text_client = ScriptedMockLLMClient(["text"])
+    vision_client = ScriptedMockLLMClient(["vision"])
+    concept_client = ScriptedMockLLMClient(["concept"])
+    human_review_gate = object()
+    services = PipelineServices(
+        llm=text_client,
+        vlm_client=vision_client,
+        llm_concept_auditor_client=concept_client,
+        human_review_gate=human_review_gate,
+        provider_hard_stop=task_budget,
+    )
+
+    projected = FormalEasyICUCollaboratorAdapter(
+        services,
+        receipts={},
+        scope="qualification12",
+        task_id=task_id,
+        execution_site="server",
+        provider_hard_stop=task_budget,
+    ).project()
+
+    assert isinstance(projected.llm, FormalEasyICUModelRouter)
+    assert isinstance(projected.vlm_client, FormalAuthorizedHardStopClient)
+    assert isinstance(
+        projected.llm_concept_auditor_client,
+        FormalAuthorizedHardStopClient,
+    )
+    assert projected.visual_qa_adapter is None
+    assert projected.human_review_gate is human_review_gate
+    assert projected.provider_hard_stop is task_budget
+
+    with pytest.raises(DesignContractError) as vlm_exc:
+        projected.vlm_client.complete(
+            [LLMMessage(role="user", content="do not send vision")]
+        )
+    with pytest.raises(DesignContractError) as concept_exc:
+        projected.llm_concept_auditor_client.complete(
+            [LLMMessage(role="user", content="do not send audit")]
+        )
+
+    assert vlm_exc.value.reason_code == "FORMAL_AUTHORITY_SIGNER_NOT_REGISTERED"
+    assert concept_exc.value.reason_code == "FORMAL_AUTHORITY_SIGNER_NOT_REGISTERED"
+    assert vision_client.calls == []
+    assert concept_client.calls == []
+
+
+def test_easyicu_formal_adapter_rejects_opaque_visual_qa_adapter(
+    tmp_path: Path,
+) -> None:
+    task_id = "qualification12_a_01"
+    limits = ProviderHardStopLimits(
+        max_provider_attempts_per_run=1,
+        max_provider_attempts_per_batch=1,
+        max_total_tokens_per_run=200_000,
+        max_total_tokens_per_batch=200_000,
+        max_estimated_cost_usd_per_batch=1.0,
+        max_wall_clock_seconds_per_task=60.0,
+        input_cost_usd_per_million_tokens=0.1,
+        output_cost_usd_per_million_tokens=0.1,
+    )
+    task_budget = ProviderHardStopLedger(
+        path=tmp_path / "opaque-visual-hard-stop.json",
+        task_ids=(task_id,),
+        limits=limits,
+        batch_id="opaque-visual-test",
+    ).start_task(task_id)
+    services = PipelineServices(
+        llm=ScriptedMockLLMClient(["text"]),
+        visual_qa_adapter=object(),
+        provider_hard_stop=task_budget,
+    )
+
+    with pytest.raises(ValueError, match="opaque visual QA adapter"):
+        FormalEasyICUCollaboratorAdapter(
+            services,
+            receipts={},
+            scope="qualification12",
+            task_id=task_id,
+            execution_site="server",
+            provider_hard_stop=task_budget,
+        ).project()
+
+
 def test_formal_authority_rejects_tampered_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -518,10 +626,16 @@ def test_release_identity_owns_complete_registration_field_set() -> None:
         required_registration_fields()
     )
     assert all(path.is_file() for path in REGISTERED_SOURCE_PATHS.values())
+    assert set(formal_authority.PACKAGE_ROOT.glob("formal_*.py")) <= set(
+        REGISTERED_SOURCE_PATHS.values()
+    )
     assert {
         "review_bundle_writer_sha256",
         "formal_trajectory_lifecycle_sha256",
         "formal_release_identity_sha256",
+        "formal_collaborator_adapter_sha256",
+        "pipeline_services_sha256",
+        "pipeline_services_test_sha256",
     } <= set(REGISTERED_SOURCE_PATHS)
 
 

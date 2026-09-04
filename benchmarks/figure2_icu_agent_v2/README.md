@@ -67,12 +67,17 @@ and fail-closed launch status. It cannot call a model or authorize a run.
 `generic_code_agent_harness.py` implements the frozen generic baseline loop
 and adapts the existing isolated DockerRunner to Python and in-container shell.
 `formal_generic_runner.py` and `formal_easyicu_runner.py` are the two formal
-arm entry points; both route every model turn through
-`formal_provider_gate.py` and the same durable budget ledger. The EasyICU arm
+arm entry points; both route every model turn through `formal_provider_gate.py`
+and the same durable budget ledger. `PipelineServices` owns the complete list
+of Provider-bearing collaborators, and `formal_collaborator_adapter.py`
+projects that list through formal authority. An opaque prebuilt visual-QA
+adapter is rejected because its internal transport cannot be proven governed;
+formal visual QA must supply its client through `vlm_client`. The EasyICU arm
 is projected into the shared seven-file contract only by
-`easyicu_review_bundle_adapter.py`; both producers use
-`review_bundle_semantics.py`, and `review_bundle_normalizer.py` performs the
-arm-neutral reviewer projection without repairing scientific content.
+`easyicu_review_bundle_adapter.py`; both producers commit bytes through
+`review_bundle_writer.py` and share `review_bundle_semantics.py`, while
+`review_bundle_normalizer.py` performs the arm-neutral reviewer projection
+without repairing scientific content.
 
 `formal_scheduler.py` reproduces all 78 core task-arm trajectories, creates the
 post-unsealing Qualification12 assignment deterministically, rejects nonempty
@@ -98,10 +103,12 @@ registered site identifiers before scoring without interpreting clinical slash
 units as paths. `blinded_evaluator.py`
 mechanically instantiates Heldout27 sheets from the frozen rubric and taskbank,
 then atomically locks two eligible reviewers' scores and arm guesses before
-unblinding. `formal_authority.py` verifies an Ed25519-signed atomic declaration,
-the exact call coordinate, and the registered SHA-256 of every critical runner,
-gate, producer, normalizer, scheduler, evaluator, and test owner before a
-transport can be reached. The current launch contract still denies every
+unblinding. `formal_release_identity.py` is the single owner of required
+registration fields, implementation-owner paths, and registered source paths.
+`formal_authority.py` verifies an Ed25519-signed atomic declaration, the exact
+call coordinate, and the registered SHA-256 of every critical runner, gate,
+producer, normalizer, scheduler, evaluator, and test owner before a transport
+can be reached. The current launch contract still denies every
 Provider call because this review candidate intentionally has no registered
 signer key; offline test keys grant no qualification or formal-run authority.
 

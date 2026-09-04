@@ -45,6 +45,7 @@ EXECUTION_ACCEPTANCE_PATH = PACKAGE_ROOT / "execution_acceptance_contract_v1.jso
 GENERIC_HARNESS_PATH = PACKAGE_ROOT / "generic_code_agent_harness.py"
 FORMAL_GENERIC_RUNNER_PATH = PACKAGE_ROOT / "formal_generic_runner.py"
 FORMAL_EASYICU_RUNNER_PATH = PACKAGE_ROOT / "formal_easyicu_runner.py"
+FORMAL_COLLABORATOR_ADAPTER_PATH = PACKAGE_ROOT / "formal_collaborator_adapter.py"
 FORMAL_AUTHORITY_PATH = PACKAGE_ROOT / "formal_authority.py"
 FORMAL_PROVIDER_GATE_PATH = PACKAGE_ROOT / "formal_provider_gate.py"
 FORMAL_SCHEDULER_PATH = PACKAGE_ROOT / "formal_scheduler.py"
@@ -422,6 +423,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
             GENERIC_HARNESS_PATH,
             FORMAL_GENERIC_RUNNER_PATH,
             FORMAL_EASYICU_RUNNER_PATH,
+            FORMAL_COLLABORATOR_ADAPTER_PATH,
             FORMAL_AUTHORITY_PATH,
             FORMAL_SCHEDULER_PATH,
             EASYICU_REVIEW_ADAPTER_PATH,
@@ -520,6 +522,18 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     if "complete_formal_provider_call" not in runner_named_calls:
         _fail("FORMAL_GENERIC_PROVIDER_GATE_MISSING", repr(runner_named_calls))
 
+    collaborator_calls = calls_by_file[FORMAL_COLLABORATOR_ADAPTER_PATH.name]
+    collaborator_named_calls = {
+        call.func.id
+        for call in collaborator_calls
+        if isinstance(call.func, ast.Name)
+    }
+    if "FormalAuthorizedHardStopClient" not in collaborator_named_calls:
+        _fail(
+            "FORMAL_EASYICU_PROVIDER_GATE_MISSING",
+            FORMAL_COLLABORATOR_ADAPTER_PATH.name,
+        )
+
     easyicu_runner_calls = calls_by_file[FORMAL_EASYICU_RUNNER_PATH.name]
     easyicu_runner_named_calls = {
         call.func.id
@@ -527,7 +541,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         if isinstance(call.func, ast.Name)
     }
     required_easyicu_runner_calls = {
-        "FormalAuthorizedHardStopClient",
+        "FormalEasyICUCollaboratorAdapter",
         "write_easyicu_review_bundle",
     }
     if not required_easyicu_runner_calls <= easyicu_runner_named_calls:

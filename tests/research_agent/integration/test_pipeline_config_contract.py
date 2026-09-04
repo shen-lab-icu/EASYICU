@@ -29,6 +29,12 @@ def test_pipeline_constructor_has_one_config_and_one_service_source(ra) -> None:
         "vlm_client",
     }
     assert service_fields.isdisjoint(config_fields)
+    assert set(ra.PipelineServices.PROVIDER_COLLABORATOR_FIELDS) == {
+        "llm",
+        "llm_concept_auditor_client",
+        "visual_qa_adapter",
+        "vlm_client",
+    }
 
 
 def test_pipeline_config_rejects_unknown_keys(ra, tmp_path: Path) -> None:

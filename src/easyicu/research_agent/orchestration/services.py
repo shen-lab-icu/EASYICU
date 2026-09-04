@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
-from typing import Any, Dict, Mapping, Optional, Tuple
+from dataclasses import dataclass, fields, replace
+from typing import Any, Callable, ClassVar, Dict, Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,31 @@ class PipelineServices:
     runner_factory: Optional[Any] = None
     case_plugin_registry: Optional[Any] = None
     provider_hard_stop: Optional[Any] = None
+
+    PROVIDER_COLLABORATOR_FIELDS: ClassVar[Tuple[str, ...]] = (
+        "llm",
+        "vlm_client",
+        "visual_qa_adapter",
+        "llm_concept_auditor_client",
+    )
+
+    def map_provider_collaborators(
+        self,
+        mapper: Callable[[str, Any], Any],
+    ) -> "PipelineServices":
+        """Project every collaborator that may reach a model Provider.
+
+        The services owner declares this complete set so constrained runtimes
+        do not have to rediscover Provider-bearing fields independently.
+        """
+
+        return replace(
+            self,
+            **{
+                name: mapper(name, getattr(self, name))
+                for name in self.PROVIDER_COLLABORATOR_FIELDS
+            },
+        )
 
     @classmethod
     def split_legacy_kwargs(
