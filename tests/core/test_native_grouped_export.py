@@ -237,6 +237,136 @@ def test_native_sofa2_duplicate_consolidation_keeps_value_receipt_paired(
     assert trajectory["evidence_state"].tolist() == ["direct_observed"]
 
 
+def test_native_respiratory_removes_supp_o2_orphan_after_time_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"respiratory": ["fio2", "supp_o2", "vent_ind"]},
+    )
+    # A three-day ICU stay has a native upper bound of 96 h (LOS + 24 h).
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "los_icu": [3.0, 3.0, 3.0, 3.0, 3.0],
+        }
+    ).to_parquet(tmp_path / "outcome.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 2, 3, 4, 5, 6],
+            "charttime": [96.0, 96.95, 95.0, 95.75, 4.0, 5.0, 6.0, None],
+            "fio2": [None, None, None, None, 40.0, None, 21.0, None],
+            "supp_o2": [True, None, True, None, True, True, True, True],
+            "vent_ind": [None, True, None, True, None, None, None, None],
+        }
+    ).to_parquet(tmp_path / "respiratory.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["respiratory"],
+        max_patients=None,
+        result=_completed_result("respiratory"),
+    )
+
+    published = pd.read_parquet(tmp_path / "respiratory.parquet")
+    assert published[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 2, "charttime": 95.0},
+        {"stay_id": 2, "charttime": 95.75},
+        {"stay_id": 3, "charttime": 4.0},
+        {"stay_id": 5, "charttime": 6.0},
+    ]
+    assert published.loc[published["charttime"] == 95.0, "supp_o2"].item()
+    assert published.loc[published["charttime"] == 95.75, "vent_ind"].item()
+    assert published.loc[published["charttime"] == 4.0, "supp_o2"].item()
+    assert pd.isna(
+        published.loc[published["charttime"] == 6.0, "supp_o2"].item()
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    entry = manifest["files"][0]
+    assert entry["time_axis_audit"]["excluded_rows"] == 1
+    assert entry["semantic_audit"]["supp_o2"] == {
+        "policy": (
+            "true_supp_o2_requires_canonical_fio2_gt_21_or_"
+            "hour_bucketed_canonical_vent_ind"
+        ),
+        "ventilation_time_projection": "floor_to_one_hour",
+        "excluded_semantically_invalid": 4,
+        "empty_rows_removed": 3,
+        "empty_null_charttime_rows_removed": 1,
+        "rows_before": 7,
+        "rows_after": 4,
+        "duckdb_memory_limit_mb": 512,
+    }
+    assert entry["row_grain_audit"]["published_rows"] == 4
+    assert entry["row_grain_audit"]["semantic_rows_excluded"] == 3
+    assert entry["row_grain_audit"]["null_charttime_rows_after"] == 0
+    assert entry["concept_status"]["supp_o2"]["non_null"] == 2
+    assert entry["concept_status"]["supp_o2"][
+        "excluded_semantically_invalid"
+    ] == 4
+
+
+def test_native_respiratory_preserves_supported_supp_o2_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"respiratory": ["fio2", "supp_o2", "vent_ind"]},
+    )
+    source = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 3],
+            "charttime": [1.25, 2.0, 3.0, 3.5],
+            "fio2": [None, 40.0, None, None],
+            "supp_o2": [True, True, True, None],
+            "vent_ind": [True, None, None, True],
+        }
+    )
+    source.to_parquet(tmp_path / "respiratory.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="eicu",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["respiratory"],
+        max_patients=None,
+        result=_completed_result("respiratory"),
+    )
+
+    published = pd.read_parquet(tmp_path / "respiratory.parquet")
+    expected = source.copy()
+    expected["fio2"] = expected["fio2"].astype("float64")
+    expected["supp_o2"] = expected["supp_o2"].astype("boolean")
+    expected["vent_ind"] = expected["vent_ind"].astype("boolean")
+    pd.testing.assert_frame_equal(published, expected)
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    audit = manifest["files"][0]["semantic_audit"]["supp_o2"]
+    assert audit["excluded_semantically_invalid"] == 0
+    assert audit["empty_rows_removed"] == 0
+    assert audit["empty_null_charttime_rows_removed"] == 0
+    assert audit["rows_before"] == audit["rows_after"] == 4
+
+
+def test_native_respiratory_supp_o2_projection_requires_support_columns(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "respiratory.parquet"
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "supp_o2": [True]}
+    ).to_parquet(path, index=False)
+
+    with pytest.raises(ValueError, match="support columns"):
+        api._enforce_native_export_supp_o2_support(
+            path,
+            module="respiratory",
+        )
+
+
 def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
     outcome = pd.DataFrame(
         {

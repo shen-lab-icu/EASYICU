@@ -23,6 +23,7 @@ from easyicu.api.extraction import (
     _next_stream_retry_batch_size,
     _resolve_stream_batch_size,
     plan_extraction_resources,
+    plan_module_extraction_resources,
 )
 
 
@@ -281,6 +282,50 @@ def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
     assert plan.batch_size == 50_000
     assert plan.required_available_memory_mb == pytest.approx(7_163.53)
     assert plan.advisory is None
+
+
+def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
+    plans = plan_module_extraction_resources(
+        "eicu",
+        [
+            "respiratory",
+            "sepsis_shared",
+            "sofa1_score",
+            "sofa2_score",
+            "sepsis3_sofa1",
+            "sepsis3_sofa2",
+        ],
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert {module: plan.batch_size for module, plan in plans.items()} == {
+        "respiratory": 50_000,
+        "sepsis_shared": 200_859,
+        "sofa1_score": 67_000,
+        "sofa2_score": 200_859,
+        "sepsis3_sofa1": 67_000,
+        "sepsis3_sofa2": 200_859,
+    }
+    assert plans["sepsis_shared"].mode == "one_shot"
+    assert plans["respiratory"].reason_code == (
+        "measured_profile_fastest_safe_batch"
+    )
+
+
+def test_explicit_batch_override_still_applies_to_every_module():
+    plans = plan_module_extraction_resources(
+        "eicu",
+        ["respiratory", "sepsis_shared"],
+        200_859,
+        requested_batch_size=5_000,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert {plan.batch_size for plan in plans.values()} == {5_000}
+    assert {plan.reason_code for plan in plans.values()} == {
+        "explicit_batch_size"
+    }
 
 
 def test_measured_miiv_full_module_set_uses_one_shot_at_8gib():

@@ -27,6 +27,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import shutil
 import sys
@@ -42,7 +43,11 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from easyicu.api import extract_database  # noqa: E402
-from easyicu.api.extraction import EXTRACT_MODULES  # noqa: E402
+from easyicu.api.extraction import (  # noqa: E402
+    EXTRACT_MODULES,
+    plan_extraction_resources,
+    plan_module_extraction_resources,
+)
 
 
 def _load_republisher():
@@ -85,6 +90,8 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
 }
 SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v2"
 LEGACY_SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
+RESOURCE_PLAN_SCHEMA_VERSION = "easyicu_selected_module_resource_plan_v1"
+DEFAULT_RELEASE_MEMORY_BUDGET_MB = 8 * 1024
 
 
 class ModuleRefreshError(ValueError):
@@ -181,6 +188,87 @@ def _expand_module_dependency_closure(modules: Sequence[str]) -> tuple[str, ...]
         for module in MODULE_DEPENDENCY_CLOSURE[requested_module]
     }
     return tuple(module for module in MODULES if module in required)
+
+
+def _source_cohort_size(
+    source_run_manifest: Mapping[str, Any], database: str
+) -> int:
+    """Read the sealed stay count without opening any raw database table."""
+
+    sources = source_run_manifest.get("sources")
+    source = sources.get(database) if isinstance(sources, Mapping) else None
+    metrics = source.get("module_metrics") if isinstance(source, Mapping) else None
+    outcome = metrics.get("outcome") if isinstance(metrics, Mapping) else None
+    rows = outcome.get("rows") if isinstance(outcome, Mapping) else None
+    try:
+        cohort_size = int(rows)
+    except (TypeError, ValueError) as exc:
+        raise ModuleRefreshError(
+            f"Source run lacks a valid outcome stay count for {database}"
+        ) from exc
+    if cohort_size <= 0:
+        raise ModuleRefreshError(
+            f"Source run has a non-positive outcome stay count for {database}"
+        )
+    return cohort_size
+
+
+def _build_refresh_resource_plan(
+    source_run_manifest: Mapping[str, Any],
+    *,
+    requested_modules: Sequence[str],
+    databases: Sequence[str],
+    memory_budget_mb: float,
+    requested_batch_size: int | None = None,
+) -> dict[str, Any]:
+    """Build a read-only database-by-module release execution plan."""
+
+    selected_databases = _validate_databases(databases)
+    requested = _validate_modules(requested_modules)
+    closure = _expand_module_dependency_closure(requested)
+    budget = float(memory_budget_mb)
+    if budget <= 0:
+        raise ModuleRefreshError("memory budget must be positive")
+
+    database_plans: dict[str, Any] = {}
+    for database in selected_databases:
+        cohort_size = _source_cohort_size(source_run_manifest, database)
+        aggregate = plan_extraction_resources(
+            database,
+            closure,
+            cohort_size,
+            requested_batch_size,
+            available_memory_mb=budget,
+        )
+        module_plans = plan_module_extraction_resources(
+            database,
+            closure,
+            cohort_size,
+            requested_batch_size,
+            available_memory_mb=budget,
+        )
+        database_plans[database] = {
+            "cohort_stays": cohort_size,
+            "aggregate_request_plan": aggregate.to_dict(),
+            "modules": {
+                module: {
+                    **plan.to_dict(),
+                    "planned_batches": math.ceil(cohort_size / plan.batch_size),
+                }
+                for module, plan in module_plans.items()
+            },
+        }
+    return {
+        "schema_version": RESOURCE_PLAN_SCHEMA_VERSION,
+        "read_only": True,
+        "raw_database_reread": False,
+        "memory_budget_mb": budget,
+        "requested_modules": list(requested),
+        "dependency_closure": list(closure),
+        "selected_databases": list(selected_databases),
+        "explicit_batch_override": requested_batch_size,
+        "databases": database_plans,
+    }
 
 
 def _canonical_provenance_modules(
@@ -718,6 +806,7 @@ def _refresh_one_database(
     modules: Sequence[str],
     batch_size: int | None,
     reuse_completed_export: bool,
+    resource_budget_mb: float = DEFAULT_RELEASE_MEMORY_BUDGET_MB,
 ) -> dict[str, Any]:
     staging_root = candidate_root / ".module_refresh_staging" / database
     destination_database_root = candidate_root / "exports" / database
@@ -777,7 +866,11 @@ def _refresh_one_database(
         batch_size=batch_size,
         native_export_v2=True,
         stream_output_batches=True,
-        adaptive_stream_batches=batch_size is None,
+        # Formal releases execute the reviewed plan exactly. Runtime growth
+        # would turn a measured 50k boundary into an unreviewed 67k batch;
+        # failures remain diagnosable in the immutable candidate staging area.
+        adaptive_stream_batches=False,
+        resource_budget_mb=resource_budget_mb,
         verbose=True,
     )
     metrics = _module_runtime_metrics(extraction, modules)
@@ -796,6 +889,9 @@ def _refresh_one_database(
         "data_path": data_path,
         "num_patients": extraction.get("num_patients"),
         "batch_size": extraction.get("batch_size"),
+        "resource_budget_mb": extraction.get("resource_budget_mb"),
+        "resource_plan": extraction.get("resource_plan"),
+        "module_resource_plans": extraction.get("module_resource_plans"),
         "total_elapsed_seconds": extraction.get("total_elapsed"),
         "modules": metrics,
     }
@@ -908,6 +1004,8 @@ def refresh_candidate(
     modules: Sequence[str],
     data_path_overrides: Mapping[str, str],
     batch_size: int | None,
+    resource_budget_mb: float = DEFAULT_RELEASE_MEMORY_BUDGET_MB,
+    resource_policy_override_reason: str | None = None,
     databases: Sequence[str] = DATABASES,
     resume: bool = False,
     repair_finalized: bool = False,
@@ -1039,6 +1137,7 @@ def refresh_candidate(
                 candidate_root=destination,
                 modules=selected_modules,
                 batch_size=batch_size,
+                resource_budget_mb=resource_budget_mb,
                 reuse_completed_export=resume and not repair_finalized,
             )
 
@@ -1130,6 +1229,21 @@ def refresh_candidate(
                         current.get("batch_size")
                         if current.get("batch_size") is not None
                         else previous.get("batch_size")
+                    ),
+                    "resource_budget_mb": (
+                        current.get("resource_budget_mb")
+                        if current.get("resource_budget_mb") is not None
+                        else previous.get("resource_budget_mb")
+                    ),
+                    "resource_plan": (
+                        current.get("resource_plan")
+                        if current.get("resource_plan") is not None
+                        else previous.get("resource_plan")
+                    ),
+                    "module_resource_plans": (
+                        current.get("module_resource_plans")
+                        if current.get("module_resource_plans") is not None
+                        else previous.get("module_resource_plans")
                     ),
                     "modules": previous_modules,
                     "latest_refresh_elapsed_seconds": current.get(
@@ -1293,6 +1407,14 @@ def refresh_candidate(
                 else "database_subset_across_lineage"
             ),
             "raw_data_paths": combined_data_paths,
+            "resource_policy": {
+                "owner": "easyicu.api.extraction.plan_module_extraction_resources",
+                "memory_budget_mb": float(resource_budget_mb),
+                "explicit_batch_override": batch_size,
+                "override_reason": resource_policy_override_reason,
+                "execution_grain": "database_by_module",
+                "adaptive_batch_growth": False,
+            },
             "per_database_runtime": combined_runtime,
             "publication_only_semantic_audit": publication_only_semantic_audit,
             "reused_module_count_per_database": {
@@ -1343,7 +1465,20 @@ def refresh_candidate(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-run-root", required=True, type=Path)
-    parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument("--output-root", type=Path)
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help=(
+            "Validate scope and print the database-by-module resource plan "
+            "without cloning a candidate or reading raw database tables."
+        ),
+    )
+    parser.add_argument(
+        "--plan-output",
+        type=Path,
+        help="Optional JSON destination for --plan-only output.",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -1387,23 +1522,83 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        help="Fixed per-database stay batch; default uses adaptive stream planning.",
+        help=(
+            "Expert-only fixed stay batch for every module; normal releases use "
+            "the measured database-by-module policy."
+        ),
+    )
+    parser.add_argument(
+        "--memory-budget-mb",
+        type=float,
+        default=DEFAULT_RELEASE_MEMORY_BUDGET_MB,
+        help=(
+            "Reproducible release memory contract in MiB "
+            f"(default: {DEFAULT_RELEASE_MEMORY_BUDGET_MB})."
+        ),
+    )
+    parser.add_argument(
+        "--allow-resource-policy-override",
+        action="store_true",
+        help="Acknowledge that --batch-size bypasses the measured policy.",
+    )
+    parser.add_argument(
+        "--resource-policy-override-reason",
+        help="Required audit reason when --batch-size is supplied.",
     )
     args = parser.parse_args(argv)
     if args.batch_size is not None and args.batch_size <= 0:
         parser.error("--batch-size must be positive")
+    if args.memory_budget_mb <= 0:
+        parser.error("--memory-budget-mb must be positive")
+    if args.plan_output is not None and not args.plan_only:
+        parser.error("--plan-output requires --plan-only")
+    if not args.plan_only and args.output_root is None:
+        parser.error("--output-root is required unless --plan-only is used")
+    if args.batch_size is not None and not args.allow_resource_policy_override:
+        parser.error(
+            "--batch-size is blocked for formal release execution; add "
+            "--allow-resource-policy-override and an audit reason only for an "
+            "intentional expert override"
+        )
+    if args.batch_size is not None and not str(
+        args.resource_policy_override_reason or ""
+    ).strip():
+        parser.error("--batch-size requires --resource-policy-override-reason")
     return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if args.plan_only:
+            source_manifest = REPUBLICATION._validate_source(
+                args.source_run_root.resolve()
+            )
+            plan = _build_refresh_resource_plan(
+                source_manifest,
+                requested_modules=args.module,
+                databases=args.database or DATABASES,
+                memory_budget_mb=args.memory_budget_mb,
+                requested_batch_size=args.batch_size,
+            )
+            plan["source_run_root"] = str(args.source_run_root.resolve())
+            plan["resource_policy_override_reason"] = (
+                args.resource_policy_override_reason
+            )
+            if args.plan_output is not None:
+                REPUBLICATION._atomic_write_json(args.plan_output, plan)
+            print(json.dumps(plan, ensure_ascii=False, indent=2))
+            return 0
         candidate = refresh_candidate(
             source_run_root=args.source_run_root,
             output_root=args.output_root,
             modules=args.module,
             data_path_overrides=_parse_data_path_overrides(args.data_path),
             batch_size=args.batch_size,
+            resource_budget_mb=args.memory_budget_mb,
+            resource_policy_override_reason=(
+                args.resource_policy_override_reason
+            ),
             databases=args.database or DATABASES,
             resume=args.resume,
             repair_finalized=args.repair_finalized,
