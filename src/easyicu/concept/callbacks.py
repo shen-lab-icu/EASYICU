@@ -4880,6 +4880,46 @@ def _callback_vent_ind(
             return None
         return result
 
+    database_name = str(
+        getattr(getattr(ctx.data_source, "config", None), "name", "") or ""
+    ).lower()
+
+    # eICU's three mech_vent sources are deliberately point evidence only:
+    # an invasive-airway start, a device charting row, or a treatment row.  None
+    # has an auditable stop time.  The generic R-compatible WinTbl path below
+    # fills a missing duration with ``match_win`` (six hours by default), which
+    # would silently turn each observed point into a made-up ventilation spell.
+    # Keep those rows as ICUTable points so downstream callbacks may use only a
+    # contemporaneous observation and can never infer continuity from it.
+    if database_name in {"eicu", "eicu_demo"}:
+        # Do not let the result depend on which stays happen to share a batch.
+        # A missing dependency means the catalog/loader contract is broken; an
+        # observed-but-empty dependency simply means that batch has no evidence.
+        # In neither case may eICU fall back to the legacy vent_start/end path.
+        if mech_tbl is None:
+            raise ValueError(
+                "eICU vent_ind requires the point-evidence mech_vent dependency"
+            )
+        if mech_tbl.data.empty:
+            return _empty_result()
+        eicu_duration_columns = {
+            "dur_var",
+            "mech_vent_dur",
+            "duration",
+            "dur",
+            "endtime",
+            "end_time",
+            "stop",
+            "end",
+        }.intersection(mech_tbl.data.columns)
+        if isinstance(mech_tbl, WinTbl) or eicu_duration_columns:
+            raise ValueError(
+                "eICU mech_vent point-evidence contract received an interval; "
+                "review the source semantics before deriving vent_ind"
+            )
+        eicu_point_result = _normalize_result(_windows_from_mech(mech_tbl))
+        return eicu_point_result if eicu_point_result is not None else _empty_result()
+
     # 🔥 R ricu vent_ind 逻辑:
     # 如果 mech_vent 有数据 → 只使用 mech_vent，返回 win_tbl 格式
     # 否则 → 使用 vent_start + vent_end 匹配，返回 win_tbl 格式
