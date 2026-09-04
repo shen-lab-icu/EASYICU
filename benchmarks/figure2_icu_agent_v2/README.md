@@ -114,10 +114,13 @@ keys, nonfinite values, a warning, drift, Provider access, or missing field are
 a hard NO-GO. The normalizer also requires both exact host markers and both
 formal output roots on every call, and hides generic POSIX/Windows paths and
 registered site identifiers before scoring without interpreting clinical slash
-units as paths. `blinded_evaluator.py`
-mechanically instantiates Heldout27 sheets from the frozen rubric and taskbank,
-then atomically locks two eligible reviewers' scores and arm guesses before
-unblinding. `formal_release_identity.py` is the single owner of required
+units as paths. `blinded_evaluator.py` mechanically instantiates Heldout27
+sheets from the frozen rubric and taskbank, normalizes both source bundles
+through one `BlindedReviewPackage`, verifies every post-normalization file
+digest, and binds the exact pre/post digest maps and package digest into the
+two eligible reviewers' score lock before unblinding. Reviewers consume the
+package's sealed bytes rather than reopening mutable source paths.
+`formal_release_identity.py` is the single owner of required
 registration fields, implementation-owner paths, and registered source paths.
 `formal_authority.py` verifies an Ed25519-signed atomic declaration, the exact
 call coordinate, and the registered SHA-256 of every critical runner, gate,
