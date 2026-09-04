@@ -14,12 +14,12 @@ import binascii
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any, Mapping, NoReturn
 
 from .design_errors import DesignContractError
+from .immutable_publication import publish_immutable_bytes
 from .formal_scheduler import (
     FormalScheduleError,
     validate_authorized_site_coordinates,
@@ -364,31 +364,13 @@ def _consume_authorized_coordinate(
         }
     )
     try:
-        descriptor = os.open(
-            marker,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
-        )
+        publish_immutable_bytes(record, marker)
     except FileExistsError:
         _fail(
             "FORMAL_AUTHORITY_COORDINATE_ALREADY_CONSUMED",
             repr(dict(coordinate)),
         )
     except OSError as exc:
-        _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_UNAVAILABLE", str(exc))
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(record)
-            handle.flush()
-            os.fsync(handle.fileno())
-        directory_descriptor = os.open(ledger, os.O_RDONLY)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-    except OSError as exc:
-        # Keep an ambiguous marker fail-closed. Removing it could authorize a
-        # second transport after the first durable-write attempt became unclear.
         _fail("FORMAL_AUTHORITY_CONSUMPTION_STORE_UNAVAILABLE", str(exc))
     return _sha256_bytes(record)
 

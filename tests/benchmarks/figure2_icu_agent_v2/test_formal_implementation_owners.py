@@ -8,11 +8,15 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from benchmarks.figure2_icu_agent_v2 import blinded_evaluator
+from benchmarks.figure2_icu_agent_v2 import immutable_publication
 from benchmarks.figure2_icu_agent_v2.blinded_evaluator import (
     BlindedReviewPackage,
     BlindedEvaluationError,
     lock_blinded_scores,
     prepare_blinded_review_package,
+)
+from benchmarks.figure2_icu_agent_v2.immutable_publication import (
+    publish_immutable_bytes,
 )
 from benchmarks.figure2_icu_agent_v2.easyicu_review_bundle_adapter import (
     EasyICUReviewMaterial,
@@ -244,6 +248,27 @@ def test_shared_review_bundle_writer_serializes_competing_publishers(
     assert outcomes.count("published") == 1
     assert len(outcomes) == 2
     assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
+
+
+def test_shared_immutable_file_publisher_serializes_competing_writers(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "single-owner.json"
+
+    def publish(payload: bytes) -> str:
+        try:
+            publish_immutable_bytes(payload, destination)
+        except FileExistsError:
+            return "already-published"
+        return "published"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(publish, (b"first\n", b"second\n")))
+
+    assert outcomes.count("published") == 1
+    assert outcomes.count("already-published") == 1
+    assert destination.read_bytes() in {b"first\n", b"second\n"}
+    assert not tuple(tmp_path.glob(".*.stage"))
 
 
 def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
@@ -1279,15 +1304,15 @@ def test_blinded_score_lock_partial_stage_failure_is_retryable(
         for bundle in ("bundle_1", "bundle_2")
     ]
     destination = tmp_path / "retryable-lock.json"
-    original = blinded_evaluator._write_score_lock_stage
+    original = immutable_publication._write_stage
 
     def fail_after_partial_stage(path: Path, payload: bytes) -> None:
         path.write_bytes(payload[:17])
         raise OSError("injected staging failure")
 
     monkeypatch.setattr(
-        blinded_evaluator,
-        "_write_score_lock_stage",
+        immutable_publication,
+        "_write_stage",
         fail_after_partial_stage,
     )
     with pytest.raises(OSError, match="injected staging failure"):
@@ -1302,8 +1327,8 @@ def test_blinded_score_lock_partial_stage_failure_is_retryable(
     assert not destination.exists()
     assert not tuple(tmp_path.glob(".*.stage"))
     monkeypatch.setattr(
-        blinded_evaluator,
-        "_write_score_lock_stage",
+        immutable_publication,
+        "_write_stage",
         original,
     )
     receipt = lock_blinded_scores(
