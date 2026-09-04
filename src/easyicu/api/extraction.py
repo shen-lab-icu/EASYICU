@@ -428,6 +428,17 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 1_110.9,
             "seconds": 2.4,
         },
+        # The full respiratory owner is materially heavier than the subset
+        # loaded by SOFA. Under per-batch process isolation plus deferred part
+        # merge, 5k completed five partitions; 6k, 7k, 8k and 12k all crossed
+        # the 7,447-MiB hard stop. Use the largest internal batch sample because
+        # it exceeded the external monitor's coarser whole-run peak.
+        "respiratory": {
+            "cohort_stays": 23_106,
+            "batch_size": 5_000,
+            "peak_rss_mb": 7_254.6,
+            "seconds": 836.0,
+        },
     },
     "eicu": {
         "respiratory": {
