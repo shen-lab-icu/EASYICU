@@ -29,6 +29,12 @@ from .review_bundle_writer import (
     terminal_failure_material,
     write_review_bundle,
 )
+from .review_bundle_semantics import (
+    FailureCategory,
+    ReviewResourceReceipt,
+    TerminalOutcome,
+    TerminalStatus,
+)
 
 
 SPEC_PATH = Path(__file__).with_name("generic_code_agent_spec_v1.json")
@@ -200,8 +206,8 @@ class DockerRunnerBackend:
 
 @dataclass(frozen=True)
 class GenericHarnessResult:
-    terminal_status: str
-    failure_category: str | None
+    terminal_status: TerminalStatus
+    failure_category: FailureCategory | None
     output_dir: Path
     model_turns: int
     tool_calls: int
@@ -294,7 +300,9 @@ class GenericCodeAgentHarness:
         self._system_prompt = str(spec["system_prompt"])
         self._model = model
         self._executor = executor
-        self._resource_snapshot = resource_snapshot or (lambda: {})
+        self._resource_snapshot = resource_snapshot or (
+            lambda: {"within_frozen_budget": False}
+        )
 
     def _model_json(
         self,
@@ -353,7 +361,7 @@ class GenericCodeAgentHarness:
             return self._write_terminal_failure(
                 destination=destination,
                 plan=self._unavailable_plan(),
-                category="budget_exhausted",
+                category=FailureCategory.BUDGET_EXHAUSTED,
                 mandatory_artifacts=required_artifacts,
                 model_turns=1,
                 tool_calls=tool_calls,
@@ -363,7 +371,7 @@ class GenericCodeAgentHarness:
             return self._write_terminal_failure(
                 destination=destination,
                 plan=self._unavailable_plan(),
-                category="agent_output_contract_error",
+                category=FailureCategory.AGENT_OUTPUT_CONTRACT_ERROR,
                 mandatory_artifacts=required_artifacts,
                 model_turns=1,
                 tool_calls=tool_calls,
@@ -375,7 +383,7 @@ class GenericCodeAgentHarness:
             return self._write_terminal_failure(
                 destination=destination,
                 plan=plan,
-                category="plan_rejected",
+                category=FailureCategory.PLAN_REJECTED,
                 mandatory_artifacts=required_artifacts,
                 model_turns=model_turns,
                 tool_calls=tool_calls,
@@ -404,7 +412,7 @@ class GenericCodeAgentHarness:
                 return self._write_terminal_failure(
                     destination=destination,
                     plan=plan,
-                    category="budget_exhausted",
+                    category=FailureCategory.BUDGET_EXHAUSTED,
                     mandatory_artifacts=required_artifacts,
                     model_turns=model_turns + 1,
                     tool_calls=tool_calls,
@@ -414,7 +422,7 @@ class GenericCodeAgentHarness:
                 return self._write_terminal_failure(
                     destination=destination,
                     plan=plan,
-                    category="agent_output_contract_error",
+                    category=FailureCategory.AGENT_OUTPUT_CONTRACT_ERROR,
                     mandatory_artifacts=required_artifacts,
                     model_turns=model_turns + 1,
                     tool_calls=tool_calls,
@@ -450,7 +458,7 @@ class GenericCodeAgentHarness:
                 return self._write_terminal_failure(
                     destination=destination,
                     plan=plan,
-                    category="budget_exhausted",
+                    category=FailureCategory.BUDGET_EXHAUSTED,
                     mandatory_artifacts=required_artifacts,
                     model_turns=model_turns + 1,
                     tool_calls=tool_calls,
@@ -460,7 +468,7 @@ class GenericCodeAgentHarness:
                 return self._write_terminal_failure(
                     destination=destination,
                     plan=plan,
-                    category="agent_output_contract_error",
+                    category=FailureCategory.AGENT_OUTPUT_CONTRACT_ERROR,
                     mandatory_artifacts=required_artifacts,
                     model_turns=model_turns + 1,
                     tool_calls=tool_calls,
@@ -473,7 +481,7 @@ class GenericCodeAgentHarness:
                     return self._write_terminal_failure(
                         destination=destination,
                         plan=plan,
-                        category="agent_output_contract_error",
+                        category=FailureCategory.AGENT_OUTPUT_CONTRACT_ERROR,
                         mandatory_artifacts=required_artifacts,
                         model_turns=model_turns,
                         tool_calls=tool_calls,
@@ -485,7 +493,7 @@ class GenericCodeAgentHarness:
                     return self._write_terminal_failure(
                         destination=destination,
                         plan=plan,
-                        category="agent_output_contract_error",
+                        category=FailureCategory.AGENT_OUTPUT_CONTRACT_ERROR,
                         mandatory_artifacts=required_artifacts,
                         model_turns=model_turns,
                         tool_calls=tool_calls,
@@ -502,7 +510,7 @@ class GenericCodeAgentHarness:
                     return self._write_terminal_failure(
                         destination=destination,
                         plan=plan,
-                        category="budget_exhausted",
+                        category=FailureCategory.BUDGET_EXHAUSTED,
                         mandatory_artifacts=required_artifacts,
                         model_turns=model_turns,
                         tool_calls=tool_calls,
@@ -512,7 +520,7 @@ class GenericCodeAgentHarness:
                     return self._write_terminal_failure(
                         destination=destination,
                         plan=plan,
-                        category="execution_timeout",
+                        category=FailureCategory.EXECUTION_TIMEOUT,
                         mandatory_artifacts=required_artifacts,
                         model_turns=model_turns,
                         tool_calls=tool_calls,
@@ -555,7 +563,7 @@ class GenericCodeAgentHarness:
                     return self._write_terminal_failure(
                         destination=destination,
                         plan=plan,
-                        category="agent_output_contract_error",
+                        category=FailureCategory.AGENT_OUTPUT_CONTRACT_ERROR,
                         mandatory_artifacts=required_artifacts,
                         model_turns=model_turns,
                         tool_calls=tool_calls,
@@ -564,7 +572,7 @@ class GenericCodeAgentHarness:
             return self._write_terminal_failure(
                 destination=destination,
                 plan=plan,
-                category="agent_output_contract_error",
+                category=FailureCategory.AGENT_OUTPUT_CONTRACT_ERROR,
                 mandatory_artifacts=required_artifacts,
                 model_turns=model_turns,
                 tool_calls=tool_calls,
@@ -628,12 +636,12 @@ class GenericCodeAgentHarness:
                 "artifact_inventory must map every frozen mandatory artifact",
             )
         snapshot = dict(self._resource_snapshot())
-        receipt = {
-            **snapshot,
-            "model_turns": model_turns,
-            "tool_calls": tool_calls,
-            "wall_seconds": round(max(0.0, time.monotonic() - started), 6),
-        }
+        receipt = ReviewResourceReceipt.from_snapshot(
+            snapshot,
+            model_turns=model_turns,
+            tool_calls=tool_calls,
+            wall_seconds=round(max(0.0, time.monotonic() - started), 6),
+        )
         material = ReviewBundleMaterial(
             plan=plan,
             cohort=action["cohort"],
@@ -656,7 +664,7 @@ class GenericCodeAgentHarness:
                 str(exc),
             ) from exc
         return GenericHarnessResult(
-            terminal_status="completed",
+            terminal_status=TerminalStatus.COMPLETED,
             failure_category=None,
             output_dir=destination,
             model_turns=model_turns,
@@ -668,19 +676,19 @@ class GenericCodeAgentHarness:
         *,
         destination: Path,
         plan: Mapping[str, Any],
-        category: str,
+        category: FailureCategory,
         mandatory_artifacts: tuple[str, ...],
         model_turns: int,
         tool_calls: int,
         started: float,
     ) -> GenericHarnessResult:
         snapshot = dict(self._resource_snapshot())
-        receipt = {
-            **snapshot,
-            "model_turns": model_turns,
-            "tool_calls": tool_calls,
-            "wall_seconds": round(max(0.0, time.monotonic() - started), 6),
-        }
+        receipt = ReviewResourceReceipt.from_snapshot(
+            snapshot,
+            model_turns=model_turns,
+            tool_calls=tool_calls,
+            wall_seconds=round(max(0.0, time.monotonic() - started), 6),
+        )
         material = terminal_failure_material(
             plan=plan,
             failure_category=category,
@@ -692,8 +700,7 @@ class GenericCodeAgentHarness:
                 output_dir=destination,
                 mandatory_artifacts=mandatory_artifacts,
                 resource_receipt=receipt,
-                terminal_status="failed",
-                failure_category=category,
+                outcome=TerminalOutcome.failed(category),
             )
         except ReviewBundleWriteError as exc:
             raise GenericHarnessError(
@@ -701,7 +708,7 @@ class GenericCodeAgentHarness:
                 str(exc),
             ) from exc
         return GenericHarnessResult(
-            terminal_status="failed",
+            terminal_status=TerminalStatus.FAILED,
             failure_category=category,
             output_dir=destination,
             model_turns=model_turns,

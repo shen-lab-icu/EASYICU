@@ -121,6 +121,7 @@ def _write_bundle(root: Path) -> None:
             "sha256": "a" * 64,
         },
         "07_run_receipt.json": {
+            "resource_receipt_schema_version": "easyicu.figure2_resource_receipt/1",
             "terminal_status": "completed",
             "within_frozen_budget": True,
             "failure_category": None,
@@ -133,9 +134,13 @@ def _write_bundle(root: Path) -> None:
                 "04_diagnostics.json": True,
                 "06_report.md": True,
             },
+            "provider_calls": 3,
             "provider_tokens": 1234,
+            "accounted_cost_upper_bound_usd": 0.04,
+            "reported_billed_cost_usd": 0.03,
             "model_turns": 3,
-            "tool_call_sequence": ["python"],
+            "tool_calls": 1,
+            "wall_seconds": 4.2,
         },
     }
     for name, payload in payloads.items():
@@ -1189,3 +1194,36 @@ def test_normalizer_rejects_nonboolean_artifact_presence(tmp_path: Path) -> None
         _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_RECEIPT_FIELD_INVALID"
+
+
+def test_normalizer_rejects_failure_category_outside_closed_vocabulary(
+    tmp_path: Path,
+) -> None:
+    _write_bundle(tmp_path)
+    receipt_path = tmp_path / "07_run_receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["terminal_status"] = "failed"
+    receipt["failure_category"] = "arm_specific_failure"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        _normalize(tmp_path)
+
+    assert exc_info.value.reason_code == "REVIEW_BUNDLE_RECEIPT_FIELD_INVALID"
+
+
+def test_normalizer_rejects_arm_specific_raw_resource_field(
+    tmp_path: Path,
+) -> None:
+    _write_bundle(tmp_path)
+    receipt_path = tmp_path / "07_run_receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["provider_accounting"] = {"arm_specific": True}
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        _normalize(tmp_path)
+
+    assert exc_info.value.reason_code == (
+        "REVIEW_BUNDLE_RECEIPT_FIELD_SET_INVALID"
+    )

@@ -57,6 +57,31 @@
         "internal stages, retries, logs, and timestamps finer than the neutral terminal receipt requires"
       ],
       "efficiency_analysis": "The unredacted receipt is released only after both independent primary and dimension scores, arm guesses, and adjudication inputs are locked. It is then used for prespecified unblinded efficiency analyses and audit."
+    },
+    "raw_resource_receipt_schema": {
+      "schema_version": "easyicu.figure2_resource_receipt/1",
+      "exact_fields": [
+        "within_frozen_budget",
+        "provider_calls",
+        "provider_tokens",
+        "accounted_cost_upper_bound_usd",
+        "reported_billed_cost_usd",
+        "model_turns",
+        "tool_calls",
+        "wall_seconds"
+      ],
+      "nullable_when_unavailable": true,
+      "arbitrary_arm_specific_fields_forbidden": true
+    },
+    "terminal_failure_categories": {
+      "closed": true,
+      "values": [
+        "agent_output_contract_error",
+        "budget_exhausted",
+        "execution_failure",
+        "execution_timeout",
+        "plan_rejected"
+      ]
     }
   },
   "plan_review_projection": {

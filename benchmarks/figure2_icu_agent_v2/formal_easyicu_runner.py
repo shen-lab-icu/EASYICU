@@ -21,6 +21,11 @@ from .formal_collaborator_adapter import (
     FormalEasyICUModelRouter,
 )
 from .review_bundle_writer import terminal_failure_material
+from .review_bundle_semantics import (
+    FailureCategory,
+    ReviewResourceReceipt,
+    TerminalOutcome,
+)
 from .formal_trajectory_lifecycle import FormalExecutionSession
 
 
@@ -80,21 +85,24 @@ class FormalEasyICURunner:
         mandatory_artifacts: tuple[str, ...],
     ) -> None:
         accounting = self._provider_hard_stop.accounting_summary()
+        resource_receipt = ReviewResourceReceipt.from_provider_accounting(
+            accounting,
+            within_frozen_budget=False,
+        )
         failed = terminal_failure_material(
-            plan={"available": False, "failure_category": "execution_failure"},
-            failure_category="execution_failure",
+            plan={
+                "available": False,
+                "failure_category": FailureCategory.EXECUTION_FAILURE.value,
+            },
+            failure_category=FailureCategory.EXECUTION_FAILURE,
             mandatory_artifacts=mandatory_artifacts,
         )
         write_easyicu_review_bundle(
             failed,
             output_dir=output_dir,
             mandatory_artifacts=mandatory_artifacts,
-            resource_receipt={
-                "within_frozen_budget": False,
-                "provider_accounting": accounting,
-            },
-            terminal_status="failed",
-            failure_category="execution_failure",
+            resource_receipt=resource_receipt,
+            outcome=TerminalOutcome.failed(FailureCategory.EXECUTION_FAILURE),
         )
 
     def run_and_write_review_bundle(
@@ -120,6 +128,10 @@ class FormalEasyICURunner:
             )
             self._provider_hard_stop.assert_active()
             accounting = self._provider_hard_stop.accounting_summary()
+            resource_receipt = ReviewResourceReceipt.from_provider_accounting(
+                accounting,
+                within_frozen_budget=True,
+            )
         except Exception:
             self._write_terminal_failure_bundle(
                 output_dir=output_dir,
@@ -130,10 +142,7 @@ class FormalEasyICURunner:
             material,
             output_dir=output_dir,
             mandatory_artifacts=mandatory_artifacts,
-            resource_receipt={
-                "within_frozen_budget": True,
-                "provider_accounting": accounting,
-            },
+            resource_receipt=resource_receipt,
         )
         return result
 

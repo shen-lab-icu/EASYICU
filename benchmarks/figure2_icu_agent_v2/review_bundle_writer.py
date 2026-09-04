@@ -13,7 +13,10 @@ from typing import Any, Mapping, Sequence
 
 from .review_bundle_semantics import (
     CANONICAL_FILES,
+    FailureCategory,
+    ReviewResourceReceipt,
     SUBSTANTIVE_OUTPUT_FILES,
+    TerminalOutcome,
     asserted_artifact_presence,
     normalize_artifact_inventory,
     substantive_file_flags,
@@ -42,12 +45,15 @@ class ReviewBundleMaterial:
 def terminal_failure_material(
     *,
     plan: Mapping[str, Any],
-    failure_category: str,
+    failure_category: FailureCategory,
     mandatory_artifacts: Sequence[str],
 ) -> ReviewBundleMaterial:
     """Build the single neutral failure projection used by both arms."""
 
-    unavailable = {"available": False, "failure_category": failure_category}
+    if not isinstance(failure_category, FailureCategory):
+        raise TypeError("failure_category must be FailureCategory")
+    category = failure_category.value
+    unavailable = {"available": False, "failure_category": category}
     return ReviewBundleMaterial(
         plan=plan,
         cohort=unavailable,
@@ -55,7 +61,7 @@ def terminal_failure_material(
         diagnostics=unavailable,
         report=(
             "The task ended with the neutral terminal category "
-            f"`{failure_category}`."
+            f"`{category}`."
         ),
         headline_evidence=(),
         artifact_inventory={label: [] for label in mandatory_artifacts},
@@ -201,17 +207,15 @@ class ReviewBundleWriter:
         material: ReviewBundleMaterial,
         *,
         mandatory_artifacts: Sequence[str],
-        resource_receipt: Mapping[str, Any],
-        terminal_status: str = "completed",
-        failure_category: str | None = None,
+        resource_receipt: ReviewResourceReceipt,
+        outcome: TerminalOutcome | None = None,
     ) -> Path:
         return _write_review_bundle(
             material,
             output_dir=self.output_dir,
             mandatory_artifacts=mandatory_artifacts,
             resource_receipt=resource_receipt,
-            terminal_status=terminal_status,
-            failure_category=failure_category,
+            outcome=outcome,
         )
 
 
@@ -220,18 +224,18 @@ def _write_review_bundle(
     *,
     output_dir: Path,
     mandatory_artifacts: Sequence[str],
-    resource_receipt: Mapping[str, Any],
-    terminal_status: str = "completed",
-    failure_category: str | None = None,
+    resource_receipt: ReviewResourceReceipt,
+    outcome: TerminalOutcome | None = None,
 ) -> Path:
     """Validate and commit one canonical bundle, rolling back partial writes."""
 
-    if terminal_status not in {"completed", "failed"}:
-        raise ReviewBundleWriteError("terminal_status must be completed or failed")
-    if (terminal_status == "completed") != (failure_category is None):
+    if not isinstance(resource_receipt, ReviewResourceReceipt):
         raise ReviewBundleWriteError(
-            "completed requires null failure_category; failed requires a category"
+            "resource_receipt must be a ReviewResourceReceipt"
         )
+    terminal_outcome = outcome or TerminalOutcome.completed()
+    if not isinstance(terminal_outcome, TerminalOutcome):
+        raise ReviewBundleWriteError("outcome must be a TerminalOutcome")
     if not all(
         isinstance(value, Mapping)
         for value in (
@@ -251,7 +255,7 @@ def _write_review_bundle(
     if not all(isinstance(item, Mapping) for item in material.headline_evidence):
         raise ReviewBundleWriteError("headline_evidence entries must be objects")
 
-    if terminal_status == "failed":
+    if terminal_outcome.failure_category is not None:
         if set(material.artifact_inventory) != set(mandatory_artifacts) or any(
             references != [] for references in material.artifact_inventory.values()
         ):
@@ -288,15 +292,11 @@ def _write_review_bundle(
     payloads["05_evidence_manifest.json"] = _canonical_json(manifest)
 
     receipt = {
-        **dict(resource_receipt),
-        "terminal_status": terminal_status,
-        "within_frozen_budget": bool(
-            resource_receipt.get("within_frozen_budget", False)
-        ),
-        "failure_category": failure_category,
+        **resource_receipt.as_dict(),
+        **terminal_outcome.receipt_fields(),
         "agent_asserted_mandatory_artifact_presence": (
             {label: False for label in mandatory_artifacts}
-            if terminal_status == "failed"
+            if terminal_outcome.failure_category is not None
             else asserted_artifact_presence(
                 inventory,
                 plan=material.plan,
@@ -308,7 +308,7 @@ def _write_review_bundle(
         ),
         "substantive_output_files": (
             {name: False for name in SUBSTANTIVE_OUTPUT_FILES}
-            if terminal_status == "failed"
+            if terminal_outcome.failure_category is not None
             else substantive_file_flags(
                 plan=material.plan,
                 cohort=material.cohort,
@@ -329,9 +329,8 @@ def write_review_bundle(
     *,
     output_dir: Path,
     mandatory_artifacts: Sequence[str],
-    resource_receipt: Mapping[str, Any],
-    terminal_status: str = "completed",
-    failure_category: str | None = None,
+    resource_receipt: ReviewResourceReceipt,
+    outcome: TerminalOutcome | None = None,
 ) -> Path:
     """Validate and commit one canonical bundle, rolling back partial writes."""
 
@@ -339,8 +338,7 @@ def write_review_bundle(
         material,
         mandatory_artifacts=mandatory_artifacts,
         resource_receipt=resource_receipt,
-        terminal_status=terminal_status,
-        failure_category=failure_category,
+        outcome=outcome,
     )
 
 

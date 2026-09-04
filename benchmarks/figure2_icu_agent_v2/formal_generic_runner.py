@@ -26,6 +26,7 @@ from .generic_code_agent_harness import (
     GenericHarnessResult,
     PlanReviewDecision,
 )
+from .review_bundle_semantics import ReviewResourceReceipt
 
 
 class FormalGenericResourceReceiptError(RuntimeError):
@@ -110,26 +111,30 @@ class FormalGenericCodeAgentRunner:
             missing = sorted(required.difference(snapshot))
             if missing:
                 raise FormalGenericResourceReceiptError(missing)
+            if not isinstance(snapshot["within_frozen_budget"], bool):
+                raise FormalGenericResourceReceiptError(
+                    ("within_frozen_budget",)
+                )
             try:
                 provider_hard_stop.assert_active()
                 hard_stop_active = True
             except ProviderHardStopExceeded:
                 hard_stop_active = False
-            snapshot["within_frozen_budget"] = bool(
+            within_frozen_budget = (
                 snapshot["within_frozen_budget"] and hard_stop_active
             )
             accounting = provider_hard_stop.accounting_summary()
-            conservative = accounting.get("conservative_upper_bound")
-            if not isinstance(conservative, Mapping):
-                raise FormalGenericResourceReceiptError(
-                    ("conservative_upper_bound",)
+            try:
+                receipt = ReviewResourceReceipt.from_provider_accounting(
+                    accounting,
+                    within_frozen_budget=within_frozen_budget,
+                    reported_billed_cost_usd=snapshot["billed_cost"],
                 )
-            snapshot["provider_calls"] = conservative.get("n_calls")
-            snapshot["provider_tokens"] = conservative.get("total_tokens")
-            snapshot["accounted_cost_upper_bound_usd"] = conservative.get(
-                "estimated_cost_usd"
-            )
-            return snapshot
+            except ValueError as exc:
+                raise FormalGenericResourceReceiptError(
+                    ("resource_receipt",)
+                ) from exc
+            return receipt.as_dict()
 
         def build_harness() -> GenericCodeAgentHarness:
             docker_runner = docker_runner_factory(session.workdir)
