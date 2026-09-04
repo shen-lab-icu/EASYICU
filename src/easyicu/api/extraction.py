@@ -375,6 +375,25 @@ _INVALIDATED_MEASURED_PROFILES: Mapping[
 # that respiratory/circulatory need five balanced patient batches at 8 GiB,
 # while three larger batches cross the same hard RSS limit.
 _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "aumc": {
+        # Exact post-SOFA2-semantics boundary search under the deterministic
+        # 8,192-MiB execution envelope.  Both 7k and 6k crossed the 7,447-MiB
+        # hard stop; 5k completed all five partitions at commit 2964e85a.
+        # Use the larger internal sampler peak rather than the lower external
+        # process-tree sample so the admission threshold remains conservative.
+        "sofa2_score": {
+            "cohort_stays": 23_106,
+            "batch_size": 5_000,
+            "peak_rss_mb": 6_583.5,
+            "seconds": 927.2,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 23_106,
+            "batch_size": 5_000,
+            "peak_rss_mb": 1_110.9,
+            "seconds": 2.4,
+        },
+    },
     "eicu": {
         "respiratory": {
             "cohort_stays": 200_859,

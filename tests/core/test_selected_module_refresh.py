@@ -286,7 +286,7 @@ def test_measured_miiv_score_plan_is_formally_admissible() -> None:
     assert plan["unmeasured_or_overridden_modules"] == {}
 
 
-def test_unmeasured_aumc_score_pilot_is_not_a_release_standard() -> None:
+def test_measured_aumc_sofa2_closure_is_formally_admissible() -> None:
     refresher = _load_refresher()
     manifest = {
         "sources": {
@@ -304,12 +304,14 @@ def test_unmeasured_aumc_score_pilot_is_not_a_release_standard() -> None:
     modules = plan["databases"]["aumc"]["modules"]
     assert modules["sofa2_score"]["batch_size"] == 5_000
     assert modules["sofa2_score"]["reason_code"] == (
-        "unmeasured_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
     )
-    assert plan["formal_release_admissible"] is False
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "aumc": ["sofa2_score", "sepsis3_sofa2"]
-    }
+    assert modules["sepsis3_sofa2"]["batch_size"] == 5_000
+    assert modules["sepsis3_sofa2"]["reason_code"] == (
+        "measured_profile_fastest_safe_batch"
+    )
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
 
 
 def test_data_path_resolution_checks_only_selected_databases(tmp_path: Path) -> None:

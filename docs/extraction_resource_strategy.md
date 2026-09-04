@@ -26,8 +26,9 @@ Patient batching is a fallback for insufficient memory, not the normal path.
    formal selected-module release launcher blocks this override unless the
    operator supplies both an explicit acknowledgement and an audit reason.
 7. A measured light-module profile never authorises an unmeasured module. Mixed
-   or unmeasured MIMIC-III, MIMIC-IV, and AUMC requests retain the conservative
-   24 GiB full-cohort guard until their own measurements are recorded.
+   requests retain the conservative full-cohort guard for every module without
+   its own measurement; the AUMC SOFA-2 measurement below therefore does not
+   authorise one-shot or 5,000-stay batching for another AUMC module.
 8. An explicit resource budget owns the lower-layer worker configuration as
    well as the stay batch. At 8,192 MiB this means two internal workers, two
    Arrow/DuckDB threads, a 2,048 MiB DuckDB limit and a 512 MiB resolver cache;
@@ -211,21 +212,38 @@ machine.
 Under the deterministic 8,192-MiB worker envelope, the completed part of an
 8,000-stay benchmark showed that AUMC SOFA-1 can finish in three batches at a
 5,912.8-MiB internal peak. The subsequent SOFA-2 part crossed the 7,447-MiB
-hard-stop boundary, so the combined run was rejected. A separate 5,000-stay
-SOFA-2 benchmark completed five batches with a 6,982.0-MiB external
-process-tree peak. This is a safe measured point, not yet the largest safe
-batch and therefore not registered as the production standard. The planner's
-automatic 5,000 value remains an unmeasured conservative pilot; the formal
-release launcher rejects it until a larger-boundary search and output
-invariance review are complete.
+hard-stop boundary, so the combined run was rejected and does not register a
+SOFA-1 closure profile.
 
-A read-only comparison of that diagnostic candidate against the sealed AUMC
-package found byte changes in only `sofa2_score` and its downstream
-`sepsis3_sofa2`; the other 17 module Parquets were SHA-identical. SOFA-2 row
-keys were identical (2,587,657 rows, 23,104 stays), five organ components were
-identical, and one respiratory component row changed under the corrected
-worst-state publication rule. No evidence from this benchmark authorises a
-change to any other AUMC module.
+The exact post-semantics SOFA-2 boundary search rejected both 7,000 stays
+(7,714.9 MiB external process-tree RSS) and 6,000 stays (7,607.4 MiB). The
+5,000-stay run at commit `2964e85a` completed all five partitions
+(5,000/5,000/5,000/5,000/3,106) and the downstream Sepsis-SOFA2 closure. The
+external monitor recorded 6,434.0 MiB over 942.9 seconds; the more conservative
+module sampler recorded 6,583.5 MiB for `sofa2_score` over 927.2 seconds.
+The registry uses that higher peak plus 10% headroom, yielding a 7,241.9-MiB
+admission threshold. Thus 5,000 is the fastest verified safe boundary among
+the tested 1,000-stay candidates, not a generic AUMC default.
+
+The first normal-imputation implementation retained 124,393 hours created
+only by the dense gap grid. A source-assessment marker now prevents those
+synthetic empty hours from becoming scores: 33,018 were removed. The final
+candidate has 2,679,032 SOFA-2 rows over 23,104 stays. Its 91,375 keys not
+present in the old complete-case-oriented package are real component-owner
+assessment times at which all six domains were unavailable; their primary
+score is zero and their availability receipts remain false. This keeps them
+distinguishable from the 251 fully available normal zero-score rows.
+
+A read-only comparison against the sealed package found byte changes in only
+`sofa2_score` and its experimental downstream `sepsis3_sofa2`; the other 17
+AUMC module Parquets were SHA-identical. On common keys, coagulation, liver,
+cardiovascular, CNS and renal values and receipts were identical. Respiratory
+value/observed/available differed at one key, as expected from the corrected
+worst-state/IMV publication rule. All 2,679,032 totals equal the receipt-aware
+sum of the six components, range from 0 to 19, and no receipt-disclaimed row
+has a non-zero total. The measured 5,000-stay policy is registered only for
+`sofa2_score` and `sepsis3_sofa2`; no evidence here changes the strategy or
+content of another AUMC module.
 
 ## Evidence and limits
 
@@ -245,9 +263,9 @@ change to any other AUMC module.
 - Persistent eICU audit and limitations:
   `task_logs/20260827_eicu_19_module_resource_standard.md`
 
-These measurements support resource selection only for the listed MIMIC-IV and
-eICU modules and cohort ceilings. They do not establish a safe threshold for
-the other four databases. Add a new production
+These measurements support resource selection only for the listed MIMIC-IV,
+MIMIC-III, eICU and AUMC modules and cohort ceilings. They do not establish a
+safe threshold for an unlisted module or database. Add a new production
 profile only after a clean full-cohort run records commit identity, cohort size,
 elapsed time, process-tree peak RSS, output validity, and partition-invariance
 evidence where batching can affect semantics.

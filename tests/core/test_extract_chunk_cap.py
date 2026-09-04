@@ -303,6 +303,29 @@ def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
     assert plan.advisory_zh is None
 
 
+def test_measured_aumc_sofa2_uses_fastest_verified_five_batches():
+    plans = plan_module_extraction_resources(
+        "aumc",
+        ["sofa2_score", "sepsis3_sofa2"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert {module: plan.batch_size for module, plan in plans.items()} == {
+        "sofa2_score": 5_000,
+        "sepsis3_sofa2": 5_000,
+    }
+    assert all(
+        plan.reason_code == "measured_profile_fastest_safe_batch"
+        for plan in plans.values()
+    )
+    assert plans["sofa2_score"].measured_peak_rss_mb == pytest.approx(6_583.5)
+    assert plans["sofa2_score"].required_available_memory_mb == pytest.approx(
+        7_241.85
+    )
+    assert _n_chunks(23_106, plans["sofa2_score"].batch_size) == 5
+
+
 def test_eicu_full_request_remains_guarded_after_execution_envelope_change():
     plan = plan_extraction_resources(
         "eicu",
