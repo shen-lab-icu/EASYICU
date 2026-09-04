@@ -83,8 +83,11 @@ and core authority reject an unknown task, split pair, wrong site, missing arm,
 or mismatched assignment digest before transport. The signed declaration also
 binds the exact output root for each site; both qualification and core leases
 must match the registered task, site, pair, global sequence, and site output
-root. A formal runner requires the matching lease before construction and may
-write only to its leased output directory.
+root. `formal_trajectory_lifecycle.py` validates the lease without consuming it,
+derives the only permitted scratch workdir under the signed site root, constructs
+the arm implementation, and only then commits the single-use lease. The final
+seven-file review bundle is written only to the exact leased output directory;
+an initialization failure leaves the lease unconsumed.
 `multi_host_acceptance.py` accepts exactly one server and one laptop preflight
 receipt as unparsed JSON bytes only when the frozen release, model route, input
 set, budgets, container limits, and network policy match exactly; duplicate

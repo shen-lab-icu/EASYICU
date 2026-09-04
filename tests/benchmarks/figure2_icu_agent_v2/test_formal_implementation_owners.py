@@ -29,6 +29,11 @@ from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import FormalEasyICUR
 from benchmarks.figure2_icu_agent_v2.formal_generic_runner import (
     FormalGenericCodeAgentRunner,
 )
+from benchmarks.figure2_icu_agent_v2.formal_trajectory_lifecycle import (
+    FormalTrajectoryLifecycle,
+    FormalTrajectoryLifecycleError,
+)
+from benchmarks.figure2_icu_agent_v2 import formal_trajectory_lifecycle
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     CANONICAL_FILES,
     ReviewBlindingContext,
@@ -81,6 +86,20 @@ def _native_pipeline_result(root: Path) -> PipelineResult:
         evidence_count=1,
         findings_count=0,
     )
+
+
+class _LeasedTrajectory:
+    def __init__(self, output_dir: Path) -> None:
+        self.output_dir = output_dir.resolve()
+
+    def require_output_dir(self, output_dir: Path) -> Path:
+        if Path(output_dir).resolve() != self.output_dir:
+            raise FormalTrajectoryLifecycleError(
+                "formal output directory does not match the committed lease"
+            )
+        return self.output_dir
+
+
 def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -> None:
     material = EasyICUReviewMaterial(
         plan={"population": "adult ICU"},
@@ -168,7 +187,7 @@ def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
     runner._pipeline = _Pipeline()
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "review-bundle"
-    runner._leased_output_dir = output.resolve()
+    runner._trajectory = _LeasedTrajectory(output)
 
     returned = runner.run_and_write_review_bundle(
         output_dir=output,
@@ -202,7 +221,7 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
     runner._pipeline = _Pipeline()
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "failed-review-bundle"
-    runner._leased_output_dir = output.resolve()
+    runner._trajectory = _LeasedTrajectory(output)
 
     with pytest.raises(RuntimeError, match="private implementation detail"):
         runner.run_and_write_review_bundle(
@@ -228,8 +247,8 @@ def test_formal_runners_reject_output_directory_outside_consumed_lease(
     wrong = tmp_path / "wrong-output"
 
     easyicu = object.__new__(FormalEasyICURunner)
-    easyicu._leased_output_dir = leased
-    with pytest.raises(ValueError, match="consumed lease"):
+    easyicu._trajectory = _LeasedTrajectory(leased)
+    with pytest.raises(ValueError, match="committed lease"):
         easyicu.run_and_write_review_bundle(
             output_dir=wrong,
             mandatory_artifacts=("result",),
@@ -237,8 +256,8 @@ def test_formal_runners_reject_output_directory_outside_consumed_lease(
         )
 
     generic = object.__new__(FormalGenericCodeAgentRunner)
-    generic._leased_output_dir = leased
-    with pytest.raises(ValueError, match="consumed lease"):
+    generic._trajectory = _LeasedTrajectory(leased)
+    with pytest.raises(ValueError, match="committed lease"):
         generic.run(
             task_prompt="offline",
             neutral_input_description="offline",
@@ -273,6 +292,104 @@ def test_core_scheduler_projects_78_unique_trajectories_without_writes(
     occupied.mkdir(parents=True)
     with pytest.raises(FormalScheduleError):
         build_core_schedule_dry_run(roots)
+
+
+def _first_core_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[FormalTrajectoryLifecycle, Path]:
+    roots = {
+        "server": tmp_path / "server-output",
+        "laptop": tmp_path / "laptop-output",
+    }
+    dry_run = build_core_schedule_dry_run(roots)
+    trajectory = dry_run.trajectories[0]
+    lease_root = tmp_path / "leases"
+    lease_root.mkdir()
+    lease = claim_trajectory_lease(
+        trajectory,
+        schedule=dry_run,
+        logical_site=trajectory.execution_site,
+        lease_root=lease_root,
+    )
+    assignment = expected_site_assignment("core_wp2_wp3")
+    monkeypatch.setattr(
+        formal_trajectory_lifecycle,
+        "signed_site_assignment",
+        lambda _receipts, *, scope: assignment,
+    )
+    monkeypatch.setattr(
+        formal_trajectory_lifecycle,
+        "signed_output_root",
+        lambda _receipts, *, execution_site: str(
+            roots[execution_site].resolve()
+        ),
+    )
+    return (
+        FormalTrajectoryLifecycle(
+            lease_path=lease,
+            scope=trajectory.scope,
+            task_id=trajectory.task_id,
+            arm=trajectory.arm,
+            execution_site=trajectory.execution_site,
+            receipts={},
+        ),
+        lease,
+    )
+
+
+def test_formal_lifecycle_does_not_consume_lease_when_initialization_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle, lease = _first_core_lifecycle(tmp_path, monkeypatch)
+
+    def fail_initialization() -> object:
+        lifecycle.workdir.mkdir(parents=True)
+        raise RuntimeError("injected initialization failure")
+
+    with pytest.raises(RuntimeError, match="injected initialization failure"):
+        lifecycle.initialize(
+            workdir=lifecycle.workdir,
+            factory=fail_initialization,
+        )
+
+    assert not Path(f"{lease}.started").exists()
+    assert not lifecycle.workdir.exists()
+
+
+def test_formal_lifecycle_commits_only_after_initialization_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle, lease = _first_core_lifecycle(tmp_path, monkeypatch)
+    initialized = object()
+
+    def initialize() -> object:
+        lifecycle.workdir.mkdir(parents=True)
+        return initialized
+
+    assert lifecycle.initialize(
+        workdir=lifecycle.workdir,
+        factory=initialize,
+    ) is initialized
+    assert Path(f"{lease}.started").is_file()
+    assert lifecycle.require_output_dir(lifecycle.output_dir) == lifecycle.output_dir
+
+
+def test_formal_lifecycle_rejects_workdir_outside_signed_root_before_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle, lease = _first_core_lifecycle(tmp_path, monkeypatch)
+
+    with pytest.raises(FormalTrajectoryLifecycleError, match="derived signed path"):
+        lifecycle.initialize(
+            workdir=tmp_path / "wrong-workdir",
+            factory=object,
+        )
+
+    assert not Path(f"{lease}.started").exists()
 
 
 def test_qualification_scheduler_is_deterministic_balanced_and_pair_local(
