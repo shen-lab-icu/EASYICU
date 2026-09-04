@@ -393,8 +393,12 @@ def _consume_authorized_coordinate(
     return _sha256_bytes(record)
 
 
-def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate a signed atomic declaration for one exact formal call."""
+def authorize_formal_provider_call(
+    authority_payload: Mapping[str, Any],
+    *,
+    consume: bool = True,
+) -> dict[str, Any]:
+    """Validate, and normally consume, one exact signed formal call."""
 
     launch = _load_json(LAUNCH_CONTRACT_PATH)
     signature_contract = _require_mapping(
@@ -573,10 +577,14 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         public_key_text=public_key_text,
     )
     output_root = output_root_by_site[requested_coordinate["execution_site"]]
-    consumption_sha256 = _consume_authorized_coordinate(
-        output_root=output_root,
-        declaration=declaration,
-        coordinate=requested_coordinate,
+    consumption_sha256 = (
+        _consume_authorized_coordinate(
+            output_root=output_root,
+            declaration=declaration,
+            coordinate=requested_coordinate,
+        )
+        if consume
+        else None
     )
     return {
         "authorized": True,
