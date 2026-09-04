@@ -1,5 +1,6 @@
 import builtins
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -424,6 +425,174 @@ def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
     assert exported["charttime"].dtype == "float64"
     assert exported["charttime"].iloc[:2].isna().all()
     assert exported["charttime"].iloc[2] == 5.0
+
+
+def test_isolated_stream_batches_preserve_output_and_remove_parts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls = []
+    daemon_flags = []
+
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        calls.append(ids)
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [0.0] * len(ids),
+                "test_signal": [float(value) for value in ids],
+            }
+        )
+
+    class InlineProcess:
+        def __init__(self, *, target, args, daemon):
+            self.target = target
+            self.args = args
+            self.exitcode = None
+            daemon_flags.append(daemon)
+
+        def start(self):
+            self.target(*self.args)
+            self.exitcode = 0
+
+        def join(self):
+            return None
+
+    class InlineContext:
+        Process = InlineProcess
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+    monkeypatch.setattr(api, "_extract_worker_env_setup", lambda _path: None)
+    monkeypatch.setattr(api, "_get_extraction_mp_context", lambda _mp: InlineContext())
+    monkeypatch.setattr(
+        api,
+        "_ISOLATED_STREAM_BATCH_TARGETS",
+        {("eicu", "test_module")},
+    )
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1, 2, 3, 4]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
+    assert manifest["errors"] == []
+    assert manifest["batch_process_isolation"] is True
+    assert calls == [[1, 3], [2, 4]]
+    assert daemon_flags == [False, False]
+    assert exported["stay_id"].tolist() == [1, 3, 2, 4]
+    assert exported["test_signal"].tolist() == [1.0, 3.0, 2.0, 4.0]
+    assert not list(tmp_path.glob(".test_module.batch-*.parquet"))
+    assert not (tmp_path / ".test_module.partial.parquet").exists()
+
+
+def test_batch_process_isolation_is_scoped_to_measured_target(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api,
+        "_ISOLATED_STREAM_BATCH_TARGETS",
+        {("eicu", "sofa2_score")},
+    )
+
+    assert api._requires_isolated_stream_batch("eicu", "sofa2_score") is True
+    assert api._requires_isolated_stream_batch("eicu_demo", "sofa2_score") is False
+    assert api._requires_isolated_stream_batch("mimic", "sofa2_score") is False
+    assert api._requires_isolated_stream_batch("eicu", "sofa1_score") is False
+
+
+def test_append_isolated_stream_batch_aligns_to_frozen_schema(tmp_path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    source = tmp_path / "source.parquet"
+    destination = tmp_path / "destination.parquet"
+    schema = pa.schema(
+        [
+            pa.field("stay_id", pa.int64()),
+            pa.field("charttime", pa.float64()),
+            pa.field("test_signal", pa.float64()),
+            pa.field("first_batch_context", pa.float64()),
+        ]
+    )
+    pq.write_table(
+        pa.table(
+            {
+                "stay_id": pa.array([2], type=pa.int64()),
+                "charttime": pa.array([1.0], type=pa.float64()),
+                "test_signal": pa.array([2.0], type=pa.float64()),
+                "later_only_context": pa.array(["ignored"]),
+            }
+        ),
+        source,
+    )
+    writer = pq.ParquetWriter(destination, schema)
+    try:
+        rows = api._append_isolated_stream_batch(
+            source,
+            writer=writer,
+            schema=schema,
+            pyarrow_module=pa,
+            parquet_module=pq,
+        )
+    finally:
+        writer.close()
+
+    result = pq.read_table(destination)
+    assert rows == 1
+    assert result.schema == schema
+    assert result.column_names == schema.names
+    assert result["first_batch_context"].null_count == 1
+
+
+def test_isolated_stream_batch_failure_removes_atomic_outputs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class FailedProcess:
+        def __init__(self, *, target, args, daemon):
+            self.destination = Path(args[-1])
+            self.exitcode = None
+
+        def start(self):
+            self.destination.write_text("failed child residue")
+            self.exitcode = 1
+
+        def join(self):
+            return None
+
+    class FailedContext:
+        Process = FailedProcess
+
+    monkeypatch.setattr(api, "_get_extraction_mp_context", lambda _mp: FailedContext())
+    monkeypatch.setattr(
+        api,
+        "_ISOLATED_STREAM_BATCH_TARGETS",
+        {("eicu", "test_module")},
+    )
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["saved"] == {}
+    assert "isolated batch worker exited with code 1" in manifest["errors"][0]
+    assert not list(tmp_path.glob(".test_module.batch-*.parquet"))
+    assert not (tmp_path / ".test_module.partial.parquet").exists()
 
 
 def test_stream_batch_release_flushes_duckdb_and_arrow_pool(monkeypatch):

@@ -53,9 +53,14 @@ below. Until then, the executable reason code is
 The old eICU measurements (`sofa2_score` 6,926.6 MiB and
 `sepsis3_sofa2` 6,268.4 MiB) predated the IMV ascertainment change. They are no
 longer present in the measured-profile registry. Controlled post-update runs
-at 67,000, 50,000 and 40,000 stays crossed the 7,447 MiB hard stop; the 31,000
-run was stopped at the user's request before completion. None of those runs
-authorises a production batch size.
+at 67,000, 50,000 and 40,000 stays crossed the 7,447 MiB hard stop. A pre-fix
+31,000 run was stopped at the user's request before completion. After the
+duplicate-materialisation fixes, 40,000 still crossed the limit during its
+first batch (7,449.9 MiB), while 31,000 completed its first batch and crossed
+the limit only as the second batch began (7,465.4 MiB). The latter localises
+the remaining defect to cross-batch allocator retention rather than a
+31,000-stay working set. None of these failed runs authorises a production
+batch size.
 
 The code review found three algorithmic peak owners:
 
@@ -70,6 +75,13 @@ The code review found three algorithmic peak owners:
    component's two owner receipts through one indexed concat.
 3. The dense hourly gap grid represented ordinal scores and binary receipts as
    float64. The SOFA-2 owner now requests exact float32 storage for this grid.
+4. Python, Arrow and DuckDB cleanup calls did not return all native allocator
+   arenas after a completed batch. The eICU `sofa2_score` stream path now runs
+   every patient batch in a fresh spawned process. The bounded parent appends
+   the child's temporary Parquet in 64k-row Arrow record batches; process exit
+   is therefore the memory-release contract. This exception is registered by
+   the exact `(database, module)` pair and does not change another database or
+   module without its own evidence.
 
 Batch patient identifiers are passed through the recursive component loader
 and into the DuckDB/Arrow source predicates. The partition boundary is not
@@ -78,8 +90,10 @@ therefore pointed to redundant materialisation and allocator lifecycle, not a
 justification for an arbitrary 5,000-stay split.
 
 These changes deliberately do not alter thresholds, time windows, missing-data
-policy, public columns or row-grain semantics. Focused regression tests must
-pass before a hard-limited performance run is allowed.
+policy, public columns or row-grain semantics. The isolation writer has
+regression coverage for partition order, frozen-schema alignment, atomic
+failure cleanup and exact target scoping. Focused regression tests must pass
+before a hard-limited performance run is allowed.
 
 ## Clinical-semantics finding (not silently changed)
 
@@ -174,8 +188,10 @@ endpoint.
 ## Decision
 
 The targeted rebuild remains paused. First run the focused and full relevant
-test suites, then prove output invariance, then repeat the same 40,000-stay eICU
-SOFA-2 experiment under the 7,447 MiB process-tree stop. Only after a candidate
-completes may larger batches be tested to find the fewest safe partitions and a
-new profile be promoted. MIMIC-III profiling and any broader release rebuild
-come afterwards.
+test suites and prove output invariance. The next hard-limited experiment is
+31,000 stays, because one such batch already completed before accumulation in
+the former long-lived process; 40,000 already failed within its first batch and
+must not be treated as the first candidate. If 31,000 completes the full cohort,
+larger candidates below 40,000 may be tested to find the fewest safe partitions.
+Only the largest successful candidate may enter the measured profile.
+MIMIC-III profiling and any broader release rebuild come afterwards.
