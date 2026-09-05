@@ -1,7 +1,10 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/sofa2-dict.json"
+      "src/easyicu/research_agent/planning/figure_strategy.py",
+      "src/easyicu/research_agent/reporting/article_contract.py",
+      "src/easyicu/research_agent/research_context/outbound.py",
+      "src/easyicu/research_agent/schema.py"
     ],
     "summary_changes": {}
   },
@@ -444,9 +447,19 @@
         "src/easyicu/data/sofa2-dict.json"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Record reviewed authority closure changes in figure strategy, article contract, outbound requested endpoints and schema owner; measured resource summaries and existing budgets remain unchanged, with no Provider or patient-data calls.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/figure_strategy.py",
+        "src/easyicu/research_agent/reporting/article_contract.py",
+        "src/easyicu/research_agent/research_context/outbound.py",
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Reconcile the offline context fixture with the reviewed SOFA-2 dictionary description from the extraction branch. Only the sofa2-dict.json source digest changes; prompt sizes, selected resources, zero provider calls and zero patient-data reads remain unchanged. Preserve prior baseline history and frozen profile coordinates.",
+  "baseline_reason": "Record reviewed authority closure changes in figure strategy, article contract, outbound requested endpoints and schema owner; measured resource summaries and existing budgets remain unchanged, with no Provider or patient-data calls.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -467,12 +480,12 @@
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "79c013db5b2b6f14bf0d1463dbcc614ab2e1943a3e670f0f25454bacfd55c3eb",
     "src/easyicu/research_agent/planning/cohort_contract.py": "8a77e4ee1e765a24ac1275fef72d12c95af95c5d3ab1301460534e264374eb81",
-    "src/easyicu/research_agent/planning/figure_strategy.py": "fb38bee2e099043411707383c6144793d898a123323a2be7989cc832978f2923",
+    "src/easyicu/research_agent/planning/figure_strategy.py": "42adaa26187ea4879a6d46a646026128465c18db5533d8d88927c1b128925b89",
     "src/easyicu/research_agent/planning/study_design.py": "8c26e3d42c1397839e3347317b90ceadab56beee58a500170cb182535aca7a3c",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "c8312eb455d0a65d8c3936bbf8f770cb15a64925923e679cc2509bcf5036d649",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "11fcb41202300b3729a8db063fa0aac5eb2e2fb4a05bdc72a323f213b3d571a6",
-    "src/easyicu/research_agent/research_context/outbound.py": "0a33010d53ddbb34c954162e15a68e4f4bb2893780451ad8b1a8d216c16b66b9",
+    "src/easyicu/research_agent/reporting/article_contract.py": "c7c11a7a2bcbea2aca3fa1dc0905803bf2cf0d98fa0cde292f433e1bf3b89e22",
+    "src/easyicu/research_agent/research_context/outbound.py": "b27cf5c48adf6183c1c8cdc062c309185db1151d7f3680b8418196f6988e269f",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
@@ -480,7 +493,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "34682167038591c1850a8386162ebdf5b8c7f9b283d9611a7448e114562aa4fa",
+    "src/easyicu/research_agent/schema.py": "9c137e22700684cbb4482d224d3dc1c65e791365a10403cfa3d976e1dd0c8714",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {
