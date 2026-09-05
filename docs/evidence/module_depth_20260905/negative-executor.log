@@ -1,0 +1,18 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_______________ test_plan_declaration_check_never_generates_code _______________
+tests/research_agent/gates/test_owner_declaration_gate.py:127: in test_plan_declaration_check_never_generates_code
+    assert rendered == []
+E   AssertionError: assert ['render'] == []
+E     
+E     Left contains one more item: 'render'
+E     Use -v to get more diff
+__________ test_candidate_report_preserves_exact_refusal_diagnostics ___________
+tests/research_agent/reporting/test_standard_executor_selection_report.py:85: in test_candidate_report_preserves_exact_refusal_diagnostics
+    assert owner["decline_reason"] == candidate.decline_reason
+           ^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'decline_reason'
+=========================== short test summary info ============================
+FAILED tests/research_agent/gates/test_owner_declaration_gate.py::test_plan_declaration_check_never_generates_code
+FAILED tests/research_agent/reporting/test_standard_executor_selection_report.py::test_candidate_report_preserves_exact_refusal_diagnostics
+2 failed in 2.12s
