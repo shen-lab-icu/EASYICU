@@ -12,6 +12,8 @@ def test_desktop_bundle_uses_one_private_runtime_and_local_loading_page():
     )
 
     assert config["identifier"] == "org.easyicu.desktop"
+    # The selected NumPy/SciPy arm64 binaries require macOS 14.
+    assert config["bundle"]["macOS"]["minimumSystemVersion"] == "14.0"
     assert config["app"]["withGlobalTauri"] is False
     assert config["app"]["windows"] == [
         {
