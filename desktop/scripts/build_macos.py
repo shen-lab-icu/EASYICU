@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import stat
 import subprocess
@@ -16,8 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DESKTOP_ROOT = REPO_ROOT / "desktop"
 BUILD_ROOT = DESKTOP_ROOT / ".build"
 VENV_ROOT = BUILD_ROOT / "venv"
-NODE_APP = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
-PYINSTALLER_VERSION = "6.22.2"
+PYTHON_LOCK = DESKTOP_ROOT / "requirements-macos-arm64-py311.lock"
 MIN_NODE = (22, 19, 0)
 
 
@@ -28,20 +30,20 @@ def _run(command: list[str], *, cwd: Path = REPO_ROOT) -> None:
 def _select_python() -> str:
     configured = str(os.environ.get("EASYICU_DESKTOP_PYTHON") or "").strip()
     candidates = [configured] if configured else []
-    candidates.extend(["python3.13", "python3.12", "python3.11", "python3.10"])
+    candidates.extend([sys.executable, "python3.11"])
     for candidate in candidates:
         executable = shutil.which(candidate) if not Path(candidate).is_absolute() else candidate
         if not executable:
             continue
         result = subprocess.run(
-            [str(executable), "-c", "import sys; print(sys.version_info >= (3, 10))"],
+            [str(executable), "-c", "import sys; print(sys.version_info[:2] == (3, 11))"],
             capture_output=True,
             text=True,
             check=False,
         )
         if result.returncode == 0 and result.stdout.strip() == "True":
             return str(executable)
-    raise RuntimeError("A Python 3.10+ interpreter is required to build EasyICU Desktop")
+    raise RuntimeError("The macOS arm64 dependency lock requires Python 3.11")
 
 
 def _venv_python() -> Path:
@@ -53,20 +55,21 @@ def _prepare_python_runtime(selected_python: str) -> Path:
     if not _venv_python().exists():
         _run([selected_python, "-m", "venv", str(VENV_ROOT)])
     python = _venv_python()
-    _run([str(python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    _run(
+        [str(python), "-m", "pip", "install", "--require-hashes", "-r", str(PYTHON_LOCK)]
+    )
     _run(
         [
             str(python),
             "-m",
             "pip",
             "install",
-            "--upgrade",
+            "--no-deps",
             "--no-build-isolation",
-            "-e",
             ".[webapp]",
-            f"pyinstaller=={PYINSTALLER_VERSION}",
         ]
     )
+    _run([str(python), "-m", "pip", "check"])
     return python
 
 
@@ -99,8 +102,21 @@ def _node_license(node: Path) -> Path:
     raise RuntimeError("The selected Node distribution has no LICENSE file")
 
 
-def _prepare_node_runtime(node: Path) -> None:
-    _run(["npm", "ci", "--ignore-scripts", "--omit=dev"], cwd=NODE_APP)
+def _installed_node_app(python: Path) -> Path:
+    result = subprocess.run(
+        [
+            str(python), "-c",
+            "from importlib.util import find_spec; from pathlib import Path; "
+            "print(Path(next(iter(find_spec('easyicu').submodule_search_locations))) "
+            "/ 'webserver' / 'pi_copilot' / 'node_app')",
+        ],
+        cwd=BUILD_ROOT, capture_output=True, text=True, check=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def _prepare_node_runtime(node: Path, python: Path) -> None:
+    _run(["npm", "ci", "--ignore-scripts", "--omit=dev"], cwd=_installed_node_app(python))
     resources = DESKTOP_ROOT / "src-tauri" / "resources"
     resources.mkdir(parents=True, exist_ok=True)
     target_name = "node.exe" if sys.platform == "win32" else "node"
@@ -126,8 +142,6 @@ def _build_backend(python: Path) -> Path:
             "_internal",
             "--name",
             "easyicu-backend",
-            "--paths",
-            str(REPO_ROOT / "src"),
             "--collect-submodules",
             "easyicu",
             "--collect-data",
@@ -213,11 +227,38 @@ def main(argv: list[str] | None = None) -> int:
         help="Prepare the frozen backend and bundled Node runtime without Tauri packaging.",
     )
     args = parser.parse_args(argv)
-    if sys.platform != "darwin":
-        raise RuntimeError("This build entry point creates the macOS distribution only")
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        raise RuntimeError("This dependency lock targets macOS Apple Silicon only")
+    BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    os.environ["EASYICU_HOME"] = str(BUILD_ROOT / "build-state")
     node = _select_node()
     python = _prepare_python_runtime(_select_python())
-    _prepare_node_runtime(node)
+    _prepare_node_runtime(node, python)
+    inputs = {
+        "schema_version": "easyicu.desktop_build_inputs/1",
+        "source_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+        ).strip(),
+        "source_dirty": bool(subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=REPO_ROOT, text=True,
+        ).strip()),
+        "python_version": subprocess.check_output(
+            [str(python), "--version"], text=True
+        ).strip(),
+        "node_version": ".".join(map(str, _node_version(node))),
+        "lock_sha256": {
+            str(path.relative_to(REPO_ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (
+                PYTHON_LOCK, DESKTOP_ROOT / "package-lock.json",
+                DESKTOP_ROOT / "src-tauri" / "Cargo.lock",
+                REPO_ROOT / "src/easyicu/webserver/pi_copilot/node_app/package-lock.json",
+            )
+        },
+    }
+    (BUILD_ROOT / "build-inputs.json").write_text(
+        json.dumps(inputs, indent=2) + "\n", encoding="utf-8"
+    )
     backend = _build_backend(python)
     print(f"Frozen backend: {backend}")
     if not args.backend_only:
