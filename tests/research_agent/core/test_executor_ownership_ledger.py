@@ -231,3 +231,22 @@ def test_the_fixture_records_where_it_came_from() -> None:
         assert entry["run_id"].startswith("run_2026")
         assert len(entry["source_sha256"]) == 64
         assert "canonical9_runs" in entry["source_path"]
+
+
+def test_all_builtin_routes_are_order_independent_on_the_recorded_plan_corpus(monkeypatch):
+    from easyicu.research_agent.execution.runners import selection
+    from easyicu.research_agent.execution.step_executor_registry import StepExecutorRegistry
+
+    def decisions():
+        return {
+            label: [(row.step_id, row.upper_owner, row.lower_owner)
+                    for row in measure_plan(plan, raw_steps)]
+            for label, (plan, raw_steps, _granted) in _plans().items()
+        }
+
+    original = decisions()
+    reversed_registry = StepExecutorRegistry()
+    for executor in reversed(selection.STANDARD_EXECUTORS.executors):
+        reversed_registry.declare(executor)
+    monkeypatch.setattr(selection, "STANDARD_EXECUTORS", reversed_registry)
+    assert decisions() == original

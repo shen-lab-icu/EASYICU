@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Optional, Sequence, Union
 
 from ..authority.plausibility import FlagOnlyPlausibilityScope
@@ -87,38 +87,46 @@ class StepExecutor:
     applicable: Optional[Applicability] = None
     declaration_verdict: Optional[DeclarationVerdict] = None
 
-    def resolve(self, context: StepExecutorContext) -> "StepExecutorResolution":
+    def claim(
+        self, context: StepExecutorContext
+    ) -> Optional[StandardExecutorCandidate]:
+        """Evaluate ownership and refusal gates without invoking a renderer."""
         if self.applicable is not None and not self.applicable(context):
-            return StepExecutorResolution()
+            return None
         answer = self.owns(context)
         verdict = answer if isinstance(answer, OwnershipVerdict) else None
         claimed = verdict.claimed if verdict is not None else bool(answer)
         if not claimed:
             if verdict is None and self.declaration_verdict is not None:
                 verdict = self.declaration_verdict(context)
-            return StepExecutorResolution(
-                candidate=StandardExecutorCandidate(
-                    analysis_kind=(
-                        verdict.analysis_kind if verdict is not None else self.key
-                    ),
-                    contract_matches=False,
-                    outcome="contract_declined",
-                    missing_declarations=(
-                        verdict.missing_declarations if verdict is not None else ()
-                    ),
-                    decline_reason=verdict.reason if verdict is not None else "",
-                )
+            return StandardExecutorCandidate(
+                analysis_kind=(
+                    verdict.analysis_kind if verdict is not None else self.key
+                ),
+                contract_matches=False,
+                outcome="contract_declined",
+                missing_declarations=(
+                    verdict.missing_declarations if verdict is not None else ()
+                ),
+                decline_reason=verdict.reason if verdict is not None else "",
             )
         if self.blocks_on_plausibility_receipt and context.receipt_required:
-            return StepExecutorResolution(
-                candidate=StandardExecutorCandidate(
-                    analysis_kind=self.key,
-                    contract_matches=True,
-                    outcome="declined_receipt_required",
-                ),
-                terminal=True,
+            return StandardExecutorCandidate(
+                analysis_kind=self.key,
+                contract_matches=True,
+                outcome="declined_receipt_required",
             )
-        selection = StandardExecutorSelection(
+        return StandardExecutorCandidate(
+            analysis_kind=self.key,
+            contract_matches=True,
+            outcome="claimed",
+        )
+
+    def render_selection(
+        self, context: StepExecutorContext
+    ) -> StandardExecutorSelection:
+        """Render only after the registry has established a unique owner."""
+        return StandardExecutorSelection(
             analysis_kind=_text(self.analysis_kind, context),
             selection_reason=_text(self.selection_reason, context),
             progress_message=_text(self.progress_message, context),
@@ -126,26 +134,23 @@ class StepExecutor:
             consumed_input_keys=tuple(self.consumed_input_keys(context)),
             host_sealed_renderer=self.host_sealed_renderer,
         )
-        return StepExecutorResolution(
-            selection=selection,
-            candidate=StandardExecutorCandidate(
-                analysis_kind=self.key,
-                contract_matches=True,
-                outcome="selected",
-            ),
-            terminal=True,
+
+
+class AmbiguousExecutorOwnership(RuntimeError):
+    """Multiple scientific owners claimed one step; no code may be rendered."""
+
+    code = "ambiguous_executor_ownership"
+
+    def __init__(self, step_id: str, owner_keys: Sequence[str]) -> None:
+        self.step_id = step_id
+        self.owner_keys = tuple(sorted(owner_keys))
+        super().__init__(
+            f"{self.code}: step={step_id}; owners={','.join(self.owner_keys)}"
         )
 
 
-@dataclass(frozen=True)
-class StepExecutorResolution:
-    selection: Optional[StandardExecutorSelection] = None
-    candidate: Optional[StandardExecutorCandidate] = None
-    terminal: bool = False
-
-
 class StepExecutorRegistry:
-    """Ordered, duplicate-refusing registry for deterministic step owners."""
+    """Exactly one applicable owner must claim a step before any rendering."""
 
     def __init__(self) -> None:
         self._executors: list[StepExecutor] = []
@@ -170,10 +175,36 @@ class StepExecutorRegistry:
         *,
         trace: Optional[list[StandardExecutorCandidate]] = None,
     ) -> Optional[StandardExecutorSelection]:
-        for executor in self._executors:
-            resolution = executor.resolve(context)
-            if resolution.candidate is not None and trace is not None:
-                trace.append(resolution.candidate)
-            if resolution.terminal:
-                return resolution.selection
-        return None
+        # Registration order is diagnostic presentation only, never authority.
+        claims = [(executor, executor.claim(context)) for executor in self._executors]
+        owners = [
+            (executor, claim)
+            for executor, claim in claims
+            if claim is not None and claim.contract_matches
+        ]
+        ambiguous = len(owners) > 1
+        trace_start = len(trace) if trace is not None else 0
+        if trace is not None:
+            trace.extend(
+                replace(claim, outcome="ambiguous_ownership")
+                if ambiguous and claim.contract_matches
+                else claim
+                for _, claim in claims
+                if claim is not None
+            )
+        if ambiguous:
+            raise AmbiguousExecutorOwnership(
+                context.step.step_id, [e.key for e, _ in owners]
+            )
+        if not owners:
+            return None  # The caller still governs unsupported vs bounded Coder.
+        owner, claim = owners[0]
+        if claim.outcome == "declined_receipt_required":
+            return None
+        selection = owner.render_selection(context)
+        if trace is not None:
+            for index in range(trace_start, len(trace)):
+                if trace[index] is claim:
+                    trace[index] = replace(claim, outcome="selected")
+                    break
+        return selection

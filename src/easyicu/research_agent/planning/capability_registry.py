@@ -692,6 +692,7 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
 def _assert_capability_vocabulary_matches_registry() -> None:
     """Keep stable persisted ids synchronized with executable registrations."""
 
+    validate_capability_contracts(CAPABILITY_REGISTRY)
     registered = {
         capability.capability_id: capability.family
         for capability in CAPABILITY_REGISTRY
@@ -705,6 +706,35 @@ def _assert_capability_vocabulary_matches_registry() -> None:
             "family_mismatches="
             f"{sorted(key for key in registered.keys() & CAPABILITY_FAMILIES.keys() if registered[key] != CAPABILITY_FAMILIES[key])!r}"
         )
+
+
+def validate_capability_contracts(capabilities: Tuple[ScientificCapability, ...]) -> None:
+    """Compile-time admission contract for the existing capability vocabulary.
+
+    Declared inputs/products/diagnostics and an explicit claim ceiling are
+    mandatory. Execution still validates the family-specific typed plan; this
+    admission check does not turn catalogue text into execution authorization.
+    """
+    seen: set[str] = set()
+    for capability in capabilities:
+        identity = capability.capability_id
+        if not identity or identity in seen:
+            raise ValueError(f"capability_identity_missing_or_duplicate: {identity!r}")
+        seen.add(identity)
+        if not capability.data_contract or not capability.result_contract or not capability.required_diagnostics:
+            raise ValueError(f"capability_contract_incomplete: {identity}")
+        if not capability.fail_closed or capability.primary_analysis not in {"deterministic", "llm_coded"}:
+            raise ValueError(f"capability_execution_contract_invalid: {identity}")
+        if capability.scientific_validation not in {"reportable", "analysis_only"}:
+            raise ValueError(f"capability_claim_ceiling_invalid: {identity}")
+        if capability.scientific_validation == "reportable" and not (
+            capability.scientific_validator_owner and capability.scientific_validator_contract
+        ):
+            raise ValueError(f"capability_validator_required: {identity}")
+        if capability.primary_analysis == "deterministic" and not (
+            capability.primary_runner_module or capability.scientific_validator_owner
+        ):
+            raise ValueError(f"capability_executor_owner_required: {identity}")
 
 
 _assert_capability_vocabulary_matches_registry()
@@ -864,7 +894,14 @@ def get_capability(
             else "association_adjusted_v1"
         )
         return next((c for c in matches if c.capability_id == wanted), None)
-    return matches[0]
+    defaults = {
+        "time_to_event": "survival_time_to_event_v1",
+        "causal_emulation": "causal_target_trial_v1",
+        "prediction": "prediction_risk_model_v1",
+        "phenotyping": "phenotyping_cluster_v1",
+        "descriptive": "descriptive_measurement_v1",
+    }
+    return next((c for c in matches if c.capability_id == defaults.get(family)), None)
 
 
 def get_capability_by_id(
