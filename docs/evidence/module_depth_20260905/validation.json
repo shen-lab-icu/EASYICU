@@ -1,0 +1,77 @@
+{
+  "schema_version": "easyicu.module_depth_development_validation/1",
+  "date": "2026-09-05",
+  "branch": "codex/authority-closure-20260904",
+  "base_commit": "e2a0d10e729acc0a24239e2c333556842712c596",
+  "implementation_commit": "a7b0ded38dd8ac4c276311fbc1f1ef259b9d4dd4",
+  "implementation_commits": [
+    "f7e7fc9e277099d79e0706a9b7cf067816ab1852",
+    "2fcd930e8f312da8ea6795f2a33600e2f5caf3e2",
+    "a7b0ded38dd8ac4c276311fbc1f1ef259b9d4dd4"
+  ],
+  "validation_class": "combined development checks plus cheap architecture gates; not full exact-head CI",
+  "post_implementation_changes": "Only the stale structural test anchor, ratchet snapshots, evidence and documentation changed after the implementation commit.",
+  "environment": {
+    "python": "/Users/haibo/Documents/GitHub/EASYICU/.venv/bin/python",
+    "PYTHONPATH": "<absolute-checkout>/src",
+    "EASYICU_HOME": "<writable-temporary-state>",
+    "architecture_PATH": "<venv>/bin:<existing-PATH>; existing lint-imports is /opt/anaconda3/bin/lint-imports"
+  },
+  "combined": {
+    "passed": 381,
+    "skipped": 1,
+    "warnings": 23,
+    "test_files": "combined_test_files.txt",
+    "command": "<python> -m pytest -q -m \"\" <combined_test_files.txt entries>",
+    "log": "combined.log"
+  },
+  "integration": {
+    "passed": 22,
+    "deselected": 261,
+    "command": "<python> -m pytest -q -m \"\" tests/research_agent/integration/test_pipeline.py -k \"readiness or display_suite\"",
+    "log": "combined-integration.log"
+  },
+  "architecture": {
+    "gates_passed": 5,
+    "structure_tests_passed": 142,
+    "import_contracts_kept": 7,
+    "command": "PATH=<venv>/bin:$PATH <python> tools/check_architecture_gates.py",
+    "log": "architecture.log",
+    "first_attempt": {
+      "log": "architecture-first.log",
+      "explained_failures": [
+        "An overly restricted command PATH omitted the installed import-linter executable.",
+        "A structural test still searched for the removed select_standard_executor assignment. Updated to enforce resolve -> render -> preflight code order."
+      ]
+    }
+  },
+  "skip": {
+    "nodeid": "tests/research_agent/core/test_security_boundary_regressions.py::test_p1_5_debug_dump_is_owner_only",
+    "reason": "Pre-existing skipped source-string check replaced by a real on-disk mode assertion.",
+    "replacement_nodeid": "tests/research_agent/integration/test_pipeline_authority_regressions.py::test_p1_5_debug_dump_is_owner_only_on_disk",
+    "replacement_result": "passed",
+    "log": "guard-and-skip-check.log"
+  },
+  "scope_limits": [
+    "No Provider calls or research runs.",
+    "No new visual rendering acceptance run; prior figure-layout fixes are inherited.",
+    "No main merge, deployment, full CI, formal experiment or paper authority.",
+    "Read-only second-agent review found no new actionable correctness or authority regression; it is not independent scientific review."
+  ],
+  "evidence_sha256": {
+    "negative-executor.log": "8de63e31d3cd05dc064eb43280c1ac30c0c9ca7feb1a475d13358c9dc0b51194",
+    "negative-figure-reader.log": "5a09064760f69b3dce0a3d536cce677d7fc3dc7ee65140d84327d68631e60085",
+    "negative-completion.log": "e9cc231e416efb6e622cea78981f5e567bb84f8a38b3a4888224baed3dc80b16",
+    "executor-focused.log": "cfaa1a552afbdbf012de9f61b8707cf3c176b0687709906e5d53094a8c52f926",
+    "executor-ledger.log": "a5013ca3f620c4c2960168f527d6773e1d802a531a175690f55a692aa6a0ece1",
+    "figure-reader-focused.log": "6e571205c88319b0a937707b89348128ef4d96fb35cf32251be4425b59ba9915",
+    "completion-focused.log": "367947f0124a9c90c71e21629bcfcd66da0561803ca1c7d67e81121a3a0b54b4",
+    "completion-integration.log": "06b7e9939cda5bd3e7c46e3d807aafa8470eba1c6a3d7f3eb51030310ce0af23",
+    "combined.log": "bf860cbe6ba96988bcdda18ec095102b880271cc2e0334b97eee9048f5fbf024",
+    "combined-integration.log": "49e4b71053f9c3edb45c3b18e5ebdd8585f9a9b45eb80e88a7238e0ee30239fe",
+    "architecture-first.log": "cdde8544de78408acbc4024a37c00e1b3ba9151023c0eecc096178749ff738a3",
+    "architecture.log": "4975376fb3c1bccd4124808dc3a1e904811687431508c288b85b75bcdfc8236c",
+    "guard-and-skip-check.log": "990ffc93227ea202b8fd5d1970331936e786b5773a1569deb21b7211b5b07342",
+    "combined_test_files.txt": "0bda2fa789353d1219ddcc4385827be60b2a097068960910d34346dc3265a344"
+  }
+}
