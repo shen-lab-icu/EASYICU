@@ -1787,7 +1787,9 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "userVisiblePromptText(part.text)" in entrypoint
     assert "use at most two short sentences around tool calls" in entrypoint
     assert "ask one direct question and stop" in entrypoint
-    assert "stop setup questioning and let the host ask whether to generate" in entrypoint
+    assert "do not generate a Research Brief, shadow plan, long candidate setup, or sequential setup questionnaire" in entrypoint
+    assert "the host will show exactly two user actions: start candidate-plan generation, or add research requirements first" in entrypoint
+    assert "Do not add a third model-authored choice" in entrypoint
     assert "Do not write a Research Brief or shadow plan" in entrypoint
     assert "host-owned plan confirmation card already supplies the next actions" in entrypoint
     assert "do not write a Next step block, bullet choices, continue action" in entrypoint
