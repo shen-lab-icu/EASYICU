@@ -30,6 +30,9 @@ from xml.etree import ElementTree as ET
 
 from easyicu.concept import catalog as concept_catalog
 from easyicu.research_agent.discovery.discovery_handoff import DiscoveryHandoffPacket
+from easyicu.research_agent.discovery.source_provenance import (
+    idea_with_readiness_overlay as _idea_with_readiness_overlay,
+)
 from easyicu.research_agent.discovery.idea_mining_construct_answerability import (
     assess_idea_constructs,
 )
@@ -1735,61 +1738,6 @@ def bounded_sample_feasibility(
     return out
 
 
-def _idea_with_readiness_overlay(
-    idea: Mapping[str, Any], readiness: Mapping[str, Any]
-) -> Dict[str, Any]:
-    selected = dict(idea)
-    if not readiness.get("execution_ready_for_confirmation"):
-        return selected
-    bindings = readiness.get("concept_bindings")
-    bindings = bindings if isinstance(bindings, Mapping) else {}
-    modules = readiness.get("concept_modules")
-    modules = modules if isinstance(modules, Mapping) else {}
-    role_by_concept = {
-        str(bindings.get("primary_exposure") or ""): "predictor",
-        str(bindings.get("outcome") or ""): "outcome",
-        str(bindings.get("time_zero") or ""): "time_zero",
-        **{
-            str(value): "adjustment"
-            for value in bindings.get("covariates") or []
-            if str(value).strip()
-        },
-    }
-    mapped = [
-        {
-            "concept_id": concept_id,
-            "label": _concept_label(concept_id),
-            "module": str(modules.get(concept_id) or ""),
-            "role": role,
-            "status": "source_bound_feasibility_ready",
-            "available": True,
-        }
-        for concept_id, role in role_by_concept.items()
-        if concept_id and modules.get(concept_id)
-    ]
-    selected.update(
-        {
-            "mapped_concepts": mapped,
-            "requested_adjustment_concepts": list(bindings.get("covariates") or []),
-            "resolved_analysis_concepts": [
-                row["concept_id"] for row in mapped if row["role"] != "outcome"
-            ],
-            "feasibility": {
-                "tier": "executable",
-                "label": "Source-bound feasibility ready",
-                "reason": "Exact concepts passed bounded source feasibility.",
-            },
-            "go_no_go": "recommend",
-            "go_no_go_reason": (
-                "Differentiated prior art and source-bound feasibility are current; "
-                "the plan is ready for researcher confirmation."
-            ),
-            "next_action": "Review and accept the execution-ready Idea Plan.",
-        }
-    )
-    return selected
-
-
 def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     """Freeze an idea-mining plan for the downstream Agent module."""
     run_id = str(body.get("run_id") or "").strip()
@@ -1896,6 +1844,7 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
             pre_experiment=pre_experiment,
             prior_art_check=prior_art_check,
             run_dir=run_dir,
+            readiness=readiness,
         )
         handoff.update(persist_canonical_handoff(canonical_packet, run_dir=run_dir))
     except (TypeError, ValueError) as exc:

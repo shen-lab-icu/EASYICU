@@ -8,6 +8,7 @@ the research task's provenance rather than being rewritten by hand.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,16 +16,17 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
-from ..canonical_json import canonical_sha256, sha256_file
+from ..canonical_json import canonical_sha256
 from ..contracts.frozen_payload import freeze_payload, thaw_payload
 from ..authority.filesystem import publish_write_once_bytes
+from .source_provenance import DiscoveryCandidateSource, bind_source_candidate
 
 from ..planning.analysis_types import (
     is_concept_set_family,
     normalize_analysis_family,
 )
 
-DISCOVERY_HANDOFF_SCHEMA_VERSION = "easyicu.discovery_handoff/4"
+DISCOVERY_HANDOFF_SCHEMA_VERSION = "easyicu.discovery_handoff/5"
 
 DiscoverySelectionMode = Literal[
     "agent_selected",
@@ -48,13 +50,16 @@ class DiscoveryHandoffPacket(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.discovery_handoff/4"] = DISCOVERY_HANDOFF_SCHEMA_VERSION
+    schema_version: Literal["easyicu.discovery_handoff/5"] = (
+        DISCOVERY_HANDOFF_SCHEMA_VERSION
+    )
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     source_triage_report_path: str
     source_triage_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     selected_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_source: DiscoveryCandidateSource
     handoff_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     selection_mode: DiscoverySelectionMode = "agent_selected"
     selection_rationale: str
@@ -161,11 +166,19 @@ class DiscoveryHandoffPacket(BaseModel):
     def verify_source(self) -> None:
         self.verify_seal()
         try:
-            actual = sha256_file(self.source_triage_report_path)
+            raw = Path(self.source_triage_report_path).read_bytes()
         except OSError as exc:
             raise ValueError("discovery_source_evidence_unavailable") from exc
-        if actual != self.source_triage_report_sha256:
+        if hashlib.sha256(raw).hexdigest() != self.source_triage_report_sha256:
             raise ValueError("discovery_source_evidence_changed")
+        observed = bind_source_candidate(
+            payload=json.loads(raw),
+            source_path=Path(self.source_triage_report_path),
+            row=self.selected_ledger_row,
+            transformation=self.candidate_source.transformation,
+        )
+        if observed != self.candidate_source:
+            raise ValueError("discovery_source_candidate_binding_mismatch")
 
     @property
     def analysis_ready(self) -> bool:
@@ -253,6 +266,7 @@ def build_handoff_from_row(
     inclusion_criteria: Optional[Sequence[str]] = None,
     human_confirmed: bool = False,
     human_confirmation_note: Optional[str] = None,
+    candidate_transformation: Mapping[str, Any] | None = None,
 ) -> DiscoveryHandoffPacket:
     """Create a frozen handoff packet from one discovery-ledger row."""
 
@@ -302,14 +316,21 @@ def build_handoff_from_row(
         ).strip()
     source = Path(triage_report_path).resolve()
     try:
-        source_digest = sha256_file(source)
+        source_bytes = source.read_bytes()
     except OSError as exc:
         raise ValueError("discovery_source_evidence_unavailable") from exc
+    candidate_source = bind_source_candidate(
+        payload=json.loads(source_bytes),
+        source_path=source,
+        row=row,
+        transformation=candidate_transformation,
+    )
     payload = dict(
         schema_version=DISCOVERY_HANDOFF_SCHEMA_VERSION,
         created_at=datetime.now(timezone.utc).isoformat(),
         source_triage_report_path=str(source),
-        source_triage_report_sha256=source_digest,
+        source_triage_report_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        candidate_source=candidate_source.model_dump(mode="json"),
         selected_candidate_sha256=canonical_sha256(thaw_payload(row)),
         selection_mode=selection_mode,
         selection_rationale=rationale,
