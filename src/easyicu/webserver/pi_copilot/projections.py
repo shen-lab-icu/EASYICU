@@ -176,6 +176,7 @@ def project_study_context(
             "question": question,
             "purpose": _bounded_text(context.get("purpose"), 800),
             "data_source": {
+                "source_id": source.get("source_id") or source.get("id"),
                 "label": _bounded_text(source.get("label"), 160),
                 "source_type": source.get("source_type") or source.get("type"),
                 "database": source.get("database") or source.get("source_id"),
@@ -357,7 +358,15 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
     configuration["data_source"] = {
         key: value
         for key, value in source.items()
-        if key in {"label", "source_type", "database", "path_digest", "status"}
+        if key
+        in {
+            "source_id",
+            "label",
+            "source_type",
+            "database",
+            "path_digest",
+            "status",
+        }
         and value not in (None, "")
     }
     configuration["cohort_eligibility_authority"] = (
@@ -1015,6 +1024,7 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "operator_plan_approval_required",
                 "plan_scientific_changes_required",
                 "scientific_plan_review_policy_stale",
+                "agent_plan_revision_nonconvergent",
             }
             & set(pending_review_reason_codes)
         )
@@ -1038,10 +1048,13 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "draft_unlocked",
                 "artifact_count",
                 "artifact_names",
+                "plan_available",
                 "updated_at",
                 "plan_approval_allowed",
                 "scientific_plan_review_status",
                 "scientific_plan_review_score",
+                "plan_revision_source_run_id",
+                "plan_revision_nonconvergent",
             )
             if row.get(key) is not None
         }

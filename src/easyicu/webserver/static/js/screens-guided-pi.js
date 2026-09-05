@@ -589,7 +589,8 @@
     // markdown -- four bullet lists that read as offers but could not be
     // clicked, beside the one live card.
     const nextStep = row.role === 'assistant' && row.complete !== false
-      && row.hostActionCode !== 'generate_plan'
+      && !['auto_generate_plan', 'auto_revise_plan', 'generate_plan']
+        .includes(String(row.hostActionCode || ''))
       && nextOwner && typeof nextOwner.project === 'function'
       ? nextOwner.project(publicRow.text) : null;
     const interactive = Boolean(options && options.interactive);
@@ -968,7 +969,8 @@
       if (projectOwner && projectOwner.syncLocation) {
         projectOwner.syncLocation(expectedProjectId, sessionId);
       }
-      if (refreshWorkflow !== false) await loadWorkflow();
+      if (refreshWorkflow !== false || !state.workflow) await loadWorkflow();
+      await PLAN_ACTIONS.continueSystemOwnedPlanProgression({passive: true});
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
   }
 
@@ -1457,7 +1459,8 @@
           'planner_checkpoint_resume_available',
         ].includes(durablePlanState)) state.error = '';
         state.pendingAuthorityRebind = false;
-        render();
+        const continued = await PLAN_ACTIONS.continueSystemOwnedPlanProgression();
+        if (!continued) render();
       }
     };
     state.source.onerror = () => { if (!state.busy) closeSource(); };
@@ -1557,6 +1560,7 @@
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
     const input = state.host.querySelector('[data-gpi-input]');
     const text = String((input && input.value) || state.draft || '').trim();
+    if (await PLAN_ACTIONS.continueUserRequestedSystemProgression(text)) return;
     const intent = state.pendingEntryIntent
       || (IDEA_SOURCE && IDEA_SOURCE.suggestsIdeaMining(text) ? 'idea_mining_entry' : undefined);
     await sendText(text, undefined, intent);
@@ -1700,7 +1704,8 @@
       state.session = payload.session; state.error = '';
       rememberSession(state.session && state.session.session_id);
       await loadWorkflow();
-      render();
+      const continued = await PLAN_ACTIONS.continueSystemOwnedPlanProgression({passive: true});
+      if (!continued) render();
     } catch (error) { state.error = errorText(error); render(); }
   }
 

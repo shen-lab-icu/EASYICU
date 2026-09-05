@@ -676,9 +676,20 @@ def build_research_context(
         cohort_path=cohort_path_str,
     )
 
+    planning_catalog_provenance = _planning_catalog_provenance(df)
+    replacement_row_identity = (
+        legacy_materialization_provenance.get("replacement_row_identity")
+        if legacy_materialization_provenance is not None
+        else planning_catalog_provenance.get("replacement_row_identity")
+    )
     granularity = resolve_cohort_granularity(
         frame=df,
         id_columns=episode.id_columns,
+        replacement_row_identity=(
+            replacement_row_identity
+            if isinstance(replacement_row_identity, dict)
+            else None
+        ),
     )
     n_stays = int(len(df))
 
@@ -695,7 +706,7 @@ def build_research_context(
         provenance={
             **episode.provenance,
             **granularity.provenance(),
-            **_planning_catalog_provenance(df),
+            **planning_catalog_provenance,
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
             **(

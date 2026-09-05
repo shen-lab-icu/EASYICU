@@ -822,16 +822,60 @@ def _list_source_concepts(
             "Choose one exact registered source_id before listing its concepts.",
         )
     registry = sources.load_registry()
+    registered_sources = [
+        row
+        for row in (registry.get("sources") or [])
+        if isinstance(row, Mapping) and row.get("ok") and row.get("id")
+    ]
     source = next(
         (
             row
-            for row in (registry.get("sources") or [])
-            if isinstance(row, Mapping)
-            and row.get("ok")
-            and str(row.get("id") or "") == source_id
+            for row in registered_sources
+            if str(row.get("id") or "") == source_id
         ),
         None,
     )
+    study = _bound_context(context.session.binding)
+    study_source = (
+        study.get("data_source")
+        if isinstance(study, Mapping)
+        and isinstance(study.get("data_source"), Mapping)
+        else {}
+    )
+    bound_path = str(study_source.get("path") or "").strip()
+    bound_source = next(
+        (
+            row
+            for row in registered_sources
+            if bound_path and str(row.get("path") or "").strip() == bound_path
+        ),
+        None,
+    )
+    if bound_source is not None:
+        bound_source_id = str(bound_source.get("id") or "").strip()
+        if source is not None and str(source.get("id") or "") != bound_source_id:
+            return _result(
+                context,
+                status="blocked",
+                code="pi_source_not_session_bound",
+                summary=(
+                    "The requested source differs from the exact source bound "
+                    "to this research conversation."
+                ),
+                owner="easyicu.webserver.sources",
+            )
+        aliases = {
+            bound_source_id.casefold(),
+            str(bound_source.get("label") or "").strip().casefold(),
+            str(bound_source.get("database") or "").strip().casefold(),
+            str(study_source.get("label") or "").strip().casefold(),
+            str(study_source.get("database") or "").strip().casefold(),
+        }
+        aliases.discard("")
+        if source is None and source_id.casefold() in aliases:
+            source = bound_source
+        if source is not None and str(source.get("id") or "") == bound_source_id:
+            source_id = bound_source_id
     if source is None:
         return _result(
             context,

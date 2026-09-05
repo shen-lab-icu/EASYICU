@@ -667,7 +667,7 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
         "survival_effect"
     ]
     assert audit.facts["primary_covariates"] == ["age", "sex"]
-    assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" in codes
+    assert "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE" in codes
     assert "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE" not in codes
 
     receipt_path.write_text("{}", encoding="utf-8")

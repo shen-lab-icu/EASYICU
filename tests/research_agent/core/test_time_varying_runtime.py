@@ -603,12 +603,23 @@ def test_landmark_materialization_uses_hospital_hours_not_icu_duration(source):
     from easyicu.research_agent.acquisition.hospital_followup_materialization import (
         materialize_hospital_followup_acquisition,
     )
+    from easyicu.research_agent.intake.legacy_materialization import (
+        load_verified_legacy_materialization_provenance,
+    )
 
     acquisition, followup, _ = source
     prepared = materialize_hospital_followup_acquisition(
         acquisition, followup=followup, raw_source_receipt={"authority_ref": "test"}
     )
     frame = pd.read_parquet(prepared.universe_path)
+    assert prepared.provenance_path.name == "hospital_followup_cohort_provenance.json"
+    verified = load_verified_legacy_materialization_provenance(
+        prepared.universe_path,
+        cohort=frame,
+    )
+    assert verified is not None
+    assert verified["n_stays_after_inclusion_exclusion"] == len(frame)
+    assert verified["cohort_file_sha256"] == sha256_file(prepared.universe_path)
     assert len(frame) == 300
     assert frame.loc[0, "death_time_hours"] == 0.5
     np.testing.assert_allclose(
@@ -627,6 +638,82 @@ def test_landmark_materialization_uses_hospital_hours_not_icu_duration(source):
         }
     )
     assert row.source_materialization_variables == ()
+
+
+def test_landmark_followup_keeps_verified_patient_grouping_visible_to_planning(
+    source,
+):
+    from easyicu.research_agent.acquisition.hospital_followup_materialization import (
+        materialize_hospital_followup_acquisition,
+    )
+    from easyicu.research_agent.cohort.materializer import _hash_df
+    from easyicu.research_agent.planning.dependence_authority import (
+        context_dependence_authority,
+    )
+    from easyicu.research_agent.research_context.builder import build_research_context
+
+    acquisition, followup, grouping = source
+    frame = pd.read_parquet(acquisition.universe_path)
+    mapping = pd.read_parquet(grouping.mapping_path).set_index("stay_id")
+    frame["patient_stay_id"] = [
+        f"p{int(mapping.loc[stay, 'patient_key'])}:s{int(stay)}"
+        for stay in frame["stay_id"]
+    ]
+    frame = frame.drop(columns=["stay_id"])
+    frame.to_parquet(acquisition.universe_path, index=False)
+    provenance = json.loads(acquisition.provenance_path.read_text())
+    provenance.update(
+        {
+            "columns": list(frame),
+            "cohort_sha256": _hash_df(frame.reset_index(drop=True)),
+            "cohort_file_sha256": sha256_file(acquisition.universe_path),
+            "cohort_file_size": acquisition.universe_path.stat().st_size,
+            "replacement_row_identity": {
+                "mapping_file_sha256": grouping.mapping_sha256,
+                "output_identity_column": "patient_stay_id",
+                "mapped_cohort_rows": len(frame),
+                "patient_group_derivation": {
+                    "algorithm": "prefix_before_:s",
+                    "delimiter": ":s",
+                },
+                "authority_coordinates": dict(grouping.authority_coordinates),
+            },
+        }
+    )
+    acquisition.provenance_path.write_text(json.dumps(provenance))
+
+    prepared = materialize_hospital_followup_acquisition(
+        acquisition,
+        followup=followup,
+        raw_source_receipt={"authority_ref": "test"},
+    )
+    context = build_research_context(
+        research_question="Is a first-day exposure associated with hospital death?",
+        cohort=prepared.universe_path,
+        cohort_name="patient-grouped landmark cohort",
+        database="miiv",
+        target_outcome="death",
+        id_columns=["patient_stay_id"],
+        user_preferences={
+            "data_constraints": json.dumps(
+                {
+                    "analysis_design": {
+                        "analysis_unit": "icu_stay",
+                        "cluster_unit": "patient",
+                        "variance_estimator": "cluster_robust",
+                    }
+                }
+            )
+        },
+    )
+
+    replacement = context.cohort.provenance["replacement_row_identity"]
+    assert replacement["mapped_cohort_rows"] == len(pd.read_parquet(prepared.universe_path))
+    assert context.cohort.n_patients == 150
+    dependence = context_dependence_authority(context)
+    assert dependence is not None
+    assert dependence.group_source == "patient_stay_id"
+    assert dependence.group_derivation == "prefix_before_delimiter"
 
 
 def test_landmark_followup_accounts_for_excluded_and_uncovered_stays(source):

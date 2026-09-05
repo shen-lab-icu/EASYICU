@@ -24,9 +24,13 @@ from .time_varying_runtime import TimeVaryingRuntimeAuthority
 from ..contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     association_execution_verdict,
+    landmark_categorical_association_execution_verdict,
     sole_primary_model_requirement,
 )
-from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
+from ..contracts.capability_ids import (
+    LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
+    LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+)
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import landmark_association_composite_panels
 from ..contracts.dependence import PlannedDependenceRequirement
@@ -586,6 +590,323 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
         self.governed_step(plan)
+
+
+class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
+    """Bind a fixed-landmark cohort to one declared categorical association.
+
+    The authority owns only the temporal eligibility rule and the exact bridge
+    to the existing adjusted-association adapter. Exposure coding, contrasts,
+    adjustment variables, and dependence remain explicit typed coordinates;
+    no prompt text or observed patient values are used to choose them.
+    """
+
+    schema_version: Literal[
+        "easyicu.landmark_categorical_association_runtime_authority/1"
+    ]
+    authority_kind: Literal["landmark_categorical_association"]
+    cohort_method: Literal["signed_landmark_analysis_cohort"]
+    primary_method: Literal["signed_landmark_categorical_association"]
+    plan_intent: str = Field(min_length=1)
+    landmark_spec_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    cohort_product: Literal["artifact:analysis_cohort"]
+    cohort_flow_product: Literal["table:cohort_flow"]
+    primary_product: Literal["table:adjusted_association_estimates"]
+    exposure_column: str = Field(min_length=1)
+    exposure_kind: Literal["ordinal", "categorical", "binary"]
+    exposure_levels: Tuple[str, ...] = Field(min_length=2)
+    exposure_reference_level: str = Field(min_length=1)
+    primary_contrast_level: str = Field(min_length=1)
+    outcome_column: str = Field(min_length=1)
+    event_time_column: str = Field(min_length=1)
+    observation_duration_column: str = Field(min_length=1)
+    observation_duration_unit: Literal["hours", "days"]
+    landmark_hours: Literal[24]
+    exclude_negative_event_times: Literal[True]
+    require_alive_at_landmark: Literal[True]
+    required_adjustment_columns: Tuple[str, ...]
+    categorical_adjustment_columns: Tuple[str, ...]
+    dependence: PlannedDependenceRequirement | None = None
+    interpretation: Literal["descriptive_prognostic_association_not_causal"]
+
+    @model_validator(mode="after")
+    def _closed_contract(self) -> "LandmarkCategoricalAssociationRuntimeAuthority":
+        if len(self.exposure_levels) != len(set(self.exposure_levels)):
+            raise ValueError("landmark categorical exposure levels must be unique")
+        if self.exposure_reference_level not in self.exposure_levels:
+            raise ValueError("landmark categorical reference must be a declared level")
+        if (
+            self.primary_contrast_level not in self.exposure_levels
+            or self.primary_contrast_level == self.exposure_reference_level
+        ):
+            raise ValueError(
+                "landmark categorical primary contrast must be a non-reference level"
+            )
+        if len(self.required_adjustment_columns) != len(
+            set(self.required_adjustment_columns)
+        ):
+            raise ValueError("landmark categorical adjustments must be unique")
+        if not set(self.categorical_adjustment_columns).issubset(
+            self.required_adjustment_columns
+        ):
+            raise ValueError(
+                "landmark categorical categorical adjustments must be adjusted columns"
+            )
+        source_columns = (
+            self.exposure_column,
+            self.outcome_column,
+            self.event_time_column,
+            self.observation_duration_column,
+            *self.required_adjustment_columns,
+            *((self.dependence.group_source,) if self.dependence is not None else ()),
+        )
+        if len(source_columns) != len(set(source_columns)):
+            raise ValueError("landmark categorical source columns must be unique")
+        self._verify_digest()
+        return self
+
+    @property
+    def cohort_filter_columns(self) -> Tuple[str, ...]:
+        return (
+            self.outcome_column,
+            self.event_time_column,
+            self.observation_duration_column,
+        )
+
+    @property
+    def primary_required_columns(self) -> Tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    self.exposure_column,
+                    self.outcome_column,
+                    *self.required_adjustment_columns,
+                    *((self.dependence.group_source,) if self.dependence is not None else ()),
+                )
+            )
+        )
+
+    def _draft_primary(self, plan: AnalysisPlan) -> AnalysisStep:
+        primary = [
+            step for step in plan.steps if step.planned_analysis_role == "primary"
+        ]
+        if len(primary) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical authority requires exactly one primary step"
+            )
+        return primary[0]
+
+    def _validated_requirement(self, step: AnalysisStep) -> Any:
+        requirement = sole_primary_model_requirement(step)
+        verdict = association_execution_verdict(step)
+        if requirement is None or not verdict.claimed:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical primary is not one closed adjusted association: "
+                + verdict.reason
+            )
+        exposure_terms = [
+            term
+            for term in (requirement.model_terms or ())
+            if term.role == "exposure"
+        ]
+        expected_coding = "binary" if self.exposure_kind == "binary" else "categorical"
+        issues: list[str] = []
+        if requirement.outcome_type != "binary":
+            issues.append("outcome_type")
+        if requirement.exposure_source != self.exposure_column:
+            issues.append("exposure_source")
+        if requirement.outcome != self.outcome_column:
+            issues.append("outcome")
+        if tuple(requirement.covariates or ()) != self.required_adjustment_columns:
+            issues.append("covariates")
+        if requirement.dependence != self.dependence:
+            issues.append("dependence")
+        if tuple(requirement.exposure_levels or ()) != self.exposure_levels:
+            issues.append("exposure_levels")
+        if requirement.exposure_reference_level != self.exposure_reference_level:
+            issues.append("exposure_reference_level")
+        if requirement.primary_contrast_level != self.primary_contrast_level:
+            issues.append("primary_contrast_level")
+        if len(exposure_terms) != 1 or exposure_terms[0].coding != expected_coding:
+            issues.append("exposure_coding")
+        if issues:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical primary drifted from signed coordinates: "
+                + ", ".join(issues)
+            )
+        return requirement
+
+    def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
+        """Compile the temporal cohort owner and signed primary route."""
+
+        primary = self._draft_primary(plan)
+        self._validated_requirement(primary)
+        cohort_input = sole_typed_cohort_input(primary)
+        if not cohort_input:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical primary requires one typed cohort input"
+            )
+        cohort_candidates = [
+            step for step in plan.steps if cohort_input in set(step.expected_outputs)
+        ]
+        if len(cohort_candidates) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical primary requires one cohort-product owner"
+            )
+        cohort = cohort_candidates[0].model_copy(
+            update={
+                "planned_analysis_role": "auxiliary",
+                "method": self.cohort_method,
+                "intent": (
+                    f"Retain rows alive and observed at the {self.landmark_hours}-hour "
+                    "landmark using the signed event-time contract."
+                ),
+                "inputs": list(self.cohort_filter_columns),
+                "expected_outputs": [self.cohort_product, self.cohort_flow_product],
+                "model_requirements": [],
+                "family_primary_result_requirement": None,
+                "icu_rule_refs": list(
+                    dict.fromkeys([*cohort_candidates[0].icu_rule_refs, self.plan_rule_ref])
+                ),
+            }
+        )
+        bound_primary = primary.model_copy(
+            update={
+                "method": self.primary_method,
+                "scientific_capability": (
+                    LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID
+                ),
+                "intent": self.plan_intent,
+                "inputs": [self.cohort_product, *self.primary_required_columns],
+                "expected_outputs": [self.primary_product],
+                "icu_rule_refs": list(
+                    dict.fromkeys([*primary.icu_rule_refs, self.plan_rule_ref])
+                ),
+            }
+        )
+
+        duplicate_outputs = {
+            output
+            for step in plan.steps
+            if step.planned_analysis_role == "sensitivity"
+            and _normalise(step.method) == "landmark_analysis"
+            and tuple(step.sensitivity_spec_ids) == (self.landmark_spec_id,)
+            for output in step.expected_outputs
+        }
+        steps: list[AnalysisStep] = []
+        for step in plan.steps:
+            if step is cohort_candidates[0]:
+                candidate = cohort
+            elif step is primary:
+                candidate = bound_primary
+            elif set(step.expected_outputs) & duplicate_outputs:
+                continue
+            else:
+                candidate = step
+            if duplicate_outputs:
+                candidate = candidate.model_copy(
+                    update={
+                        "inputs": [
+                            value
+                            for value in candidate.inputs
+                            if value not in duplicate_outputs
+                        ],
+                        "input_consumption_contracts": [
+                            item
+                            for item in candidate.input_consumption_contracts
+                            if item.input_key not in duplicate_outputs
+                        ],
+                    }
+                )
+            steps.append(candidate)
+        return plan.model_copy(update={"steps": steps})
+
+    def governed_cohort_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        candidates = [step for step in plan.steps if step.method == self.cohort_method]
+        if len(candidates) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical plan lacks one signed cohort owner"
+            )
+        step = candidates[0]
+        issues: list[str] = []
+        if step.planned_analysis_role != "auxiliary":
+            issues.append("planned_analysis_role")
+        if tuple(step.inputs) != self.cohort_filter_columns:
+            issues.append("inputs")
+        if tuple(step.expected_outputs) != (
+            self.cohort_product,
+            self.cohort_flow_product,
+        ):
+            issues.append("expected_outputs")
+        if step.model_requirements or step.family_primary_result_requirement is not None:
+            issues.append("nested_model_contract")
+        if issues:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical cohort drifted from signed authority: "
+                + ", ".join(issues)
+            )
+        self._require_rule_ref(step)
+        return step
+
+    def governed_primary_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        candidates = [step for step in plan.steps if step.method == self.primary_method]
+        if len(candidates) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical plan lacks one signed primary owner"
+            )
+        step = candidates[0]
+        requirement = sole_primary_model_requirement(step)
+        owner_verdict = landmark_categorical_association_execution_verdict(step)
+        if requirement is None or not owner_verdict.claimed:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical primary lost its closed model contract: "
+                + owner_verdict.reason
+            )
+        exposure_terms = [
+            term for term in (requirement.model_terms or ()) if term.role == "exposure"
+        ]
+        expected_coding = "binary" if self.exposure_kind == "binary" else "categorical"
+        issues: list[str] = []
+        if step.planned_analysis_role != "primary":
+            issues.append("planned_analysis_role")
+        if (
+            step.scientific_capability
+            != LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID
+        ):
+            issues.append("scientific_capability")
+        if tuple(step.inputs) != (self.cohort_product, *self.primary_required_columns):
+            issues.append("inputs")
+        if tuple(step.expected_outputs) != (self.primary_product,):
+            issues.append("expected_outputs")
+        if requirement.outcome_type != "binary":
+            issues.append("outcome_type")
+        if requirement.exposure_source != self.exposure_column:
+            issues.append("exposure_source")
+        if requirement.outcome != self.outcome_column:
+            issues.append("outcome")
+        if tuple(requirement.covariates or ()) != self.required_adjustment_columns:
+            issues.append("covariates")
+        if requirement.dependence != self.dependence:
+            issues.append("dependence")
+        if tuple(requirement.exposure_levels or ()) != self.exposure_levels:
+            issues.append("exposure_levels")
+        if requirement.exposure_reference_level != self.exposure_reference_level:
+            issues.append("exposure_reference_level")
+        if requirement.primary_contrast_level != self.primary_contrast_level:
+            issues.append("primary_contrast_level")
+        if len(exposure_terms) != 1 or exposure_terms[0].coding != expected_coding:
+            issues.append("exposure_coding")
+        if issues:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical primary drifted from signed authority: "
+                + ", ".join(issues)
+            )
+        self._require_rule_ref(step)
+        return step
+
+    def validate_plan(self, plan: AnalysisPlan) -> None:
+        self.governed_cohort_step(plan)
+        self.governed_primary_step(plan)
 
 
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):
@@ -1627,6 +1948,7 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
 CurrentCaseScientificRuntimeAuthority = Annotated[
     Union[
         AssociationModelGridRuntimeAuthority,
+        LandmarkCategoricalAssociationRuntimeAuthority,
         LandmarkSplineRuntimeAuthority,
         LandmarkSurvivalRuntimeAuthority,
         SourceFeasibilityRuntimeAuthority,
@@ -1644,6 +1966,7 @@ def load_current_case_scientific_runtime_authority(
         value,
         (
             AssociationModelGridRuntimeAuthority,
+            LandmarkCategoricalAssociationRuntimeAuthority,
             LandmarkSplineRuntimeAuthority,
             LandmarkSurvivalRuntimeAuthority,
             SourceFeasibilityRuntimeAuthority,
@@ -1687,6 +2010,7 @@ __all__ = [
     "AssociationModelGridVariant",
     "CurrentCaseScientificAuthorityError",
     "CurrentCaseScientificRuntimeAuthority",
+    "LandmarkCategoricalAssociationRuntimeAuthority",
     "LandmarkSplineRuntimeAuthority",
     "LandmarkSurvivalRuntimeAuthority",
     "SourceFeasibilityRuntimeAuthority",

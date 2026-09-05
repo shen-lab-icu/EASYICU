@@ -13,8 +13,13 @@ from typing import Mapping, Sequence
 from ..authority.declared_levels import observed_levels_for
 from ..canonical_json import canonical_sha256
 from ..contracts.figure_plan import ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS
+from ..contracts.ordered_stratified import (
+    PARENT_PRODUCT as ORDERED_STRATIFIED_PARENT_PRODUCT,
+    SCIENTIFIC_ACTION_ID as ORDERED_STRATIFIED_ACTION_ID,
+)
 from ..schema import ResearchContext
 from .method_literature import METHOD_CARDS
+from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
 from .progressive_contract import (
     ProgressiveLiteratureBinding,
     ProgressiveOutlineStep,
@@ -276,6 +281,58 @@ def normalize_progressive_cohort_identity(
     return materialization.model_copy(update={"step": normalized_step})
 
 
+def normalize_progressive_action_contract(
+    materialization: ProgressiveStepMaterialization,
+    *,
+    context: ResearchContext,
+    outline_step: ProgressiveOutlineStep,
+    available_product_refs: Sequence[tuple[str, str]],
+) -> ProgressiveStepMaterialization:
+    """Close exact action-owned inputs without replacing Planner judgment.
+
+    The outline remains the authority for selecting a scientific action and
+    its variables. Once that choice matches a typed action contract, asking
+    the model to repeat the same raw-column and upstream-product wiring during
+    step materialization creates avoidable failure entropy. Project only the
+    uniquely implied execution coordinates; ambiguous contexts stay unchanged
+    and fail through the ordinary compiler.
+    """
+
+    step = materialization.step
+    if (
+        step.scientific_action_id != ORDERED_STRATIFIED_ACTION_ID
+        or outline_step.scientific_action_id != ORDERED_STRATIFIED_ACTION_ID
+        or step.module_id != "custom_analysis"
+        or step.planned_analysis_role != "secondary"
+    ):
+        return materialization
+    contract = resolve_ordinal_multi_outcome_contract(context)
+    if contract is None or set(outline_step.variable_names) != set(contract.variables):
+        return materialization
+    parent_owners = [
+        producer
+        for producer, product_id in available_product_refs
+        if product_id == ORDERED_STRATIFIED_PARENT_PRODUCT
+        and producer in step.depends_on
+    ]
+    if len(parent_owners) != 1:
+        return materialization
+    normalized_step = step.model_copy(
+        update={
+            "raw_inputs": list(contract.variables),
+            "product_inputs": [
+                ProgressiveProductRef(
+                    producer_step_id=parent_owners[0],
+                    product_id=ORDERED_STRATIFIED_PARENT_PRODUCT,
+                )
+            ],
+        }
+    )
+    if normalized_step == step:
+        return materialization
+    return materialization.model_copy(update={"step": normalized_step})
+
+
 def _cohort_row_identity(
     context: ResearchContext,
     raw_inputs: Sequence[str],
@@ -456,6 +513,7 @@ def host_materialize_progressive_step(
 
 __all__ = [
     "host_materialize_progressive_step",
+    "normalize_progressive_action_contract",
     "normalize_progressive_cohort_identity",
     "progressive_module_method_source_keys",
 ]

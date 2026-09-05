@@ -273,7 +273,7 @@ def _allow_current_scientific_review(monkeypatch: pytest.MonkeyPatch) -> None:
         agent_pipeline_runs,
         "_load_pending_scientific_review",
         lambda *_args, **_kwargs: {
-            "schema_version": "easyicu.plan_scientific_review/4",
+            "schema_version": "easyicu.plan_scientific_review/5",
             "approval_allowed": True,
         },
     )
@@ -349,6 +349,52 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
         assert "generate a fresh plan" in contract
     else:
         assert contract == ""
+
+
+def test_plan_revision_stops_when_agent_owned_defects_do_not_shrink() -> None:
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review the revised plan.",
+        authority_sha256="a" * 64,
+        payload={"reason": "plan_scientific_changes_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-revised",
+        thread_id="thread-revised",
+        run_dir="/private/revised",
+        requests=(request,),
+    )
+    same_review = {
+        "facts": {
+            "remediation_buckets": {
+                "agent_plan_revision": ["TIMING", "FUNCTIONAL_FORM"]
+            }
+        }
+    }
+
+    stopped = agent_pipeline_runs._mark_nonconvergent_plan_revision(
+        pending,
+        source_codes=("TIMING", "FUNCTIONAL_FORM"),
+        current_review=same_review,
+    )
+    improved = agent_pipeline_runs._mark_nonconvergent_plan_revision(
+        pending,
+        source_codes=("TIMING", "FUNCTIONAL_FORM"),
+        current_review={
+            "facts": {
+                "remediation_buckets": {"agent_plan_revision": ["TIMING"]}
+            }
+        },
+    )
+
+    assert stopped.requests[0].payload["reason"] == (
+        "agent_plan_revision_nonconvergent"
+    )
+    assert stopped.requests[0].payload["source_agent_plan_revision_codes"] == [
+        "FUNCTIONAL_FORM",
+        "TIMING",
+    ]
+    assert improved == pending
 
 
 def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
@@ -473,6 +519,132 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     assert authority.target_outcome == "death"
     assert "source_plan_sha256: " + "b" * 64 in authority.contract
     assert "primary_model" in authority.contract
+
+
+def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = _complete_study()
+    study.update(
+        {
+            "question": "Is peak lactate associated with death?",
+            "covariates": ["age"],
+            "covariate_selection": "exact",
+            "execution_concepts": {
+                "primary_exposure": "lact",
+                "primary_exposure_aggregation": "max",
+                "outcome": "death",
+                "covariates": ["age"],
+            },
+        }
+    )
+    source_run_id = "run-derived-candidate"
+    project_dir = tmp_path / "candidate-wrapper"
+    inner_run = project_dir / "pipeline" / source_run_id
+    inner_run.mkdir(parents=True)
+    capsule = {
+        "scientific_identity": {
+            "question": study["question"],
+            "database": "miiv",
+            "primary_exposure": "lact_max",
+            "target_outcome": "death",
+            "user_preferences": {"covariates": ["age"]},
+        }
+    }
+    capsule_raw = json.dumps(capsule).encode()
+    (inner_run / "run_input_capsule.json").write_bytes(capsule_raw)
+    (inner_run / "human_review_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "state": "pending",
+                "run_input_capsule_sha256": hashlib.sha256(
+                    capsule_raw
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    pipeline_input = project_dir / "pipeline_input"
+    pipeline_input.mkdir()
+    pd.DataFrame(columns=["lact_max", "death", "los_icu", "age"]).to_parquet(
+        pipeline_input / "planner_catalog.parquet",
+        index=False,
+    )
+    (pipeline_input / "planner_catalog_receipt.json").write_text(
+        json.dumps(
+            {
+                "selected_concepts": ["lact", "death", "los_icu", "age"],
+                "operationalized_columns": ["lact_max"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    review = PlanScientificReview(
+        status="analysis_only",
+        approval_allowed=True,
+        top_journal_candidate=False,
+        score=85,
+        dimension_scores={"study_design": 85},
+        findings=[],
+        facts={"requested_outcomes": ["los_icu", "death"]},
+        context_sha256="a" * 64,
+        plan_sha256="b" * 64,
+        literature_sha256="c" * 64,
+        figure_strategy_sha256="d" * 64,
+        generated_at="2026-09-03T00:00:00Z",
+    ).model_dump(mode="json")
+    monkeypatch.setattr(
+        agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {
+            "runs": [
+                {
+                    "run_id": source_run_id,
+                    "project_dir": str(project_dir),
+                    "scientific_configuration_sha256": (
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        agent_runs,
+        "read_run_review",
+        lambda _project_dir: {
+            "ok": True,
+            "artifact_payloads": {
+                "scientific_plan_review.json": review,
+                "agent_plan.json": {
+                    "analysis_type": "association_study",
+                    "cohort": {"selection_mode": "all_input_rows"},
+                    "steps": [],
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_metadata_only_planning_coordinates",
+        lambda **_kwargs: {
+            "primary_exposure": "lact",
+            "target_outcome": "death",
+        },
+    )
+
+    authority = agent_pipeline_runs._load_candidate_plan_materialization_authority(
+        study=study,
+        project_root=str(tmp_path),
+        source_run_id=source_run_id,
+        database="miiv",
+        covariates=("age",),
+    )
+
+    assert authority is not None
+    assert authority.primary_exposure == "lact_max"
+    assert authority.target_outcome == "death"
+    assert authority.outcome_concepts == ("los_icu", "death")
 
 
 def test_public_composite_concept_resolves_to_one_materialization_source() -> None:
@@ -688,6 +860,28 @@ def test_workflow_projects_exact_path_free_study_setup_receipt() -> None:
     serialized = snapshot.model_dump_json()
     assert "/private/prepared/source" not in serialized
     assert '"path"' not in serialized
+
+
+def test_registered_source_identity_is_projected_without_its_path() -> None:
+    study = _complete_study()
+    enriched = workflow_module._study_with_registered_source_identity(
+        study,
+        {
+            "sources": [
+                {
+                    "id": "src_exact",
+                    "path": study["data_source"]["path"],
+                    "database": "mimiciv",
+                    "ok": True,
+                }
+            ]
+        },
+    )
+
+    receipt = workflow_module.project_study_setup_receipt(enriched)
+
+    assert receipt.configuration["data_source"]["source_id"] == "src_exact"
+    assert "path" not in receipt.configuration["data_source"]
 
 
 def test_workflow_keeps_typed_execution_decisions_in_setup_gate() -> None:
@@ -1031,6 +1225,163 @@ def test_metadata_only_planning_acquisition_writes_zero_patient_rows(
     assert receipt["execution_authorized"] is False
 
 
+def test_metadata_only_planning_grounds_aliases_and_drops_unsupported_optional_names(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(
+                {
+                    "selected_concepts": [
+                        "aki_stage",
+                        "death",
+                        "lactate",
+                        "charlson",
+                        "icu_readmission",
+                    ],
+                    "inclusion_exclusion": ["ICU stays"],
+                    "rationale": "AKI stage, outcome, and candidate covariates.",
+                }
+            )
+        ]
+    )
+
+    acquisition = agent_pipeline_runs._metadata_only_planning_acquisition(
+        database="miiv",
+        question="Is KDIGO AKI stage associated with in-hospital mortality?",
+        llm=llm,
+        output_dir=tmp_path / "planning",
+    )
+
+    assert acquisition.blocked is False
+    assert acquisition.coverage.sufficient is True
+    assert acquisition.selection.selected_concepts == ["aki_stage", "death", "lact"]
+    assert list(pd.read_parquet(acquisition.universe_path).columns) == [
+        "stay_id",
+        "aki_stage",
+        "death",
+        "lact",
+    ]
+    receipt = json.loads(acquisition.provenance_path.read_text(encoding="utf-8"))
+    assert receipt["selected_concepts"] == ["aki_stage", "death", "lact"]
+    assert receipt["unavailable_model_concepts"] == [
+        "charlson",
+        "icu_readmission",
+    ]
+
+
+def test_metadata_only_planning_merges_exact_source_metadata_for_dependence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import (
+        AvailableCatalog,
+        CatalogConcept,
+    )
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="test-export",
+            concepts=[
+                CatalogConcept(
+                    concept_id="icu_readmission",
+                    description="ICU readmission in the same hospitalization",
+                    category="outcome",
+                    file_name="outcome.parquet",
+                    resolved_column="icu_readmission",
+                )
+            ],
+        ),
+    )
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(
+                {
+                    "selected_concepts": ["lact", "death"],
+                    "inclusion_exclusion": ["Adult ICU stays"],
+                    "rationale": "Exposure and mortality outcome.",
+                }
+            )
+        ]
+    )
+
+    acquisition = agent_pipeline_runs._metadata_only_planning_acquisition(
+        database="miiv",
+        export_path=tmp_path / "source",
+        question="Is lactate associated with mortality?",
+        llm=llm,
+        output_dir=tmp_path / "planning",
+    )
+
+    assert acquisition.blocked is False
+    assert list(pd.read_parquet(acquisition.universe_path).columns) == [
+        "stay_id",
+        "lact",
+        "death",
+        "icu_readmission",
+    ]
+    assert acquisition.coverage.missing == []
+
+
+def test_metadata_only_kdigo_stage_keeps_closed_domain_in_research_context(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.contracts.endpoint import EndpointSpec
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.research_context.builder import build_research_context
+
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(
+                {
+                    "selected_concepts": ["aki_stage", "death"],
+                    "inclusion_exclusion": ["ICU stays"],
+                    "rationale": "KDIGO stage and mortality outcome.",
+                }
+            )
+        ]
+    )
+    acquisition = agent_pipeline_runs._metadata_only_planning_acquisition(
+        database="miiv",
+        question="Describe the mortality gradient across KDIGO AKI stages.",
+        llm=llm,
+        output_dir=tmp_path / "planning",
+        target_outcome="death",
+        required_concepts=("aki_stage", "death"),
+        operationalized_columns=("aki_stage_max",),
+    )
+
+    context = build_research_context(
+        research_question="Describe mortality by KDIGO AKI stage.",
+        cohort=acquisition.universe_path,
+        cohort_name="metadata-only",
+        database="miiv",
+        target_outcome="death",
+        endpoint=EndpointSpec(
+            name="death",
+            kind="binary",
+            levels=[0, 1],
+            absence_semantics="no_absent_rows",
+        ),
+        primary_exposure="aki_stage_max",
+        id_columns=["stay_id"],
+        outcome_columns=["death"],
+    )
+
+    stage = next(item for item in context.variables if item.name == "aki_stage_max")
+    assert context.cohort.n_stays == 0
+    assert stage.role.value == "ordinal_score"
+    assert stage.valid_range == [0.0, 3.0]
+    assert stage.is_ordinal is True
+    assert stage.ordinal_levels == [0, 1, 2, 3]
+
+
 def test_metadata_only_planning_acquisition_projects_verified_patient_schema(
     tmp_path: Path,
 ) -> None:
@@ -1172,6 +1523,41 @@ def test_metadata_planning_schema_projects_derived_landmark_event_time() -> None
     )
 
 
+def test_metadata_planning_schema_projects_derived_hospital_followup() -> None:
+    from easyicu.research_agent.planning.sensitivity_authority import (
+        PrespecifiedSensitivitySpec,
+    )
+
+    columns = research_launch_scientific._metadata_planning_operationalized_columns(
+        primary_exposure_source="aki_stage",
+        primary_exposure_aggregation="max",
+        covariates=("age", "sex"),
+        covariate_selection="exact",
+        covariate_operationalizations={},
+        sensitivity_specs=(
+            PrespecifiedSensitivitySpec(
+                spec_id="landmark_24h_primary",
+                axis="timing",
+                strategy="landmark",
+                landmark_hours=24,
+                require_alive_at_landmark=True,
+                exclude_negative_event_times=True,
+                event_time_variable="death_time_hours",
+                observation_duration_variable="hospital_followup_time_hours",
+                observation_duration_unit="hours",
+            ),
+        ),
+    )
+
+    assert columns == (
+        "aki_stage_max",
+        "age",
+        "sex",
+        "death_time_hours",
+        "hospital_followup_time_hours",
+    )
+
+
 def test_metadata_only_planning_coordinates_keep_explicit_lactate_and_mortality() -> None:
     coordinates = research_launch_scientific._metadata_only_planning_coordinates(
         database="miiv",
@@ -1276,6 +1662,18 @@ def test_materialized_target_outcome_rejects_unmaterialized_projection() -> None
         source_concept="death",
         acquisition=acquisition,
     ) is None
+
+
+def test_materialized_outcome_roster_preserves_primary_and_secondary_endpoints() -> None:
+    acquisition = SimpleNamespace(
+        analysis_columns={"death": "death", "los_icu": "los_icu"},
+        materialized_columns=("death", "los_icu", "age"),
+    )
+
+    assert agent_pipeline_runs._resolve_materialized_outcome_columns(
+        source_concepts=("los_icu", "death"),
+        acquisition=acquisition,
+    ) == ("los_icu", "death")
 
 
 def test_plan_first_web_preferences_do_not_promote_planner_choices_to_user_authority() -> None:
@@ -1938,7 +2336,142 @@ def test_live_review_authority_overrides_stale_approvable_run_history() -> None:
     assert by_id["analysis"].reason_code == "plan_scientific_changes_required"
 
 
-def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions() -> (
+def test_nonconvergent_plan_revision_remains_blocked_without_another_action() -> None:
+    study = _complete_study()
+    run_id = "run-nonconvergent"
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_type": "full",
+            "run_id": run_id,
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "run_status": "human_review_pending",
+            "pending_review_reason_codes": [
+                "agent_plan_revision_nonconvergent"
+            ],
+            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+        },
+        plan_review_authority={
+            "run_id": run_id,
+            "resumable_here": True,
+            "scientific_configuration_sha256": (
+                study_context_owner.scientific_configuration_sha256(study)
+            ),
+            "plan_approval_allowed": False,
+            "requests": [
+                {
+                    "reason_code": "agent_plan_revision_nonconvergent",
+                    "approval_allowed": False,
+                }
+            ],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert snapshot.plan_execution_ready is False
+    assert snapshot.next_action_code == "agent_plan_revision_nonconvergent"
+    assert by_id["plan"].reason_code == "agent_plan_revision_nonconvergent"
+    assert by_id["analysis"].reason_code == "agent_plan_revision_nonconvergent"
+
+
+def test_agent_selected_runtime_gap_routes_to_host_compiler() -> None:
+    from easyicu.webserver.pi_copilot import workflow as workflow_owner
+
+    study = {
+        **_complete_study(),
+        "time_window": {"hours": 24, "anchor": "ICU admission"},
+    }
+    run_id = "run-agent-runtime"
+    review_payload = {
+        "status": "changes_required",
+        "approval_allowed": False,
+        "findings": [],
+        "facts": {
+            "remediation_buckets": {
+                "agent_plan_revision": ["ROBUSTNESS_AXES_TOO_NARROW"],
+                "runtime_capability": [
+                    "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+                    "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+                ],
+                "study_authority_change": [],
+                "external_evidence": [],
+                "independent_review": [],
+            }
+        },
+    }
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_type": "full",
+            "run_id": run_id,
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "run_status": "human_review_pending",
+            "pending_review_reason_codes": ["agent_plan_revision_nonconvergent"],
+            "artifact_names": ["agent_plan.json", "scientific_plan_review.json"],
+        },
+        plan_review_authority={
+            "run_id": run_id,
+            "resumable_here": True,
+            "scientific_configuration_sha256": (
+                study_context_owner.scientific_configuration_sha256(study)
+            ),
+            "plan_approval_allowed": False,
+            "requests": [
+                {
+                    "reason_code": "agent_plan_revision_nonconvergent",
+                    "approval_allowed": False,
+                }
+            ],
+            "scientific_plan_review": review_payload,
+        },
+    )
+    plan = {
+        "design_selection": {
+            "candidates": [
+                {
+                    "design_id": "landmark_adjusted_association",
+                    "disposition": "selected",
+                }
+            ]
+        },
+        "steps": [
+            {
+                "model_requirements": [
+                    {
+                        "analysis_role": "primary",
+                        "exposure_source": "aki_stage",
+                        "outcome": "death",
+                        "covariates": ["age", "sex"],
+                        "covariate_rationales": {
+                            "age": "Baseline age precedes exposure.",
+                            "sex": "Baseline sex precedes exposure.",
+                        },
+                        "covariate_temporal_roles": {
+                            "age": "baseline_static",
+                            "sex": "baseline_static",
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+
+    enriched = workflow_owner._enrich_plan_review(
+        snapshot,
+        study=study,
+        review={"artifact_payloads": {"agent_plan.json": plan}},
+    )
+
+    assert enriched.next_action_code == "agent_plan_configuration_required"
+
+
+def test_legacy_method_question_is_projected_as_system_owned_plan_work() -> (
     None
 ):
     study = _complete_study()
@@ -2019,33 +2552,97 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
         "rendered_outputs_assessed": False,
         "dimension_scores": {"icu_clinical_design": 0, "figures": 70},
         "finding_codes": ["POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"],
-        "authorization_questions": [
-            {
-                "code": "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
-                "question": (
-                    "Use a new landmark version or keep this study descriptive?"
-                ),
-                "evidence": "Exposure timing is not closed by an executable design.",
-                "evidence_refs": [
-                    "research_context.json",
-                    "analysis_plan.json",
-                ],
-                "remediation": (
-                    "Create a new landmark version or keep the current study descriptive."
-                ),
-            }
-        ],
+        "authorization_questions": [],
         "remediation_buckets": {
             "agent_plan_revision": [
                 "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
+                "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
             ],
-            "study_authority_change": [
-                "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
-            ],
+            "study_authority_change": [],
             "runtime_capability": [],
             "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
             "independent_review": [],
         },
+    }
+
+
+def test_resolved_study_authority_finding_becomes_system_owned_plan_revision() -> None:
+    study = _complete_study()
+    study["confirmations"] = {
+        **study["confirmations"],
+        "plan_timing_landmark_24h": True,
+    }
+    study["sensitivity_specs"] = [
+        {
+            "spec_id": "landmark_24h",
+            "axis": "timing",
+            "strategy": "landmark",
+            "execution_variables": [
+                "death_time_hours",
+                "hospital_followup_time_hours",
+            ],
+            "landmark_hours": 24,
+            "require_alive_at_landmark": True,
+            "exclude_negative_event_times": True,
+            "event_time_variable": "death_time_hours",
+            "observation_duration_variable": "hospital_followup_time_hours",
+            "observation_duration_unit": "hours",
+        }
+    ]
+    review = {
+        "status": "changes_required",
+        "findings": [
+            {
+                "code": "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+                "requires_user_authorization": True,
+                "authorization_question": "Choose a temporal design?",
+            }
+        ],
+        "facts": {
+            "remediation_buckets": {
+                "agent_plan_revision": [],
+                "study_authority_change": [
+                    "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
+                ],
+                "runtime_capability": [],
+                "external_evidence": [],
+                "independent_review": [],
+            }
+        },
+    }
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_type": "full",
+            "run_id": "run-resolved-study-authority",
+            "budget_mode": "full_reviewed",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "run_status": "human_review_pending",
+            "pending_review_reason_codes": ["plan_scientific_changes_required"],
+            "artifact_names": ["agent_plan.json", "scientific_plan_review.json"],
+        },
+        plan_review_authority={
+            "run_id": "run-resolved-study-authority",
+            "resumable_here": True,
+            "scientific_configuration_sha256": (
+                study_context_owner.scientific_configuration_sha256(study)
+            ),
+            "scientific_plan_review": review,
+        },
+    )
+
+    assert snapshot.next_action_code == "plan_scientific_changes_required"
+    assert snapshot.plan_review_summary is not None
+    assert snapshot.plan_review_summary["authorization_questions"] == []
+    assert snapshot.plan_review_summary["remediation_buckets"] == {
+        "agent_plan_revision": ["POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"],
+        "runtime_capability": [],
+        "study_authority_change": [],
+        "external_evidence": [],
+        "independent_review": [],
     }
 
 
@@ -2178,7 +2775,7 @@ def test_workflow_never_offers_approval_for_stale_or_unresumable_plan(
     assert by_id["analysis"].reason_code == expected_reason
 
 
-def test_cohort_reconfirmation_precedes_superseded_plan_regeneration() -> None:
+def test_superseded_candidate_regeneration_precedes_standalone_cohort_choice() -> None:
     study = _complete_study()
     study["revision"] += 1
     study["cohort_eligibility_authority"] = {}
@@ -2207,8 +2804,35 @@ def test_cohort_reconfirmation_precedes_superseded_plan_regeneration() -> None:
         },
     )
 
-    assert snapshot.current_stage == "setup"
-    assert snapshot.next_action_code == "cohort_eligibility_confirmation_required"
+    assert snapshot.current_stage == "plan"
+    assert snapshot.next_action_code == "plan_configuration_superseded"
+
+
+def test_empty_diagnostic_plan_file_does_not_create_plan_or_cohort_authority() -> None:
+    study = _design_free_study(Path("/tmp/miiv"))
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-data-foundation-blocked",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "gate_reason": "data_foundation_blocked",
+            "run_status": "blocked",
+            "plan_available": False,
+            "artifact_names": [
+                "agent_plan.json",
+                "scientific_readiness.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
+    by_id = {stage.id: stage for stage in snapshot.stages}
+    assert by_id["setup"].reason_code != "cohort_eligibility_confirmation_required"
 
 
 def test_fresh_planning_job_takes_precedence_over_superseded_plan() -> None:
@@ -6121,6 +6745,59 @@ def test_pending_plan_without_current_review_projects_stale_policy_reason(
     )
 
 
+def test_nonconvergent_projection_persists_stop_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "nonconvergent-pending-run"
+    _write_real_pipeline_fixture(run_dir, manuscript="")
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="The revised plan still has the same system defects.",
+        authority_sha256="a" * 64,
+        payload={
+            "reason": "agent_plan_revision_nonconvergent",
+            "approval_allowed": False,
+        },
+    )
+    pending = HumanReviewPending(
+        run_id="run-nonconvergent",
+        thread_id="thread-nonconvergent",
+        run_dir=str(run_dir),
+        requests=(request,),
+    )
+    _allow_current_scientific_review(monkeypatch)
+    project_root = tmp_path / "projects"
+    wrapper = project_root / "study-workflow" / "run_nonconvergent"
+
+    result = agent_pipeline_runs._write_projection(
+        wrapper_dir=wrapper,
+        study=_complete_study(),
+        provider={"provider": "openai", "model": "test-model"},
+        acquisition=_acquisition_receipt(),
+        run_dir=run_dir,
+        pending=pending,
+        plan_revision_source_run_id="run-source",
+    )
+
+    manifest = json.loads(
+        (wrapper / "source_run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert result["pending_reviews"][0]["reason_code"] == (
+        "agent_plan_revision_nonconvergent"
+    )
+    assert manifest["plan_revision_nonconvergent"] is True
+    assert manifest["plan_revision_source_run_id"] == "run-source"
+    history = agent_runs.list_run_history(
+        study_id="study-workflow",
+        project_root=str(project_root),
+    )
+    assert history["runs"][0]["pending_review_reason_codes"] == [
+        "agent_plan_revision_nonconvergent"
+    ]
+    assert history["runs"][0]["plan_revision_nonconvergent"] is True
+
+
 def test_pending_plan_cannot_resume_after_scientific_setup_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8168,15 +8845,21 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
 
 
 @pytest.mark.parametrize(
-    ("planner_start_mode", "resume_source_job_id"),
+    (
+        "planner_start_mode",
+        "resume_source_job_id",
+        "plan_revision_source_run_id",
+    ),
     [
-        ("fresh", ""),
-        ("resume_checkpoint", "prior-canary"),
+        ("fresh", "", ""),
+        ("resume_checkpoint", "prior-canary", ""),
+        ("auto", "prior-canary", "run-reviewed-candidate"),
     ],
 )
 def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     planner_start_mode: str,
     resume_source_job_id: str,
+    plan_revision_source_run_id: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8263,6 +8946,8 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     }
     if resume_source_job_id:
         payload["development_resume_source_job_id"] = "client-forged-checkpoint"
+    if plan_revision_source_run_id:
+        payload["plan_revision_source_run_id"] = plan_revision_source_run_id
     result = agent_route.jobs_agent_run(
         payload,
         request=_request(),
@@ -8278,6 +8963,8 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         assert result["resume_source_job_id"] == resume_source_job_id
     else:
         assert "development_resume_source_job_id" not in captured
+    if plan_revision_source_run_id:
+        assert captured["plan_revision_source_run_id"] == plan_revision_source_run_id
 
 
 def test_monitor_history_merges_default_and_copilot_pipeline_roots(
@@ -8874,6 +9561,51 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
         "require_outcome": False,
         "primary_exposure_source_concept": None,
     }
+
+
+def test_web_data_foundation_profile_keeps_all_candidate_plan_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="los_icu",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+
+    profile = research_launch_scientific._data_foundation_profile(
+        export_path="/typed/demo",
+        study={"modules": ["demographics", "outcome"]},
+        target="death",
+        additional_outcomes=("los_icu", "death"),
+    )
+
+    assert profile["static_concepts"] == ("age", "los_icu")
+    assert profile["outcome_concepts"] == ("death",)
+    assert profile["require_outcome"] is True
 
 
 def test_web_data_foundation_profile_keeps_event_outcome_typed(

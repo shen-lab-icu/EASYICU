@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
+from easyicu.research_agent.icu_rules import VariableKind, classify_variable
 from easyicu.webserver import dataio, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
@@ -108,6 +109,7 @@ def _runtime_projection_sensitivity_specs(
     sensitivity_specs: tuple[Any, ...],
     *,
     primary_exposure_source: str,
+    primary_exposure_dtype: str = "",
 ) -> tuple[Any, ...]:
     """Add only the deterministic runtime's automatic nonlinear safeguard.
 
@@ -119,6 +121,12 @@ def _runtime_projection_sensitivity_specs(
     """
 
     if not primary_exposure_source:
+        return sensitivity_specs
+    exposure_kind = classify_variable(
+        primary_exposure_source,
+        primary_exposure_dtype,
+    ).kind
+    if exposure_kind != VariableKind.CONTINUOUS:
         return sensitivity_specs
     strategies = {
         str(getattr(item, "strategy", "") or "") for item in sensitivity_specs
@@ -137,6 +145,20 @@ def _runtime_projection_sensitivity_specs(
         execution_variables=(primary_exposure_source,),
     )
     return (*sensitivity_specs, automatic)
+
+
+def _materialized_column_dtype(path: Path, column: str | None) -> str:
+    """Return one schema dtype without reading patient rows."""
+
+    if not column:
+        return ""
+    try:
+        import pyarrow.parquet as pq
+
+        schema = pq.read_schema(path)
+    except Exception:
+        return ""
+    return str(schema.field(column).type) if column in schema.names else ""
 
 
 def _patient_grouping_for_analysis_design(
@@ -555,14 +577,17 @@ def _metadata_planning_operationalized_columns(
         values.extend(mapping.get(name, name) for name in covariates)
     for spec in sensitivity_specs:
         values.extend(getattr(spec, "source_materialization_variables", ()) or ())
-        # The outcome owner derives event time during real materialization, so
-        # it is intentionally absent from ``source_materialization_variables``.
-        # A zero-row planning catalog still needs that derived column in its
-        # schema so the host can compile the already user-reviewed landmark
-        # runtime without reading patient rows.
-        event_time_variable = getattr(spec, "event_time_variable", None)
-        if event_time_variable:
-            values.append(event_time_variable)
+        # The outcome owner derives event time and may also derive follow-up
+        # duration during real materialization.  They are intentionally absent
+        # from source concept selection, but the zero-row catalog still needs
+        # both owner-issued output columns so the host can bind the exact
+        # landmark runtime without reading patient rows.
+        for derived in (
+            getattr(spec, "event_time_variable", None),
+            getattr(spec, "observation_duration_variable", None),
+        ):
+            if derived:
+                values.append(derived)
     return _normalized_metadata_planning_operationalized_columns(values)
 
 
@@ -636,6 +661,7 @@ def _data_foundation_profile(
     require_primary_exposure: bool = True,
     covariates: tuple[str, ...] = (),
     sensitivity_specs: tuple[Any, ...] = (),
+    additional_outcomes: tuple[str, ...] = (),
 ) -> Dict[str, Any]:
     """Compile StudyContext modules into one typed materialization request."""
 
@@ -715,30 +741,41 @@ def _data_foundation_profile(
             static_concepts.append("icu_readmission")
         else:
             required_feature_concepts.append("icu_readmission")
-    if target:
-        target_meta = by_id.get(target)
+    requested_outcomes = tuple(
+        dict.fromkeys(
+            value
+            for value in (target, *additional_outcomes)
+            if isinstance(value, str) and value.strip()
+        )
+    )
+    for requested_outcome in requested_outcomes:
+        target_meta = by_id.get(requested_outcome)
         if target_meta is None:
-            if require_target:
+            if require_target or requested_outcome != target:
                 raise ResearchPipelineRunError(
-                    "research_pipeline_target_outside_configured_modules",
                     (
-                        "The configured outcome is not available in the "
+                        "research_pipeline_target_outside_configured_modules"
+                        if requested_outcome == target
+                        else "research_pipeline_outcome_outside_configured_modules"
+                    ),
+                    (
+                        "A plan-required outcome is not available in the "
                         "selected feature modules."
                     ),
                     details={
                         "field": "execution_concepts.outcome",
-                        "concept_id": target,
+                        "concept_id": requested_outcome,
                     },
                 )
         else:
             target_module = Path(target_meta.file_name).stem.lower()
             if target_meta.column_role == "event_status":
-                outcome_concepts.append(target)
+                outcome_concepts.append(requested_outcome)
                 require_outcome = True
             elif target_module in {"demographics", "outcome"}:
-                static_concepts.append(target)
+                static_concepts.append(requested_outcome)
             else:
-                required_feature_concepts.append(target)
+                required_feature_concepts.append(requested_outcome)
 
     sensitivity_variables = tuple(
         dict.fromkeys(

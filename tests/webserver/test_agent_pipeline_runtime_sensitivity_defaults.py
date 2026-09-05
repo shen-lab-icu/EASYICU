@@ -61,3 +61,22 @@ def test_explicit_functional_form_is_never_replaced() -> None:
         configured,
         primary_exposure_source="lact",
     ) == configured
+
+
+def test_ordinal_landmark_exposure_never_receives_continuous_rcs() -> None:
+    configured = normalize_prespecified_sensitivities(
+        [
+            {
+                "spec_id": "landmark_24h",
+                "axis": "timing",
+                "strategy": "landmark",
+                "landmark_hours": 24,
+            }
+        ]
+    )
+
+    assert _runtime_projection_sensitivity_specs(
+        configured,
+        primary_exposure_source="aki_stage",
+        primary_exposure_dtype="int64",
+    ) == configured

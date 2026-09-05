@@ -88,7 +88,9 @@ from easyicu.webserver.research_launch_scientific import (
     _configured_sensitivity_specs,
     _data_foundation_profile,
     _metadata_only_planning_coordinates,
+    _materialized_column_dtype,
     _normalized_metadata_planning_operationalized_columns,
+    _primary_exposure,
     _primary_exposure_aggregation,
     _runtime_projection_sensitivity_specs,
     _target_outcome,
@@ -386,13 +388,16 @@ def _pending_review_reason_code(
 ) -> str:
     """Project one precise current-policy reason for the paused plan."""
 
+    payload = request.payload if isinstance(request.payload, Mapping) else {}
+    explicit_reason = _clean_text(payload.get("reason"), 160)
+    if explicit_reason == "agent_plan_revision_nonconvergent":
+        return explicit_reason
     if not plan_recommendation_complete:
         return "plan_scientific_changes_required"
     if not scientific_plan_review:
         return "scientific_plan_review_policy_stale"
     if scientific_plan_review.get("approval_allowed") is not True:
         return "plan_scientific_changes_required"
-    payload = request.payload if isinstance(request.payload, Mapping) else {}
     return _clean_text(payload.get("reason"), 160)
 
 
@@ -956,6 +961,7 @@ def _metadata_only_patient_grouping_authority(
 def _metadata_only_planning_acquisition(
     *,
     database: str,
+    export_path: str | Path | None = None,
     question: str,
     llm: Any,
     output_dir: Path,
@@ -979,6 +985,7 @@ def _metadata_only_planning_acquisition(
 
     from easyicu.research_agent.acquisition.catalog import (
         assess_coverage,
+        build_available_catalog,
         build_database_capability_catalog,
     )
     from easyicu.research_agent.acquisition.foundation import (
@@ -989,6 +996,18 @@ def _metadata_only_planning_acquisition(
     from easyicu.research_agent.concept_availability import normalize_database_name
 
     catalog = build_database_capability_catalog(database)
+    if export_path is not None:
+        try:
+            source_catalog = build_available_catalog(Path(export_path).expanduser())
+        except (FileNotFoundError, OSError, ValueError):
+            source_catalog = None
+        if source_catalog is not None:
+            by_id = {item.concept_id: item for item in catalog.concepts}
+            for item in source_catalog.concepts:
+                # Exact source metadata is stronger than generic database
+                # capability metadata, but no patient values are read here.
+                by_id[item.concept_id] = item
+            catalog.concepts = list(by_id.values())
     if not catalog.concepts:
         raise ResearchPipelineRunError(
             "research_pipeline_planning_catalog_unavailable",
@@ -1000,9 +1019,55 @@ def _metadata_only_planning_acquisition(
         catalog=catalog,
         target_outcome=target_outcome,
     )
+    # This catalog is the host's complete executable menu for planning, not a
+    # partial user export. Ground ordinary clinical spellings through the
+    # dictionary's unique aliases and discard any remaining model-only names.
+    # Keeping those names as "missing data" made one optional hallucinated
+    # covariate block the Planner before it could choose a supported design.
+    # A malformed/empty selection still fails closed below.
+    unavailable_model_concepts: list[str] = []
+    if selection.selection_succeeded and selection.selected_concepts:
+        from easyicu.research_agent.concept_catalog import load_concept_catalog
+
+        dictionary_catalog = load_concept_catalog(restrict_to=catalog.ids())
+        alias_owners: Dict[str, list[str]] = {}
+        for concept_id, aliases in dictionary_catalog.concept_aliases.items():
+            if concept_id not in catalog.ids():
+                continue
+            for alias in aliases:
+                normalized_alias = re.sub(r"\s+", " ", str(alias).strip()).casefold()
+                if normalized_alias:
+                    alias_owners.setdefault(normalized_alias, []).append(concept_id)
+        available_ids = set(catalog.ids())
+        grounded: list[str] = []
+        for proposed in selection.selected_concepts:
+            if proposed in available_ids:
+                resolved = proposed
+            else:
+                owners = list(
+                    dict.fromkeys(
+                        alias_owners.get(
+                            re.sub(r"\s+", " ", proposed.strip()).casefold(),
+                            (),
+                        )
+                    )
+                )
+                resolved = owners[0] if len(owners) == 1 else ""
+            if resolved:
+                if resolved not in grounded:
+                    grounded.append(resolved)
+            else:
+                unavailable_model_concepts.append(proposed)
+        selection.selected_concepts = grounded
+        selection.coverage = assess_coverage(grounded, catalog)
+    # Patient grouping is not always present in a published research export.
+    # Keep the owner-issued readmission coordinate in the zero-row planning
+    # schema when it exists so the Agent can propose a dependence sensitivity
+    # without looking at patient values or asking the user to discover fields.
+    planning_required_concepts = (*required_concepts, "icu_readmission")
     resolvable_required = [
         value.strip()
-        for value in required_concepts
+        for value in planning_required_concepts
         if isinstance(value, str)
         and value.strip()
         and assess_coverage([value.strip()], catalog).sufficient
@@ -1105,6 +1170,7 @@ def _metadata_only_planning_acquisition(
             "operationalized_columns": list(normalized_operationalized),
             "replacement_row_identity": replacement_row_identity,
             "selected_concepts": selected,
+            "unavailable_model_concepts": unavailable_model_concepts,
             "selected_concepts_sha256": hashlib.sha256(
                 json.dumps(
                     selected,
@@ -1376,6 +1442,45 @@ def _resolve_materialized_target_outcome(
     return source_concept if source_concept in materialized else None
 
 
+def _resolve_materialized_outcome_columns(
+    *,
+    source_concepts: Sequence[str],
+    acquisition: Any,
+) -> tuple[str, ...]:
+    """Resolve every reviewed outcome through the data-foundation owner.
+
+    A candidate plan can legitimately contain more than its primary endpoint.
+    Preserve that complete reviewed roster when patient data are materialized;
+    silently falling back to only ``target_outcome`` changes the question
+    before the package-bound Planner sees it.
+    """
+
+    resolved: list[str] = []
+    missing: list[str] = []
+    for source_concept in source_concepts:
+        column = _resolve_materialized_target_outcome(
+            source_concept=str(source_concept),
+            acquisition=acquisition,
+        )
+        if column:
+            if column not in resolved:
+                resolved.append(column)
+        else:
+            missing.append(str(source_concept))
+    if missing:
+        raise ResearchPipelineRunError(
+            "research_pipeline_plan_outcome_materialization_unavailable",
+            "A reviewed candidate-plan outcome is unavailable in the materialized cohort.",
+            details={
+                "missing_source_concepts": missing,
+                "available_analysis_columns": dict(
+                    getattr(acquisition, "analysis_columns", {}) or {}
+                ),
+            },
+        )
+    return tuple(resolved)
+
+
 def _elide_constraint_lists(
     constraints: Mapping[str, Any], *, head: int
 ) -> Dict[str, Any]:
@@ -1521,10 +1626,13 @@ def _research_user_preferences(
     covariates = _configured_covariates(study)
     selection = _configured_covariate_selection(study)
     if selection == "exact":
-        # An exact empty roster is a positive user decision to run unadjusted.
-        # Merely serializing ``covariates=[]`` is not that authority.
+        # An exact roster is owned either by an explicit user decision or by a
+        # complete Agent Plan compiled for whole-plan review. Preserve that
+        # owner instead of collapsing both paths into fabricated user consent.
         preferences["covariates"] = list(covariates)
         preferences["covariate_selection"] = "exact"
+        if study.get("covariate_authority") is not None:
+            preferences["covariate_authority"] = study.get("covariate_authority")
         preferences["covariate_rationales"] = dict(
             study.get("covariate_rationales") or {}
         )
@@ -2705,6 +2813,7 @@ def _write_projection(
     run_dir: Optional[Path],
     pending: Optional[Any] = None,
     blocked_reason: Optional[str] = None,
+    plan_revision_source_run_id: str = "",
 ) -> Dict[str, Any]:
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     run_id = str(
@@ -2747,6 +2856,9 @@ def _write_projection(
             "coverage_sufficient": bool(getattr(coverage, "sufficient", False)),
         },
         "local_first": {"uploads": 0},
+        "plan_revision_source_run_id": _clean_text(
+            plan_revision_source_run_id, 160
+        ),
     }
     cohort_summary = {
         "summary": run_context["summary"],
@@ -2902,6 +3014,13 @@ def _write_projection(
         "run_id": run_id,
         "status": "human_review_pending" if pending is not None else gate["status"],
         "resume_scope": getattr(pending, "resume_scope", None),
+        "plan_revision_source_run_id": _clean_text(
+            plan_revision_source_run_id, 160
+        ),
+        "plan_revision_nonconvergent": any(
+            item.get("reason_code") == "agent_plan_revision_nonconvergent"
+            for item in pending_requests
+        ),
         "pending_reviews": pending_requests,
         "plan_approval_allowed": bool(
             pending_requests
@@ -3173,6 +3292,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             credential_source = record.credential_source
             budget_mode = record.budget_mode
             provider_name = _clean_text(record.provider_meta.get("provider"), 64)
+            wrapper_dir = Path(record.wrapper_dir)
         except WebReviewRecoveryError:
             return None
     else:
@@ -3181,6 +3301,12 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         credential_source = entry.credential_source
         budget_mode = entry.budget_mode
         provider_name = _clean_text(entry.provider.get("provider"), 64)
+        wrapper_dir = entry.wrapper_dir
+    source_manifest = _read_json(wrapper_dir / "source_run_manifest.json", {})
+    revision_nonconvergent = bool(
+        isinstance(source_manifest, Mapping)
+        and source_manifest.get("plan_revision_nonconvergent") is True
+    )
     plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(
         _pending_plan_authority(pending)
     )
@@ -3209,7 +3335,9 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
                 "summary": request.summary,
                 "authority_sha256": request.authority_sha256,
                 "reason_code": _clean_text(
-                    _pending_review_reason_code(
+                    "agent_plan_revision_nonconvergent"
+                    if revision_nonconvergent
+                    else _pending_review_reason_code(
                         request=request,
                         plan_recommendation_complete=plan_recommendation_complete,
                         scientific_plan_review=scientific_plan_review,
@@ -3262,19 +3390,13 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def _compile_plan_revision_contract(
+def _load_plan_revision_source_review(
     *,
     study: Mapping[str, Any],
     project_root: Optional[str],
     source_run_id: str,
-) -> str:
-    """Compile an exact prior review into an Agent-owned revision contract.
-
-    An empty return value is intentional: it means the prior non-approvable
-    review contains only study-authority, external-evidence, or independent-
-    review findings, so the next attempt must be a fully fresh Plan rather than
-    a constrained revision of the old one.
-    """
+) -> PlanScientificReview:
+    """Load the exact digest-verified review that seeds one plan revision."""
 
     history = agent_runs.list_run_history(
         study_id=_clean_text(study.get("id"), 160),
@@ -3319,7 +3441,86 @@ def _compile_plan_revision_contract(
             "plan_revision_source_not_changes_required",
             "Only a non-approvable scientific review may seed a fresh plan revision.",
         )
-    return render_agent_plan_revision_contract(parsed_review)
+    return parsed_review
+
+
+def _agent_plan_revision_codes(
+    review: PlanScientificReview | Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Return the exact system-owned defect set from one scientific review."""
+
+    facts = (
+        review.facts
+        if isinstance(review, PlanScientificReview)
+        else review.get("facts")
+    )
+    facts = facts if isinstance(facts, Mapping) else {}
+    buckets = facts.get("remediation_buckets")
+    buckets = buckets if isinstance(buckets, Mapping) else {}
+    return tuple(
+        sorted(
+            {
+                _clean_text(value, 160)
+                for value in list(buckets.get("agent_plan_revision") or ())
+                if _clean_text(value, 160)
+            }
+        )
+    )
+
+
+def _mark_nonconvergent_plan_revision(
+    pending: Any,
+    *,
+    source_codes: Sequence[str],
+    current_review: Mapping[str, Any],
+) -> Any:
+    """Stop an automatic revision whose Agent-owned defects did not shrink."""
+
+    source = frozenset(_clean_text(value, 160) for value in source_codes)
+    current = frozenset(_agent_plan_revision_codes(current_review))
+    if not source or current < source:
+        return pending
+    requests = tuple(
+        request.model_copy(
+            update={
+                "payload": {
+                    **(
+                        dict(request.payload)
+                        if isinstance(request.payload, Mapping)
+                        else {}
+                    ),
+                    "reason": "agent_plan_revision_nonconvergent",
+                    "approval_allowed": False,
+                    "source_agent_plan_revision_codes": sorted(source),
+                    "current_agent_plan_revision_codes": sorted(current),
+                }
+            }
+        )
+        for request in pending.requests
+    )
+    return pending.model_copy(update={"requests": requests})
+
+
+def _compile_plan_revision_contract(
+    *,
+    study: Mapping[str, Any],
+    project_root: Optional[str],
+    source_run_id: str,
+) -> str:
+    """Compile an exact prior review into an Agent-owned revision contract.
+
+    An empty return value is intentional: it means the prior non-approvable
+    review contains only study-authority, external-evidence, or independent-
+    review findings, so the next attempt must be a fully fresh Plan rather than
+    a constrained revision of the old one.
+    """
+
+    review = _load_plan_revision_source_review(
+        study=study,
+        project_root=project_root,
+        source_run_id=source_run_id,
+    )
+    return render_agent_plan_revision_contract(review)
 
 
 @dataclass(frozen=True)
@@ -3328,6 +3529,7 @@ class _CandidatePlanMaterializationAuthority:
 
     primary_exposure: str
     target_outcome: str
+    outcome_concepts: tuple[str, ...]
     contract: str
 
 
@@ -3496,9 +3698,6 @@ def _load_candidate_plan_materialization_authority(
         for value in list(preferences.get("covariates") or ())
         if _clean_text(value, 160)
     )
-    required_concepts = tuple(
-        dict.fromkeys((primary_exposure, target_outcome, *candidate_covariates))
-    )
     receipt = _read_json(
         project_dir / "pipeline_input" / "planner_catalog_receipt.json", {}
     ) or {}
@@ -3507,11 +3706,62 @@ def _load_candidate_plan_materialization_authority(
         for value in list(receipt.get("selected_concepts") or ())
         if _clean_text(value, 160)
     }
+    operationalized_columns = {
+        _clean_text(value, 160)
+        for value in list(receipt.get("operationalized_columns") or ())
+        if _clean_text(value, 160)
+    }
+    planning_schema_coordinates = selected_concepts | operationalized_columns
+    requested_outcomes = tuple(
+        dict.fromkeys(
+            _clean_text(value, 160)
+            for value in list(parsed_review.facts.get("requested_outcomes") or ())
+            if _clean_text(value, 160)
+        )
+    )
+    if not requested_outcomes:
+        requested_outcomes = (target_outcome,)
+    for identity_key in ("row_identity_column", "patient_identity_column"):
+        coordinate = _clean_text(receipt.get(identity_key), 160)
+        if coordinate:
+            planning_schema_coordinates.add(coordinate)
+    proposed_primary_exposure = _clean_text(
+        proposed.get("primary_exposure"), 160
+    )
+    configured_primary_exposure = (
+        _clean_text(_primary_exposure(study), 160) or proposed_primary_exposure
+    )
+    aggregation = _clean_text(_primary_exposure_aggregation(study), 16)
+    expected_primary_exposure = configured_primary_exposure
+    if configured_primary_exposure and aggregation:
+        expected_primary_exposure = f"{configured_primary_exposure}_{aggregation}"
+    source_required_concepts = tuple(
+        dict.fromkeys(
+            (
+                proposed_primary_exposure,
+                _clean_text(proposed.get("target_outcome"), 160),
+                *requested_outcomes,
+                *covariates,
+            )
+        )
+    )
+    planned_analysis_coordinates = tuple(
+        dict.fromkeys(
+            (
+                primary_exposure,
+                target_outcome,
+                *requested_outcomes,
+                *candidate_covariates,
+            )
+        )
+    )
     catalog_path = project_dir / "pipeline_input" / "planner_catalog.parquet"
     try:
         import pyarrow.parquet as pq
 
-        catalog_rows = pq.ParquetFile(catalog_path).metadata.num_rows
+        catalog_file = pq.ParquetFile(catalog_path)
+        catalog_rows = catalog_file.metadata.num_rows
+        catalog_columns = set(catalog_file.schema_arrow.names)
     except (OSError, ValueError) as exc:
         raise ResearchPipelineRunError(
             "candidate_plan_materialization_authority_invalid",
@@ -3521,11 +3771,23 @@ def _load_candidate_plan_materialization_authority(
         _clean_text(identity.get("question"), 1_200)
         != _clean_text(study.get("question"), 1_200)
         or _clean_text(identity.get("database"), 64) != database
-        or primary_exposure != proposed.get("primary_exposure")
+        # The natural-language intent owns the source concept while the
+        # metadata-only acquisition owner may expose a distinct, typed output
+        # column (for example ``aki_stage`` -> ``aki_stage_max``).  Compare
+        # each coordinate at its own authority boundary instead of treating
+        # the derived analysis column as a different scientific exposure.
+        or configured_primary_exposure != proposed_primary_exposure
+        or primary_exposure != expected_primary_exposure
         or target_outcome != proposed.get("target_outcome")
+        or target_outcome not in requested_outcomes
         or candidate_covariates != tuple(covariates)
-        or not all(required_concepts)
-        or not set(required_concepts).issubset(selected_concepts)
+        or not all(source_required_concepts)
+        or not set(source_required_concepts).issubset(selected_concepts)
+        or not all(planned_analysis_coordinates)
+        or not set(planned_analysis_coordinates).issubset(
+            planning_schema_coordinates
+        )
+        or not set(planned_analysis_coordinates).issubset(catalog_columns)
         or catalog_rows != 0
     ):
         raise ResearchPipelineRunError(
@@ -3535,6 +3797,7 @@ def _load_candidate_plan_materialization_authority(
     return _CandidatePlanMaterializationAuthority(
         primary_exposure=primary_exposure,
         target_outcome=target_outcome,
+        outcome_concepts=requested_outcomes,
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
     )
 
@@ -4086,6 +4349,8 @@ def make_research_pipeline_run_runner(
         )
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         bound_plan_revision_contract = ""
+        candidate_outcome_concepts: tuple[str, ...] = ()
+        source_agent_plan_revision_codes: tuple[str, ...] = ()
         if source_run_id:
             candidate_authority = _load_candidate_plan_materialization_authority(
                 study=study,
@@ -4102,6 +4367,7 @@ def make_research_pipeline_run_runner(
                 # Planner must still pause for a second review.
                 target = candidate_authority.target_outcome
                 primary_exposure = candidate_authority.primary_exposure
+                candidate_outcome_concepts = candidate_authority.outcome_concepts
                 foundation_profile = _data_foundation_profile(
                     export_path=export_path,
                     study=candidate_planning_study,
@@ -4111,13 +4377,20 @@ def make_research_pipeline_run_runner(
                     require_primary_exposure=True,
                     covariates=covariates,
                     sensitivity_specs=sensitivity_specs,
+                    additional_outcomes=candidate_outcome_concepts,
                 )
                 bound_plan_revision_contract = candidate_authority.contract
             else:
-                bound_plan_revision_contract = _compile_plan_revision_contract(
+                source_review = _load_plan_revision_source_review(
                     study=study,
                     project_root=project_root,
                     source_run_id=source_run_id,
+                )
+                source_agent_plan_revision_codes = _agent_plan_revision_codes(
+                    source_review
+                )
+                bound_plan_revision_contract = render_agent_plan_revision_contract(
+                    source_review
                 )
         _progress(job, step="provider", label="Research Agent provider authorized")
         request_timeout, request_hard_timeout = _provider_request_timeouts_for_budget(
@@ -4204,6 +4477,7 @@ def make_research_pipeline_run_runner(
             elif metadata_only_planning:
                 acquisition = _metadata_only_planning_acquisition(
                     database=database,
+                    export_path=export_path,
                     question=question,
                     llm=acquisition_client,
                     output_dir=wrapper_dir / "pipeline_input",
@@ -4296,6 +4570,7 @@ def make_research_pipeline_run_runner(
                     acquisition=acquisition,
                     run_dir=None,
                     blocked_reason="data_foundation_blocked",
+                    plan_revision_source_run_id=source_run_id,
                 )
             resolved_primary_exposure = primary_exposure
             if configured_primary_exposure and not metadata_only_planning:
@@ -4327,6 +4602,7 @@ def make_research_pipeline_run_runner(
                         "The Planner could not bind a reviewable materialized representation for the exposure named in the research question.",
                     )
             pipeline_target = target
+            pipeline_outcome_columns: tuple[str, ...] | None = None
             if target and not metadata_only_planning:
                 pipeline_target = _resolve_materialized_target_outcome(
                     source_concept=str(target),
@@ -4342,6 +4618,16 @@ def make_research_pipeline_run_runner(
                                 getattr(acquisition, "analysis_columns", {}) or {}
                             ),
                         },
+                    )
+            if candidate_outcome_concepts and not metadata_only_planning:
+                pipeline_outcome_columns = _resolve_materialized_outcome_columns(
+                    source_concepts=candidate_outcome_concepts,
+                    acquisition=acquisition,
+                )
+                if pipeline_target not in pipeline_outcome_columns:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_plan_primary_outcome_missing",
+                        "The materialized candidate outcome roster lost its primary endpoint.",
                     )
             if metadata_only_planning:
                 execution_concepts = study.get("execution_concepts")
@@ -4422,7 +4708,10 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.contracts.dependence import (
                 PlannedDependenceRequirement,
             )
-            from easyicu.research_agent.literature import LiteratureBundle, manuscript_citable_keys
+            from easyicu.research_agent.literature import (
+                LiteratureBundle,
+                manuscript_citable_keys,
+            )
 
             try:
                 runtime_literature = (
@@ -4445,10 +4734,12 @@ def make_research_pipeline_run_runner(
             runtime_projection_specs = _runtime_projection_sensitivity_specs(
                 sensitivity_specs,
                 primary_exposure_source=runtime_primary_exposure_source,
+                primary_exposure_dtype=_materialized_column_dtype(
+                    Path(acquisition.universe_path),
+                    resolved_primary_exposure,
+                ),
             )
-            runtime_literature_keys = manuscript_citable_keys(
-                runtime_literature
-            )
+            runtime_literature_keys = manuscript_citable_keys(runtime_literature)
             runtime_direct_comparator_keys = tuple(
                 decision.citation_key
                 for decision in (
@@ -4716,6 +5007,7 @@ def make_research_pipeline_run_runner(
                 cohort_name=f"web_{_slug(study.get('id'))}",
                 database=database,
                 target_outcome=pipeline_target,
+                outcome_columns=pipeline_outcome_columns,
                 endpoint=acquisition.endpoint,
                 primary_exposure=resolved_primary_exposure,
                 inclusion_criteria=_inclusion_criteria(study),
@@ -4757,6 +5049,14 @@ def make_research_pipeline_run_runner(
                 )
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
+                if source_agent_plan_revision_codes:
+                    outcome = _mark_nonconvergent_plan_revision(
+                        outcome,
+                        source_codes=source_agent_plan_revision_codes,
+                        current_review=_load_pending_scientific_review(
+                            run_dir, outcome
+                        ),
+                    )
                 put_review_recovery_record(recovery_seed.record(str(outcome.run_id)))
                 entry = _PendingRun(
                     pipeline=pipeline,
@@ -4779,6 +5079,7 @@ def make_research_pipeline_run_runner(
                     acquisition=acquisition,
                     run_dir=run_dir,
                     pending=outcome,
+                    plan_revision_source_run_id=source_run_id,
                 )
             _finish_web_provider_hard_stop(provider_hard_stop)
             projection = _write_projection(
@@ -4787,6 +5088,7 @@ def make_research_pipeline_run_runner(
                 provider=provider_public,
                 acquisition=acquisition,
                 run_dir=Path(outcome.manifest_path).parent,
+                plan_revision_source_run_id=source_run_id,
             )
             _cleanup_recovery_after_projection(
                 wrapper_dir=wrapper_dir,

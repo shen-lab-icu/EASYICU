@@ -26,6 +26,7 @@ from ..schema import AnalysisStep, ValidationFinding
 
 CONTROLLED_METHOD = "ordinal_stratified_descriptive_analysis"
 SCIENTIFIC_ACTION_ID = "association.ordinal_trend"
+PARENT_PRODUCT = "table:adjusted_association_estimates"
 CONTRACT_KEY = "ordered_stratified_contract"
 CONTRACT_SCHEMA_VERSION = "1.0"
 
@@ -1008,6 +1009,8 @@ __all__ = [
     "CONTRACT_KEY",
     "CONTRACT_SCHEMA_VERSION",
     "CONTROLLED_METHOD",
+    "PARENT_PRODUCT",
+    "SCIENTIFIC_ACTION_ID",
     "is_ordered_stratified_analysis_step",
     "ordered_stratified_numeric_findings",
     "ordered_stratified_script_findings",

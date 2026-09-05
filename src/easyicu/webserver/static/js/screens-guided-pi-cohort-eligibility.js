@@ -57,10 +57,11 @@
       const value = selection();
       const options = value && Array.isArray(value.options) ? value.options : [];
       const actionCode = String(workflow().next_action_code || '');
-      const planNeedsThisDecision = [
-        'cohort_eligibility_confirmation_required',
-        'planner_checkpoint_resume_available',
-      ].includes(actionCode);
+      // A Planner checkpoint is an operational recovery state, never cohort
+      // authority.  Showing admission choices while a provider retry is due
+      // asks the researcher to solve a scientific design question that the
+      // candidate Plan has not finished answering yet.
+      const planNeedsThisDecision = actionCode === 'cohort_eligibility_confirmation_required';
       if (!value || value.stated || value.blocker_code !== 'cohort_eligibility_confirmation_required'
         || !options.length || !planNeedsThisDecision || host.busy() || host.sessionIsStale()) return '';
 
