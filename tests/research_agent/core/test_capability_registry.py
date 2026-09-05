@@ -413,7 +413,10 @@ def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
         + "\n"
         + inspect.getsource(pipeline_execute._step_settle_initial_code)
     )
-    assert "select_standard_executor(" in execute_source
+    assert "select_standard_executor(" not in execute_source
+    assert execute_source.index("resolve_standard_executor(") < execute_source.index(
+        "executor_decision.render_selection()"
+    )
     assert 'step_record["deterministic_standard_analysis"] = (' in execute_source
 
     # Every documented runner must define its registry-declared entrypoint
