@@ -78,9 +78,9 @@ from .completion import (
     count_missing_evidence_markers as _count_missing_evidence_markers,
     count_writer_attempts,
     has_figure_only_output_contract,
-    paper_authority_gates,
-    publication_authorized,
-    run_completion_axes,
+    RunCompletionDecision,
+    RunCompletionFacts,
+    readiness_status as _readiness_status,
     step_completion_projection,
 )
 from .manuscript_gate_state import (
@@ -1736,6 +1736,10 @@ def _compute_readiness_gates(
     stop_after_analysis: bool,
     writer_probe_mode: bool = False,
     writer_probe_failed_steps: Optional[Sequence[str]] = None,
+    force_diagnostic_only: bool = False,
+    execution_paper_eligible: bool = False,
+    plan_authority_verified: bool = False,
+    plan_authority_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     execution = execution_gate_status(
         plan=plan, per_step_records=per_step_records, run_dir=run_dir
@@ -2045,12 +2049,6 @@ def _compute_readiness_gates(
         and execution["step_scientific_requirements_complete"]
         and not analysis_errors
     )
-    manuscript_ready = (
-        execution["execution_complete"]
-        and evidence_complete
-        and numeric_verified
-        and analysis_validated
-    )
     publication = _publication_figure_bundle_ready(
         evidence=evidence,
         run_dir=run_dir,
@@ -2107,55 +2105,43 @@ def _compute_readiness_gates(
     # revision that declares the product again — which is why the final plan is
     # passed in rather than the question being answered from findings alone.
     plan_truncation = _plan_truncation_status(findings, plan=plan)
-    publication_ready = (
-        publication_authorized(
-            manuscript_ready=manuscript_ready,
-            publication_figure_bundle_ready=publication[
-                "publication_figure_bundle_ready"
-            ],
-            publication_provenance_ready=publication_provenance[
-                "publication_provenance_ready"
-            ],
-            display_suite_complete=display_suite["display_suite_complete"],
-            article_contract_complete=article_contract["article_contract_complete"],
-            article_figure_strategy_complete=figure_strategy[
-                "article_figure_strategy_complete"
-            ],
-            plan_not_truncated=not plan_truncation["plan_truncated"],
-        )
-        and scientific_maturity_gates["scientific_maturity_article_grade"]
-    )
     administrative_authority = load_manuscript_administrative_authority(run_dir)
     administrative_metadata_verified = administrative_authority is not None
-    submission_ready = publication_ready and administrative_metadata_verified
+    completion = RunCompletionDecision(
+        facts=RunCompletionFacts(
+            execution_complete=execution["execution_complete"],
+            evidence_complete=evidence_complete,
+            numeric_verified=numeric_verified,
+            analysis_validated=analysis_validated,
+            publication_figure_bundle_ready=publication["publication_figure_bundle_ready"],
+            publication_provenance_ready=publication_provenance["publication_provenance_ready"],
+            display_suite_complete=display_suite["display_suite_complete"],
+            article_contract_complete=article_contract["article_contract_complete"],
+            article_figure_strategy_complete=figure_strategy["article_figure_strategy_complete"],
+            scientific_maturity_article_grade=scientific_maturity_gates["scientific_maturity_article_grade"],
+            plan_truncated=plan_truncation["plan_truncated"],
+            replan_budget_exhausted=replan_budget_exhausted,
+            administrative_metadata_verified=administrative_metadata_verified,
+        ),
+        forced_diagnostic_only=force_diagnostic_only,
+        execution_paper_eligible=execution_paper_eligible,
+        plan_authority_verified=plan_authority_verified,
+        plan_authority_sha256=plan_authority_sha256,
+    )
     return {
         **execution,
-        **run_completion_axes(
-            execution_ok=execution["execution_complete"],
-            artifact_valid=evidence_complete,
-            scientific_requirement_complete=analysis_validated,
-            paper_authorized=publication_ready,
-        ),
-        "evidence_complete": evidence_complete,
-        "numeric_verified": numeric_verified,
-        "analysis_validated": analysis_validated,
-        "manuscript_ready": manuscript_ready,
         "scientific_capability": capability_assessment.to_dict(),
         "scientific_capability_claim_ceiling_allows_reportable": (
             capability_assessment.claim_ceiling_allows_reportable
         ),
         **plan_truncation,
-        "replan_budget_exhausted": replan_budget_exhausted,
         "replan_budget_hit": replan_budget_hit,
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
-        "publication_ready": publication_ready,
-        "administrative_metadata_verified": administrative_metadata_verified,
         "administrative_authority_sha256": (
             administrative_authority.authority_sha256
             if administrative_authority is not None
             else None
         ),
-        "submission_ready": submission_ready,
         **scientific_maturity_gates,
         "manuscript_generated": manuscript_generated,
         **manuscript_text_gate,
@@ -2189,6 +2175,7 @@ def _compute_readiness_gates(
         **display_suite,
         **article_contract,
         **figure_strategy,
+        **completion.to_gates(),
     }
 
 
@@ -2220,33 +2207,17 @@ def write_readiness_artifacts(
         stop_after_analysis=stop_after_analysis,
         writer_probe_mode=writer_probe_mode,
         writer_probe_failed_steps=writer_probe_failed_steps,
+        force_diagnostic_only=force_diagnostic_only,
+        execution_paper_eligible=execution_paper_eligible,
+        plan_authority_verified=plan_authority_verified,
+        plan_authority_sha256=plan_authority_sha256,
     )
     # Attempts-to-ready: how many writer passes this run needed before the
     # gates were satisfied. Derived from the always-on audit_log.jsonl event
     # stream (no separate event artifact) so the gate story is quantitative
     # — a run that took 4 writer passes is more fragile than one that took 1.
     gates["writer_attempt_count"] = count_writer_attempts(run_dir)
-    gates["forced_diagnostic_only"] = bool(force_diagnostic_only)
-    status = _readiness_status(gates)
-
-    # The content gate and execution authority answer different questions.
-    # Preserve the former under an explicit name, then bind final paper
-    # authorization to the independently constructed execution identity.
-    # The default is fail-closed so direct callers cannot accidentally grant
-    # paper authority without supplying that identity verdict.
-    publication_artifacts_ready = bool(gates.get("paper_authorized")) and (
-        status == "publication_ready"
-    )
-    gates["publication_artifacts_ready"] = publication_artifacts_ready
-    gates["execution_paper_eligible"] = bool(execution_paper_eligible)
-    gates.update(
-        paper_authority_gates(
-            publication_artifacts_ready,
-            execution_paper_eligible,
-            plan_authority_verified,
-            plan_authority_sha256,
-        )
-    )
+    status = str(gates["completion_status"])
 
     artifact_paths: Dict[str, str] = {}
 
@@ -2899,20 +2870,6 @@ def _render_author_review_note(
 # ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
-
-
-def _readiness_status(gates: Mapping[str, Any]) -> str:
-    """Return the one fail-closed status ladder shared by artifacts and reports."""
-
-    if gates.get("forced_diagnostic_only") or gates.get("replan_budget_exhausted"):
-        return "diagnostic_only"
-    if gates.get("publication_ready"):
-        return "publication_ready"
-    if gates.get("manuscript_ready"):
-        return "manuscript_ready"
-    if gates.get("execution_complete"):
-        return "analysis_only"
-    return "diagnostic_only"
 
 
 _READINESS_STATUS_LABELS = {
