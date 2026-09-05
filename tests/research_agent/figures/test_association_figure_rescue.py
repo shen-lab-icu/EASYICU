@@ -122,6 +122,11 @@ def test_planned_model_contract_seals_exact_association_renderer(
         "_resolve_upstream_manifest_step",
         lambda run_dir, step_id: dict(request_step),
     )
+    from easyicu.research_agent.figures import prior_output_contracts
+    monkeypatch.setattr(
+        prior_output_contracts, "_resolve_upstream_manifest_step",
+        lambda run_dir, step_id: dict(request_step),
+    )
     monkeypatch.setattr(
         pipeline_module,
         "_resolve_upstream_manifest_analysis_request",
