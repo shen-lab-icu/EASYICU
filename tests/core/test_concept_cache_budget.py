@@ -30,7 +30,8 @@ from easyicu.concept import (
     _estimate_cached_bytes,
     _resolve_cache_budget_bytes,
 )
-from easyicu.concept.schema import ConceptDictionary
+from easyicu.config import DataSourceConfig
+from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
 from easyicu.table import ICUTable
 
 
@@ -220,3 +221,83 @@ def test_drop_source_caches_only_clears_sources(monkeypatch):
     assert resolver._concept_data_cache  # untouched
     roles = {role for (role, _key) in resolver._cache_entry_bytes}
     assert roles == {"data"}
+
+
+def test_requested_recursive_components_are_not_recomputed_when_cache_refuses_them(
+    monkeypatch,
+):
+    """A requested child already held for export is a zero-copy cache hit."""
+
+    component_names = (
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    )
+    definitions = {
+        name: ConceptDefinition(
+            name=name,
+            sources={
+                "unit": [ConceptSource(table=name, value_var="value")]
+            },
+        )
+        for name in component_names
+    }
+    definitions["sofa2"] = ConceptDefinition(
+        name="sofa2",
+        sources={},
+        sub_concepts=list(component_names),
+        callback="sofa2_score",
+    )
+
+    class CountingDataSource:
+        def __init__(self):
+            self.calls = {name: 0 for name in component_names}
+            self.config = DataSourceConfig(
+                name="unit",
+                tables={
+                    name: {
+                        "defaults": {
+                            "id_var": "stay_id",
+                            "index_var": "charttime",
+                            "val_var": "value",
+                        }
+                    }
+                    for name in component_names
+                },
+            )
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            del columns, filters, verbose
+            self.calls[table_name] += 1
+            return ICUTable(
+                data=pd.DataFrame(
+                    {"stay_id": [1], "charttime": [0.0], "value": [0.0]}
+                ),
+                id_columns=["stay_id"],
+                index_column="charttime",
+                value_column="value",
+            )
+
+    source = CountingDataSource()
+    resolver = ConceptResolver(ConceptDictionary(definitions))
+    # Force the reusable cache to reject even these tiny frames.  The
+    # request-local map may still retain references because the same objects
+    # are required by the final requested result mapping.
+    resolver._cache_budget_bytes = 1
+
+    loaded = resolver.load_concepts(
+        ["sofa2", *component_names],
+        source,
+        merge=False,
+        r_compatible=False,
+        interval=pd.Timedelta(hours=1),
+        verbose=False,
+        concept_workers=1,
+    )
+
+    assert set(loaded) == {"sofa2", *component_names}
+    assert source.calls == {name: 1 for name in component_names}
+    assert resolver._thread_local.requested_results is None

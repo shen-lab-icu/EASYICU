@@ -150,7 +150,11 @@ def run(
         raise ValueError("rss_limit_mb must be positive")
     started_wall = time.monotonic()
     started_at = _utc_now()
-    child = subprocess.Popen(list(command))
+    # Keep the measured command in its own session.  An interactive Ctrl-C is
+    # then handled once by this monitor, which can stop the complete process
+    # tree and publish a terminal receipt instead of leaving both orphaned
+    # workers and a stale ``status=running`` checkpoint.
+    child = subprocess.Popen(list(command), start_new_session=True)
     root = psutil.Process(child.pid)
     peak_rss_mb = 0.0
     peak_pss_mb = 0.0
@@ -158,42 +162,53 @@ def run(
     samples = 0
     stopped_for_rss = False
     last_checkpoint = started_wall
-    while True:
-        rss_mb, pss_mb, process_count = _process_tree_memory_mb(root)
-        peak_rss_mb = max(peak_rss_mb, rss_mb)
-        peak_pss_mb = max(peak_pss_mb, pss_mb)
-        peak_process_count = max(peak_process_count, process_count)
-        samples += 1
-        exit_code = child.poll()
-        if exit_code is not None:
-            break
-        if rss_limit_mb is not None and rss_mb >= rss_limit_mb:
-            stopped_for_rss = True
-            _stop_process_tree(root)
+    interrupted = False
+    try:
+        while True:
+            rss_mb, pss_mb, process_count = _process_tree_memory_mb(root)
+            peak_rss_mb = max(peak_rss_mb, rss_mb)
+            peak_pss_mb = max(peak_pss_mb, pss_mb)
+            peak_process_count = max(peak_process_count, process_count)
+            samples += 1
+            exit_code = child.poll()
+            if exit_code is not None:
+                break
+            if rss_limit_mb is not None and rss_mb >= rss_limit_mb:
+                stopped_for_rss = True
+                _stop_process_tree(root)
+                child.wait()
+                exit_code = 137
+                break
+            now = time.monotonic()
+            if now - last_checkpoint >= 5.0:
+                _atomic_write_json(
+                    output,
+                    _evidence_payload(
+                        command=command,
+                        started_at=started_at,
+                        started_wall=started_wall,
+                        peak_rss_mb=peak_rss_mb,
+                        peak_pss_mb=peak_pss_mb,
+                        peak_process_count=peak_process_count,
+                        interval=interval,
+                        samples=samples,
+                        status="running",
+                        exit_code=None,
+                        rss_limit_mb=rss_limit_mb,
+                        stopped_for_rss=False,
+                    ),
+                )
+                last_checkpoint = now
+            time.sleep(max(0.05, interval))
+    except KeyboardInterrupt:
+        interrupted = True
+        _stop_process_tree(root)
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
             child.wait()
-            exit_code = 137
-            break
-        now = time.monotonic()
-        if now - last_checkpoint >= 5.0:
-            _atomic_write_json(
-                output,
-                _evidence_payload(
-                    command=command,
-                    started_at=started_at,
-                    started_wall=started_wall,
-                    peak_rss_mb=peak_rss_mb,
-                    peak_pss_mb=peak_pss_mb,
-                    peak_process_count=peak_process_count,
-                    interval=interval,
-                    samples=samples,
-                    status="running",
-                    exit_code=None,
-                    rss_limit_mb=rss_limit_mb,
-                    stopped_for_rss=False,
-                ),
-            )
-            last_checkpoint = now
-        time.sleep(max(0.05, interval))
+        exit_code = 130
     payload = _evidence_payload(
         command=command,
         started_at=started_at,
@@ -206,6 +221,8 @@ def run(
         status=(
             "rss_limit_exceeded"
             if stopped_for_rss
+            else "interrupted"
+            if interrupted
             else "complete" if exit_code == 0 else "failed"
         ),
         exit_code=int(exit_code),

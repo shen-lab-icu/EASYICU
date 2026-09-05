@@ -1,11 +1,46 @@
 import builtins
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 import easyicu
 from easyicu.api import extraction as api
+
+
+def _write_complete_score_dependencies(source: Path, time) -> None:
+    """Write component-complete producer artifacts for streamed Sepsis tests."""
+
+    sofa1_components = list(api._SOFA1_COMPONENT_NAMES)
+    sofa1 = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": time,
+            **{
+                component: [0.0, 3.0 if component == "sofa_resp" else 0.0]
+                for component in sofa1_components
+            },
+        }
+    )
+    sofa1["sofa"] = sofa1[sofa1_components].sum(axis=1)
+    sofa1.to_parquet(source / "sofa1_score.parquet", index=False)
+
+    sofa2_components = list(api.SOFA2_COMPONENT_NAMES)
+    sofa2 = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": time,
+            **{
+                component: [0.0, 3.0 if component == "sofa2_resp" else 0.0]
+                for component in sofa2_components
+            },
+        }
+    )
+    for component in sofa2_components:
+        sofa2[f"{component}_available"] = True
+    sofa2["sofa2"] = sofa2[sofa2_components].sum(axis=1)
+    sofa2.to_parquet(source / "sofa2_score.parquet", index=False)
 
 
 def test_enforce_concept_bounds_drops_only_numeric_out_of_range(monkeypatch):
@@ -426,6 +461,196 @@ def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
     assert exported["charttime"].iloc[2] == 5.0
 
 
+@pytest.mark.parametrize("database", ["eicu", "aumc"])
+def test_isolated_stream_batches_preserve_output_and_remove_parts(
+    monkeypatch,
+    tmp_path,
+    database,
+) -> None:
+    calls = []
+    daemon_flags = []
+    events = []
+    original_append = api._append_isolated_stream_batch
+
+    def tracked_append(*args, **kwargs):
+        events.append("append")
+        return original_append(*args, **kwargs)
+
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        calls.append(ids)
+        events.append("extract")
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [0.0] * len(ids),
+                "test_signal": [float(value) for value in ids],
+            }
+        )
+
+    class InlineProcess:
+        def __init__(self, *, target, args, daemon):
+            self.target = target
+            self.args = args
+            self.exitcode = None
+            daemon_flags.append(daemon)
+
+        def start(self):
+            self.target(*self.args)
+            self.exitcode = 0
+
+        def join(self):
+            return None
+
+    class InlineContext:
+        Process = InlineProcess
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+    monkeypatch.setattr(api, "_append_isolated_stream_batch", tracked_append)
+    monkeypatch.setattr(api, "_extract_worker_env_setup", lambda _path: None)
+    monkeypatch.setattr(api, "_get_extraction_mp_context", lambda _mp: InlineContext())
+    monkeypatch.setattr(
+        api,
+        "_ISOLATED_STREAM_BATCH_TARGETS",
+        {(database, "test_module")},
+    )
+    monkeypatch.setattr(api, "_DEFERRED_STREAM_MERGE_TARGETS", {("aumc", "test_module")})
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal"],
+        database,
+        str(tmp_path),
+        {"stay_id": [1, 2, 3, 4]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
+    assert manifest["errors"] == []
+    assert manifest["batch_process_isolation"] is True
+    assert manifest["deferred_batch_merge"] is (database == "aumc")
+    assert events == (
+        ["extract", "extract", "append", "append"] if database == "aumc"
+        else ["extract", "append", "extract", "append"]
+    )
+    assert calls == [[1, 3], [2, 4]]
+    assert daemon_flags == [False, False]
+    assert exported["stay_id"].tolist() == [1, 3, 2, 4]
+    assert exported["test_signal"].tolist() == [1.0, 3.0, 2.0, 4.0]
+    assert not list(tmp_path.glob(".test_module.batch-*.parquet"))
+    assert not (tmp_path / ".test_module.partial.parquet").exists()
+
+
+def test_batch_process_isolation_is_scoped_to_measured_target(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api,
+        "_ISOLATED_STREAM_BATCH_TARGETS",
+        {("eicu", "sofa2_score")},
+    )
+
+    assert api._requires_isolated_stream_batch("eicu", "sofa2_score") is True
+    assert api._requires_isolated_stream_batch("eicu_demo", "sofa2_score") is False
+    assert api._requires_isolated_stream_batch("mimic", "sofa2_score") is False
+    assert api._requires_isolated_stream_batch("eicu", "sofa1_score") is False
+
+
+def test_aumc_respiratory_uses_measured_batch_process_isolation() -> None:
+    assert api._requires_isolated_stream_batch("aumc", "respiratory") is True
+    assert api._requires_isolated_stream_batch("aumc", "ventilator") is False
+    assert api._requires_isolated_stream_batch("aumc", "other_scores") is False
+
+
+def test_append_isolated_stream_batch_aligns_to_frozen_schema(tmp_path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    source = tmp_path / "source.parquet"
+    destination = tmp_path / "destination.parquet"
+    schema = pa.schema(
+        [
+            pa.field("stay_id", pa.int64()),
+            pa.field("charttime", pa.float64()),
+            pa.field("test_signal", pa.float64()),
+            pa.field("first_batch_context", pa.float64()),
+        ]
+    )
+    pq.write_table(
+        pa.table(
+            {
+                "stay_id": pa.array([2], type=pa.int64()),
+                "charttime": pa.array([1.0], type=pa.float64()),
+                "test_signal": pa.array([2.0], type=pa.float64()),
+                "later_only_context": pa.array(["ignored"]),
+            }
+        ),
+        source,
+    )
+    writer = pq.ParquetWriter(destination, schema)
+    try:
+        rows = api._append_isolated_stream_batch(
+            source,
+            writer=writer,
+            schema=schema,
+            pyarrow_module=pa,
+            parquet_module=pq,
+        )
+    finally:
+        writer.close()
+
+    result = pq.read_table(destination)
+    assert rows == 1
+    assert result.schema == schema
+    assert result.column_names == schema.names
+    assert result["first_batch_context"].null_count == 1
+
+
+def test_isolated_stream_batch_failure_removes_atomic_outputs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class FailedProcess:
+        def __init__(self, *, target, args, daemon):
+            self.destination = Path(args[-1])
+            self.exitcode = None
+
+        def start(self):
+            self.destination.write_text("failed child residue")
+            self.exitcode = 1
+
+        def join(self):
+            return None
+
+    class FailedContext:
+        Process = FailedProcess
+
+    monkeypatch.setattr(api, "_get_extraction_mp_context", lambda _mp: FailedContext())
+    monkeypatch.setattr(
+        api,
+        "_ISOLATED_STREAM_BATCH_TARGETS",
+        {("eicu", "test_module")},
+    )
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["saved"] == {}
+    assert "isolated batch worker exited with code 1" in manifest["errors"][0]
+    assert not list(tmp_path.glob(".test_module.batch-*.parquet"))
+    assert not (tmp_path / ".test_module.partial.parquet").exists()
+
+
 def test_stream_batch_release_flushes_duckdb_and_arrow_pool(monkeypatch):
     from easyicu import datasource
 
@@ -534,12 +759,7 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
             "infection_icd": pd.Series([True, True, True], dtype="boolean"),
         }
     ).to_parquet(source / "sepsis_shared.parquet", index=False)
-    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
-        source / "sofa1_score.parquet", index=False
-    )
-    pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
-    ).to_parquet(source / "sofa2_score.parquet", index=False)
+    _write_complete_score_dependencies(source, time)
 
     api._stream_special_extraction_batches(
         ["sepsis3_sofa1", "sepsis3_sofa2"],
@@ -559,6 +779,49 @@ def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
     assert (output / "sep3_sofa2.parquet").is_file()
 
 
+def test_streamed_special_export_adapts_sealed_canonical_stay_id(tmp_path):
+    """A sealed dependency can be joined to a raw-native eICU score artifact."""
+
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
+    pd.DataFrame(
+        {
+            # Selected refresh stages this file from native-v2, where every
+            # database has already been normalized to the public stay_id.
+            "stay_id": [1, 1],
+            "charttime": time,
+            "susp_inf": pd.Series([False, True], dtype="boolean"),
+        }
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
+    _write_complete_score_dependencies(source, time)
+    score_path = source / "sofa2_score.parquet"
+    score = pd.read_parquet(score_path).rename(
+        columns={"stay_id": "patientunitstayid"}
+    )
+    score.to_parquet(score_path, index=False)
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa2"],
+        "eicu",
+        str(tmp_path),
+        {"patientunitstayid": [1]},
+        1,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert set(manifest["saved"]) == {"sep3_sofa2"}
+    exported = pd.read_parquet(output / "sep3_sofa2.parquet")
+    assert "patientunitstayid" in exported.columns
+    assert exported["patientunitstayid"].eq(1).all()
+
+
 def test_streamed_special_export_rejects_positive_null_time_suspicion(tmp_path):
     source = tmp_path / "published"
     output = tmp_path / "special"
@@ -568,12 +831,7 @@ def test_streamed_special_export_rejects_positive_null_time_suspicion(tmp_path):
     pd.DataFrame(
         {"stay_id": [1], "charttime": [None], "susp_inf": [True]}
     ).to_parquet(source / "sepsis_shared.parquet", index=False)
-    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
-        source / "sofa1_score.parquet", index=False
-    )
-    pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
-    ).to_parquet(source / "sofa2_score.parquet", index=False)
+    _write_complete_score_dependencies(source, time)
 
     with pytest.raises(
         ValueError,
@@ -628,6 +886,39 @@ def test_streamed_special_export_accepts_declared_empty_infection_dependency(
     assert manifest["saved"] == {}
     assert not (output / "sep3_sofa1.parquet").exists()
     assert not (output / "sep3_sofa2.parquet").exists()
+
+
+def test_streamed_special_export_skips_score_reads_without_positive_infection(
+    tmp_path,
+) -> None:
+    """A negative SI batch cannot yield Sepsis and needs no score scan."""
+
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "charttime": [0.0, 0.0],
+            "susp_inf": pd.Series([False, False], dtype="boolean"),
+        }
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "eicu",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert manifest["saved"] == {}
 
 
 def test_streamed_special_export_uses_outer_batch_instead_of_fixed_2000(
@@ -698,3 +989,59 @@ def test_nonstream_special_export_reuses_already_published_scores(
     assert calls[0][0][3] == {"stay_id": [1, 2]}
     assert calls[0][0][4] == 2_000_000
     assert calls[0][1]["published_output_dir"] == str(source)
+
+
+def test_special_sofa1_dependency_collapses_components_before_total() -> None:
+    """Same-time component maxima must prevent a false SOFA delta."""
+
+    components = list(api._SOFA1_COMPONENT_NAMES)
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 0.0, 1.0],
+            **{component: [0.0, 0.0, 0.0] for component in components},
+        }
+    )
+    frame.loc[0, "sofa_resp"] = 4.0
+    frame.loc[1, "sofa_coag"] = 4.0
+    frame.loc[2, "sofa_resp"] = 4.0
+    frame.loc[2, "sofa_coag"] = 2.0
+
+    result = api._consolidate_special_score_dependency(
+        frame,
+        score_name="sofa",
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result["sofa"].tolist() == [8.0, 6.0]
+
+
+def test_special_sofa2_dependency_respects_component_availability() -> None:
+    """Unavailable values cannot enter a total; evidence may unite by hour."""
+
+    components = list(api.SOFA2_COMPONENT_NAMES)
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0.0, 0.0, 1.0],
+            **{component: [0.0, 0.0, 0.0] for component in components},
+        }
+    )
+    for component in components:
+        frame[f"{component}_available"] = True
+    frame.loc[0, "sofa2_resp"] = 4.0
+    frame.loc[1, "sofa2_coag"] = 3.0
+    frame.loc[0, "sofa2_coag_available"] = False
+    frame.loc[1, "sofa2_resp_available"] = False
+    frame.loc[2, "sofa2_renal_available"] = False
+
+    result = api._consolidate_special_score_dependency(
+        frame,
+        score_name="sofa2",
+        id_col="stay_id",
+        time_col="charttime",
+    )
+
+    assert result.loc[result["charttime"].eq(0.0), "sofa2"].item() == 7.0
+    assert result.loc[result["charttime"].eq(1.0), "sofa2"].item() == 0.0

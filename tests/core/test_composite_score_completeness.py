@@ -57,11 +57,11 @@ def test_sofa2_score_emits_outcome_blind_component_count():
         assert out.loc[1, column] == 6
         assert out.loc[2, column] == 3
         assert out.loc[3, column] == 0
-    # The component count remains available for outcome-blind QC, while the
-    # aggregate score fails closed unless all six components are available.
+    # The primary score normal-imputes patient-level missing domains, while the
+    # component counts retain the outcome-blind complete-case information.
     assert out.loc[1, "sofa2"] == 3
-    assert pd.isna(out.loc[2, "sofa2"])
-    assert pd.isna(out.loc[3, "sofa2"])
+    assert out.loc[2, "sofa2"] == 3
+    assert out.loc[3, "sofa2"] == 0
 
 
 def test_composite_score_completeness_is_generic_non_sofa():
