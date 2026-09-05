@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import easyicu.concept.callbacks as concept_callbacks
 from easyicu.callbacks import sofa2_cardio, sofa2_cns, sofa2_renal, sofa2_resp
 from easyicu.concept.callbacks import (
     ConceptCallbackContext,
@@ -16,6 +17,112 @@ from easyicu.scores.sofa2 import sofa2_cns_proxy_sensitivity
 from easyicu.scores.sofa2 import sofa2_renal as standalone_sofa2_renal
 from easyicu.scores.sofa2 import sofa2_resp as standalone_sofa2_resp
 from easyicu.table import ICUTable
+
+
+def test_sofa2_aggregate_merges_scores_and_owner_receipts_once(monkeypatch):
+    """The large score and receipt frames must share one indexed concat."""
+
+    calls = []
+    original = concept_callbacks._merge_tables
+
+    def tracked_merge(*args, **kwargs):
+        calls.append(kwargs.get("sidecar_columns"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(concept_callbacks, "_merge_tables", tracked_merge)
+    components = {
+        name: _component_table(name, [0.0])
+        for name in (
+            "sofa2_resp",
+            "sofa2_coag",
+            "sofa2_liver",
+            "sofa2_cardio",
+            "sofa2_cns",
+            "sofa2_renal",
+        )
+    }
+
+    result = _callback_sofa2_score(
+        components,
+        _component_context("sofa2", keep_components=True),
+    ).data
+
+    assert len(calls) == 1
+    assert calls[0] == {
+        name: [f"{name}_observed", f"{name}_available"]
+        for name in components
+    }
+    assert result["sofa2"].tolist() == [0]
+    assert result["sofa2_observed"].tolist() == [1]
+    assert result["sofa2_available"].tolist() == [1]
+
+
+def test_single_pass_score_receipt_merge_matches_the_previous_two_pass_result():
+    """The memory optimisation preserves the old logical multiset exactly."""
+
+    component_names = (
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    )
+    tables = {}
+    for offset, name in enumerate(component_names):
+        times = [0.0, 2.0] if offset % 2 == 0 else [1.0, 2.0]
+        frame = pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": times,
+                name: [float(offset), float(offset + 1)],
+                f"{name}_observed": [1, 0],
+                f"{name}_available": [1, 1],
+            }
+        )
+        tables[name] = ICUTable(
+            frame,
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column=name,
+        )
+
+    score_frame, _, _ = concept_callbacks._merge_tables(tables)
+    receipt_tables = {}
+    for name, table in tables.items():
+        for suffix in ("observed", "available"):
+            receipt = f"{name}_{suffix}"
+            receipt_tables[receipt] = ICUTable(
+                table.data,
+                id_columns=["stay_id"],
+                index_column="charttime",
+                value_column=receipt,
+            )
+    receipt_frame, _, _ = concept_callbacks._merge_tables(receipt_tables)
+    previous = score_frame.merge(
+        receipt_frame,
+        on=["stay_id", "charttime"],
+        how="outer",
+    )
+
+    current, _, _ = concept_callbacks._merge_tables(
+        tables,
+        sidecar_columns={
+            name: [f"{name}_observed", f"{name}_available"]
+            for name in component_names
+        },
+    )
+
+    ordered_columns = ["stay_id", "charttime"] + [
+        column
+        for name in component_names
+        for column in (name, f"{name}_observed", f"{name}_available")
+    ]
+    pd.testing.assert_frame_equal(
+        current[ordered_columns].sort_values(["stay_id", "charttime"]).reset_index(drop=True),
+        previous[ordered_columns].sort_values(["stay_id", "charttime"]).reset_index(drop=True),
+        check_dtype=True,
+    )
 
 
 def test_sofa2_resp_uses_fractional_fio2_for_safi_fallback():
@@ -404,10 +511,12 @@ def test_sofa2_aggregate_counts_component_receipts_not_score_non_nullness():
         _component_context("sofa2", keep_components=True),
     ).data
 
-    assert pd.isna(result["sofa2"].tolist()[0])
+    assert result["sofa2"].tolist() == [0]
     assert result["sofa2_n_observed_components"].tolist() == [5]
     assert result["sofa2_n_available_components"].tolist() == [5]
     assert result["sofa2_n_components"].tolist() == [5]
+    assert result["sofa2_observed"].tolist() == [0]
+    assert result["sofa2_available"].tolist() == [0]
 
 
 @pytest.mark.clinical_conformance
@@ -517,9 +626,106 @@ def test_sofa2_production_aggregate_keeps_observation_count_separate_from_zero_i
         none_observed, _component_context("sofa2")
     ).data
     assert all_missing["sofa2_n_components"].tolist() == [0]
-    # No observed component: the total must stay unknown, not masquerade as a
-    # true SOFA-2 score of zero.
-    assert pd.isna(all_missing["sofa2"].tolist()[0])
+    # Primary SOFA-2 uses normal-value imputation; the zero component count
+    # keeps this row distinguishable from a fully measured normal patient.
+    assert all_missing["sofa2"].tolist() == [0]
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_normal_imputation_does_not_score_synthetic_empty_gap_rows():
+    """Normal imputation applies to assessments, not invented grid records."""
+
+    components = {}
+    for name in (
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    ):
+        components[name] = ICUTable(
+            pd.DataFrame(
+                {
+                    "stay_id": [1, 1, 1, 1],
+                    "charttime": [0.0, 1.0, 2.0, 4.0],
+                    name: [np.nan, np.nan, np.nan, np.nan],
+                    f"{name}_observed": [0, 0, 0, 0],
+                    f"{name}_available": [0, 0, 0, 0],
+                }
+            ),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column=name,
+        )
+
+    result = _callback_sofa2_score(
+        components,
+        _component_context("sofa2"),
+    ).data.set_index("charttime")
+
+    assert result.loc[[0.0, 1.0, 2.0, 4.0], "sofa2"].tolist() == [0, 0, 0, 0]
+    assert pd.isna(result.loc[3.0, "sofa2"])
+    assert "_sofa2_source_assessment_time" not in result.columns
+
+
+@pytest.mark.clinical_conformance
+def test_sofa2_gap_domain_is_invariant_to_stay_partitioning():
+    """Stay batching must not change the longitudinal SOFA-2 result."""
+
+    names = (
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+    )
+
+    def component_tables(stay_ids):
+        tables = {}
+        for component_index, name in enumerate(names):
+            rows = []
+            for stay_id in stay_ids:
+                for charttime in (0.0, 1.0, 2.0, 4.0):
+                    observed = charttime == float(component_index % 3)
+                    rows.append(
+                        {
+                            "stay_id": stay_id,
+                            "charttime": charttime,
+                            name: float(component_index % 4) if observed else np.nan,
+                            f"{name}_observed": int(observed),
+                            f"{name}_available": int(observed),
+                        }
+                    )
+            tables[name] = ICUTable(
+                pd.DataFrame(rows),
+                id_columns=["stay_id"],
+                index_column="charttime",
+                value_column=name,
+            )
+        return tables
+
+    full = _callback_sofa2_score(
+        component_tables([1, 2, 3, 4]),
+        _component_context("sofa2", keep_components=True),
+    ).data
+    partitioned = pd.concat(
+        [
+            _callback_sofa2_score(
+                component_tables(stay_ids),
+                _component_context("sofa2", keep_components=True),
+            ).data
+            for stay_ids in ([1, 3], [2, 4])
+        ],
+        ignore_index=True,
+    )
+    sort_keys = ["stay_id", "charttime"]
+    pd.testing.assert_frame_equal(
+        full.sort_values(sort_keys).reset_index(drop=True),
+        partitioned.sort_values(sort_keys).reset_index(drop=True),
+        check_dtype=False,
+    )
 
 
 @pytest.mark.clinical_conformance

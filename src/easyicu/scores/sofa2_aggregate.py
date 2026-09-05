@@ -29,6 +29,24 @@ SOFA2_TRUSTED_ID_COLUMNS = (
 )
 SOFA2_TRUSTED_TIME_COLUMNS = ("charttime", "time", "hour", "index_var")
 
+# A patient-level missing measurement is imputed to the normal score of zero in
+# the published SOFA-2 primary analysis.  That rule must not be stretched to a
+# database that lacks an entire organ-domain owner: such a database cannot
+# provide a total score at all.  SICDB currently has no canonical CNS owner;
+# its five supported component trajectories remain usable independently.
+SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE = {
+    "sic": frozenset({"sofa2_cns"}),
+}
+
+
+def sofa2_total_structurally_supported(database: object) -> bool:
+    """Return whether a database supports all six SOFA-2 organ domains."""
+
+    normalized = str(database or "").strip().lower()
+    if normalized == "sicdb":
+        normalized = "sic"
+    return not SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE.get(normalized)
+
 
 def _key_names(
     value: Optional[Sequence[str]],
@@ -275,11 +293,17 @@ def sofa2_score(
 
     observed = [f"{component}_observed" for component in required]
     available = [f"{component}_available" for component in required]
-    complete = result[available].fillna(0).eq(1).all(axis=1)
+    available_frame = result[available].fillna(0).eq(1)
+    # The published SOFA-2 primary analysis uses normal-value imputation:
+    # a domain without patient-level evidence contributes zero.  Availability
+    # receipts remain separate so callers can reproduce the complete-case
+    # sensitivity analysis instead of changing the primary score definition.
+    effective_components = result[required].where(
+        available_frame.to_numpy(),
+        0,
+    )
     result["sofa2"] = (
-        result[required]
-        .sum(axis=1, min_count=len(required))
-        .where(complete)
+        effective_components.fillna(0).sum(axis=1)
         .round()
         .astype("Int64")
     )
@@ -299,4 +323,9 @@ def sofa2_score(
     return result
 
 
-__all__ = ["SOFA2_COMPONENT_NAMES", "sofa2_score"]
+__all__ = [
+    "SOFA2_COMPONENT_NAMES",
+    "SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE",
+    "sofa2_score",
+    "sofa2_total_structurally_supported",
+]

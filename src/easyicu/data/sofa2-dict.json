@@ -28,7 +28,7 @@
    "sofa2_cns",
    "sofa2_renal"
   ],
-  "description": "Database operationalization of SOFA-2 (2025) with conservative handling of unconfirmed delirium-treatment proxies",
+  "description": "Database operationalization of SOFA-2 (2025): patient-level missing domains contribute the normal value zero, complete-case receipts remain separate, and unconfirmed delirium-treatment proxies are handled conservatively",
   "clinical_status": "source_bound_golden",
   "canonical_definition": false,
   "requires_explicit_opt_in": false,

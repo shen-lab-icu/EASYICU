@@ -348,13 +348,15 @@ def get_available_memory_mb() -> float:
 #     hr 单概念：    N=10k →  669 MB,  N=30k → 1034 MB  → (300, 0.020)
 #     vitals 7个：   N=10k →  830 MB,  N=30k → 1552 MB  → 每概念约 (50, 0.0036)
 #     chemistry 21个: N=10k →  599 MB                   → 每概念约 (15, 0.0019)
-#     sofa1_full 7个: N=3k → 1602 MB, N=10k → 1670 MB   → 几乎不随 N 增长！
+#     sofa1_full 7个（旧 MIIV 路径）: N=3k → 1602 MB, N=10k → 1670 MB
 #     sep3 单概念：   N=3k → 2025 MB                    → 大固定开销
 #
-#   结论：重概念用大固定成本+几乎零边际；轻概念用小固定成本+小边际。
+#   这些系数只为通用交互式加载提供保守启发；正式 release 的模块策略由
+#   api.extraction 中未失效且通过硬内存上限验证的 profile 决定。
 _MEMORY_COEFFICIENTS = {
     # (fixed_mb, marginal_mb_per_patient)
-    # 重概念：DuckDB 内部 hash join + 递归子概念加载，peak 几乎不随 N 增长
+    # 重概念：DuckDB hash join 与递归依赖带来较大固定成本；数据库映射或
+    # 概念语义改变后，边际成本必须重新实测，不能假设与 N 无关。
     'sofa':        (1700, 0.005),     # 实测 N=3k→1602, N=10k→1670（基本平）
     'sofa2':       (1800, 0.006),     # 比 sofa 略重
     'sep3':        (2000, 0.005),     # 实测 N=3k→2025
@@ -433,9 +435,9 @@ _BASE_MB = 300
 # 因此组合成本不是 sum，而是 max + share*(sum-max)：
 #   share=0 → 纯 max（完全重叠，适合"父+自身子分数"这类全冗余组）
 #   share=1 → 纯 sum（完全独立，旧行为）
-# 0.25 是在实测点上拟合出的折中：score 组接近 max（实测 peak 几乎不随概念数、
-# 不随 N 增长），多个**独立**重概念（如 20 个 vitals）仍随概念数增长以保留真实
-# OOM 保护。详见 `.tmp/mem_calib_verify.py` 对所有实测点的回归。
+# 0.25 是旧 MIIV 实测点上的折中，只用于通用估算。它不是 eICU SOFA-2 的
+# release 准入证据；2026-09-04 IMV 语义更新后的实测已经证明该路径可能随输出
+# 网格和依赖物化显著增长。多个**独立**重概念仍随概念数增长以保留 OOM 保护。
 _WORKINGSET_OVERLAP_SHARE = 0.25
 
 
@@ -483,12 +485,10 @@ def estimate_memory_mb(
     `_WORKINGSET_OVERLAP_SHARE`）。这反映实测的"成组加载共享工作集、峰值由
     最重概念主导"行为，而不是把各单概念峰值简单相加。
 
-    实测校准（miiv，单次 in-process 流式加载，EASYICU_FORCE_INPROCESS_BATCH=1）：
-      score 组 [sofa2 + 6 子分数] 的真实 peak ~2-2.85 GB，**几乎不随 N 增长**
-      （10k/20k/40k/94k 基本持平，因为加载按源表流式而非一次性持有全部行）。
-      旧的 sum 模型在 94k 估到 ~9.5 GB（3-5× 高估），会在任何可用内存 < 6 GB
-      的机器上误触发低内存分批；新模型估到 ~5.4 GB，安全留有 1.5× 余量但不再
-      在 6 GB 边缘误触发。
+    该模型来自旧 MIIV 交互式路径，只能作为没有模块级 profile 时的启发式估算。
+    正式 release 不以这里的估计准入 one-shot；它使用
+    ``easyicu.api.extraction`` 中逐数据库、逐模块的进程树 RSS 实测证据。概念映射、
+    输出网格或依赖语义改变时，对应 profile 必须先失效并重新测量。
 
     Args:
         concepts: 概念列表
