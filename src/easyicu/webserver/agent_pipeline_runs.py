@@ -275,7 +275,7 @@ def _pending_plan_authority(pending: Optional[Any]) -> Dict[str, Any]:
         if observed is not None and authority != observed:
             return {}
         observed = authority
-    return dict(observed.plan_payload) if observed is not None else {}
+    return observed.model_dump(mode="json")["plan_payload"] if observed is not None else {}
 
 
 def _plan_has_complete_reviewable_recommendation(plan: Mapping[str, Any]) -> bool:
@@ -4422,7 +4422,18 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.contracts.dependence import (
                 PlannedDependenceRequirement,
             )
-            from easyicu.research_agent.literature import manuscript_citable_keys
+            from easyicu.research_agent.literature import LiteratureBundle, manuscript_citable_keys
+
+            try:
+                runtime_literature = (
+                    LiteratureBundle.model_validate(bound_preplan_literature)
+                    if bound_preplan_literature is not None else None
+                )
+            except ValueError as exc:
+                raise ResearchPipelineRunError(
+                    "bound_literature_schema_invalid",
+                    "The bound literature cannot satisfy the typed scientific contract.",
+                ) from exc
 
             planning_endpoint = metadata_planning_coordinates.get("endpoint")
             runtime_primary_exposure_source = str(
@@ -4436,13 +4447,13 @@ def make_research_pipeline_run_runner(
                 primary_exposure_source=runtime_primary_exposure_source,
             )
             runtime_literature_keys = manuscript_citable_keys(
-                bound_preplan_literature
+                runtime_literature
             )
             runtime_direct_comparator_keys = tuple(
                 decision.citation_key
                 for decision in (
-                    bound_preplan_literature.screening_decisions
-                    if bound_preplan_literature is not None
+                    runtime_literature.screening_decisions
+                    if runtime_literature is not None
                     else ()
                 )
                 if decision.disposition == "include"
