@@ -7336,7 +7336,7 @@ def test_readiness_publication_ready_requires_article_display_suite(
     assert "baseline_context" in gates["article_missing_artifact_roles"]
     assert "data_quality" in gates["article_missing_artifact_roles"]
     assert any("Table 1" in err for err in gates["display_suite_errors"])
-    assert any("fewer than two panels" in err for err in gates["display_suite_errors"])
+    assert any("fewer than two panels" in err for err in gates["display_design_advice"])
 
 
 def test_readiness_publication_ready_accepts_complete_display_suite(
@@ -7576,11 +7576,11 @@ def test_display_suite_keeps_step_contracts_supporting_not_primary(
     assert gates["display_supporting_absolute_risk_visual_present"] is True
     assert any(
         "Primary publication figure exposes fewer" in err
-        for err in gates["display_suite_errors"]
+        for err in gates["display_design_advice"]
     )
     assert any(
         "Primary publication figure lacks panel-role" in err
-        for err in gates["display_suite_errors"]
+        for err in gates["display_design_advice"]
     )
     assert any(
         "Primary association figure lacks" in err
@@ -8048,7 +8048,7 @@ def test_association_display_suite_rejects_generic_chart_only_bundle(
         "lacks a visual prevalence" in err for err in gates["display_suite_errors"]
     )
     assert any(
-        "generic bar/forest/heatmap" in err for err in gates["display_suite_errors"]
+        "generic bar/forest/heatmap" in err for err in gates["display_design_advice"]
     )
 
 
