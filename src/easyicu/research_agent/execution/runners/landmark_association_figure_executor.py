@@ -788,9 +788,7 @@ def run_landmark_association_figure(
 
     palette = apply_publication_style(font_size=7.0)
     placements = dict(panel_placements or {})
-    # The registered article contract keeps audit-only coverage and routine
-    # measurement availability outside the primary scientific figure.  Their
-    # source tables remain exported and clickable in the run dossier.
+    # Audit panels have a separate exported display and exact runtime binding.
     show_process = placements.get("measurement_process", "supplementary") == "main"
     show_robustness = placements.get("robustness_summary", "supplementary") == "main"
     if show_process or show_robustness:
@@ -1038,6 +1036,79 @@ def run_landmark_association_figure(
         dpi=300,
     )
     plt.close(fig)
+    supplemental_name = f"{figure_product}_supplementary"
+    supplemental_panels = [
+        panel
+        for panel in panel_templates
+        if placements.get(panel.panel_id, panel.placement) == "supplementary"
+    ]
+    supplemental_fig, supplemental_axes = plt.subplots(
+        1,
+        2,
+        figsize=(
+            183 / 25.4,
+            max(85, 35 + 6 * max(len(process), len(robustness))) / 25.4,
+        ),
+        layout="constrained",
+    )
+    draw_robustness_coverage(
+        supplemental_axes[0],
+        robustness,
+        color=palette["blue"],
+        label_formatter=display_label,
+    )
+    supplemental_axes[1].barh(
+        np.arange(len(process)), 100 * numerator / denominator, color=palette["blue"]
+    )
+    supplemental_axes[1].set_yticks(
+        np.arange(len(process)), [display_label(value) for value in process["concept"]]
+    )
+    supplemental_axes[1].set_xlim(0, 100)
+    supplemental_axes[1].set_xlabel("Measured (%)")
+    supplemental_axes[1].set_title("Measurement availability", loc="left")
+    supplemental_axes[1].invert_yaxis()
+    for axis, label in zip(supplemental_axes, ("a", "b")):
+        add_panel_label(axis, label)
+    supplemental_contract = make_figure_contract(
+        figure_id=f"figure:{supplemental_name}",
+        core_claim="Supplementary source-backed specification coverage and measurement availability; no effect comparison is authorized.",
+        archetype="quantitative_grid",
+        width_mm=float(supplemental_fig.get_figwidth() * 25.4),
+        height_mm=float(supplemental_fig.get_figheight() * 25.4),
+        panels=[
+            {
+                "panel_id": panel.panel_id,
+                "title": _label(panel.panel_id),
+                "role": panel.article_role,
+                "claim": "Registered counts projected from the bound source table without refitting.",
+                "evidence_ids": [evidence[source] for source in panel.source_products],
+                "metadata": {
+                    "chart_type": panel.chart_type,
+                    "source_products": list(panel.source_products),
+                    "placement": "supplementary",
+                    "source_data": [
+                        f"{source.partition(':')[2]}_source_data.csv"
+                        for source in panel.source_products
+                    ],
+                },
+            }
+            for panel in supplemental_panels
+        ],
+        source_data=[
+            f"{source.partition(':')[2]}_source_data.csv"
+            for panel in supplemental_panels
+            for source in panel.source_products
+        ],
+        statistics_note="Counts only; robustness effect comparability remains unresolved. No patient rows or model fitting.",
+    )
+    supplemental_outputs = save_publication_figure(
+        supplemental_fig,
+        out_dir / supplemental_name,
+        contract=supplemental_contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(supplemental_fig)
     for item in bound.values():
         if sha256_file(item.path) != item.sha256:
             raise ValueError(f"typed input changed while rendering: {item.input_key}")
@@ -1067,12 +1138,21 @@ def run_landmark_association_figure(
             if placements.get(panel.panel_id, panel.placement) == "supplementary"
         ),
         "figure_files": [
-            path.name for key, path in outputs.items() if key != "contract"
+            path.name
+            for bundle in (outputs, supplemental_outputs)
+            for key, path in bundle.items()
+            if key != "contract"
         ],
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
-        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "contract_files": [
+            f"{figure_product}.figure_contract.json",
+            f"{supplemental_name}.figure_contract.json",
+        ],
         "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
+        "supplementary_output_files": {
+            f"figure:{figure_product}": f"{supplemental_name}.png"
+        },
     }
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
