@@ -26,7 +26,8 @@ validation and regulatory process establishes a broader claim.
 
 Requirements for the build machine only:
 
-- macOS on Apple Silicon (the minimum OS version is set in `tauri.conf.json`)
+- macOS 14+ on Apple Silicon (the minimum is set in `tauri.conf.json` to match
+  the locked NumPy/SciPy binaries)
 - Rust/Cargo
 - Node 22.19+
 - Python 3.11 (the Python library itself continues to support Python 3.10+)

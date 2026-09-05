@@ -11,7 +11,8 @@
 
 ## macOS 桌面包
 
-当前桌面构建目标为 Apple Silicon。打开提供的 `.dmg`，把 `EasyICU.app`
+当前桌面构建目标为 macOS 14+ / Apple Silicon。具体经过测试的系统版本以
+发行说明为准。打开提供的 `.dmg`，把 `EasyICU.app`
 拖入 Applications，再启动应用。安装包自带运行环境，不需要 Git 或源码目录。
 本地测试构建只有 ad-hoc 签名；公开分发需要完成 Developer ID 签名与公证。
 
