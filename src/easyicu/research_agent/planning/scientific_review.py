@@ -1969,27 +1969,6 @@ def build_plan_scientific_review(
                 remediation="Plan source-data-bound figures for each missing role; table prose elsewhere does not count as a figure.",
             )
         )
-    if not figure_roles["distinct_chart_types_complete"]:
-        findings.append(
-            PlanScientificFinding(
-                code="FIGURE_CHART_TYPES_TOO_NARROW",
-                severity="major",
-                dimension="figures",
-                message=(
-                    "The typed figure plan declares fewer distinct valid chart "
-                    "families than the article figure strategy requires."
-                ),
-                evidence_refs=[
-                    "article_figure_strategy.json.minimum_distinct_chart_types",
-                    "analysis_plan.json.steps.figure_panels",
-                ],
-                remediation=(
-                    "Declare complementary typed panels with exact article roles, "
-                    "accepted chart types, figure outputs, and source products; "
-                    "renaming a table or generic overview does not count."
-                ),
-            )
-        )
     if content_roles["missing_roles"]:
         findings.append(
             PlanScientificFinding(

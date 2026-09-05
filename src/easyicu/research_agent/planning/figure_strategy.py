@@ -79,7 +79,10 @@ class ArticleFigureStrategy(BaseModel):
     analysis_family: StudyDesignFamily
     archetype: str
     hero_role: str
-    minimum_distinct_chart_types: int = 3
+    minimum_distinct_chart_types: int = Field(
+        default=3,
+        description="Advisory design target; never a scientific or publication gate.",
+    )
     role_strategies: List[FigureRoleStrategy] = Field(default_factory=list)
     anti_patterns: List[str] = Field(default_factory=list)
     prompt_rules: List[str] = Field(default_factory=list)
@@ -526,7 +529,7 @@ def render_article_figure_strategy_for_prompt(strategy: ArticleFigureStrategy) -
         f"- analysis_family: {strategy.analysis_family}",
         f"- archetype: {strategy.archetype}",
         f"- hero_role: {strategy.hero_role}",
-        f"- minimum_distinct_chart_types: {strategy.minimum_distinct_chart_types}",
+        f"- advisory_chart_diversity_target: {strategy.minimum_distinct_chart_types} (choose only forms that help the question; this is not a publication requirement)",
         "- required_visual_roles:",
     ]
     for role in strategy.role_strategies:
@@ -603,11 +606,8 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
     if not role.acceptable_chart_types:
         return True
     if chart_type == "unspecified":
-        # The panel already matched this role by name/required text but its
-        # chart family could not even be inferred. Do not hard-fail the whole
-        # publication gate on a formatting guess: chartless suites are still
-        # caught by the distinct-chart-family minimum below.
-        return True
+        # Missing chart coordinates are a contract defect, not low diversity.
+        return False
     accepted = {item.replace(" ", "_") for item in role.acceptable_chart_types}
     # Deterministic renderers predate the article-strategy vocabulary and a
     # few of their precise chart names carry harmless geometry suffixes.  Keep
@@ -835,16 +835,17 @@ def summarize_article_figure_strategy_coverage(
             "Supporting or scratch figures can supplement the article package, "
             "but they cannot make a sparse main figure article-grade."
         )
+    design_advice = []
     if len(nonempty_chart_types) < strategy.minimum_distinct_chart_types:
-        errors.append(
+        design_advice.append(
             "Figure strategy uses fewer distinct chart families than expected "
             f"for {strategy.analysis_family}: {len(nonempty_chart_types)} < "
             f"{strategy.minimum_distinct_chart_types}."
         )
     if chart_types and set(chart_types) <= _GENERIC_CHART_TYPES:
-        errors.append(
+        design_advice.append(
             "Figure strategy is limited to generic bar/forest/heatmap panels; "
-            "top-journal article figures need a role-specific visual grammar."
+            "consider other forms only when they communicate the planned scientific information more clearly."
         )
     if strategy.hero_role not in covered_roles:
         errors.append(
@@ -875,6 +876,7 @@ def summarize_article_figure_strategy_coverage(
         "article_figure_strategy_minimum_distinct_chart_types": strategy.minimum_distinct_chart_types,
         "article_figure_strategy_role_panels": role_panel_ids,
         "article_figure_strategy_errors": errors,
+        "article_figure_strategy_design_advice": design_advice,
         "article_figure_strategy": strategy.model_dump(mode="json"),
     }
 

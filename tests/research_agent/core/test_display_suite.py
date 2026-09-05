@@ -156,11 +156,11 @@ def test_display_suite_requires_article_grade_primary_not_only_supporting(
     assert status["display_supporting_absolute_risk_visual_present"] is True
     assert any(
         "Primary publication figure exposes fewer" in err
-        for err in status["display_suite_errors"]
+        for err in status["display_design_advice"]
     )
     assert any(
         "Primary publication figure lacks panel-role" in err
-        for err in status["display_suite_errors"]
+        for err in status["display_design_advice"]
     )
     assert any(
         "Primary association figure lacks a visual prevalence" in err

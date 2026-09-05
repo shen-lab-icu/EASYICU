@@ -158,6 +158,7 @@ def display_suite_audit_payload(gates: Mapping[str, Any]) -> Dict[str, Any]:
             "display_figure_claim_boundary_errors"
         ],
         "errors": gates["display_suite_errors"],
+        "design_advice": gates.get("display_design_advice", []),
     }
 
 
@@ -394,6 +395,7 @@ def summarize_display_suite_status(
     has_audit_context = bool(categories & _AUDIT_DISPLAY_CATEGORIES)
     figure_contract_count = len(contract_paths)
     errors: List[str] = []
+    design_advice: List[str] = []
     if table_one_expected and not has_table_one:
         errors.append(
             "Table 1/baseline cohort display was declared but not registered."
@@ -405,15 +407,15 @@ def summarize_display_suite_status(
             "No primary publication result-bearing figure contract is registered."
         )
     if primary_panel_count < 2:
-        errors.append("Primary publication figure exposes fewer than two panels.")
+        design_advice.append("Primary publication figure exposes fewer than two panels.")
     if len(primary_role_names) < 2:
-        errors.append("Primary publication figure lacks panel-role diversity.")
+        design_advice.append("Primary publication figure lacks panel-role diversity.")
     if not has_audit_context:
         errors.append(
             "No audit, sensitivity, robustness, missingness, or provenance display is registered."
         )
     if len(categories) < 3:
-        errors.append(
+        design_advice.append(
             "Display suite covers fewer than three article content categories."
         )
     if (
@@ -434,9 +436,9 @@ def summarize_display_suite_status(
         and primary_chart_types
         and primary_chart_types <= generic_chart_types
     ):
-        errors.append(
+        design_advice.append(
             "Primary association figure is limited to generic bar/forest/heatmap panels; "
-            "article-level association displays need at least one complementary visual form "
+            "consider a complementary visual form if it clarifies the question, "
             "such as flow, dot-interval absolute-risk, distribution, curve, or specification display."
         )
     claim_boundaries = build_figure_claim_boundary_audit(
@@ -507,4 +509,5 @@ def summarize_display_suite_status(
         ],
         "display_figure_claim_boundary_errors": list(claim_boundaries.errors),
         "display_suite_errors": errors,
+        "display_design_advice": design_advice,
     }

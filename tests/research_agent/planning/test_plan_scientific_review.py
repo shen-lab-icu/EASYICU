@@ -2565,7 +2565,7 @@ def test_generic_overview_inputs_do_not_infer_figure_roles_or_chart_breadth() ->
     assert facts["distinct_chart_types_complete"] is False
     codes = {item.code for item in review.findings}
     assert "FIGURE_ROLE_COVERAGE_INCOMPLETE" in codes
-    assert "FIGURE_CHART_TYPES_TOO_NARROW" in codes
+    assert "FIGURE_CHART_TYPES_TOO_NARROW" not in codes
 
 
 def test_revision_contract_contains_only_agent_owned_findings() -> None:
