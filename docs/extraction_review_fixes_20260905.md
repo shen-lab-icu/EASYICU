@@ -207,3 +207,25 @@ that every later source-semantic change has passed raw-data verification.
 The outstanding work must not be described as "all six databases verified",
 "globally fastest", "fewest possible batches", or "release ready". Sealed
 data and global `current` remain separate from the corrected code branch.
+
+## Integration with current main
+
+Merge candidate `872c7b68` combined this branch with `8d3d7f69`. Text merging
+was clean, but the wider local test run exposed two genuine binding failures:
+the current E1 development profile and offline context baseline still pinned
+the pre-correction SOFA-2 dictionary hash. That run was stopped for repair
+after 4,474 passes, two failures and 122 skips; it is not a passing checkpoint.
+
+Additive `20260905` E1 development profiles now bind the corrected packaged
+SOFA-2 dictionary. All `20260904` profiles remain registered and immutable.
+Regression coverage verifies that only the version, lock timestamp and
+SOFA-2 dictionary hash differ between each old/new profile pair. Research
+options, provider permissions and source-concept bindings are unchanged.
+These application profile refs are not the global data-release `current`.
+
+The generated offline context baseline records the intentional hash change in
+its append-only history. The measured payload changes only at
+`source_sha256["src/easyicu/data/sofa2-dict.json"]`: prompt sizes, selected
+resources, provider calls (zero) and patient-data reads (zero) are unchanged.
+The 53-test profile/baseline regression run and lint pass after this repair;
+the integrated commit must still pass the PR checks before merging.
