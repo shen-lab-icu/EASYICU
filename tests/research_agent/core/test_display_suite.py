@@ -82,6 +82,70 @@ def _association_plan(ra, context):
     )
 
 
+@pytest.mark.parametrize("consumer", ["display", "article", "strategy"])
+def test_article_audits_report_corrupt_current_figure_contracts(ra, tmp_path, consumer):
+    from easyicu.research_agent.reporting.article_contract import summarize_article_contract_coverage
+    from easyicu.research_agent.planning.figure_strategy import summarize_article_figure_strategy_coverage
+
+    path = tmp_path / "publication_figures" / "broken.figure_contract.json"
+    path.parent.mkdir()
+    path.write_text("{broken", encoding="utf-8")
+    context = _association_context(ra)
+    plan = _association_plan(ra, context)
+    evidence = EvidenceStore(tmp_path)
+    if consumer == "display":
+        status = summarize_display_suite_status(
+            context=context, plan=plan, evidence=evidence, run_dir=tmp_path,
+            publication={"publication_figure_bundle_ready": True}, per_step_records=[],
+        )
+        errors = status["display_suite_errors"]
+    elif consumer == "article":
+        status = summarize_article_contract_coverage(
+            context=context, plan=plan, evidence_records=[], per_step_records=[], run_dir=tmp_path,
+        )
+        errors = status["article_contract_errors"]
+    else:
+        status = summarize_article_figure_strategy_coverage(
+            context=context, run_dir=tmp_path, per_step_records=[],
+        )
+        errors = status["article_figure_strategy_errors"]
+    assert any("figure_contract_invalid_json" in error and path.name in error for error in errors)
+
+
+def test_article_audits_share_the_same_current_contract_read(ra, tmp_path):
+    from easyicu.research_agent.figures.contracts import FigureContractInventory
+    from easyicu.research_agent.reporting.article_contract import summarize_article_contract_coverage
+    from easyicu.research_agent.planning.figure_strategy import summarize_article_figure_strategy_coverage
+
+    _write_contract(
+        tmp_path, "publication_figures", "quality", figure_id="quality",
+        core_claim="Missingness and measurement availability are shown.",
+        panels=[{"panel_id": "A", "role": "data_quality", "chart_type": "availability_panel"}],
+    )
+    contracts = FigureContractInventory.load(tmp_path, per_step_records=[])
+    _write_contract(
+        tmp_path, "publication_figures", "quality", figure_id="later",
+        core_claim="A later result is on disk.",
+        panels=[{"panel_id": "A", "role": "robustness", "chart_type": "forest"}],
+    )
+    context = _association_context(ra)
+    plan = _association_plan(ra, context)
+    display = summarize_display_suite_status(
+        context=context, plan=plan, evidence=EvidenceStore(tmp_path), run_dir=tmp_path,
+        publication={"publication_figure_bundle_ready": True}, per_step_records=[],
+        figure_contracts=contracts,
+    )
+    article = summarize_article_contract_coverage(
+        context=context, plan=plan, evidence_records=[], per_step_records=[], run_dir=tmp_path,
+        figure_contracts=contracts,
+    )
+    strategy = summarize_article_figure_strategy_coverage(
+        context=context, run_dir=tmp_path, per_step_records=[], figure_contracts=contracts,
+    )
+    assert display["display_chart_types"] == strategy["article_figure_strategy_chart_types"] == ["availability_panel"]
+    assert "data_quality" in article["article_artifact_roles"]
+
+
 def test_display_suite_requires_article_grade_primary_not_only_supporting(
     ra,
     tmp_path: Path,

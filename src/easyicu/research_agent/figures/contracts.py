@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..authority.runtime_artifacts import current_successful_step_records
+from ..contracts.frozen_payload import freeze_payload, thaw_payload
 
 EXPORT_SUFFIXES = ("png", "svg", "pdf", "tiff", "tif")
 
@@ -201,6 +204,31 @@ def relative_to_run(path: Path, run_dir: Path) -> str:
         return str(path)
 
 
+def _current_contract_files(
+    per_step_records: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, set[str] | None] | None:
+    if per_step_records is None:
+        return None
+    declared: dict[str, set[str] | None] = {}
+    for record in current_successful_step_records(per_step_records):
+        step_id = str(record.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        summary = record.get("step_summary")
+        if isinstance(summary, Mapping) and "contract_files" in summary:
+            raw_files = summary.get("contract_files")
+            declared[step_id] = {
+                Path(str(name)).name
+                for name in (raw_files if isinstance(raw_files, list) else [])
+                if str(name).strip()
+            }
+        else:
+            # Legacy successful records can predate explicit contract_files;
+            # a modern explicit empty list still selects no step contracts.
+            declared[step_id] = None
+    return declared
+
+
 def figure_contract_paths(
     run_dir: Path,
     *,
@@ -208,26 +236,8 @@ def figure_contract_paths(
     include_publication_figures: bool = True,
 ) -> List[Path]:
     supporting_paths = list(run_dir.glob("steps/*/outputs/*.figure_contract.json"))
-    if per_step_records is not None:
-        current_records = current_successful_step_records(per_step_records)
-        declared_contracts: Dict[str, set[str] | None] = {}
-        for record in current_records:
-            step_id = str(record.get("step_id") or "").strip()
-            if not step_id:
-                continue
-            summary = record.get("step_summary")
-            if isinstance(summary, Mapping) and "contract_files" in summary:
-                raw_files = summary.get("contract_files")
-                declared_contracts[step_id] = {
-                    Path(str(name)).name
-                    for name in (raw_files if isinstance(raw_files, list) else [])
-                    if str(name).strip()
-                }
-            else:
-                # Compatibility for successful legacy records that predate the
-                # explicit contract_files field. Modern records with the field
-                # present (including an empty list) remain fail-closed.
-                declared_contracts[step_id] = None
+    declared_contracts = _current_contract_files(per_step_records)
+    if declared_contracts is not None:
         supporting_paths = [
             path
             for path in supporting_paths
@@ -252,6 +262,160 @@ def figure_contract_paths(
         seen.add(key)
         unique.append(path)
     return unique
+
+
+@dataclass(frozen=True, slots=True)
+class FigureContractReadError:
+    path: Path
+    reason_code: str
+    detail: str
+
+    def message(self, run_dir: Path) -> str:
+        return (
+            f"{self.reason_code}: {relative_to_run(self.path, run_dir)} ({self.detail})"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FigureContractSnapshot:
+    """One observed file, not scientific validation or publication authority."""
+
+    path: Path
+    tier: str
+    sha256: str
+    _payload: Mapping[str, Any]
+
+    def to_payload(self) -> dict[str, Any]:
+        return thaw_payload(self._payload)
+
+
+def _selection_identity(
+    per_step_records: Sequence[Mapping[str, Any]] | None,
+) -> tuple | None:
+    declared = _current_contract_files(per_step_records)
+    if declared is None:
+        return None
+    return tuple(
+        (step_id, tuple(sorted(names)) if names is not None else None)
+        for step_id, names in sorted(declared.items())
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FigureContractInventory:
+    """An immutable read of current contracts shared by one reporting pass.
+
+    Selection remains owned by the current-step artifact rules. Consumers keep
+    their scientific policies; this value only owns reading, read errors, and
+    detached projections. It must be reloaded for a later reporting pass.
+    """
+
+    run_dir: Path
+    paths: tuple[Path, ...]
+    snapshots: tuple[FigureContractSnapshot, ...]
+    errors: tuple[FigureContractReadError, ...]
+    _selection: tuple | None
+
+    @classmethod
+    def load(
+        cls,
+        run_dir: Path,
+        *,
+        per_step_records: Sequence[Mapping[str, Any]] | None = None,
+        current: FigureContractInventory | None = None,
+    ) -> FigureContractInventory:
+        root = run_dir.resolve()
+        selection = _selection_identity(per_step_records)
+        if current is not None:
+            if current.run_dir != root or current._selection != selection:
+                raise ValueError("figure_contract_inventory_scope_mismatch")
+            return current
+        paths = tuple(figure_contract_paths(root, per_step_records=per_step_records))
+        snapshots: list[FigureContractSnapshot] = []
+        errors: list[FigureContractReadError] = []
+        for path in paths:
+            if not path.resolve().is_relative_to(root):
+                errors.append(
+                    FigureContractReadError(
+                        path,
+                        "figure_contract_outside_run",
+                        "contract resolves outside the run directory",
+                    )
+                )
+                continue
+            try:
+                content = path.read_bytes()
+            except OSError as exc:
+                errors.append(
+                    FigureContractReadError(
+                        path, "figure_contract_unreadable", str(exc)
+                    )
+                )
+                continue
+            try:
+                raw = json.loads(content)
+            except (ValueError, UnicodeError) as exc:
+                errors.append(
+                    FigureContractReadError(
+                        path, "figure_contract_invalid_json", str(exc)
+                    )
+                )
+                continue
+            try:
+                if not isinstance(raw, dict):
+                    raise ValueError("contract must be a JSON object")
+                panels = raw.get("panels", [])
+                if not isinstance(panels, list) or any(
+                    not isinstance(panel, dict) for panel in panels
+                ):
+                    raise ValueError("panels must be a list of JSON objects")
+                payload = freeze_payload(raw)
+            except ValueError as exc:
+                errors.append(
+                    FigureContractReadError(
+                        path, "figure_contract_invalid_shape", str(exc)
+                    )
+                )
+                continue
+            snapshots.append(
+                FigureContractSnapshot(
+                    path,
+                    figure_contract_tier(path, root),
+                    sha256(content).hexdigest(),
+                    payload,
+                )
+            )
+        return cls(root, paths, tuple(snapshots), tuple(errors), selection)
+
+    def error_messages(self) -> list[str]:
+        return [error.message(self.run_dir) for error in self.errors]
+
+    def panel_projections(self) -> list[dict[str, Any]]:
+        panels = []
+        for snapshot in self.snapshots:
+            raw = snapshot.to_payload()
+            for panel in raw.get("panels", []):
+                panels.append(
+                    {
+                        **panel,
+                        "_contract_path": str(snapshot.path),
+                        "_figure_id": str(raw.get("figure_id") or snapshot.path.stem),
+                        "_primary_publication_contract": snapshot.tier
+                        == "primary_publication",
+                    }
+                )
+        return panels
+
+    def texts(self, *, allowed_step_ids: set[str] | None = None) -> tuple[str, ...]:
+        return tuple(
+            figure_contract_text(snapshot.to_payload())
+            for snapshot in self.snapshots
+            if allowed_step_ids is None
+            or (
+                snapshot.tier == "supporting_step"
+                and snapshot.path.parents[1].name in allowed_step_ids
+            )
+        )
 
 
 def figure_contract_tier(path: Path, run_dir: Path) -> str:

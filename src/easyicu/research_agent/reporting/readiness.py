@@ -62,6 +62,8 @@ from ..contracts.time_varying_exposure import TIME_VARYING_EXPOSURE_CAPABILITY
 from ..contracts.time_varying_validation import time_varying_runtime_bundle_errors
 from ..trajectory.runtime_validation import signed_trajectory_runtime_bundle_errors
 
+from ..figures.contracts import FigureContractInventory
+
 from .article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
@@ -2060,6 +2062,9 @@ def _compute_readiness_gates(
         run_dir=run_dir,
         per_step_records=per_step_records,
     )
+    figure_contracts = FigureContractInventory.load(
+        run_dir, per_step_records=per_step_records,
+    )
     display_suite = summarize_display_suite_status(
         context=context,
         plan=plan,
@@ -2067,18 +2072,21 @@ def _compute_readiness_gates(
         run_dir=run_dir,
         publication=publication,
         per_step_records=per_step_records,
+        figure_contracts=figure_contracts,
     )
     article_contract = summarize_article_contract_coverage(
         context=context,
         plan=plan,
         evidence_records=evidence.records(),
         per_step_records=per_step_records,
+        figure_contracts=figure_contracts,
         run_dir=run_dir,
     )
     figure_strategy = summarize_article_figure_strategy_coverage(
         context=context,
         run_dir=run_dir,
         per_step_records=per_step_records,
+        figure_contracts=figure_contracts,
         analysis_family=(
             study_design_family_for_analysis_type(plan.analysis_type)
             if plan is not None and plan.analysis_type is not None
