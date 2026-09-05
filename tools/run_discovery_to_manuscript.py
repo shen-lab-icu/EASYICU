@@ -333,6 +333,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     print(f"[discovery] package assessment: {assessment_path}")
     print(f"[discovery] package status: {assessment.status}")
+    from easyicu.research_agent.authority.run_receipt import preserve_terminal_run_receipt
+
+    receipt_path = preserve_terminal_run_receipt(run_dir)
+    print(f"[discovery] immutable run receipt: {receipt_path}")
     return 0 if assessment.package_ready else 3
 
 

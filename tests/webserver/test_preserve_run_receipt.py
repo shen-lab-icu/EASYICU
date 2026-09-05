@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from easyicu.research_agent.authority import run_receipt
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL_PATH = REPO_ROOT / "tools" / "preserve_run_receipt.py"
 
@@ -210,3 +212,76 @@ def test_cli_round_trips_build_then_verify(run_dir: Path, tmp_path: Path) -> Non
 
     (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
     assert tool.main([str(run_dir), "--verify", str(out)]) == 1
+
+
+def test_terminal_receipts_are_durable_immutable_versions(run_dir, tmp_path):
+    root = tmp_path / "durable"
+    first = run_receipt.preserve_terminal_run_receipt(run_dir, destination_root=root)
+    original = first.read_bytes()
+    assert first == run_receipt.preserve_terminal_run_receipt(run_dir, destination_root=root)
+    assert not first.is_relative_to(run_dir)
+    _write_json(run_dir / "later_signoff.json", {"scope": "analysis_only"})
+    second = run_receipt.preserve_terminal_run_receipt(run_dir, destination_root=root)
+    assert second != first
+    assert first.read_bytes() == original
+    assert tool.verify_receipt(run_dir, json.loads(second.read_bytes())) == []
+
+
+def test_receipt_cannot_overwrite_an_existing_different_receipt(run_dir, tmp_path):
+    out = tmp_path / "receipt.json"
+    assert tool.main([str(run_dir), "--out", str(out)]) == 0
+    original = out.read_bytes()
+    _write_json(run_dir / "added.json", {"status": "new"})
+    assert tool.main([str(run_dir), "--out", str(out)]) == 1
+    assert out.read_bytes() == original
+
+
+def test_receipt_cannot_be_written_inside_its_own_inventory(run_dir):
+    assert tool.main([str(run_dir), "--out", str(run_dir / "receipt.json")]) == 1
+    assert not (run_dir / "receipt.json").exists()
+
+
+def test_receipt_facts_are_checked_even_when_self_digest_was_recomputed(run_dir):
+    receipt = tool.build_receipt(run_dir)
+    receipt["status"] = "publication_ready"
+    receipt["receipt_sha256"] = tool._receipt_sha256(receipt)
+    assert any(run_receipt.RUN_RECEIPT_FACTS_MISMATCH in item for item in tool.verify_receipt(run_dir, receipt))
+
+
+def test_receipt_refuses_corrupt_present_authority_head(run_dir):
+    (run_dir / run_receipt.AUTHORITY_HEAD_NAME).write_text("broken")
+    with pytest.raises(tool.ReceiptError, match="RUN_RECEIPT_UNREADABLE_JSON"):
+        tool.build_receipt(run_dir)
+
+
+def test_receipt_refuses_source_drift_during_capture(run_dir, monkeypatch):
+    read = run_receipt._read_json
+    def changed_read(path, **kwargs):
+        result = read(path, **kwargs)
+        if path.name == "manifest.json":
+            path.write_text("{}")
+        return result
+    monkeypatch.setattr(run_receipt, "_read_json", changed_read)
+    with pytest.raises(tool.ReceiptError, match="RUN_RECEIPT_SOURCE_CHANGED"):
+        tool.build_receipt(run_dir)
+
+
+def test_pipeline_completion_automatically_preserves_terminal_receipt(run_dir, tmp_path, monkeypatch):
+    from easyicu.research_agent.pipeline import PipelineResult, ResearchAgentPipeline
+    from easyicu.research_agent.orchestration.workflow import WorkflowCompleted
+
+    root = tmp_path / "retained"
+    monkeypatch.setenv("EASYICU_RUN_RECEIPT_ROOT", str(root))
+    pipeline = object.__new__(ResearchAgentPipeline)
+    result = PipelineResult(
+        run_id=run_dir.name, workdir=str(run_dir), context_path="", plan_path="",
+        manifest_path=str(run_dir / "manifest.json"), report_path="", manuscript_path="",
+        evidence_count=1, findings_count=0,
+    )
+    actual = pipeline._pipeline_result_or_pending(
+        WorkflowCompleted(final_result=result), workflow=None,
+        run_id=run_dir.name, run_dir=run_dir,
+    )
+    assert actual is result
+    saved, = (root / run_dir.name).glob("*.json")
+    assert tool.verify_receipt(run_dir, json.loads(saved.read_bytes())) == []
