@@ -255,9 +255,11 @@ def test_monitored_worker_forces_current_source_pythonpath(
     assert captured["env"]["PYTHONNOUSERSITE"] == "1"
 
 
-def test_worker_passes_one_recorded_initial_batch_and_keeps_adaptation(
+@pytest.mark.parametrize("requested_batch_size", [None, 5000])
+def test_worker_preserves_module_plans_and_enforces_assigned_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    requested_batch_size,
 ) -> None:
     import easyicu.api as public_api
     import easyicu.api.extraction as extraction
@@ -317,7 +319,7 @@ def test_worker_passes_one_recorded_initial_batch_and_keeps_adaptation(
                 "assigned_memory_mb": 6 * 1024,
                 "planning_memory_mb": 8 * 1024,
                 "adaptive_core": True,
-                "requested_batch_size": None,
+                "requested_batch_size": requested_batch_size,
             }
         ),
         encoding="utf-8",
@@ -329,10 +331,15 @@ def test_worker_passes_one_recorded_initial_batch_and_keeps_adaptation(
     result = json.loads((attempt_root / "worker_result.json").read_text())
     assert plan["assigned_memory_mb"] == 6 * 1024
     assert plan["planning_memory_mb"] == 8 * 1024
-    assert plan["planned_initial_batch_size"] == 20_000
-    assert captured["batch_size"] == plan["planned_initial_batch_size"]
-    assert captured["adaptive_stream_batches"] is True
-    assert result["batch_strategy"]["initial_batch_size"] == 20_000
+    assert plan["effective_resource_budget_mb"] == 6 * 1024
+    assert captured["resource_budget_mb"] == 6 * 1024
+    assert captured["batch_size"] == requested_batch_size
+    assert captured["adaptive_stream_batches"] is False
+    assert plan["adaptive_core"] is False
+    assert plan["module_resource_plans"]["blood_gas"]["batch_size"] == (requested_batch_size or 61_532)
+    assert plan["planned_initial_batch_size"] == (requested_batch_size or 13_000)
+    assert result["batch_strategy"]["initial_batch_size"] == plan["planned_initial_batch_size"]
+    assert result["batch_strategy"]["aggregate_plan_is_summary"] is (requested_batch_size is None)
 
 
 def test_successful_database_is_atomically_promoted_and_never_overwritten(

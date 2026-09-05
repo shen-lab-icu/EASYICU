@@ -439,17 +439,17 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 7_254.6,
             "seconds": 836.0,
         },
-        # The smallest rounded two-partition candidate (12k) crossed the
-        # 7,447-MiB hard stop. 8k completed the same-process streamed path in
-        # three partitions with a 6,025.4-MiB external process-tree peak.
-        # Matching a second extraction is not an independent semantic oracle.
-        # Exact-time mode conflicts must select one native record for BOTH
-        # axes; see test_vent_mode_source_consistency.py.
+        # After the native-mode and raw tidal-volume repairs (a86b4fd6), 8k
+        # completed all three same-process partitions and native publication
+        # at a 6,281.5-MiB external peak. Independent full-source oracles passed
+        # for both axes and pooled tidal volume (at its float32 precision).
+        # Larger failed candidates used older code; this is a verified plan,
+        # not proof of the minimum partition count or globally fastest time.
         "ventilator": {
             "cohort_stays": 23_106,
             "batch_size": 8_000,
-            "peak_rss_mb": 6_025.4,
-            "seconds": 392.6,
+            "peak_rss_mb": 6_281.5,
+            "seconds": 399.5,
         },
         # The 12k rounded two-partition candidate crossed the 7,447-MiB hard
         # stop. The 8k candidate completed all three same-process streamed
@@ -608,7 +608,7 @@ def _measured_batch_recommendation(
     modules: Optional[Sequence[str]],
     num_patients: int,
 ) -> Optional[tuple[int, float, float]]:
-    """Return the fastest fully-covered measured batch recommendation.
+    """Return the registered fully-covered measured batch recommendation.
 
     The tuple is ``(batch_size, required_available_mb, measured_peak_mb)``.
     One-shot-profiled modules do not constrain a mixed request's batch size;
@@ -936,7 +936,7 @@ def plan_extraction_resources(
     *,
     available_memory_mb: Optional[float] = None,
 ) -> ExtractionResourcePlan:
-    """Choose the fastest evidence-supported extraction strategy.
+    """Choose a measured strategy, preferring one-shot when it fits.
 
     Automatic patient batching is a fallback only.  A fully measured module
     request runs one-shot whenever its measured process-tree peak plus 10%
@@ -1044,14 +1044,14 @@ def plan_extraction_resources(
             modules=selected_modules,
             advisory=(
                 f"Available memory {available_gib:.2f} GiB is below the measured "
-                f"fastest-batch threshold {required_gib:.2f} GiB. EasyICU will "
-                "use smaller patient batches, which is slower. Close memory-heavy "
-                "apps or free memory to restore the fastest verified batch size."
+                f"recorded-batch threshold {required_gib:.2f} GiB. EasyICU will "
+                "use smaller patient batches, which may be slower. Close memory-heavy "
+                "apps or free memory to restore the recorded batch size."
             ),
             advisory_zh=(
-                f"当前可用内存 {available_gib:.2f} GiB，低于实测最快批次门槛 "
-                f"{required_gib:.2f} GiB。EasyICU 将使用更小的患者批次，速度会变慢；"
-                "关闭占内存程序或清理内存后可恢复最快已验证批次。"
+                f"当前可用内存 {available_gib:.2f} GiB，低于已登记批次门槛 "
+                f"{required_gib:.2f} GiB。EasyICU 将使用更小的患者批次，速度可能变慢；"
+                "关闭占内存程序或清理内存后可恢复已验证批次；这不代表全局最快。"
             ),
         )
 

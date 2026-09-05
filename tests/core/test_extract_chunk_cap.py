@@ -333,8 +333,8 @@ def test_measured_aumc_ventilator_uses_minimum_verified_three_batches():
     assert plan.mode == "patient_batches"
     assert plan.reason_code == "measured_profile_fastest_safe_batch"
     assert plan.batch_size == 8_000
-    assert plan.measured_peak_rss_mb == pytest.approx(6_025.4)
-    assert plan.required_available_memory_mb == pytest.approx(6_627.94)
+    assert plan.measured_peak_rss_mb == pytest.approx(6_281.5)
+    assert plan.required_available_memory_mb == pytest.approx(6_909.65)
     assert _n_chunks(23_106, plan.batch_size) == 3
     assert plan.advisory is None
 
@@ -625,9 +625,9 @@ def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
 
     assert plan.reason_code == "measured_profile_insufficient_memory"
     assert plan.batch_size == 40_000
-    assert "fastest-batch threshold" in plan.advisory
-    assert "最快批次门槛" in plan.advisory_zh
-    assert "速度会变慢" in plan.advisory_zh
+    assert "recorded-batch threshold" in plan.advisory
+    assert "已登记批次门槛" in plan.advisory_zh
+    assert "速度可能变慢" in plan.advisory_zh
 
 
 def test_measured_module_batches_and_warns_only_below_its_threshold():

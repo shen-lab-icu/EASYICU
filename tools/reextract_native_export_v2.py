@@ -885,6 +885,7 @@ def _worker_main(spec_path: Path) -> int:
             EXTRACT_MODULE_ORDER,
             _get_all_patient_ids,
             plan_extraction_resources,
+            plan_module_extraction_resources,
         )
 
         imported_package = Path(easyicu.__file__).resolve().parent
@@ -906,15 +907,25 @@ def _worker_main(spec_path: Path) -> int:
         planning_memory_mb = float(
             spec.get("planning_memory_mb", spec["assigned_memory_mb"])
         )
+        effective_budget_mb = min(planning_memory_mb, float(spec["assigned_memory_mb"]))
         resource_plan = plan_extraction_resources(
             database,
             MODULE_ORDER,
             num_stays,
             requested_batch_size,
-            available_memory_mb=planning_memory_mb,
+            available_memory_mb=effective_budget_mb,
         )
         planned_batch_size = resource_plan.batch_size
-        adaptive_core = bool(spec.get("adaptive_core")) and requested_batch_size is None
+        # A launcher-assigned budget is a fixed contract, not permission to
+        # grow batches according to the physical host's spare RAM.
+        adaptive_core = False
+        module_plans = {
+            module: item.to_dict()
+            for module, item in plan_module_extraction_resources(
+                database, MODULE_ORDER, num_stays, requested_batch_size,
+                available_memory_mb=effective_budget_mb,
+            ).items()
+        }
         plan = {
             "database": database,
             "num_stays": num_stays,
@@ -925,6 +936,9 @@ def _worker_main(spec_path: Path) -> int:
             "adaptive_core": adaptive_core,
             "assigned_memory_mb": round(float(spec["assigned_memory_mb"]), 1),
             "planning_memory_mb": round(planning_memory_mb, 1),
+            "effective_resource_budget_mb": effective_budget_mb,
+            "module_resource_plans": module_plans,
+            "aggregate_plan_is_summary": requested_batch_size is None,
             "runtime_limits": runtime,
             "resource_plan": resource_plan.to_dict(),
             "easyicu_git_commit": identity["commit"],
@@ -937,11 +951,14 @@ def _worker_main(spec_path: Path) -> int:
             output_dir=output_root,
             modules=list(MODULE_ORDER),
             patient_ids={id_column: patient_ids},
-            batch_size=planned_batch_size,
+            # Preserve each module's policy. The aggregate minimum is only
+            # a summary; it must not downbatch already measured light modules.
+            batch_size=requested_batch_size,
             native_export_v2=True,
             stream_output_batches=True,
             verbose=True,
             adaptive_stream_batches=adaptive_core,
+            resource_budget_mb=effective_budget_mb,
         )
         errors = {
             module: list((extraction["modules"].get(module) or {}).get("errors") or [])
@@ -971,6 +988,8 @@ def _worker_main(spec_path: Path) -> int:
                 "planned_batch_count": math.ceil(num_stays / actual_batch_size),
                 "stream_retry_history": retries,
                 "resource_plan": resource_plan.to_dict(),
+                "module_resource_plans": extraction.get("module_resource_plans", module_plans),
+                "aggregate_plan_is_summary": requested_batch_size is None,
             },
             "runtime_limits": runtime,
             "package_receipt": receipt,
