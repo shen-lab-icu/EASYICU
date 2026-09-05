@@ -3276,7 +3276,18 @@ class ConceptResolver:
                     # - aumc_rate_kg: 先median再/kg ≠ 先/kg再median
                     # 🔧 FIX 2026-02: 对所有有callback的源都跳过预降采样
                     has_callback = getattr(source, 'callback', None) is not None
-                    skip_resample = has_callback
+                    # AUMC tidal_vol must obey its raw pooled/bounds contract.
+                    # Otherwise crossing 1,000
+                    # source rows changes results: [0, 2849] becomes 1424.5
+                    # before the 2,000-mL upper bound can reject the outlier.
+                    # Per-source medians also cannot be pooled into a median.
+                    # Keep this repair scoped to the independently reproduced
+                    # source contract; do not silently reprofile other modules
+                    # by changing every high-frequency fallback here.
+                    skip_resample = (
+                        has_callback
+                        or (db_name == "aumc" and concept_name == "tidal_vol")
+                    )
                     
                     if is_high_freq_db and table.index_column and len(frame) > 1000 and not skip_resample:
                         time_col = table.index_column

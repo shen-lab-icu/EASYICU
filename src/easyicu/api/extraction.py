@@ -428,10 +428,10 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 1_110.9,
             "seconds": 2.4,
         },
-        # The full respiratory owner is materially heavier than the subset
-        # loaded by SOFA. Under per-batch process isolation plus deferred part
-        # merge, 5k completed five partitions; 6k, 7k, 8k and 12k all crossed
-        # the 7,447-MiB hard stop. Use the largest internal batch sample because
+        # With isolated batches and deferred merging, 5k completed five
+        # partitions. Larger candidates failed EARLIER implementations, not
+        # this final path: this is a measured plan, not a minimum-batch proof.
+        # Use the largest internal batch sample because
         # it exceeded the external monitor's coarser whole-run peak.
         "respiratory": {
             "cohort_stays": 23_106,
@@ -442,10 +442,9 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         # The smallest rounded two-partition candidate (12k) crossed the
         # 7,447-MiB hard stop. 8k completed the same-process streamed path in
         # three partitions with a 6,025.4-MiB external process-tree peak.
-        # A fresh direct extraction of all 68 stays/108 keys changed from the
-        # sealed release matched the streamed result in all three affected
-        # fields, proving that the differences come from the existing stable
-        # categorical-first rule rather than patient partitioning.
+        # Matching a second extraction is not an independent semantic oracle.
+        # Exact-time mode conflicts must select one native record for BOTH
+        # axes; see test_vent_mode_source_consistency.py.
         "ventilator": {
             "cohort_stays": 23_106,
             "batch_size": 8_000,
@@ -1732,6 +1731,10 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
     }
 )
 
+# Deferred merging was measured only for AUMC respiratory. eICU SOFA-2 keeps
+# its established append-after-each-child schedule until separately measured.
+_DEFERRED_STREAM_MERGE_TARGETS = frozenset({("aumc", "respiratory")})
+
 
 def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:
     return (
@@ -2019,6 +2022,10 @@ def _stream_module_batches_to_parquet(
         str(load_kwargs.get("database") or ""),
         module_name,
     )
+    defer_merge = isolate_batch_process and (
+        _normalise_stream_database(str(load_kwargs.get("database") or "")),
+        module_name,
+    ) in _DEFERRED_STREAM_MERGE_TARGETS
     batch_process_context = _get_extraction_mp_context(mp) if isolate_batch_process else None
     part_files: list[Path] = []
     try:
@@ -2087,6 +2094,20 @@ def _stream_module_batches_to_parquet(
                             pq.ParquetFile(batch_part).metadata.num_rows
                         )
                         rows += output_rows
+                        if not defer_merge:
+                            if writer is None:
+                                writer = pq.ParquetWriter(
+                                    partial, schema, compression="snappy"
+                                )
+                            _append_isolated_stream_batch(
+                                batch_part,
+                                writer=writer,
+                                schema=schema,
+                                pyarrow_module=pa,
+                                parquet_module=pq,
+                            )
+                            batch_part.unlink()
+                            part_files.remove(batch_part)
                     else:
                         # An empty source batch intentionally produces no part.
                         part_files.remove(batch_part)
@@ -2169,7 +2190,7 @@ def _stream_module_batches_to_parquet(
                     available_memory_mb=batch_memory["available_memory_mb_at_start"],
                     remaining_patients=len(all_ids) - start,
                 )
-        if isolate_batch_process:
+        if defer_merge:
             if not part_files:
                 return None
             assert schema is not None
@@ -2213,6 +2234,7 @@ def _stream_module_batches_to_parquet(
         "adaptive_batch_growth": bool(adaptive_batch_growth),
         "patient_partition_strategy": "source_order_interleaved_v1",
         "batch_process_isolation": isolate_batch_process,
+        "deferred_batch_merge": defer_merge,
         "initial_planned_partition_count": planned_partition_count,
     }
 
@@ -2411,6 +2433,7 @@ def _run_module_extraction(
             "batch_process_isolation",
             False,
         )
+        manifest["deferred_batch_merge"] = stream_info.get("deferred_batch_merge", False)
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
@@ -5982,7 +6005,7 @@ def extract_database(
     batch_size: Optional[int] = None,
     group_modules: bool = True,
     native_export_v2: Optional[bool] = None,
-    stream_output_batches: bool = False,
+    stream_output_batches: Optional[bool] = None,
     verbose: bool = True,
     adaptive_stream_batches: Optional[bool] = None,
     resource_budget_mb: Optional[float] = None,
@@ -6001,14 +6024,14 @@ def extract_database(
         chartevents/labevents 等重表每组只扫一次，而不是每模块重扫一遍；
         SOFA 闭包只算一次并被 sofa1/sofa2/sep3_* 复用。缓存受
         EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%）；
-        低内存整库安全性由下述 streamed pilot 与重试合同共同保证。
+        固定预算同时限制线程、缓冲区和缓存；运行时硬上限仍需外部监控。
       * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
         arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
         EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
       * 自动策略以最快为目标：若所选模块已有全队列实测，且当前可用内存可容纳
         实测进程树峰值 + 10% 余量，则直接 one-shot；内存不足才按患者分批并返回
         结构化提醒。未实测的 MIMIC-III、MIMIC-IV 和 AUMC 模块组继续使用 24 GiB
-        保护线。每个流式模块再根据首批真实工作集调整后续批次，上限 67,000 stays。
+        保护线。默认固定执行模块计划，不根据服务器空闲内存自动扩大后续批次。
       * 参考实测：MIMIC-III 全量 61,532 stays 的 SOFA-2 六分量 ~6 分钟。
 
     Args:
@@ -6019,9 +6042,8 @@ def extract_database(
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
         batch_size: 模块内患者分批大小。None(默认) = 优先采用所选模块的实测
-            one-shot 最快路径；只有当前可用内存低于安全门槛时才分批。流式提取
-            会根据首批实测工作集调整后续批次（上限 67,000 stays）。仅在需要
-            覆盖默认策略时显式传值。
+            one-shot 路径；内存不足才分批。已登记批次按固定计划执行；未实测
+            模块保留保守保护线。仅在需要覆盖默认策略时显式传值。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -6030,14 +6052,13 @@ def extract_database(
             跨库统一 schema 与 typed metadata sidecar，不会重读原始表。传
             False 可显式保留旧版未封装输出。若任何模块或 metadata 绑定失败，
             不会发布根 ``_manifest.json``。
-        stream_output_batches: 将显式患者批次直接追加写入模块 parquet，不在
+        stream_output_batches: None 自动在有 output_dir 的分批提取中启用流式
+            写出；True 将患者批次直接追加写入模块 parquet，不在
             worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
             外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
         verbose: 是否打印进度
-        adaptive_stream_batches: ``None`` 保持公共默认：自动选择的流式 batch
-            会自适应，用户显式 ``batch_size`` 固定不变。六库 launcher 会同时
-            显式传入有 provenance 的首批计划和 ``True``，从而保证 plan 与实际
-            首批一致，同时允许后续批次继续按实测增长或收缩。
+        adaptive_stream_batches: None/False 固定执行资源计划。True 仅供没有显式
+            resource_budget_mb 的自适应试验；固定预算禁止运行中增批。
         resource_budget_mb: 资源规划可使用的内存预算（MiB）。None 使用当前
             可用内存；可复现的正式 release 应显式传入其资源合同（例如 8192），
             避免同一任务仅因换到大内存服务器就绕过已验证的分批边界。显式预算
@@ -6140,8 +6161,13 @@ def extract_database(
     # The resource plan is the single policy used by API, launcher, and Web.
     # Automatic batching is a last-resort degradation, never the default for a
     # measured module that fits currently available memory.
-    if adaptive_stream_batches and not stream_output_batches:
+    if adaptive_stream_batches and stream_output_batches is False:
         raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
+    if adaptive_stream_batches and resource_budget_mb is not None:
+        raise ValueError(
+            "adaptive_stream_batches cannot override a fixed resource_budget_mb; "
+            "use adaptive_stream_batches=False to execute the reviewed batch plan"
+        )
 
     automatic_batch = batch_size is None
     if resource_budget_mb is not None and float(resource_budget_mb) <= 0:
@@ -6171,6 +6197,21 @@ def extract_database(
         None if automatic_batch else batch_size,
         available_memory_mb=planning_available_mb,
     )
+    has_patient_batches = any(
+        plan.mode != "one_shot" for plan in module_resource_plans.values()
+    )
+    if stream_output_batches is None:
+        stream_output_batches = output_dir is not None and has_patient_batches
+    if adaptive_stream_batches and not stream_output_batches:
+        raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
+    if resource_budget_mb is not None and has_patient_batches and (
+        output_dir is None or not stream_output_batches
+    ):
+        raise ValueError(
+            "A fixed resource budget with patient batches requires an output_dir "
+            "and stream_output_batches=True; collecting the complete module in "
+            "memory is outside the measured streaming contract"
+        )
     # A mixed request must not force light modules through the strictest
     # module's batches.  Each module was profiled in an isolated process, so
     # automatic release execution uses that same per-module unit of planning.
@@ -6184,11 +6225,7 @@ def extract_database(
         or len({plan.batch_size for plan in module_resource_plans.values()}) > 1
     ):
         group_modules = False
-    _adaptive_stream_batches = bool(stream_output_batches) and (
-        automatic_batch
-        if adaptive_stream_batches is None
-        else bool(adaptive_stream_batches)
-    )
+    _adaptive_stream_batches = bool(stream_output_batches and adaptive_stream_batches)
     _auto_one_shot = all(
         plan.mode == "one_shot" for plan in module_resource_plans.values()
     )
@@ -6320,6 +6357,7 @@ def extract_database(
             "peak_working_set_mb": 0.0,
             "stream_batches": [],
             "batch_process_isolation": False,
+            "deferred_batch_merge": False,
         }
         manifest_path = os.path.join(tmp_mod_dir, "_manifest.json")
         if not os.path.exists(manifest_path):
@@ -6342,6 +6380,7 @@ def extract_database(
             "batch_process_isolation",
             False,
         )
+        mod_result["deferred_batch_merge"] = manifest.get("deferred_batch_merge", False)
         output_manifest = {
             "module": mod_name,
             "saved": {},
@@ -6358,6 +6397,7 @@ def extract_database(
             ),
             "stream_batches": mod_result["stream_batches"],
             "batch_process_isolation": mod_result["batch_process_isolation"],
+            "deferred_batch_merge": mod_result["deferred_batch_merge"],
             "initial_batch_size": manifest.get("initial_batch_size"),
             "final_planned_batch_size": manifest.get("final_planned_batch_size"),
             "adaptive_batch_growth": manifest.get(

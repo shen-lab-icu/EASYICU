@@ -360,6 +360,14 @@ coherent; the same output still fails for every other database.
 
 ## Decision
 
+2026-09-05 addendum: the subsequent review found default adaptive growth,
+cross-database deferred-merge scope and exact-time mode-source inconsistencies.
+See [review fixes](extraction_review_fixes_20260905.md). Earlier claims of a
+minimum AUMC partition count are withdrawn; measurements on an earlier
+implementation are not a boundary proof for later optimisations. A reproduced
+AUMC tidal-volume pre-resampling defect is repaired only for that concept and
+requires a fresh ventilator-module receipt.
+
 The targeted rebuild remains paused while eICU, AUMC, HiRID, MIMIC-III and SIC
 score closures receive measurements under the exact lower-layer 8-GiB
 envelope. The prior eICU 25,000-stay receipt is diagnostic but no longer

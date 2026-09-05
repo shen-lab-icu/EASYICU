@@ -1,6 +1,9 @@
 # Extraction resource strategy
 
-EasyICU automatically chooses the fastest evidence-supported extraction mode.
+EasyICU prefers measured one-shot execution, then a recorded batched plan.
+"Largest tested batch" is not proof of globally fastest execution or the
+minimum feasible partition count. Timings and failure bounds are specific to
+the implementation, source layout and runtime envelope that produced them.
 Patient batching is a fallback for insufficient memory, not the normal path.
 
 ## Stable user contract
@@ -33,6 +36,17 @@ Patient batching is a fallback for insufficient memory, not the normal path.
    well as the stay batch. At 8,192 MiB this means two internal workers, two
    Arrow/DuckDB threads, a 2,048 MiB DuckDB limit and a 512 MiB resolver cache;
    these values are recorded in the output manifest.
+9. The API now executes the recorded plan with **fixed batches by default**.
+   It does not grow later batches using the host's available RAM. Explicit
+   adaptive growth is experimental and rejected with a fixed resource budget.
+   A budgeted batched request requires an output directory and streaming;
+   leaving `stream_output_batches=None` automatically enables streaming for
+   batched disk exports. An in-memory full-module return is not covered by the
+   measured streaming contract. These settings are not an OS memory hard cap:
+   profiling still requires process-tree monitoring with an enforced stop.
+10. Deferred merging is restricted to `aumc/respiratory`. `eicu/sofa2_score`
+    retains its established append-after-each-child schedule. Both isolation
+    and deferred-merge flags are included in module manifests.
 
 The machine-readable owner is `easyicu.api.extraction.plan_extraction_resources`.
 Its stable reason codes are:
@@ -43,6 +57,9 @@ Its stable reason codes are:
 - `calibrated_fast_path`
 - `unmeasured_profile_memory_guard`
 - `explicit_batch_size`
+
+The legacy reason code `measured_profile_fastest_safe_batch` remains stable
+for callers; it denotes the registered measured plan, not an optimality proof.
 
 ## MIMIC-IV v3.1 full-cohort measurements
 
@@ -245,7 +262,10 @@ have exited, and then runs native-v2 publication separately. At commit
 `0e2b2dd0`, 5,000 completed all five partitions in 836.0 seconds. The external
 whole-run peak was 6,996.6 MiB; the conservative largest internal batch sample
 was 7,254.6 MiB, so the registry threshold is 7,980.1 MiB after 10% headroom.
-Because 6,000 already failed, five is the minimum verified partition count.
+Those larger failures predate the final deferred-merge implementation. Five
+partitions are verified for `0e2b2dd0`; fewer partitions have **not** been ruled
+out on that implementation. Re-test larger balanced partitions before making
+a minimum-batch claim.
 
 The final native-v2 table retained all 2,537,113 sealed row keys. Sixteen of 17
 physical columns had identical logical multisets. The only change was
@@ -260,17 +280,21 @@ two-partition candidate of 12,000 stays crossed the 7,447-MiB hard stop at
 7,473.0 MiB. The 8,000-stay candidate completed three partitions in 395.9
 seconds (392.6 seconds in module extraction), with a 6,025.4-MiB external
 process-tree peak and a lower 5,704.1-MiB internal module peak. Its admission
-threshold is therefore 6,627.9 MiB after 10% headroom, and three is the minimum
-verified partition count.
+threshold was therefore 6,627.9 MiB after 10% headroom. Three partitions were
+verified; failure at 12,000 does not exclude two balanced partitions of 11,553.
 
 All 1,445,236 native row keys, schema fields and 12 raw/base concept columns
 matched the sealed release. The only logical differences were 43 `vent_mode`,
 67 `vent_breath_seq`, and 36 `driving_pres_controlled` values. These are the
-expected downstream effect of commit `095159ef`, which made hourly categorical
-`first` deterministic by exact source time and canonical value instead of
-unordered Parquet scan order. An independent direct extraction of every 68
-affected stays reproduced all 108 changed keys and all three current values
-with zero mismatches, excluding the patient partition as the cause.
+effect of commit `095159ef`, which made hourly categorical `first`
+deterministic. That earlier acceptance was insufficient: two separate axes
+could select different native records at the same time and invent a hybrid
+mode. Repeating the production algorithm was not an independent semantic
+check. The source-selection repair and its independent raw oracle are
+described in `extraction_review_fixes_20260905.md`. A separately reproduced
+AUMC tidal-volume pre-resampling defect also requires a fresh module receipt;
+the old timing and equality statement above are historical, not acceptance
+of the corrected implementation.
 
 Finally, the AUMC `other_scores` rounded two-partition candidate of 12,000
 stays crossed the same hard stop at 7,576.7 MiB after 68.1 seconds. The 8,000-
@@ -279,9 +303,9 @@ module extraction), with a 7,069.1-MiB external process-tree peak and a lower
 6,738.9-MiB internal module peak. Its admission threshold is 7,776.0 MiB after
 10% headroom. The published table contained 2,580,685 unique stay-hour rows
 from all 23,106 stays; schema, keys, qSOFA, SIRS, MEWS and NEWS were exactly
-equal to the sealed release in both multiset directions. Three is therefore
-the minimum verified partition count, and no additional process-isolation
-mechanism is needed for this module.
+equal to the sealed release in both multiset directions. Three is a verified
+partition count, not a minimum proof: 11,553/11,553 was not tested. No additional
+process-isolation mechanism was needed for the tested 8,000-stay plan.
 
 Under the deterministic 8,192-MiB worker envelope, a first combined benchmark
 showed that AUMC SOFA-1 could finish at 8,000 stays per batch, but its later
@@ -290,9 +314,9 @@ dedicated boundary test then rejected the smallest rounded two-partition
 candidate, 12,000 stays, at 7,472.3 MiB after 31.7 seconds. The dedicated
 8,000-stay closure completed in three partitions (8,000/8,000/7,106): the
 external process-tree peak was 6,535.4 MiB and `sofa1_score` took 574.9
-seconds. This proves that three is the minimum safe partition count under the
-8-GiB contract; testing 9k--11k would still produce three partitions and
-cannot improve that count.
+seconds. This verifies three partitions under the 8-GiB contract, not the
+minimum possible count. Two balanced 11,553-stay partitions remain untested;
+even candidates with the same partition count can have different runtimes.
 
 The SOFA-1 candidate preserves exactly the sealed 2,871,000 row keys and all
 six component values. Its total is recomputed from those components on every
@@ -311,7 +335,7 @@ The exact post-semantics SOFA-2 boundary search rejected both 7,000 stays
 external monitor recorded 6,434.0 MiB over 942.9 seconds; the more conservative
 module sampler recorded 6,583.5 MiB for `sofa2_score` over 927.2 seconds.
 The registry uses that higher peak plus 10% headroom, yielding a 7,241.9-MiB
-admission threshold. Thus 5,000 is the fastest verified safe boundary among
+admission threshold. Thus 5,000 is the largest verified safe batch among
 the tested 1,000-stay candidates, not a generic AUMC default.
 
 The first normal-imputation implementation retained 124,393 hours created
