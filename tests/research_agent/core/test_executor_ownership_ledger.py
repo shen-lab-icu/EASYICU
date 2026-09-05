@@ -197,7 +197,7 @@ def test_unowned_products_reports_what_no_owner_can_emit(rows) -> None:
 def test_the_ledger_asks_the_selector_rather_than_the_predicates() -> None:
     """A second copy of the ownership predicates would drift from the selector.
 
-    ``select_standard_executor`` applies gates *after* a contract matches -- a
+    ``resolve_standard_executor`` applies gates *after* a contract matches -- a
     receipt an owner cannot discharge, a typed input scope it does not support
     -- so a tool that called ``*_owns_step`` directly would eventually report
     an owner the selector declined.
@@ -211,7 +211,8 @@ def test_the_ledger_asks_the_selector_rather_than_the_predicates() -> None:
         for alias in node.names
     }
 
-    assert "select_standard_executor" in imported
+    assert "resolve_standard_executor" in imported
+    assert "select_standard_executor" not in imported
     assert not [name for name in imported if name.endswith("_owns_step")]
 
 
