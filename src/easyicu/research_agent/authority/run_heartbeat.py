@@ -39,6 +39,8 @@ class RunHeartbeatSupervisor:
     def __init__(self, *, run_id: str) -> None:
         self.run_id = str(run_id)
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._finish_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._path: Optional[Path] = None
@@ -83,24 +85,24 @@ class RunHeartbeatSupervisor:
             raise ValueError("heartbeat task_timeout_seconds must be positive")
 
         target = Path(run_dir) / "run_heartbeat.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
+            if self._stop_event.is_set():
+                raise RuntimeError("run heartbeat has already finished")
             if self._path is not None and self._path != target:
                 raise RuntimeError("run heartbeat is already bound to another directory")
+            target.parent.mkdir(parents=True, exist_ok=True)
             self._path = target
             self._interval_seconds = interval
             self._task_timeout_seconds = task_timeout
-            should_start = self._thread is None
-        self.flush()
-        if should_start:
-            thread = threading.Thread(
-                target=self._heartbeat_loop,
-                name=f"easyicu-heartbeat-{self.run_id}",
-                daemon=True,
-            )
-            with self._lock:
+            if self._thread is None:
+                thread = threading.Thread(
+                    target=self._heartbeat_loop,
+                    name=f"easyicu-heartbeat-{self.run_id}",
+                    daemon=True,
+                )
+                thread.start()
                 self._thread = thread
-            thread.start()
+        self.flush()
         return target
 
     def record_progress(
@@ -126,6 +128,8 @@ class RunHeartbeatSupervisor:
         if normalized_timeout is not None and normalized_timeout <= 0:
             normalized_timeout = None
         with self._lock:
+            if self._stop_event.is_set():
+                return
             if (
                 normalized_stage != self._stage
                 or normalized_step != self._step_id
@@ -143,20 +147,35 @@ class RunHeartbeatSupervisor:
         self.flush()
 
     def finish(self, *, terminal_reason: str) -> None:
-        """Stop periodic writes and persist one final inactive receipt."""
+        """Drain writers and persist one final inactive receipt exactly once."""
 
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=max(1.0, min(self._interval_seconds * 2.0, 5.0)))
-        with self._lock:
-            self._active = False
-            self._terminal_reason = str(terminal_reason)[:160]
-            self._stage_status = "inactive"
-        self.flush()
+        with self._finish_lock:
+            with self._lock:
+                if not self._active:
+                    return
+                self._stop_event.set()
+                thread = self._thread
+            # Never join while holding a lock a pending flush needs. Returning
+            # before a writer drains would let it invalidate the run receipt.
+            if thread is not None and thread is not threading.current_thread():
+                thread.join()
+            with self._write_lock:
+                with self._lock:
+                    self._active = False
+                    self._terminal_reason = str(terminal_reason)[:160]
+                    self._stage_status = "inactive"
+                self._write_snapshot()
 
     def flush(self) -> None:
         """Atomically write the current snapshot when a path is bound."""
+
+        with self._write_lock:
+            if self._stop_event.is_set():
+                return
+            self._write_snapshot()
+
+    def _write_snapshot(self) -> None:
+        """Write under the caller's write lock, including the final snapshot."""
 
         with self._lock:
             path = self._path
@@ -274,6 +293,17 @@ def bind_active_run_heartbeat(
     return path
 
 
+def finish_active_run_heartbeat(*, run_id: str) -> None:
+    """Quiesce the current run's heartbeat before sealing its terminal tree."""
+
+    supervisor = _ACTIVE_HEARTBEAT.get()
+    if supervisor is None:
+        return
+    if supervisor.run_id != run_id:
+        raise RuntimeError("active run heartbeat belongs to a different run")
+    supervisor.finish(terminal_reason="workflow_completed")
+
+
 def record_active_run_progress(
     *,
     stage: str,
@@ -324,6 +354,7 @@ __all__ = [
     "RUN_HEARTBEAT_SCHEMA",
     "RunHeartbeatSupervisor",
     "bind_active_run_heartbeat",
+    "finish_active_run_heartbeat",
     "record_active_run_progress",
     "run_heartbeat_scope",
 ]

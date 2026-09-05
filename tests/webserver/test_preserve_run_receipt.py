@@ -266,7 +266,16 @@ def test_receipt_refuses_source_drift_during_capture(run_dir, monkeypatch):
         tool.build_receipt(run_dir)
 
 
-def test_pipeline_completion_automatically_preserves_terminal_receipt(run_dir, tmp_path, monkeypatch):
+@pytest.mark.parametrize("heartbeat_mode", ["none", "scope_exit", "during_capture"])
+def test_pipeline_completion_automatically_preserves_terminal_receipt(
+    run_dir, tmp_path, monkeypatch, heartbeat_mode
+):
+    from contextlib import nullcontext
+
+    from easyicu.research_agent.authority.run_heartbeat import (
+        bind_active_run_heartbeat,
+        run_heartbeat_scope,
+    )
     from easyicu.research_agent.pipeline import PipelineResult, ResearchAgentPipeline
     from easyicu.research_agent.orchestration.workflow import WorkflowCompleted
 
@@ -278,10 +287,28 @@ def test_pipeline_completion_automatically_preserves_terminal_receipt(run_dir, t
         manifest_path=str(run_dir / "manifest.json"), report_path="", manuscript_path="",
         evidence_count=1, findings_count=0,
     )
-    actual = pipeline._pipeline_result_or_pending(
-        WorkflowCompleted(final_result=result), workflow=None,
-        run_id=run_dir.name, run_dir=run_dir,
+    scope = (
+        nullcontext()
+        if heartbeat_mode == "none"
+        else run_heartbeat_scope(run_id=run_dir.name)
     )
+    with scope as supervisor:
+        if supervisor is not None:
+            bind_active_run_heartbeat(run_dir)
+        if heartbeat_mode == "during_capture":
+            read_json = run_receipt._read_json
+
+            def heartbeat_during_capture(path, **kwargs):
+                payload = read_json(path, **kwargs)
+                if path.name == "manifest.json":
+                    supervisor.flush()
+                return payload
+
+            monkeypatch.setattr(run_receipt, "_read_json", heartbeat_during_capture)
+        actual = pipeline._pipeline_result_or_pending(
+            WorkflowCompleted(final_result=result), workflow=None,
+            run_id=run_dir.name, run_dir=run_dir,
+        )
     assert actual is result
     saved, = (root / run_dir.name).glob("*.json")
     assert tool.verify_receipt(run_dir, json.loads(saved.read_bytes())) == []
