@@ -98,3 +98,14 @@ def complete_study() -> dict[str, Any]:
         "export_format": "parquet",
         "analysis_goal": "Descriptive prognostic association",
     }
+
+
+def _foundation_profile() -> dict[str, Any]:
+    return {
+        "allowed_modules": ("demographics", "outcome"),
+        "static_concepts": ("age", "sex"),
+        "outcome_concepts": ("death",),
+        "required_feature_concepts": (),
+        "require_outcome": True,
+        "primary_exposure_source_concept": "heart_rate",
+    }
