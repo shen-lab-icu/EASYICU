@@ -1,0 +1,12 @@
+tests/research_agent/authority/test_discovery_handoff_seal.py
+tests/research_agent/core/test_discovery_package.py
+tests/webserver/test_webserver_idea_sources.py
+tests/research_agent/planning/test_figure_plan_runtime_binding.py
+tests/research_agent/figures/test_landmark_association_figure_executor.py
+tests/research_agent/figures/test_adjusted_association_figure_executor.py
+tests/research_agent/planning/test_figure_strategy_advice.py
+tests/research_agent/figures/test_family_figures.py
+tests/research_agent/execution/test_step_executor_registry.py
+tests/research_agent/planning/test_plan_scientific_review.py
+tests/research_agent/planning/test_study_design.py
+tests/research_agent/core/test_display_suite.py

@@ -1,0 +1,65 @@
+{
+  "figure_id": "association",
+  "core_claim": "The absolute exposure/outcome distribution and the adjusted association are shown together from two digest-bound host tables.",
+  "archetype": "asymmetric_mixed_modality",
+  "panels": [
+    {
+      "panel_id": "distribution",
+      "title": "Absolute distribution",
+      "role": "descriptive_result",
+      "claim": "Exposure prevalence and observed outcome risk by declared exposure level.",
+      "evidence_ids": [
+        "exposure_outcome_distribution"
+      ],
+      "review_risk": null,
+      "metadata": {
+        "source_data": [
+          "association_distribution_source_data.csv"
+        ],
+        "chart_type": "event_rate_panel",
+        "source_products": [
+          "table:exposure_outcome_distribution"
+        ],
+        "placement": "main",
+        "display_purpose": "scientific_result",
+        "display_policy_reason_code": "SCIENTIFIC_RESULT_DISPLAY"
+      }
+    },
+    {
+      "panel_id": "effect",
+      "title": "Adjusted association",
+      "role": "primary_estimand",
+      "claim": "Host-fitted effect estimate and confidence interval. Adjusted for age, sex.",
+      "evidence_ids": [
+        "adjusted_association_estimates"
+      ],
+      "review_risk": null,
+      "metadata": {
+        "source_data": [
+          "association_association_source_data.csv"
+        ],
+        "chart_type": "forest",
+        "source_products": [
+          "table:adjusted_association_estimates"
+        ],
+        "placement": "main",
+        "display_purpose": "scientific_result",
+        "display_policy_reason_code": "SCIENTIFIC_RESULT_DISPLAY"
+      }
+    }
+  ],
+  "export_formats": [
+    "svg",
+    "pdf",
+    "png",
+    "tiff"
+  ],
+  "width_mm": 183.0,
+  "height_mm": 105.00000000000001,
+  "source_data": [
+    "association_distribution_source_data.csv",
+    "association_association_source_data.csv"
+  ],
+  "statistics_note": "All plotted values are direct projections of registered tables; the renderer performs no fitting, filtering, or denominator choice.",
+  "image_integrity_note": null
+}
