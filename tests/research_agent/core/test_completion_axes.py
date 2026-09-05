@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import json
+from dataclasses import FrozenInstanceError, replace
+
+import pytest
 from pathlib import Path
 
+from easyicu.research_agent.reporting.completion import (
+    RunCompletionDecision,
+    RunCompletionFacts,
+    readiness_status,
+)
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.reporting.readiness import (
     execution_gate_status,
@@ -181,9 +189,7 @@ def test_post_readiness_reviewer_inherits_final_paper_gate(tmp_path: Path):
     )
 
     final_report = json.loads(
-        (tmp_path / "reviewer_report_post_readiness.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "reviewer_report_post_readiness.json").read_text(encoding="utf-8")
     )
     scientific_gate_comments = [
         comment
@@ -204,9 +210,7 @@ def test_post_readiness_reviewer_inherits_final_paper_gate(tmp_path: Path):
     assert evidence.get("run_status") is not None
     assert "run_status" in {
         record.evidence_id
-        for record in evidence.current_verified_records(
-            [_feasibility_failure_record()]
-        )
+        for record in evidence.current_verified_records([_feasibility_failure_record()])
     }
 
 
@@ -242,141 +246,130 @@ def test_report_keeps_analysis_only_distinct_from_diagnostic_only(tmp_path: Path
     assert "## Status: ANALYSIS ONLY" in report
 
 
-def _readiness_with_all_content_gates_passing(
-    tmp_path: Path, *, monkeypatch, extra_gates: dict, **kwargs
-) -> dict:
-    """Run the real artifact writer over a run whose content gates all pass.
-
-    The demotions under test are orthogonal to content, so the interesting
-    case is a run that *would* have been publishable. Reaching that state
-    through the real gate computation needs a full successful pipeline; here
-    we substitute the content verdict and exercise the demotion logic itself.
-    """
-    import easyicu.research_agent.reporting.readiness as readiness_mod
-
-    class _Gates(dict):
-        def __missing__(self, key: str):
-            return 0 if "count" in key else ([] if key.endswith("s") else True)
-
-    base = {
-        "paper_authorized": True,
-        "publication_ready": True,
-        "manuscript_ready": True,
-        "execution_complete": True,
-        "replan_budget_exhausted": False,
-        "plan_truncated": False,
-        "scientific_maturity_article_grade": True,
-        "scientific_maturity_status": "article_grade",
-        "scientific_maturity_score": 100,
-        "scientific_maturity_dimension_scores": {},
-        "scientific_maturity_findings": [],
-        "scientific_maturity_facts": {},
-    }
-    monkeypatch.setattr(
-        readiness_mod,
-        "_compute_readiness_gates",
-        lambda **_kw: _Gates({**base, **extra_gates}),
-    )
-
-    context = ResearchContext(
-        research_question="Is a treatment exposure associated with mortality?",
-        cohort=CohortDescriptor(
-            cohort_name="synthetic", database="synthetic", n_patients=10, n_stays=10
+def _all_content_facts(**changes) -> RunCompletionFacts:
+    return replace(
+        RunCompletionFacts(
+            execution_complete=True,
+            evidence_complete=True,
+            numeric_verified=True,
+            analysis_validated=True,
+            publication_figure_bundle_ready=True,
+            publication_provenance_ready=True,
+            display_suite_complete=True,
+            article_contract_complete=True,
+            article_figure_strategy_complete=True,
+            scientific_maturity_article_grade=True,
+            plan_truncated=False,
+            replan_budget_exhausted=False,
+            administrative_metadata_verified=True,
         ),
-        variables=[],
-    )
-    manuscript = tmp_path / "manuscript.md"
-    manuscript.write_text("Publishable-looking manuscript.\n", encoding="utf-8")
-
-    kwargs.setdefault("execution_paper_eligible", True)
-    kwargs.setdefault("plan_authority_verified", True)
-    kwargs.setdefault("plan_authority_sha256", "a" * 64)
-    write_readiness_artifacts(
-        context=context,
-        plan=_plan(),
-        findings=[],
-        per_step_records=[],
-        evidence=EvidenceStore(tmp_path),
-        run_dir=tmp_path,
-        manuscript_path=manuscript,
-        stop_after_analysis=True,
-        **kwargs,
-    )
-    return json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
-
-
-def test_a_development_lane_run_is_not_paper_authorized(tmp_path: Path, monkeypatch):
-    """A demotion `status` honours must also bind `paper_authorized`.
-
-    These are the same question asked twice. When they were computed
-    independently the file could state `diagnostic_only` and
-    `paper_authorized: true` at once, and an external reader keying on the
-    boolean would read the opposite of the status string next to it.
-    """
-    status = _readiness_with_all_content_gates_passing(
-        tmp_path, monkeypatch=monkeypatch, extra_gates={}, force_diagnostic_only=True
+        **changes,
     )
 
-    assert status["status"] == "diagnostic_only"
-    assert status["gates"]["paper_authorized"] is False
+
+def _authorized_decision(**fact_changes):
+    return RunCompletionDecision(
+        _all_content_facts(**fact_changes),
+        execution_paper_eligible=True,
+        plan_authority_verified=True,
+        plan_authority_sha256="a" * 64,
+    )
 
 
-def test_an_exhausted_replan_budget_is_not_paper_authorized(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    "changes,expected_status",
+    [
+        ({"execution_complete": False}, "diagnostic_only"),
+        ({"evidence_complete": False}, "analysis_only"),
+        ({"numeric_verified": False}, "analysis_only"),
+        ({"analysis_validated": False}, "analysis_only"),
+        ({"publication_figure_bundle_ready": False}, "manuscript_ready"),
+        ({"publication_provenance_ready": False}, "manuscript_ready"),
+        ({"display_suite_complete": False}, "manuscript_ready"),
+        ({"article_contract_complete": False}, "manuscript_ready"),
+        ({"article_figure_strategy_complete": False}, "manuscript_ready"),
+        ({"scientific_maturity_article_grade": False}, "manuscript_ready"),
+        ({"plan_truncated": True}, "manuscript_ready"),
+        ({"replan_budget_exhausted": True}, "diagnostic_only"),
+    ],
+)
+def test_each_missing_scientific_requirement_blocks_paper_authority(
+    changes, expected_status
 ):
-    """The replan-budget floor demotes `status`; it must demote authority too."""
-    status = _readiness_with_all_content_gates_passing(
-        tmp_path,
-        monkeypatch=monkeypatch,
-        extra_gates={"replan_budget_exhausted": True},
-    )
-
-    assert status["status"] == "diagnostic_only"
-    assert status["gates"]["paper_authorized"] is False
+    decision = _authorized_decision(**changes)
+    assert decision.status == expected_status
+    assert decision.paper_authorized is False
+    assert readiness_status(decision.to_gates()) == expected_status
 
 
-def test_an_undemoted_publishable_run_keeps_paper_authorization(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    "authority,expected_status,authorized",
+    [
+        ({}, "publication_ready", True),
+        ({"execution_paper_eligible": False}, "publication_ready", False),
+        ({"plan_authority_verified": False}, "publication_ready", False),
+        ({"plan_authority_sha256": None}, "publication_ready", False),
+        ({"plan_authority_sha256": "not-a-digest"}, "publication_ready", False),
+        ({"plan_authority_sha256": "a" * 63}, "publication_ready", False),
+        ({"forced_diagnostic_only": True}, "diagnostic_only", False),
+    ],
+)
+def test_content_readiness_and_final_paper_authority_are_separate(
+    authority, expected_status, authorized
 ):
-    """Negative control: the binding must not demote everything it touches."""
-    status = _readiness_with_all_content_gates_passing(
-        tmp_path, monkeypatch=monkeypatch, extra_gates={}
+    decision = replace(_authorized_decision(), **authority)
+    assert decision.publication_ready is True
+    assert decision.status == expected_status
+    assert decision.paper_authorized is authorized
+    gates = decision.to_gates()
+    assert gates["publication_artifacts_ready"] is (
+        expected_status == "publication_ready"
+    )
+    assert gates["paper_authorized"] is authorized
+    assert readiness_status(gates) == expected_status
+
+
+def test_no_identity_can_never_authorize_a_content_ready_run():
+    decision = RunCompletionDecision(_all_content_facts())
+    assert decision.status == "publication_ready"
+    assert decision.publication_artifacts_ready is True
+    assert decision.paper_authorized is False
+    assert decision.plan_authority_sha256 is None
+
+
+def test_administrative_metadata_does_not_change_scientific_authority():
+    decision = _authorized_decision(administrative_metadata_verified=False)
+    assert decision.paper_authorized is True
+    assert decision.to_gates()["submission_ready"] is False
+
+
+def test_completion_is_immutable_and_projections_are_independent():
+    decision = _authorized_decision()
+    with pytest.raises(FrozenInstanceError):
+        decision.execution_paper_eligible = False
+    with pytest.raises(FrozenInstanceError):
+        decision.facts.evidence_complete = False
+    projection = decision.to_gates()
+    projection["paper_authorized"] = False
+    assert decision.to_gates()["paper_authorized"] is True
+    assert (
+        replace(
+            decision, plan_authority_sha256=" A" + "a" * 63 + " "
+        ).plan_authority_sha256
+        == "a" * 64
     )
 
-    assert status["status"] == "publication_ready"
-    assert status["gates"]["publication_artifacts_ready"] is True
-    assert status["gates"]["execution_paper_eligible"] is True
-    assert status["gates"]["paper_authorized"] is True
+
+@pytest.mark.parametrize("value", [None, 1, "false"])
+def test_unknown_or_truthy_strings_are_not_boolean_completion_verdicts(value):
+    with pytest.raises(TypeError, match="completion_fact_requires_boolean"):
+        _all_content_facts(evidence_complete=value)
+    with pytest.raises(TypeError, match="completion_authority_requires_boolean"):
+        replace(_authorized_decision(), plan_authority_verified=value)
 
 
-def test_content_ready_run_without_paper_eligible_identity_is_not_authorized(
-    tmp_path: Path, monkeypatch
-):
-    """Content readiness must not substitute for an authorized execution."""
-    status = _readiness_with_all_content_gates_passing(
-        tmp_path,
-        monkeypatch=monkeypatch,
-        extra_gates={},
-        execution_paper_eligible=False,
-    )
-
-    assert status["status"] == "publication_ready"
-    assert status["gates"]["publication_artifacts_ready"] is True
-    assert status["gates"]["execution_paper_eligible"] is False
-    assert status["gates"]["paper_authorized"] is False
-
-
-def test_content_ready_run_without_verified_plan_authority_is_not_authorized(
-    tmp_path: Path, monkeypatch
-) -> None:
-    status = _readiness_with_all_content_gates_passing(
-        tmp_path,
-        monkeypatch=monkeypatch,
-        extra_gates={},
-        plan_authority_verified=False,
-        plan_authority_sha256=None,
-    )
-
-    assert status["gates"]["execution_paper_eligible"] is True
-    assert status["gates"]["plan_authority_verified"] is False
-    assert status["gates"]["paper_authorized"] is False
+def test_a_report_rejects_a_contradictory_completion_status_projection():
+    projection = _authorized_decision().to_gates()
+    projection["forced_diagnostic_only"] = True
+    with pytest.raises(ValueError, match="completion_status_projection_mismatch"):
+        readiness_status(projection)
