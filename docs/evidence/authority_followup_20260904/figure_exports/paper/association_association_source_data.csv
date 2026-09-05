@@ -1,0 +1,2 @@
+fit_status,estimate,ci_low,ci_high,effect_scale,exposure,model_id,requirement_id,outcome,covariates,estimator_kind,analysis_role,analysis_set,n,n_events,standard_error,variance_estimator,cluster_count,notes,exposure_level,reference_level,contrast,is_primary_contrast
+fitted,1.4,1.1,1.8,odds_ratio,fixture_exposure,,fixture_effect,fixture_outcome,age;sex,logistic,,complete_case,100,25,0.1,,,,,,,

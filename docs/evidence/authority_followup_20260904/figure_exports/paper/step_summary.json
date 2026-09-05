@@ -1,0 +1,44 @@
+{
+  "analysis_family": "association",
+  "analysis_status": "ok",
+  "contract_files": [
+    "association.figure_contract.json"
+  ],
+  "deterministic_standard_analysis": "association_overview_figure",
+  "figure_contract": "association.figure_contract.json",
+  "figure_files": [
+    "association.png",
+    "association.svg",
+    "association.pdf",
+    "association.tiff"
+  ],
+  "figure_path": "association.png",
+  "figure_presentation": {
+    "font_family": "sans-serif",
+    "font_size": 7.5,
+    "height_mm": 105.0,
+    "layout": "row",
+    "legend_location": "outside bottom",
+    "palette": "grayscale",
+    "width_mm": 183.0
+  },
+  "method": "deterministic_association_overview_figure",
+  "output_files": {
+    "figure:association": "association.png"
+  },
+  "rendering_only": true,
+  "source_data_files": [
+    "association_distribution_source_data.csv",
+    "association_association_source_data.csv"
+  ],
+  "source_evidence_ids": {
+    "table:adjusted_association_estimates": "adjusted_association_estimates",
+    "table:exposure_outcome_distribution": "exposure_outcome_distribution"
+  },
+  "source_inputs": [
+    "table:exposure_outcome_distribution",
+    "table:adjusted_association_estimates"
+  ],
+  "status": "ok",
+  "step_id": "association"
+}
