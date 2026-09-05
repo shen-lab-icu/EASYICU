@@ -2168,6 +2168,48 @@ def test_scientific_review_hides_system_owned_method_questions() -> None:
     assert "请一次只问我一个尚未解决的科学设定问题" in owner
 
 
+def test_whole_plan_review_renders_its_actual_confirmation_choice() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    confirmation_owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
+    script = r"""
+global.window = { EU_LANG: 'zh' };
+require(process.argv[1]);
+const owner = window.EU_GUIDED_PI_CONFIRMATION.create({
+  tr: (en, zh) => zh || en,
+  esc: value => String(value),
+  iconHtml: () => '',
+  resourceButton: () => '',
+  sessionIsStale: () => false,
+  busy: () => false,
+  session: () => ({ binding: { run_id: 'run-1' } }),
+  workflow: () => ({
+    next_action_code: 'plan_scientific_changes_required',
+    plan_review_summary: { authorization_questions: [{
+      code: 'ADJUSTMENT_SET_NOT_USER_CONFIRMED',
+      proposed_covariates: ['age', 'sex'],
+    }]},
+  }),
+});
+const html = owner.workflowConfirmationHtml();
+process.stdout.write(JSON.stringify({
+  choices: (html.match(/data-gpi-plan-decision-option="accept_proposed_adjustment"/g) || []).length,
+  confirm: html.includes('确认这份候选计划（推荐）'),
+  edit: html.includes('data-gpi-confirm-edit'),
+  execute: html.includes('data-gpi-confirm-action'),
+}));
+"""
+    result = subprocess.run(
+        [node, "-e", script, str(confirmation_owner.resolve())],
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout) == {
+        "choices": 1, "confirm": True, "edit": True, "execute": False,
+    }
+
+
 def test_post_baseline_timing_review_hides_method_choices() -> None:
     node = shutil.which("node")
     if node is None:
