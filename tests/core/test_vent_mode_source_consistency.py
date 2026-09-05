@@ -1,10 +1,14 @@
 """Ventilator axes must describe one observed native mode, including ties."""
 
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 
+from easyicu.api import EXTRACT_MODULES
 from easyicu.concept.callbacks import apply_vent_mode_frame, _load_vent_mode_map
 from easyicu.io.ts_utils import change_interval
+from easyicu.resources import load_dictionary
 from easyicu.table import ICUTable
 
 
@@ -75,3 +79,46 @@ def test_unmapped_earlier_native_label_does_not_hide_valid_mode():
     result = apply_vent_mode_frame(frame, "value", "aumc", "control", "vent_mode")
     assert result.vent_mode.tolist() == ["volume"]
     assert set(result.columns) == set(frame.columns) | {"vent_mode"}
+
+
+def test_both_axes_use_identical_native_sources_in_all_supported_databases():
+    dictionary = load_dictionary(include_sofa2=True)
+    control = dictionary.get("vent_mode").sources
+    sequence = dictionary.get("vent_breath_seq").sources
+    # mimic_demo is an alias, not a seventh database. eICU/SIC have no source
+    # for these canonical mode axes; this does not describe their IMV support.
+    assert set(control) == set(sequence) == {"aumc", "hirid", "miiv", "mimic", "mimic_demo"}
+    for database in control:
+        assert all(source.callback == "vent_mode_control" for source in control[database])
+        assert all(source.callback == "vent_mode_seq" for source in sequence[database])
+        assert [replace(source, callback=None) for source in control[database]] == [
+            replace(source, callback=None) for source in sequence[database]
+        ]
+
+
+@pytest.mark.parametrize(
+    "concept", ["vent_mode", "vent_breath_seq", "driving_pres_controlled", "tidal_vol"],
+)
+def test_recent_semantic_fixes_only_feed_ventilator_module(concept):
+    """A new downstream consumer requires explicitly revisiting refresh scope."""
+    dictionary = load_dictionary(include_sofa2=True)
+
+    def dependency_closure(names):
+        seen = set()
+        pending = list(names)
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            definition = dictionary.get(name)
+            if definition is not None:
+                pending.extend(definition.sub_concepts)
+                pending.extend(definition.depends_on)
+        return seen
+
+    consumers = {
+        module for module, names in EXTRACT_MODULES.items()
+        if concept in dependency_closure(names)
+    }
+    assert consumers == {"ventilator"}

@@ -111,10 +111,99 @@ Evidence root (outside Git):
 - `.planned_evidence/aumc_ventilator_a86b4fd6_raw_oracle_v4.json`
 - `.planned_evidence/aumc_ventilator_a86b4fd6_raw_oracle_memory_v4.json`
 
-The relevant lint checks pass. The core suite plus Web resource-plan contract
-run produced 1,986 passes, 52 skips, one deselection and one pre-existing
-failure. A subsequent 120-test targeted run also covers the final profile
-numbers and float32-oracle fixture. The full suite retains the pre-existing
+The initial core suite plus Web resource-plan contract run produced 1,986
+passes, 52 skips, one deselection and one pre-existing failure. A subsequent
+120-test targeted run also covered the final profile numbers and float32-oracle
+fixture. At that point, the core suite retained the pre-existing
 `test_load_circ_failure_uses_levosimendan_and_theophylline` failure (`pd.NA`
-comparison); its fixture and circulatory implementation are unchanged from
-`2659d109`. It is not suppressed or presented as a passing full suite.
+comparison); its fixture and circulatory implementation were unchanged from
+`2659d109`. This historical failure is retained here; the test-isolation
+follow-up below resolves it without changing the production scoring logic.
+
+## Test-isolation follow-up and minimum remaining verification scope
+
+This follow-up changes tests and this document only. It does not change any
+production algorithm, concept source, resource profile or runtime limit. No
+raw-data extraction, candidate promotion, pointer switch or M1–M4 run is
+performed by these checks.
+
+### Circulatory test failure
+
+The drug-recognition fixture supplied lactate, MAP, levosimendan and
+theophylline, but omitted seven optional drug streams. `load_circ_failure`
+is allowed to supplement missing preloaded concepts from the configured
+database; supplying a partial preload does not mean offline execution. As a
+result this unit test accidentally depended on the machine's available data.
+Sparse supplementary evidence correctly preserved unknown rows, contradicting
+the fixture's assumed complete zero-rate evidence.
+
+Both drug-recognition fixtures now explicitly provide all nine optional drug
+streams, with zero values for drugs absent in the synthetic scenario. Their
+original expected scores are unchanged. A module-local test guard fails on
+any unexpected real concept load. Two additional regressions verify that:
+
+- a supplied missing rate remains unknown and is not silently reloaded;
+- a controlled, partially matched supplementary stream leaves unmatched
+  hours unknown instead of turning them into negative events.
+
+The production circulatory code and its missingness rules are unchanged.
+The circulatory test file passes all 11 tests. The combined targeted run with
+dispatch and ventilator-source tests passes all 148 tests, with lint passing.
+The final core suite plus Web resource-plan contract run reports **2,109
+passed, 52 skipped, one deselected, zero failures** in 66.90 seconds (1,887
+warnings). This is not a claim that opt-in real-data tests or the entire Web
+test suite were executed. Reproduction commands, from this EasyICU worktree:
+
+```bash
+python -m pytest tests/core tests/webserver/test_extraction_resource_plan_contract.py -q
+ruff check tests/core/test_circ_failure.py tests/core/test_extraction_budget_execution.py tests/core/test_vent_mode_source_consistency.py
+git diff --check
+```
+
+### Execution and dependency boundaries
+
+The new dispatch matrix covers all six databases and all 19 public modules
+(114 combinations). It supplies synthetic IDs, rejects raw concept loads and
+captures the worker arguments before any process starts. The checks verify
+that each module keeps its own planner-selected batch, automatic streaming
+matches that module's plan, the 8,192-MiB budget is forwarded, and adaptive
+growth remains disabled. This establishes plan-to-execution consistency,
+**not** measured peak memory or optimal batch size for all 114 combinations.
+
+Separate dictionary tests verify identical native source selectors for both
+mode axes and walk both `sub_concepts` and `depends_on`. The recent mode and
+tidal-volume fixes have only `ventilator` as a declared public-module consumer.
+This narrow scope refers to the recent `a86b4fd6` semantic corrections, not
+the entire earlier IMV/SOFA migration.
+
+| Remaining concern | Smallest relevant scope | Current evidence / next requirement |
+|---|---|---|
+| AUMC mode pairing and tidal volume | AUMC `ventilator` | Full-cohort fixed-8k run and independent raw oracle passed above; no repeat is needed for this test-only follow-up. |
+| Shared native-mode tie rule in other databases | MIMIC-III, MIMIC-IV and HiRID `ventilator` | Synthetic/source-selector tests pass; current-code real-data verification is still required before publishing changed outputs. |
+| Fixed budget and per-module scheduling | Six-database dispatcher | All 114 synthetic dispatch cases pass; no blanket six-database extraction is justified by this check. |
+| Earlier eICU IMV/SOFA dependency changes | `sofa2_score`, `sepsis3_sofa2` and their required dependency closure | Their old memory profiles remain invalidated; a complete receipt under the corrected execution envelope is still missing. |
+| Other feature definitions | Unchanged by this test-only follow-up | Do not recompute them solely because tests or this document changed. This is not certification of every historical output. |
+
+### Registered evidence is not the same as all historical experiments
+
+At implementation revision `46ce5a91`, the executable resource registry contains:
+
+| Database | Registered one-shot modules | Registered batched modules | Modules without a currently registered measured plan |
+|---|---:|---:|---|
+| MIMIC-IV | 19 | 0 | None |
+| MIMIC-III | 13 | 1 | `other_scores`, both SOFA scores, both Sepsis-3 modules |
+| eICU | 12 | 5 | `sofa2_score`, `sepsis3_sofa2` (explicitly invalidated) |
+| AUMC | 12 | 7 | None |
+| HiRID | 0 | 0 | All 19 |
+| SICdb | 0 | 0 | All 19 |
+
+An absent registered plan does **not** mean that a database/module was never
+tested, needs new batching, or must be re-extracted now. First recover and
+check historical receipts against the code, cohort, source layout and memory
+envelope; reuse compatible evidence. Only unresolved, task-relevant gaps
+justify new measurements. Existing registered profiles likewise do not prove
+that every later source-semantic change has passed raw-data verification.
+
+The outstanding work must not be described as "all six databases verified",
+"globally fastest", "fewest possible batches", or "release ready". Sealed
+data and global `current` remain separate from the corrected code branch.
