@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 
 import pytest
 from pydantic import ValidationError
@@ -81,6 +82,112 @@ def test_missing_source_cannot_be_sealed(candidate):
     candidate[1].unlink()
     with pytest.raises(ValueError, match="discovery_source_evidence_unavailable"):
         _packet(candidate, human_confirmed=True)
+
+
+def test_unrelated_valid_json_cannot_be_used_as_candidate_source(candidate):
+    candidate[1].write_text(
+        json.dumps({"schema_version": "easyicu.validation/1", "passed": True})
+    )
+    with pytest.raises(ValueError, match="discovery_source_type_invalid"):
+        _packet(candidate, human_confirmed=True)
+
+
+def test_non_discovery_source_cannot_impersonate_a_ledger_by_field_name(candidate):
+    candidate[1].write_text(json.dumps({"schema_version": "easyicu.validation/1", "discovery_ledger": [candidate[0]]}))
+    with pytest.raises(ValueError, match="discovery_source_type_invalid"):
+        _packet(candidate, human_confirmed=True)
+
+
+def test_candidate_must_belong_to_source_even_when_identity_matches(candidate):
+    candidate[0]["candidate_topic"] = "An unrelated proposal with the same identifier"
+    with pytest.raises(ValueError, match="discovery_source_candidate_mismatch"):
+        _packet(candidate, human_confirmed=True)
+
+
+def test_web_mapping_proves_raw_membership_and_replays_bound_readiness(tmp_path):
+    from easyicu.webserver.ideas.handoff import build_web_handoff_packet
+    from easyicu.research_agent.discovery.source_provenance import (
+        idea_with_readiness_overlay,
+    )
+
+    idea = {
+        "idea_id": "proposal",
+        "idea_title": "A synthetic proposal",
+        "go_no_go": "hold",
+        "go_no_go_reason": "Review required",
+        "mapped_concepts": [],
+    }
+    source = tmp_path / "idea_mining_run.json"
+    source.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.web_idea_mining/1",
+                "run_id": "fixture",
+                "idea_ledger": [idea],
+            }
+        )
+    )
+    bindings = {
+        "primary_exposure": "lact_max",
+        "outcome": "death",
+        "time_zero": "icu_intime",
+        "covariates": ["age"],
+    }
+    modules = {
+        "lact_max": "lact",
+        "death": "death",
+        "icu_intime": "basic",
+        "age": "basic",
+    }
+    feasibility = tmp_path / "bounded_sample_feasibility.json"
+    feasibility.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.web_idea_bounded_sample_feasibility/2",
+                "run_id": "fixture",
+                "idea_id": "proposal",
+                "status": "ready",
+                "concept_bindings": bindings,
+                "feature_statistics": [
+                    {"concept_id": key, "module": value}
+                    for key, value in modules.items()
+                ],
+            }
+        )
+    )
+    readiness = {
+        "execution_ready_for_confirmation": True,
+        "source_feasibility_sha256": hashlib.sha256(
+            feasibility.read_bytes()
+        ).hexdigest(),
+        "concept_bindings": bindings,
+        "concept_modules": modules,
+    }
+    selected = idea_with_readiness_overlay(idea, readiness)
+    kwargs = dict(
+        source={},
+        plan={},
+        pre_experiment={},
+        prior_art_check=None,
+        run_dir=tmp_path,
+        readiness=readiness,
+    )
+    packet = build_web_handoff_packet(idea=selected, **kwargs)
+    assert packet.candidate_source.source_kind == "web_idea_ledger"
+    assert packet.candidate_source.candidate_id == "proposal"
+    assert packet.candidate_source.candidate_sha256 != packet.selected_candidate_sha256
+    packet.verify_source()
+    with pytest.raises(ValueError, match="discovery_source_candidate_mismatch"):
+        build_web_handoff_packet(
+            idea={**selected, "idea_title": "An unrelated question"}, **kwargs
+        )
+    with pytest.raises(ValueError, match="discovery_source_candidate_identity_invalid"):
+        build_web_handoff_packet(
+            idea={**selected, "idea_id": "not_in_source"}, **kwargs
+        )
+    feasibility.write_text("{}")
+    with pytest.raises(ValueError, match="discovery_transform_evidence_changed"):
+        packet.verify_source()
 
 
 def test_wire_candidate_tampering_and_legacy_packet_are_refused(candidate):

@@ -633,7 +633,16 @@ def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) ->
         plan=plan,
         pre_experiment=pre,
     )
-    (tmp_path / "idea_mining_run.json").write_text(json.dumps({"idea_ledger": [idea]}))
+    (tmp_path / "idea_mining_run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.web_idea_mining/1",
+                "idea_ledger": [idea],
+                "source_evidence": [source],
+                "pre_experiment": pre,
+            }
+        )
+    )
     adapter_packet = build_web_handoff_packet(
         idea=idea,
         source=source,
@@ -652,6 +661,7 @@ def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) ->
         research_question=plan["research_question"],
         inclusion_criteria=[plan["cohort"]["default"]],
         human_confirmed=False,
+        candidate_transformation=adapter_packet.candidate_source.transformation,
     )
     adapter_payload = adapter_packet.model_dump(mode="json")
     core_payload = core_packet.model_dump(mode="json")
@@ -663,7 +673,19 @@ def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) ->
 
 
 def test_web_handoff_without_database_stays_unspecified(tmp_path: Path) -> None:
-    (tmp_path / "idea_mining_run.json").write_text("{}")
+    idea = {
+        "idea_id": "idea_unknown_db",
+        "idea_title": "Unknown-database ICU candidate",
+        "go_no_go": "hold",
+        "go_no_go_reason": "No active export is selected.",
+        "outcome": "In-hospital mortality",
+        "mapped_concepts": [],
+    }
+    (tmp_path / "idea_mining_run.json").write_text(
+        json.dumps(
+            {"schema_version": "easyicu.web_idea_mining/1", "idea_ledger": [idea]}
+        )
+    )
     packet = build_web_handoff_packet(
         idea={
             "idea_id": "idea_unknown_db",

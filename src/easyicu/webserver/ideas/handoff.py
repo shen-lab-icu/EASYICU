@@ -23,6 +23,7 @@ from easyicu.research_agent.discovery.discovery_handoff import (
     build_handoff_from_row,
     write_handoff_packet,
 )
+from easyicu.research_agent.discovery.source_provenance import map_web_ledger_row
 from easyicu.webserver import study_contexts
 
 CANONICAL_HANDOFF_FILENAME = "discovery_handoff.json"
@@ -268,80 +269,6 @@ def accept_canonical_handoff(
         ) from exc
 
 
-def map_web_ledger_row(
-    *,
-    idea: Mapping[str, Any],
-    source: Mapping[str, Any],
-    plan: Mapping[str, Any],
-    pre_experiment: Mapping[str, Any],
-    prior_art_check: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Map the metadata-only Web ledger row to canonical discovery semantics."""
-
-    mapped_concepts = [
-        dict(row)
-        for row in idea.get("mapped_concepts") or []
-        if isinstance(row, Mapping)
-    ]
-    outcome_concept = _role_concept(mapped_concepts, "outcome")
-    predictor_concept = _predictor_concept(mapped_concepts)
-    resolved_analysis_concepts = [
-        str(value).strip()
-        for value in idea.get("resolved_analysis_concepts") or []
-        if str(value).strip()
-    ]
-    if not resolved_analysis_concepts:
-        resolved_analysis_concepts = list(
-            dict.fromkeys(
-                str(item.get("concept_id") or "").strip()
-                for item in mapped_concepts
-                if str(item.get("role") or "").strip().lower() != "outcome"
-                and str(item.get("concept_id") or "").strip()
-            )
-        )
-    prior_art = _prior_art_payload(idea, prior_art_check)
-    feasibility = idea.get("feasibility") or {}
-    source_title = str(source.get("title") or "").strip()
-    source_quote = str(source.get("evidence_quote") or "").strip()
-
-    row = dict(idea)
-    row.update(
-        {
-            "literature_idea_id": str(idea.get("idea_id") or "").strip(),
-            "candidate_topic": str(idea.get("idea_title") or "").strip(),
-            "literature_source": source_title or None,
-            "gap_evidence_quote": source_quote or None,
-            "novelty_label": str(
-                prior_art.get("novelty_label")
-                or prior_art.get("status")
-                or "unknown_until_search"
-            ),
-            "feasibility_route": str(
-                feasibility.get("tier") or pre_experiment.get("status") or "blocked"
-            ),
-            "feasibility_next_action": str(
-                idea.get("next_action")
-                or pre_experiment.get("reason")
-                or "Review feasibility before analysis."
-            ),
-            "resolved_predictor_concept": predictor_concept,
-            "resolved_outcome_concept": outcome_concept,
-            "resolved_analysis_concepts": resolved_analysis_concepts,
-            "web_handoff_context": {
-                "plan_status": plan.get("plan_status"),
-                "analysis_family": plan.get("analysis_family")
-                or idea.get("analysis_family"),
-                "pre_experiment_status": pre_experiment.get("status"),
-                "source_id": source.get("source_id"),
-                "source_type": source.get("source_type"),
-                "source_text_sha256": source.get("source_text_sha256"),
-                "prior_art_status": prior_art.get("status"),
-            },
-        }
-    )
-    return row
-
-
 def build_web_handoff_packet(
     *,
     idea: Mapping[str, Any],
@@ -350,6 +277,7 @@ def build_web_handoff_packet(
     pre_experiment: Mapping[str, Any],
     prior_art_check: Optional[Mapping[str, Any]],
     run_dir: str | Path,
+    readiness: Mapping[str, Any] | None = None,
 ) -> DiscoveryHandoffPacket:
     """Build an unconfirmed canonical packet from the current Web artifacts."""
 
@@ -383,6 +311,19 @@ def build_web_handoff_packet(
         inclusion_criteria=_inclusion_criteria(plan),
         # Creating or editing a Web handoff is not analysis confirmation.
         human_confirmed=False,
+        candidate_transformation={
+            "schema_version": "easyicu.web_candidate_mapping/1",
+            "readiness": dict(readiness or {}),
+            "source": dict(source),
+            "plan": dict(plan),
+            "pre_experiment": dict(pre_experiment),
+            "prior_art_check": dict(prior_art_check) if prior_art_check else None,
+            "prior_art_sha256": hashlib.sha256(
+                (run_path / "prior_art_check.json").read_bytes()
+            ).hexdigest()
+            if prior_art_check
+            else None,
+        },
     )
 
 
@@ -502,32 +443,6 @@ def _inclusion_criteria(plan: Mapping[str, Any]) -> list[str]:
     cohort = plan.get("cohort") or {}
     default = str(cohort.get("default") or "").strip()
     return [default] if default else []
-
-
-def _prior_art_payload(
-    idea: Mapping[str, Any],
-    prior_art_check: Optional[Mapping[str, Any]],
-) -> Mapping[str, Any]:
-    checked = (prior_art_check or {}).get("prior_art") or {}
-    if isinstance(checked, Mapping) and checked:
-        return checked
-    fallback = idea.get("prior_art") or {}
-    return fallback if isinstance(fallback, Mapping) else {}
-
-
-def _role_concept(rows: list[Dict[str, Any]], role: str) -> Optional[str]:
-    for row in rows:
-        if str(row.get("role") or "") == role and row.get("concept_id"):
-            return str(row["concept_id"])
-    return None
-
-
-def _predictor_concept(rows: list[Dict[str, Any]]) -> Optional[str]:
-    for role in ("exposure", "predictor", "covariate_or_subgroup", "feature"):
-        concept = _role_concept(rows, role)
-        if concept:
-            return concept
-    return None
 
 
 def _target_outcome(idea: Mapping[str, Any]) -> str:
