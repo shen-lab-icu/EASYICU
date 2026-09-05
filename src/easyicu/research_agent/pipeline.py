@@ -502,6 +502,7 @@ from .authority.run_lock import (
 )
 from .authority.run_heartbeat import (
     bind_active_run_heartbeat,
+    finish_active_run_heartbeat,
     run_heartbeat_scope,
 )
 from .audits.validators import (
@@ -4894,11 +4895,7 @@ class ResearchAgentPipeline:
         durable_checkpoint: Optional[HumanReviewCheckpoint] = None,
         checkpoint_commit: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """Return the run's result, or the typed pause that replaced it.
-
-        A run that stopped for human review has no ``PipelineResult`` because
-        nothing downstream of the pause executed.
-        """
+        """Seal a terminal result, or return its unexecuted human-review pause."""
 
         from .orchestration.workflow import (
             HumanReviewPending,
@@ -4923,6 +4920,7 @@ class ResearchAgentPipeline:
             if isinstance(outcome.final_result, PipelineResult):
                 from .authority.run_receipt import preserve_terminal_run_receipt
 
+                finish_active_run_heartbeat(run_id=run_id)
                 preserve_terminal_run_receipt(run_dir)
             return outcome.final_result
 
