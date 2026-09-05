@@ -17,7 +17,10 @@ import importlib
 import inspect
 from pathlib import Path
 import textwrap
+from dataclasses import replace
 from typing import get_args
+
+import pytest
 
 from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.execution.runners import selection
@@ -68,6 +71,31 @@ _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
         "cross_sectional_phenotyping_executor_code",
     ),
 }
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"data_contract": ()}, "capability_contract_incomplete"),
+    ({"result_contract": ""}, "capability_contract_incomplete"),
+    ({"required_diagnostics": ()}, "capability_contract_incomplete"),
+    ({"scientific_validation": "unlimited"}, "capability_claim_ceiling_invalid"),
+    ({"scientific_validation": "reportable", "scientific_validator_owner": None}, "capability_validator_required"),
+])
+def test_capability_admission_rejects_incomplete_contracts(changes, reason):
+    declared = cr.get_capability_by_id("association_adjusted_v1")
+    with pytest.raises(ValueError, match=reason):
+        cr.validate_capability_contracts((replace(declared, **changes),))
+
+
+def test_capability_admission_refuses_duplicate_ids_before_dict_projection():
+    declared = cr.CAPABILITY_REGISTRY[0]
+    with pytest.raises(ValueError, match="capability_identity_missing_or_duplicate"):
+        cr.validate_capability_contracts((declared, declared))
+
+
+def test_family_defaults_do_not_depend_on_declaration_order(monkeypatch):
+    before = {family: cr.get_capability(family) for family in get_args(StudyDesignFamily)}
+    monkeypatch.setattr(cr, "CAPABILITY_REGISTRY", tuple(reversed(cr.CAPABILITY_REGISTRY)))
+    assert {family: cr.get_capability(family) for family in before} == before
 
 
 def test_landmark_spline_and_freeform_have_distinct_validation_ceilings():
