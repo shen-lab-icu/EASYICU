@@ -4,7 +4,7 @@ _______________ test_plan_declaration_check_never_generates_code _______________
 tests/research_agent/gates/test_owner_declaration_gate.py:127: in test_plan_declaration_check_never_generates_code
     assert rendered == []
 E   AssertionError: assert ['render'] == []
-E     
+E
 E     Left contains one more item: 'render'
 E     Use -v to get more diff
 __________ test_candidate_report_preserves_exact_refusal_diagnostics ___________
