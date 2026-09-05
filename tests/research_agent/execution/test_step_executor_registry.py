@@ -73,6 +73,33 @@ def test_registry_refuses_an_empty_executor_key() -> None:
         registry.declare(_executor("  "))
 
 
+def test_renderer_cannot_silently_ignore_display_parameters():
+    context = _context()
+    step = AnalysisStep(
+        step_id="figure",
+        method="visualization",
+        intent="Draw source",
+        inputs=["table:summary"],
+        expected_outputs=["figure:summary"],
+        figure_panels=[
+            dict(
+                panel_id="A",
+                figure_output="figure:summary",
+                article_role="descriptive_result",
+                chart_type="bar",
+                source_products=["table:summary"],
+                presentation={"layout": "column"},
+            )
+        ],
+    )
+    context = replace(context, step=step)
+    registry = StepExecutorRegistry()
+    registry.declare(_executor("fixed_renderer"))
+    trace = []
+    assert registry.select(context, trace=trace) is None
+    assert "unsupported_figure_presentation" in trace[0].decline_reason
+
+
 @pytest.mark.parametrize("keys", [("alpha", "beta"), ("beta", "alpha")])
 def test_semantic_overlap_refuses_all_rendering_regardless_of_registration_order(keys):
     events = []

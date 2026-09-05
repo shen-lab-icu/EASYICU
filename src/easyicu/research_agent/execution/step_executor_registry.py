@@ -86,6 +86,7 @@ class StepExecutor:
     blocks_on_plausibility_receipt: bool = False
     applicable: Optional[Applicability] = None
     declaration_verdict: Optional[DeclarationVerdict] = None
+    accepts_figure_presentation: bool = False
 
     def claim(
         self, context: StepExecutorContext
@@ -93,6 +94,15 @@ class StepExecutor:
         """Evaluate ownership and refusal gates without invoking a renderer."""
         if self.applicable is not None and not self.applicable(context):
             return None
+        if not self.accepts_figure_presentation and any(
+            panel.presentation is not None for panel in context.step.figure_panels
+        ):
+            return StandardExecutorCandidate(
+                analysis_kind=self.key,
+                contract_matches=False,
+                outcome="contract_declined",
+                decline_reason="unsupported_figure_presentation: renderer has not declared support for planned display parameters",
+            )
         answer = self.owns(context)
         verdict = answer if isinstance(answer, OwnershipVerdict) else None
         claimed = verdict.claimed if verdict is not None else bool(answer)
