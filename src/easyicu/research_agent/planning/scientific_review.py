@@ -183,16 +183,11 @@ def planned_model_outcomes(
 
 
 def requested_outcomes(context: ResearchContext) -> tuple[str, ...]:
-    """Project the data-foundation owner's typed outcome roster.
-
-    ``target_outcome`` remains the primary endpoint used by older single-outcome
-    contracts.  ``cohort.outcome_columns`` is the authoritative roster when a
-    natural research question names more than one outcome.
-    """
+    """Project explicitly requested endpoints, never infer intent from availability."""
 
     values = [
         str(value).strip()
-        for value in context.cohort.outcome_columns
+        for value in context.cohort.requested_outcome_columns or ()
         if str(value).strip()
     ]
     primary = str(context.target_outcome or "").strip()
@@ -1769,7 +1764,7 @@ def build_plan_scientific_review(
                     + "."
                 ),
                 evidence_refs=[
-                    "research_context.json.cohort.outcome_columns",
+                    "research_context.json.cohort.requested_outcome_columns",
                     "analysis_plan.json.steps.model_requirements",
                 ],
                 remediation=(

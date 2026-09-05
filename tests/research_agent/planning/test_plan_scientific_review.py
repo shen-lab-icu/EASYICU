@@ -782,11 +782,15 @@ def test_selected_temporal_design_routes_missing_execution_to_runtime_owner() ->
     assert finding.requires_user_authorization is False
 
 
-def test_multi_outcome_question_requires_one_model_contract_per_outcome() -> None:
+@pytest.mark.parametrize("requested", [None, ["death"], ["death", "los_icu"]])
+def test_only_requested_outcomes_require_model_contracts(requested) -> None:
     context = _context().model_copy(
         update={
             "cohort": _context().cohort.model_copy(
-                update={"outcome_columns": ["death", "los_icu"]}
+                update={
+                    "outcome_columns": ["death", "los_icu"],
+                    "requested_outcome_columns": requested,
+                }
             ),
             "variables": [
                 *_context().variables,
@@ -800,6 +804,14 @@ def test_multi_outcome_question_requires_one_model_contract_per_outcome() -> Non
     )
 
     review = build_plan_scientific_review(context=context, plan=_plan())
+    if not requested or "los_icu" not in requested:
+        assert not any(
+            item.code == "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE"
+            for item in review.findings
+        )
+        assert review.facts["requested_outcomes"] == ["death"]
+        assert review.facts["missing_model_outcomes"] == []
+        return
     finding = next(
         item
         for item in review.findings
@@ -825,6 +837,7 @@ def test_controlled_ordered_analysis_counts_both_typed_outcomes() -> None:
             n_stays=120,
             id_columns=["stay_id"],
             outcome_columns=["death", "los_icu"],
+            requested_outcome_columns=["death", "los_icu"],
         ),
         variables=[
             ConceptDescriptor(

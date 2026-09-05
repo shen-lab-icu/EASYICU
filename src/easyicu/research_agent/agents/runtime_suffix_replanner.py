@@ -8,7 +8,6 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from ..planning import scientific_action_catalog as _scientific_actions
 from ..planning.analysis_types import canonical_analysis_family
 from ..planning.runtime_suffix import (
-    RuntimePlanSuffixRevision,
     merge_runtime_plan_suffix,
     runtime_locked_prefix_count,
 )
@@ -239,9 +238,7 @@ def run_runtime_suffix_replan(
         )
 
     def parse_suffix(raw: str) -> AnalysisPlan:
-        revision = RuntimePlanSuffixRevision.model_validate(
-            json.loads(str(raw or "").strip())
-        )
+        revision = _payload.parse_runtime_plan_suffix(raw)
         return merge_runtime_plan_suffix(
             current_plan=current_plan,
             completed_step_ids=completed_step_ids,

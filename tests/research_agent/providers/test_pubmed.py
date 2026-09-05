@@ -1962,8 +1962,8 @@ def test_review_or_trial_cannot_become_direct_comparator_even_when_peo_matches(r
             from easyicu.research_agent.literature import CitationRecord
 
             excerpt = (
-                "Study-design excerpt: Adult ICU patients with lactate "
-                "measurement were evaluated for hospital mortality."
+                "Study-design excerpt: In adult ICU patients, the association "
+                "between measured lactate and hospital mortality was evaluated."
             )
             return [
                 CitationRecord(

@@ -601,6 +601,9 @@ def build_research_context(
         Name of the primary outcome column. Used by validators to
         confirm the analysis actually predicts this column and not a
         proxy.
+    outcome_columns
+        Explicit analysis endpoint roster. When omitted, column inference only
+        identifies available outcomes and does not request additional analyses.
     cross_database_validation
         Other databases to replicate this analysis on. The pipeline
         records these targets in every single-database run. The
@@ -660,6 +663,9 @@ def build_research_context(
     # --- cohort descriptor
     id_columns = list(id_columns) if id_columns else _guess_id_columns(df)
     time_columns = list(time_columns) if time_columns else _guess_time_columns(df)
+    requested_outcome_columns = (
+        list(outcome_columns) if outcome_columns is not None else None
+    )
     outcome_columns = (
         list(outcome_columns) if outcome_columns else _guess_outcome_columns(df)
     )
@@ -703,6 +709,7 @@ def build_research_context(
         id_columns=episode.id_columns,
         time_columns=episode.time_columns,
         outcome_columns=episode.outcome_columns,
+        requested_outcome_columns=requested_outcome_columns,
         provenance={
             **episode.provenance,
             **granularity.provenance(),
@@ -1389,6 +1396,9 @@ def build_naive_research_context(
         id_columns=id_cols,
         time_columns=time_cols,
         outcome_columns=out_cols,
+        requested_outcome_columns=(
+            list(outcome_columns) if outcome_columns is not None else None
+        ),
         provenance={
             **granularity.provenance(),
             **_planning_catalog_provenance(df),

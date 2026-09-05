@@ -1,9 +1,10 @@
-"""Typed owner for ordinal-exposure studies with two outcome kinds.
+"""Typed applicability of ordinal-exposure actions with two outcome kinds.
 
 Planner-only runs intentionally know column metadata but not patient rows.  The
-same metadata contract must therefore drive both outline obligations and the
+same metadata contract must therefore drive both available outline actions and the
 deterministic compiler; otherwise the Planner can be required to emit a step
 that the compiler later rejects solely because ``observed_domain`` is absent.
+Metadata availability does not itself request an action or choose model coding.
 """
 
 from __future__ import annotations

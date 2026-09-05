@@ -258,7 +258,6 @@ def build_lactate_map_vaso_research_context(
         target_outcome="death",
         cross_database_validation=cross_database_validation,
         id_columns=["stay_id"] if "stay_id" in df.columns else None,
-        outcome_columns=[c for c in ["death", "los_icu", "los_hosp"] if c in df.columns],
         notes=(
             "Case-specific EasyICU context contract. The LLM may plan, code and write around "
             "this context, but source files, time windows, missingness semantics and forbidden "
@@ -322,7 +321,7 @@ def build_lactate_map_vaso_context_ablation_table(
         target_outcome="death",
         cross_database_validation=aware.cross_database_validation,
         id_columns=aware.cohort.id_columns,
-        outcome_columns=aware.cohort.outcome_columns,
+        outcome_columns=aware.cohort.requested_outcome_columns,
     )
     return pd.DataFrame([
         context_information_summary(naive, label="generic_csv_context"),

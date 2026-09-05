@@ -28,7 +28,7 @@ from easyicu.research_agent.agents.progressive_planner import (
     _bound_method_layers,
     _complete_case_variable_roster,
     _continuous_planning_variable_names,
-    _required_ordered_trend_action,
+    _available_ordered_trend_action,
     _foundation_shape_contract,
     _missing_method_layers_outside_step_roster,
     _outline_method_layer_deadlines,
@@ -245,7 +245,7 @@ def test_primary_contrast_uses_declared_ordinal_domain_without_patient_rows() ->
     assert contrast == "3"
 
 
-def test_typed_ordinal_multi_outcome_context_requires_registered_trend_action() -> None:
+def test_typed_ordinal_multi_outcome_context_exposes_optional_trend_action() -> None:
     context = ResearchContext(
         research_question=(
             "Describe the gradient across an ordered stage for mortality and "
@@ -287,7 +287,7 @@ def test_typed_ordinal_multi_outcome_context_requires_registered_trend_action() 
         ),
     )
 
-    assert _required_ordered_trend_action(
+    assert _available_ordered_trend_action(
         context,
         ("association_study", "descriptive_epidemiology"),
     ) == ("stage", "death", "los_days")
@@ -359,21 +359,27 @@ def _ordinal_primary_step(*, coding: str) -> ProgressiveSkeletonStep:
     )
 
 
-def test_ordinal_multi_outcome_primary_model_reserves_trend_for_separate_owner() -> None:
-    context = _metadata_only_ordinal_multi_outcome_context()
-    step = _ordinal_primary_step(coding="ordinal_linear")
-
-    with pytest.raises(ProgressivePlanCompileError) as caught:
+@pytest.mark.parametrize("coding", ["ordinal_linear", "categorical"])
+def test_additional_outcome_metadata_does_not_change_primary_model_coding(coding) -> None:
+    context = _metadata_only_ordinal_multi_outcome_context().model_copy(
+        update={"research_question": "Assess an ordered stage against mortality."}
+    )
+    step = _ordinal_primary_step(coding=coding)
+    without_extra_outcome = context.model_copy(
+        update={"cohort": context.cohort.model_copy(update={"outcome_columns": ["death"]})}
+    )
+    requirements = [
         _compile_adjusted_association(
-            context=context,
-            variables={variable.name: variable for variable in context.variables},
+            context=current,
+            variables={variable.name: variable for variable in current.variables},
             step=step,
             step_index=0,
         )
+        for current in (without_extra_outcome, context)
+    ]
 
-    assert caught.value.reason_code == (
-        "progressive_ordinal_multi_outcome_primary_coding_invalid"
-    )
+    assert requirements[0] == requirements[1]
+    assert requirements[1][0].model_terms[0].coding == coding
 
 
 def test_ordered_trend_compiler_accepts_row_free_typed_metadata() -> None:
@@ -3620,6 +3626,7 @@ def test_compiler_uses_declared_integer_range_for_metadata_only_ordinal_score() 
             "role": "covariate",
             "coding": "ordinal_linear",
             "reference_level_index": None,
+            "clinical_rationale": "Prespecified baseline severity may confound the exposure-outcome association.",
         }
     )
     context = _context().model_copy(
@@ -4077,7 +4084,7 @@ def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
     ]
 
 
-def test_outline_requires_exact_ordered_trend_owner_when_context_compiles_it() -> None:
+def test_outline_binds_optional_ordered_trend_only_when_selected() -> None:
     payload = _outline_payload()
     variables = (
         "exposure_flag",
@@ -4088,19 +4095,17 @@ def test_outline_requires_exact_ordered_trend_owner_when_context_compiles_it() -
     )
     requirement = ("exposure_flag", "outcome_flag", "los_days")
 
-    with pytest.raises(ProgressivePlanCompileError) as caught:
-        ProgressivePlannerAgent._validate_outline_authority(
-            ProgressivePlanOutline.model_validate(payload),
-            analysis_types=("association_study",),
-            variable_names=variables,
-            allowed_literature_citation_keys=(),
-            required_ordered_trend=requirement,
-        )
-
-    assert (
-        caught.value.reason_code
-        == "progressive_outline_ordered_trend_owner_missing"
+    outline = ProgressivePlanOutline.model_validate(payload)
+    before = outline.model_dump(mode="json")
+    ProgressivePlannerAgent._validate_outline_authority(
+        outline,
+        analysis_types=("association_study",),
+        variable_names=variables,
+        allowed_literature_citation_keys=(),
+        available_ordered_trend=requirement,
     )
+    assert outline.model_dump(mode="json") == before
+    assert not any(step.scientific_action_id == "association.ordinal_trend" for step in outline.steps)
 
     primary = next(
         step
@@ -4126,10 +4131,25 @@ def test_outline_requires_exact_ordered_trend_owner_when_context_compiles_it() -
         analysis_types=("association_study",),
         variable_names=variables,
         allowed_literature_citation_keys=(),
-        required_ordered_trend=requirement,
+        available_ordered_trend=requirement,
         ordered_domain_variables=("exposure_flag",),
         primary_exposure="exposure_flag",
     )
+
+
+    # Selecting the action still binds its exact input/owner contract.
+    payload["steps"][-1]["variable_names"] = ["exposure_flag", "outcome_flag", "age_years"]
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=variables,
+            allowed_literature_citation_keys=(),
+            available_ordered_trend=requirement,
+            ordered_domain_variables=("exposure_flag",),
+            primary_exposure="exposure_flag",
+        )
+    assert caught.value.reason_code == "progressive_outline_ordered_trend_owner_invalid"
 
 
 def test_outline_rejects_categorical_distribution_for_continuous_exposure() -> None:
@@ -5601,6 +5621,7 @@ def test_compiler_uses_concept_declared_levels_for_metadata_only_model_term() ->
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Baseline sex may affect both the exposure and the risk of the outcome.",
         }
     )
 
@@ -5642,6 +5663,7 @@ def test_compiler_rejects_continuous_coding_for_declared_factor() -> None:
             "role": "covariate",
             "coding": "continuous",
             "reference_level_index": None,
+            "clinical_rationale": "Admission type may affect baseline exposure and the outcome risk.",
         }
     )
 
@@ -5666,6 +5688,7 @@ def test_compiler_reports_outcome_covariate_at_the_model_owner() -> None:
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Deliberately invalid adjustment proposal; the compiler must reject outcome leakage.",
         }
     )
 
@@ -5703,6 +5726,7 @@ def test_compiler_rejects_a_different_outcome_as_baseline_covariate() -> None:
             "role": "covariate",
             "coding": "continuous",
             "reference_level_index": None,
+            "clinical_rationale": "Deliberately invalid outcome adjustment; the compiler must reject its semantic role.",
         }
     )
 
@@ -5747,6 +5771,7 @@ def test_compiler_rejects_dynamic_covariate_without_time_zero_authority() -> Non
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Candidate severity adjustment without a declared pre-time-zero measurement window.",
         }
     )
 
@@ -5796,6 +5821,7 @@ def test_compiler_rejects_navigation_coordinate_as_a_model_term() -> None:
             "role": "covariate",
             "coding": "continuous",
             "reference_level_index": None,
+            "clinical_rationale": "Deliberately invalid identifier adjustment; the compiler must reject navigation fields.",
         }
     )
 
@@ -6118,6 +6144,7 @@ def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
     encoded = request.canonical_payload_json
 
     assert len(encoded.encode("utf-8")) < 12_000
+    assert "CandidateLiteratureDesignDecision" not in schema["$defs"]
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
     branches = schema["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
     standard = next(
@@ -6750,6 +6777,7 @@ def test_agent_repairs_two_independent_current_step_findings() -> None:
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Deliberately invalid adjustment proposal; the compiler must reject outcome leakage.",
         }
     )
     responses = [
@@ -6991,6 +7019,7 @@ def test_agent_repairs_outcome_covariate_at_the_current_model_step() -> None:
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Deliberately invalid adjustment proposal; the compiler must reject outcome leakage.",
         }
     )
     responses = [
