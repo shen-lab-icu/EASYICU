@@ -128,6 +128,32 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
         unpacked_root = unpacked_roots[0]
         assert (unpacked_root / "pyproject.toml").is_file()
 
+        # Python tests need their data, JS contracts, and maintainer tools.
+        # Use the versioned file list so a new fixture cannot silently vanish.
+        if (REPO_ROOT / ".git").exists():
+            tracked = subprocess.check_output(
+                ["git", "ls-files", "-z", "--", "tests", "tools", "docs", "desktop"],
+                cwd=REPO_ROOT,
+            )
+            required_support = {p.decode() for p in tracked.split(b"\0") if p}
+            assert not (required_support - sdist_names), (
+                "sdist lost tracked verification/support files: "
+                f"{sorted(required_support - sdist_names)}"
+            )
+        collect_env = {**env, "PYTHONPATH": str(unpacked_root / "src")}
+        collected = subprocess.run(
+            [
+                sys.executable, "-m", "pytest", "--collect-only", "-q",
+                "-o", "addopts=", "-p", "no:cacheprovider",
+                "tests/core/test_clinical_contracts.py",
+                "tests/research_agent/execution/test_method_kernel_r_oracles.py",
+                "tests/webserver/test_preserve_run_receipt.py",
+            ],
+            cwd=unpacked_root, env=collect_env,
+            capture_output=True, text=True, check=False,
+        )
+        assert collected.returncode == 0, collected.stdout + collected.stderr
+
         wheel_result = subprocess.run(
             [
                 sys.executable,
