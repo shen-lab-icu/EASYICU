@@ -30,6 +30,7 @@ from .adjusted_association_executor import (
 from .adjusted_association_figure_executor import (
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
     ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
+    association_figure_design_verdict,
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
     association_overview_figure_executor_code,
@@ -579,6 +580,10 @@ def _build_registry() -> StepExecutorRegistry:
         ),
         StepExecutor(
             key="association_overview_figure",
+            accepts_figure_presentation=True,
+            declaration_verdict=lambda c: association_figure_design_verdict(
+                c.step, overview=True
+            ),
             owns=lambda c: association_overview_figure_executor_owns_step(
                 c.step, resolved_bindings=c.resolved_bindings
             ),
@@ -594,6 +599,8 @@ def _build_registry() -> StepExecutorRegistry:
         ),
         StepExecutor(
             key="adjusted_association_figure",
+            accepts_figure_presentation=True,
+            declaration_verdict=lambda c: association_figure_design_verdict(c.step),
             owns=lambda c: adjusted_association_figure_executor_owns_step(
                 c.step, resolved_bindings=c.resolved_bindings
             ),

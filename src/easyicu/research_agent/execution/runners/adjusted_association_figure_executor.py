@@ -45,9 +45,17 @@ import math
 from pathlib import Path
 import re
 import textwrap
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
+
+from ...contracts.figure_plan import PlannedFigurePanelSpec
+from ...contracts.ownership_verdict import OwnershipVerdict
+from ...figures.presentation import (
+    create_presented_axes,
+    finish_presented_figure,
+    presentation_from_panels,
+)
 
 from ...figures.publication import (
     add_panel_label,
@@ -169,6 +177,89 @@ def _binding_is_host_contract(binding: Any) -> bool:
     return _HOST_CONTRACT_COLUMNS <= set(columns)
 
 
+def _association_panels(planned: Sequence[PlannedFigurePanelSpec | Mapping[str, Any]], *, figure_product: str, overview: bool = False) -> list[PlannedFigurePanelSpec]:
+    """Bind only chart/source combinations actually drawn by this renderer."""
+    specs = [PlannedFigurePanelSpec.model_validate(panel) for panel in planned]
+    presentation_from_panels(specs)
+    contracts = [
+        (
+            ADJUSTED_ASSOCIATION_FIGURE_INPUT,
+            {
+                "forest",
+                "forest_plot",
+                "forest_interval_adjusted_association",
+                "forest_interval_unadjusted_association",
+            },
+            {"primary_effect", "primary_estimand", "primary_result"},
+            "forest",
+            "primary_effect",
+        )
+    ]
+    if overview:
+        contracts.insert(
+            0,
+            (
+                ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0],
+                {"event_rate_panel"},
+                {"absolute_risk_context", "descriptive_result"},
+                "event_rate_panel",
+                "absolute_risk_context",
+            ),
+        )
+    if not specs:
+        return [
+            PlannedFigurePanelSpec(
+                panel_id=chr(65 + index),
+                figure_output=f"figure:{figure_product}",
+                article_role=role,
+                chart_type=chart,
+                source_products=[source],
+            )
+            for index, (source, _, _, chart, role) in enumerate(contracts)
+        ]
+    if (
+        len(specs) != len(contracts)
+        or len({panel.placement for panel in specs}) != 1
+        or len({panel.panel_id for panel in specs}) != len(specs)
+    ):
+        raise ValueError(
+            "unsupported_planned_figure_design: panel count or split placement"
+        )
+    matched = []
+    for source, charts, roles, _, _ in contracts:
+        candidates = [
+            panel
+            for panel in specs
+            if panel.figure_output == f"figure:{figure_product}"
+            and panel.source_products == [source]
+            and panel.chart_type in charts
+            and panel.article_role in roles
+        ]
+        if len(candidates) != 1:
+            raise ValueError(
+                f"unsupported_planned_figure_design: {source} requires charts={sorted(charts)} roles={sorted(roles)}"
+            )
+        matched.append(candidates[0])
+    return matched
+
+
+def association_figure_design_verdict(
+    step: AnalysisStep, *, overview: bool = False
+) -> OwnershipVerdict:
+    kind = "association_overview_figure" if overview else "adjusted_association_figure"
+    try:
+        _association_panels(
+            step.figure_panels,
+            figure_product=str(step.expected_outputs[0]).partition(":")[2],
+            overview=overview,
+        )
+    except (ValueError, IndexError) as exc:
+        return OwnershipVerdict.wrong_shape(kind, reason=str(exc))
+    return OwnershipVerdict.wrong_shape(
+        kind, reason="typed input or execution contract is not owned by this renderer"
+    )
+
+
 def adjusted_association_figure_executor_owns_step(
     step: AnalysisStep,
     *,
@@ -208,6 +299,10 @@ def adjusted_association_figure_executor_owns_step(
         return False
     if not isinstance(resolved_bindings, Mapping):
         return False
+    try:
+        _association_panels(step.figure_panels, figure_product=products[0])
+    except ValueError:
+        return False
     return _binding_is_host_contract(
         resolved_bindings.get(ADJUSTED_ASSOCIATION_FIGURE_INPUT)
     )
@@ -235,6 +330,12 @@ def association_overview_figure_executor_owns_step(
         )
     ):
         return False
+    try:
+        _association_panels(
+            step.figure_panels, figure_product=products[0], overview=True
+        )
+    except ValueError:
+        return False
     distribution = resolved_bindings.get(ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0])
     contract = distribution.get("product_contract") if isinstance(distribution, Mapping) else None
     columns = contract.get("columns") if isinstance(contract, Mapping) else None
@@ -251,6 +352,9 @@ def association_overview_figure_executor_code(
     product = _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
     if product is None:
         raise ValueError("association overview has no canonical figure product")
+    panels = _association_panels(
+        step.figure_panels, figure_product=product, overview=True
+    )
     return textwrap.dedent(
         f"""
         import os
@@ -263,6 +367,7 @@ def association_overview_figure_executor_code(
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            panel_specs={[panel.model_dump(mode="json") for panel in panels]!r},
             display_labels={dict(display_labels or {})!r},
         )
         """
@@ -277,6 +382,7 @@ def adjusted_association_figure_executor_code(step: AnalysisStep) -> str:
     )
     if product is None:
         raise ValueError("the step is not owned by the adjusted association renderer")
+    panels = _association_panels(step.figure_panels, figure_product=product)
     return textwrap.dedent(
         f"""
         import os
@@ -292,6 +398,7 @@ def adjusted_association_figure_executor_code(step: AnalysisStep) -> str:
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            panel_specs={[panel.model_dump(mode="json") for panel in panels]!r},
         )
         """
     ).strip()
@@ -528,6 +635,7 @@ def run_association_overview_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    panel_specs: list[dict[str, Any]] | None = None,
     display_labels: Mapping[str, str] | None = None,
 ) -> Mapping[str, Any]:
     """Render absolute group outcomes beside the host-owned adjusted effect."""
@@ -536,6 +644,9 @@ def run_association_overview_figure(
         raise ValueError("figure product must be one canonical lowercase token")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    panels = _association_panels(
+        panel_specs or [], figure_product=figure_product, overview=True
+    )
     estimates, estimate_binding = _load_estimates(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
@@ -605,7 +716,11 @@ def run_association_overview_figure(
     import numpy as np
 
     palette = apply_publication_style(font_size=7.0)
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.35), constrained_layout=True)
+    presentation = presentation_from_panels(panels)
+    if presentation is None:
+        fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.35), constrained_layout=True)
+    else:
+        fig, axes, palette = create_presented_axes(2, presentation)
     ax = axes[0]
     positions = np.arange(len(groups), dtype=float)
     width = 0.36
@@ -649,7 +764,7 @@ def run_association_overview_figure(
     ax.set_ylabel("Percent")
     ax.set_title("Absolute prevalence and outcome risk", loc="left", pad=8)
     ax.legend(frameon=False, fontsize=6)
-    add_panel_label(ax, "A", x=-0.13, y=1.04)
+    add_panel_label(ax, "A", x=-0.13, y=1.04, fontsize=presentation.font_size * 1.1 if presentation else 11)
 
     ax = axes[1]
     values = [rows["__estimate"].iloc[index] for index in drawable]
@@ -677,9 +792,19 @@ def run_association_overview_figure(
     ax.set_yticks(y, [_reader_label(rows["__label"].iloc[index]) for index in drawable])
     ax.set_xlabel(_reader_label(scale.name))
     ax.set_title("Adjusted association", loc="left", pad=8)
-    add_panel_label(ax, "B", x=-0.13, y=1.04)
+    add_panel_label(ax, "B", x=-0.13, y=1.04, fontsize=presentation.font_size * 1.1 if presentation else 11)
     adjustment = _adjustment_note(estimates["covariates"].iloc[0])
-    fig.text(0.51, 0.01, adjustment, ha="center", va="bottom", fontsize=5.8)
+    if presentation is None:
+        fig.text(0.51, 0.01, adjustment, ha="center", va="bottom", fontsize=5.8)
+    else:
+        fig.supxlabel(
+            textwrap.fill(
+                adjustment,
+                width=max(30, int(presentation.width_mm / presentation.font_size * 3)),
+            ),
+            fontsize=presentation.font_size * 0.85,
+        )
+        finish_presented_figure(fig, presentation, base_font_size=7.0)
 
     evidence_ids = [
         str(distribution.evidence_id or ""),
@@ -687,6 +812,8 @@ def run_association_overview_figure(
     ]
     contract = make_figure_contract(
         figure_id=figure_product,
+        width_mm=float(fig.get_figwidth() * 25.4),
+        height_mm=float(fig.get_figheight() * 25.4),
         title=f"{_reader_label(exposure)} and {_reader_label(outcome)}",
         core_claim=(
             "The absolute exposure/outcome distribution and the adjusted "
@@ -694,20 +821,28 @@ def run_association_overview_figure(
         ),
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": panels[0].panel_id,
                 "title": "Absolute distribution",
-                "role": "absolute_risk_context",
+                "role": panels[0].article_role,
                 "claim": "Exposure prevalence and observed outcome risk by declared exposure level.",
                 "evidence_ids": [evidence_ids[0]],
-                "metadata": {"source_data": [distribution_source.name]},
+                "metadata": {
+                    "source_data": [distribution_source.name],
+                    "chart_type": panels[0].chart_type,
+                    "source_products": panels[0].source_products,
+                },
             },
             {
-                "panel_id": "B",
+                "panel_id": panels[1].panel_id,
                 "title": "Adjusted association",
-                "role": "primary_effect",
+                "role": panels[1].article_role,
                 "claim": f"Host-fitted effect estimate and confidence interval. {adjustment}",
                 "evidence_ids": [evidence_ids[1]],
-                "metadata": {"source_data": [estimate_source.name]},
+                "metadata": {
+                    "source_data": [estimate_source.name],
+                    "chart_type": panels[1].chart_type,
+                    "source_products": panels[1].source_products,
+                },
             },
         ],
         source_data=[distribution_source.name, estimate_source.name],
@@ -732,10 +867,17 @@ def run_association_overview_figure(
         "method": "deterministic_association_overview_figure",
         "deterministic_standard_analysis": "association_overview_figure",
         "rendering_only": True,
+        "figure_presentation": presentation.model_dump(mode="json")
+        if presentation
+        else None,
         "source_inputs": list(ASSOCIATION_OVERVIEW_FIGURE_INPUTS),
-        "source_evidence_ids": dict(zip(ASSOCIATION_OVERVIEW_FIGURE_INPUTS, evidence_ids, strict=True)),
+        "source_evidence_ids": dict(
+            zip(ASSOCIATION_OVERVIEW_FIGURE_INPUTS, evidence_ids, strict=True)
+        ),
         "source_data_files": [distribution_source.name, estimate_source.name],
-        "figure_files": [path.name for key, path in outputs.items() if key != "contract"],
+        "figure_files": [
+            path.name for key, path in outputs.items() if key != "contract"
+        ],
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [f"{figure_product}.figure_contract.json"],
@@ -755,6 +897,7 @@ def run_adjusted_association_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    panel_specs: list[dict[str, Any]] | None = None,
 ) -> Mapping[str, Any]:
     """Render the host's own adjusted estimate and write its figure contract."""
 
@@ -762,6 +905,7 @@ def run_adjusted_association_figure(
         raise ValueError("figure product must be one canonical lowercase token")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    panels = _association_panels(panel_specs or [], figure_product=figure_product)
     frame, binding = _load_estimates(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
@@ -811,7 +955,12 @@ def run_adjusted_association_figure(
     # declaration is part of the scientific contract, so dropping it is not a
     # layout fix; reserve enough height for both instead.
     height_mm = 42.0 + 7.0 * len(rows)
-    fig, ax = plt.subplots(figsize=(120 / 25.4, height_mm / 25.4))
+    presentation = presentation_from_panels(panels)
+    if presentation is None:
+        fig, ax = plt.subplots(figsize=(120 / 25.4, height_mm / 25.4))
+    else:
+        fig, axes, palette = create_presented_axes(1, presentation)
+        ax = axes[0]
 
     drawn = [index for index, ok in enumerate(rows["__drawable"]) if ok]
     estimates = [rows["__estimate"].iloc[i] for i in drawn]
@@ -902,19 +1051,34 @@ def run_adjusted_association_figure(
     adjustment = _adjustment_note(frame["covariates"].iloc[0])
     estimator = _reader_label(_text(frame["estimator_kind"].iloc[0]))
     association_kind = "unadjusted" if adjustment.startswith("Unadjusted:") else "adjusted"
+    if panels[0].chart_type.startswith("forest_interval_") and panels[0].chart_type != f"forest_interval_{association_kind}_association":
+        raise ValueError("unsupported_planned_figure_design: chart adjustment declaration disagrees with the source")
     model_note = f"{adjustment} {estimator[:1].upper()}{estimator[1:]} model."
-    fig.text(
-        0.02,
-        0.04,
-        model_note,
-        fontsize=5.9,
-        color=palette["neutral"],
-        ha="left",
-        va="bottom",
-    )
-    fig.subplots_adjust(left=0.30, right=0.72, bottom=0.36, top=0.88)
+    if presentation is None:
+        fig.text(
+            0.02,
+            0.04,
+            model_note,
+            fontsize=5.9,
+            color=palette["neutral"],
+            ha="left",
+            va="bottom",
+        )
+        fig.subplots_adjust(left=0.30, right=0.72, bottom=0.36, top=0.88)
+    else:
+        fig.supxlabel(
+            textwrap.fill(
+                model_note,
+                width=max(30, int(presentation.width_mm / presentation.font_size * 3)),
+            ),
+            fontsize=presentation.font_size * 0.85,
+        )
+    if presentation is not None:
+        finish_presented_figure(fig, presentation, base_font_size=7.0)
     contract = make_figure_contract(
         figure_id=figure_product,
+        width_mm=float(fig.get_figwidth() * 25.4),
+        height_mm=float(fig.get_figheight() * 25.4),
         title=(
             f"{association_kind.capitalize()} association between {_reader_label(exposure)} and "
             f"{_reader_label(outcome)}"
@@ -926,9 +1090,9 @@ def run_adjusted_association_figure(
         ),
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": panels[0].panel_id,
                 "title": f"{association_kind.capitalize()} effect estimate",
-                "role": "primary_effect",
+                "role": panels[0].article_role,
                 "claim": (
                     f"Point estimate and confidence interval on the "
                     f"{_reader_label(scale.name)} scale. {adjustment} "
@@ -937,7 +1101,10 @@ def run_adjusted_association_figure(
                 ),
                 "evidence_ids": [source_path.name],
                 "metadata": {
-                    "chart_type": f"forest_interval_{association_kind}_association",
+                    "chart_type": panels[0].chart_type
+                    if panel_specs
+                    else f"forest_interval_{association_kind}_association",
+                    "source_products": panels[0].source_products,
                     "source_data": [source_path.name],
                 },
             }
@@ -967,6 +1134,9 @@ def run_adjusted_association_figure(
         "analysis_family": "association",
         "deterministic_standard_analysis": "adjusted_association_figure",
         "rendering_only": True,
+        "figure_presentation": presentation.model_dump(mode="json")
+        if presentation
+        else None,
         "source_input": ADJUSTED_ASSOCIATION_FIGURE_INPUT,
         "source_evidence_id": binding.get("evidence_id"),
         "source_sha256": binding.get("sha256"),
