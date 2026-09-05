@@ -1,61 +1,80 @@
 {
   "baseline_review": {
-    "added_modules": [],
-    "base_commit": "e2a0d10e729acc0a24239e2c333556842712c596",
+    "added_modules": [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.planning.ordinal_multi_outcome"
+    ],
+    "base_commit": "439f5c9138aded968f5e575e61b968d81d80513a",
     "base_metrics": {
       "cyclic_module_count": 0,
       "cyclic_scc_count": 0,
       "edge_count": 2642,
       "largest_scc_size": 0,
-      "module_count": 642,
+      "module_count": 641,
       "package_count": 32,
       "top_level_module_count": 34
     },
-    "evidence": "docs/architecture/module_depth_20260905.md",
-    "implementation_commit": "a7b0ded38dd8ac4c276311fbc1f1ef259b9d4dd4",
+    "evidence": "docs/architecture/canonical9_owner_closeout_20260905.md",
     "previous_review": {
-      "added_modules": [
-        "easyicu.research_agent.discovery.source_provenance",
-        "easyicu.research_agent.figures.presentation"
-      ],
-      "base_commit": "9886df96b32f7112173862cc1d1c035e580aba8b",
+      "added_modules": [],
+      "base_commit": "e2a0d10e729acc0a24239e2c333556842712c596",
       "base_metrics": {
         "cyclic_module_count": 0,
         "cyclic_scc_count": 0,
-        "edge_count": 2632,
+        "edge_count": 2642,
         "largest_scc_size": 0,
-        "module_count": 640,
+        "module_count": 642,
         "package_count": 32,
         "top_level_module_count": 34
       },
-      "evidence": "docs/architecture/authority_followup_20260904.md",
+      "evidence": "docs/architecture/module_depth_20260905.md",
+      "implementation_commit": "a7b0ded38dd8ac4c276311fbc1f1ef259b9d4dd4",
       "previous_review": {
         "added_modules": [
-          "easyicu.research_agent.authority.run_receipt",
-          "easyicu.research_agent.contracts.frozen_payload",
-          "easyicu.research_agent.figures.association_prior_outputs",
-          "easyicu.research_agent.figures.prior_output_contracts",
-          "easyicu.research_agent.figures.sensitivity_prior_outputs"
+          "easyicu.research_agent.discovery.source_provenance",
+          "easyicu.research_agent.figures.presentation"
         ],
-        "base_commit": "89cb7ed00dd08545bf1a455f2e63ed86ad87fff8",
+        "base_commit": "9886df96b32f7112173862cc1d1c035e580aba8b",
         "base_metrics": {
           "cyclic_module_count": 0,
           "cyclic_scc_count": 0,
-          "edge_count": 2613,
+          "edge_count": 2632,
           "largest_scc_size": 0,
-          "module_count": 635,
+          "module_count": 640,
           "package_count": 32,
           "top_level_module_count": 34
         },
-        "evidence": "docs/architecture/authority_closure_review_20260904.md",
-        "reason": "Admit five explicit owner modules; no new top-level modules or cycles. Renderer implementations leave pipeline; shared immutable JSON and run receipts have one owner."
+        "evidence": "docs/architecture/authority_followup_20260904.md",
+        "previous_review": {
+          "added_modules": [
+            "easyicu.research_agent.authority.run_receipt",
+            "easyicu.research_agent.contracts.frozen_payload",
+            "easyicu.research_agent.figures.association_prior_outputs",
+            "easyicu.research_agent.figures.prior_output_contracts",
+            "easyicu.research_agent.figures.sensitivity_prior_outputs"
+          ],
+          "base_commit": "89cb7ed00dd08545bf1a455f2e63ed86ad87fff8",
+          "base_metrics": {
+            "cyclic_module_count": 0,
+            "cyclic_scc_count": 0,
+            "edge_count": 2613,
+            "largest_scc_size": 0,
+            "module_count": 635,
+            "package_count": 32,
+            "top_level_module_count": 34
+          },
+          "evidence": "docs/architecture/authority_closure_review_20260904.md",
+          "reason": "Admit five explicit owner modules; no new top-level modules or cycles. Renderer implementations leave pipeline; shared immutable JSON and run receipts have one owner."
+        },
+        "reason": "Admit exactly two owners: replayable discovery-source membership and bounded figure presentation. No orchestrator decomposition; zero cyclic modules and unchanged top-level count. Prior admission review retained."
       },
-      "reason": "Admit exactly two owners: replayable discovery-source membership and bounded figure presentation. No orchestrator decomposition; zero cyclic modules and unchanged top-level count. Prior admission review retained."
+      "reason": "Deepen the existing executor decision, figure contract reader and completion modules. Remove the independent candidate report; tighten the module count and retain the edge and zero-cycle ceilings. No new authority or orchestration module.",
+      "removed_modules": [
+        "easyicu.research_agent.execution.runners.selection_report"
+      ]
     },
-    "reason": "Deepen the existing executor decision, figure contract reader and completion modules. Remove the independent candidate report; tighten the module count and retain the edge and zero-cycle ceilings. No new authority or orchestration module.",
-    "removed_modules": [
-      "easyicu.research_agent.execution.runners.selection_report"
-    ]
+    "reason": "Admit exactly two typed owners: signed categorical-landmark execution and ordinal multi-outcome applicability. Metadata cannot authorize an analysis or alter model coding. Move model contracts and transport parsing into existing owners; retain zero-cycle and top-level ceilings. Run receipts reuse the existing canonical file-digest owner; one shared import replaces a duplicate local implementation.",
+    "removed_modules": []
   },
   "cyclic_sccs": [],
   "dynamic_literal_imports": [
@@ -392,6 +411,10 @@
     [
       "easyicu.research_agent.acquisition.hospital_followup_materialization",
       "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.acquisition.hospital_followup_materialization",
+      "easyicu.research_agent.contracts.dependence"
     ],
     [
       "easyicu.research_agent.acquisition.mcp_projection",
@@ -984,6 +1007,10 @@
     [
       "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.method_literature"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.ordinal_multi_outcome"
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
@@ -2130,6 +2157,10 @@
       "easyicu.research_agent.authority.filesystem"
     ],
     [
+      "easyicu.research_agent.authority.run_receipt",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
       "easyicu.research_agent.authority.runtime_artifacts",
       "easyicu.research_agent.architecture"
     ],
@@ -2491,6 +2522,10 @@
     ],
     [
       "easyicu.research_agent.contracts.association_execution",
+      "easyicu.research_agent.contracts.capability_ids"
+    ],
+    [
+      "easyicu.research_agent.contracts.association_execution",
       "easyicu.research_agent.contracts.cohort_product_keys"
     ],
     [
@@ -2604,6 +2639,14 @@
     [
       "easyicu.research_agent.contracts.model_covariates",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.contracts.model_terms",
+      "easyicu.research_agent.contracts.dependence"
+    ],
+    [
+      "easyicu.research_agent.contracts.model_terms",
+      "easyicu.research_agent.contracts.model_tokens"
     ],
     [
       "easyicu.research_agent.contracts.ordered_stratified",
@@ -4990,6 +5033,38 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.authority.current_case_scientific_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.authority.declared_levels"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.authority.plausibility"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.contracts.association_execution"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.contracts.capability_ids"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.execution.runners.adjusted_association_executor"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.execution.runners.plausibility_receipt"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.execution.runners.landmark_spline_executor",
       "easyicu.research_agent.authority.current_case_scientific_runtime"
     ],
@@ -5420,6 +5495,10 @@
     [
       "easyicu.research_agent.execution.runners.selection",
       "easyicu.research_agent.execution.runners.landmark_association_figure_executor"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.selection",
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor"
     ],
     [
       "easyicu.research_agent.execution.runners.selection",
@@ -8258,6 +8337,18 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.ordinal_multi_outcome",
+      "easyicu.research_agent.authority.declared_levels"
+    ],
+    [
+      "easyicu.research_agent.planning.ordinal_multi_outcome",
+      "easyicu.research_agent.research_context.typed"
+    ],
+    [
+      "easyicu.research_agent.planning.ordinal_multi_outcome",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.planning.plan_graph",
       "easyicu.research_agent.authority.step_recovery"
     ],
@@ -8415,6 +8506,10 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.planning.ordinal_multi_outcome"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.planning.preplan_know_how"
     ],
     [
@@ -8471,7 +8566,15 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_host_materialization",
+      "easyicu.research_agent.contracts.ordered_stratified"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_host_materialization",
       "easyicu.research_agent.planning.method_literature"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_host_materialization",
+      "easyicu.research_agent.planning.ordinal_multi_outcome"
     ],
     [
       "easyicu.research_agent.planning.progressive_host_materialization",
@@ -8500,6 +8603,10 @@
     [
       "easyicu.research_agent.planning.progressive_resume",
       "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_resume",
+      "easyicu.research_agent.planning.progressive_host_materialization"
     ],
     [
       "easyicu.research_agent.planning.progressive_resume",
@@ -8620,6 +8727,10 @@
     [
       "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.contracts.descriptive_execution"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.contracts.ordered_stratified"
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
@@ -10142,6 +10253,10 @@
       "easyicu.research_agent.trajectory.contract"
     ],
     [
+      "easyicu.research_agent.research_context.cohort_granularity",
+      "easyicu.research_agent.contracts.dependence"
+    ],
+    [
       "easyicu.research_agent.research_context.implementation_identity",
       "easyicu.research_agent.canonical_json"
     ],
@@ -10658,9 +10773,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2642,
+    "edge_count": 2666,
     "largest_scc_size": 0,
-    "module_count": 641,
+    "module_count": 643,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -10927,6 +11042,7 @@
     "easyicu.research_agent.execution.runners.figure_input_capability": "execution/runners/figure_input_capability.py",
     "easyicu.research_agent.execution.runners.host_bound_cohort_executor": "execution/runners/host_bound_cohort_executor.py",
     "easyicu.research_agent.execution.runners.landmark_association_figure_executor": "execution/runners/landmark_association_figure_executor.py",
+    "easyicu.research_agent.execution.runners.landmark_categorical_association_executor": "execution/runners/landmark_categorical_association_executor.py",
     "easyicu.research_agent.execution.runners.landmark_spline_executor": "execution/runners/landmark_spline_executor.py",
     "easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor": "execution/runners/landmark_spline_functional_form_executor.py",
     "easyicu.research_agent.execution.runners.landmark_spline_robustness_executor": "execution/runners/landmark_spline_robustness_executor.py",
@@ -11112,6 +11228,7 @@
     "easyicu.research_agent.planning.method_literature": "planning/method_literature.py",
     "easyicu.research_agent.planning.method_vocabulary": "planning/method_vocabulary.py",
     "easyicu.research_agent.planning.novelty_contract": "planning/novelty_contract.py",
+    "easyicu.research_agent.planning.ordinal_multi_outcome": "planning/ordinal_multi_outcome.py",
     "easyicu.research_agent.planning.plan_graph": "planning/plan_graph.py",
     "easyicu.research_agent.planning.planner_output_contract": "planning/planner_output_contract.py",
     "easyicu.research_agent.planning.preplan_know_how": "planning/preplan_know_how.py",
