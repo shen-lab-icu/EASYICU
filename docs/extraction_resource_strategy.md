@@ -373,14 +373,17 @@ content of another AUMC module.
   `/Volumes/外置硬盘/tmp/easyicu-ventilator-invariance-fix-59f775e/verification_result.json`
 - MIMIC-IV remaining 11-module 8 GiB receipts:
   `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/mimiciv/`
-- Persistent MIMIC-IV audit and limitations:
+- Persistent MIMIC-IV audit and limitations (local workspace evidence, not
+  repository source): workspace-root
   `task_logs/20260827_mimiciv_19_module_resource_standard.md`
 - MIMIC-III partial receipts and partition repair:
   `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/mimiciii/`
-  and `task_logs/20260827_mimiciii_partition_boundary_repair.md`
+  and workspace-root
+  `task_logs/20260827_mimiciii_partition_boundary_repair.md`
 - eICU 19-module process-tree receipts and A/B outputs:
   `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/eicu/`
-- Persistent eICU audit and limitations:
+- Persistent eICU audit and limitations (local workspace evidence, not
+  repository source): workspace-root
   `task_logs/20260827_eicu_19_module_resource_standard.md`
 
 These measurements support resource selection only for the listed MIMIC-IV,

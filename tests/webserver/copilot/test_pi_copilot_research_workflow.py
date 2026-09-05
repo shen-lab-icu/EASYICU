@@ -26,6 +26,10 @@ from easyicu.research_agent.orchestration.workflow import (
     HumanReviewPending,
     HumanReviewRequest,
 )
+from easyicu.research_agent.orchestration.profiles import (
+    CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
+    get_submission_profile,
+)
 from easyicu.webserver import (
     agent_pipeline_runs,
     agent_runs,
@@ -7173,8 +7177,6 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
         "runner_image",
         "runner_image_environment",
         "expected_runner_image",
-        "expected_profile_name",
-        "expected_profile_version",
     ),
     [
         (
@@ -7182,24 +7184,18 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             None,
             None,
             "easyicu-research-agent:1.0.0",
-            "npj_dm_e1_demo_dev",
-            "20260903",
         ),
         (
             "full_reviewed",
             None,
             "easyicu-research-agent:isolated-exact-head",
             "easyicu-research-agent:isolated-exact-head",
-            "npj_dm_e1_demo_dev",
-            "20260903",
         ),
         (
             "full_reviewed",
             "easyicu-research-agent:e1-demo-local",
             " \n",
             "easyicu-research-agent:e1-demo-local",
-            "npj_dm_e1_demo_dev",
-            "20260903",
         ),
     ],
 )
@@ -7210,8 +7206,6 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     runner_image: str | None,
     runner_image_environment: str | None,
     expected_runner_image: str,
-    expected_profile_name: str,
-    expected_profile_version: str,
 ) -> None:
     if runner_image_environment is not None:
         monkeypatch.setenv("EASYICU_RUNNER_IMAGE", runner_image_environment)
@@ -7393,8 +7387,12 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].runner_kind == "docker"
     assert calls["config"].runner_network == "none"
     assert calls["config"].runner_image == expected_runner_image
-    assert calls["config"].submission_profile_name == expected_profile_name
-    assert calls["config"].submission_profile_version == expected_profile_version
+    expected_profile = get_submission_profile(
+        CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
+    )
+    assert calls["config"].submission_profile_name == expected_profile.name
+    assert calls["config"].submission_profile_version == expected_profile.version
+    assert calls["config"].submission_profile_locked_at == expected_profile.locked_at
     assert calls["config"].planner_strategy == (
         "progressive_v2"
         if budget_mode in {None, "full_reviewed"}
