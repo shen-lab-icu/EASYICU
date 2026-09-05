@@ -140,6 +140,43 @@ def registered_export_matches_study(
     )
 
 
+def _study_with_registered_source_identity(
+    study: Mapping[str, Any], registry: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Attach the exact path-free registry id to the workflow projection.
+
+    StudyContext owns the host-side path, while source-query tools require the
+    registry id. Resolve that bridge once here so a model never has to guess an
+    id from a display label such as ``MIIV``.
+    """
+
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    expected_path = str(source.get("path") or "").strip()
+    if not expected_path:
+        return study
+    registered = next(
+        (
+            row
+            for row in (registry.get("sources") or [])
+            if isinstance(row, Mapping)
+            and bool(row.get("ok"))
+            and str(row.get("path") or "").strip() == expected_path
+            and str(row.get("id") or "").strip()
+        ),
+        None,
+    )
+    if registered is None:
+        return study
+    return {
+        **dict(study),
+        "data_source": {
+            **dict(source),
+            "source_id": str(registered.get("id") or "").strip(),
+        },
+    }
+
+
 # These are Planner proposal fields, not pre-plan setup questions.  The
 # researcher reviews the complete candidate plan; they should not have to
 # invent an endpoint contract or a sensitivity implementation before seeing
@@ -148,6 +185,8 @@ def registered_export_matches_study(
 _PLANNER_PROPOSAL_FINDING_CODES = frozenset(
     {
         "OUTCOME_DEFINITION_UNRESOLVED",
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        "REPEATED_STAY_METHOD_NOT_DECLARED",
         "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
     }
 )
@@ -211,7 +250,12 @@ def build_research_workflow_snapshot(
     }
     run_type = str(run_row.get("run_type") or "")
     run_engine = str(run_row.get("engine") or "")
-    has_plan = "agent_plan.json" in artifact_names
+    plan_available = run_row.get("plan_available")
+    has_plan = (
+        bool(plan_available)
+        if isinstance(plan_available, bool)
+        else "agent_plan.json" in artifact_names
+    )
     has_evidence = "evidence_ledger.json" in artifact_names
     has_outputs = bool(
         artifact_names
@@ -313,6 +357,7 @@ def build_research_workflow_snapshot(
         "operator_plan_approval_required",
         "plan_scientific_changes_required",
         "scientific_plan_review_policy_stale",
+        "agent_plan_revision_nonconvergent",
     }
     active_plan_review_codes = sorted(pending_review_reason_codes & plan_review_codes)
     plan_review_declared = bool(
@@ -334,6 +379,19 @@ def build_research_workflow_snapshot(
     raw_remediation_buckets = (
         raw_remediation_buckets if isinstance(raw_remediation_buckets, Mapping) else {}
     )
+    raw_study_authority_codes = raw_remediation_buckets.get(
+        "study_authority_change"
+    )
+    resolved_study_authority_codes = {
+        str(code).strip()
+        for code in (
+            raw_study_authority_codes
+            if isinstance(raw_study_authority_codes, list)
+            else []
+        )
+        if str(code).strip()
+        and plan_decisions.decision_is_resolved(study_row, str(code))
+    }
 
     def projected_remediation_codes(route: str) -> List[str]:
         values = raw_remediation_buckets.get(route)
@@ -344,7 +402,10 @@ def build_research_workflow_snapshot(
         ]
         if route == "study_authority_change":
             return [
-                code for code in rows if code not in _PLANNER_PROPOSAL_FINDING_CODES
+                code
+                for code in rows
+                if code not in _PLANNER_PROPOSAL_FINDING_CODES
+                and code not in resolved_study_authority_codes
             ]
         if route == "agent_plan_revision":
             proposal_codes = [
@@ -353,7 +414,11 @@ def build_research_workflow_snapshot(
                 if isinstance(item, Mapping)
                 and str(item.get("code") or "") in _PLANNER_PROPOSAL_FINDING_CODES
             ]
-            return list(dict.fromkeys([*rows, *proposal_codes]))[:40]
+            return list(
+                dict.fromkeys(
+                    [*rows, *proposal_codes, *sorted(resolved_study_authority_codes)]
+                )
+            )[:40]
         return rows
 
     def projected_authorization_question(item: Mapping[str, Any]) -> Dict[str, Any]:
@@ -406,6 +471,8 @@ def build_research_workflow_snapshot(
                 if isinstance(item, Mapping)
                 and bool(item.get("requires_user_authorization"))
                 and str(item.get("code") or "") not in _PLANNER_PROPOSAL_FINDING_CODES
+                and str(item.get("code") or "")
+                not in resolved_study_authority_codes
                 and str(item.get("authorization_question") or "").strip()
             ],
             "remediation_buckets": {
@@ -462,7 +529,9 @@ def build_research_workflow_snapshot(
         != "planner_canary"
     )
     live_plan_reason = (
-        "scientific_plan_review_policy_stale"
+        "agent_plan_revision_nonconvergent"
+        if "agent_plan_revision_nonconvergent" in active_plan_review_codes
+        else "scientific_plan_review_policy_stale"
         if "scientific_plan_review_policy_stale" in active_plan_review_codes
         else "plan_scientific_changes_required"
         if "plan_scientific_changes_required" in active_plan_review_codes
@@ -758,15 +827,16 @@ def build_research_workflow_snapshot(
     if (
         eligibility_confirmation_required
         and not plan_attention_required
+        and not plan_regeneration_required
         and not analysis_complete
         and not analysis_outputs_available
     ):
-        # A StudyContext change invalidates its cohort receipt by design.  The
-        # new population must be confirmed before a stale-plan regeneration
-        # action can be offered; otherwise the visible button only submits a
-        # run that the launch owner must reject. A live, digest-matching
-        # candidate is different: show its plan and evidence first and resolve
-        # its choices in that review, without granting execution authority.
+        # A StudyContext change invalidates its cohort receipt by design, but a
+        # candidate-plan regeneration is still plan-only authority.  Keep that
+        # transition ahead of a standalone eligibility card so Agent-owned
+        # configuration can be incorporated into one coherent plan review.
+        # Only a study with no live or superseded candidate at all is routed to
+        # the legacy standalone eligibility decision.
         next_stage = next(row for row in required if row.id == "setup")
     elif (
         plan_attention_required
@@ -830,7 +900,9 @@ def _enrich_plan_review(
         for question in questions:
             item = dict(question) if isinstance(question, Mapping) else {}
             decision_context = plan_decisions.plan_decision_context(
-                agent_plan, str(item.get("code") or "")
+                agent_plan,
+                str(item.get("code") or ""),
+                study,
             )
             if decision_context:
                 item["decision_context"] = decision_context
@@ -851,6 +923,39 @@ def _enrich_plan_review(
                     "authorization_questions": enriched_questions,
                 },
             }
+        )
+    current_summary = snapshot.plan_review_summary
+    remediation = (
+        current_summary.get("remediation_buckets")
+        if isinstance(current_summary, Mapping)
+        else None
+    )
+    runtime_codes = (
+        remediation.get("runtime_capability")
+        if isinstance(remediation, Mapping)
+        else None
+    )
+    if (
+        isinstance(agent_plan, Mapping)
+        and isinstance(runtime_codes, list)
+        and runtime_codes
+        and snapshot.next_action_code
+        in {
+            "agent_plan_revision_nonconvergent",
+            "plan_scientific_changes_required",
+        }
+        and plan_decisions.agent_plan_configuration_available(
+            study=study,
+            agent_plan=agent_plan,
+            runtime_finding_codes=runtime_codes,
+        )
+    ):
+        # The plan has already made a typed scientific selection and the
+        # reviewer attributes the remaining gap to the runtime owner.  Route
+        # the next action to the Host compiler instead of asking the researcher
+        # for internal method coordinates or spending another provider turn.
+        snapshot = snapshot.model_copy(
+            update={"next_action_code": "agent_plan_configuration_required"}
         )
     plan_preview = project_plan_conversation_preview(agent_plan)
     if plan_preview:
@@ -878,6 +983,7 @@ def build_project_workflow_projection(
         clean_study_id = str(study.get("id") or "").strip()
 
     registry = sources.load_registry()
+    projected_study = _study_with_registered_source_identity(study, registry)
     active_job: Optional[Mapping[str, Any]] = None
     active_job_id = str(study.get("active_job_id") or "").strip()
     if active_job_id:
@@ -910,6 +1016,14 @@ def build_project_workflow_projection(
             study, latest_run or {}, review,
         ),
     )
+    if projected_study is not study:
+        snapshot = snapshot.model_copy(
+            update={
+                "study_setup_receipt": project_study_setup_receipt(
+                    projected_study
+                )
+            }
+        )
     latest_run_outcome: Mapping[str, Any] = {"present": False}
     if latest_run:
         latest_run_outcome = project_run_outcome(review)

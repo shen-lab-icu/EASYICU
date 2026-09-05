@@ -4,6 +4,7 @@ import pytest
 
 from easyicu.webserver.pi_copilot.plan_decisions import (
     PlanDecisionError,
+    compile_agent_plan_configuration,
     compile_plan_decision,
     plan_decision_context,
 )
@@ -64,6 +65,38 @@ def _sepsis_plan() -> dict:
     requirement = plan["steps"][0]["model_requirements"][0]
     requirement["exposure_source"] = "sep3_sofa1_max"
     return plan
+
+
+def _aki_landmark_plan() -> dict:
+    plan = _plan()
+    selected = plan["design_selection"]["candidates"][0]
+    selected["design_id"] = "landmark_adjusted_association"
+    selected["time_zero"] = "入 ICU 后24小时作为预先指定的 landmark"
+    selected["observation_window"] = "从24小时 landmark 起至出院或死亡"
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement["exposure_source"] = "aki_stage_max"
+    return plan
+
+
+def _aki_study() -> dict:
+    study = _study()
+    study.update(
+        {
+            "question": "描述前24小时 KDIGO AKI 分级与死亡及 ICU 住院时长的关系。",
+            "purpose": "完成观察性、非因果的分级关联研究。",
+            "outcome": "主要结局：院内死亡；次要结局：ICU 住院时长",
+            "primary_exposure": "入 ICU 后前24小时 KDIGO AKI 分级",
+            "analysis_goal": "保留 Table 1、分期结局和趋势审计。",
+            "time_window": {"hours": 24, "anchor": "ICU admission"},
+            "execution_concepts": {
+                "outcome": "death",
+                "primary_exposure": "aki_stage",
+                "primary_exposure_aggregation": "max",
+                "covariates": ["age", "sex", "adm"],
+            },
+        }
+    )
+    return study
 
 
 def test_landmark_choice_compiles_one_complete_typed_update() -> None:
@@ -129,6 +162,166 @@ def test_landmark_choice_preserves_confirmed_patient_cluster_design() -> None:
         "cluster_unit": "patient",
     }
     assert compiled.patch["confirmations"]["plan_repeated_stays_clustered"] is True
+
+
+def test_fixed_window_aki_plan_uses_the_shared_landmark_decision() -> None:
+    plan = _aki_landmark_plan()
+    study = _aki_study()
+
+    context = plan_decision_context(
+        plan,
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        study,
+    )
+    compiled = compile_plan_decision(
+        decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        option_id="landmark_24h",
+        study=study,
+        agent_plan=plan,
+    )
+
+    assert context["timing_profile"] == "fixed_24h_landmark"
+    assert context["exposure_label_zh"] == "KDIGO AKI 分级"
+    assert compiled.patch["outcome"] == study["outcome"]
+    assert compiled.patch["primary_exposure"] == study["primary_exposure"]
+    assert "Table 1、分期结局和趋势审计" in compiled.patch["analysis_goal"]
+    assert "24 小时 landmark" in compiled.patch["analysis_goal"]
+    assert compiled.patch["execution_concepts"]["covariates"] == [
+        "age",
+        "sex",
+        "adm",
+    ]
+    timing = next(
+        spec
+        for spec in compiled.patch["sensitivity_specs"]
+        if spec["axis"] == "timing"
+    )
+    assert timing["landmark_hours"] == 24
+    assert timing["event_time_variable"] == "death_time_hours"
+    assert timing["observation_duration_variable"] == (
+        "hospital_followup_time_hours"
+    )
+
+
+def test_agent_plan_compiles_its_selected_landmark_without_rewriting_question() -> None:
+    plan = _aki_landmark_plan()
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement.update(
+        {
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+        }
+    )
+    study = _aki_study()
+    original_question = study["question"]
+
+    compiled = compile_agent_plan_configuration(
+        study=study,
+        agent_plan=plan,
+        runtime_finding_codes=(
+            "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+            "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+        ),
+        patient_cluster_available=True,
+    )
+
+    assert "question" not in compiled.patch
+    assert study["question"] == original_question
+    assert compiled.runtime_finding_codes == (
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+    )
+    assert compiled.patch["analysis_design"] == {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+    assert compiled.patch["covariates"] == ["age", "sex"]
+    assert compiled.patch["covariate_authority"] == "agent_plan"
+    assert compiled.patch["confirmations"]["plan_adjustment_set_confirmed"] is False
+    assert compiled.patch["covariate_rationales"] == requirement[
+        "covariate_rationales"
+    ]
+    assert compiled.patch["covariate_temporal_roles"] == requirement[
+        "covariate_temporal_roles"
+    ]
+    assert compiled.patch["execution_concepts"] == {
+        "outcome": "death",
+        "primary_exposure": "aki_stage",
+        "primary_exposure_aggregation": "max",
+        "covariates": ["age", "sex"],
+    }
+    timing = next(
+        item
+        for item in compiled.patch["sensitivity_specs"]
+        if item["axis"] == "timing"
+    )
+    assert timing["strategy"] == "landmark"
+    assert timing["landmark_hours"] == 24
+    assert compiled.patch["confirmations"]["agent_plan_configuration_compiled"] is True
+
+
+def test_agent_plan_compiles_owner_default_for_unsuffixed_ordinal_window() -> None:
+    plan = _aki_landmark_plan()
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement.update(
+        {
+            "exposure_source": "aki_stage",
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+        }
+    )
+    study = _aki_study()
+    study["execution_concepts"].pop("primary_exposure_aggregation")
+
+    compiled = compile_agent_plan_configuration(
+        study=study,
+        agent_plan=plan,
+        runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+        patient_cluster_available=True,
+    )
+
+    assert compiled.patch["execution_concepts"]["primary_exposure"] == "aki_stage"
+    assert compiled.patch["execution_concepts"][
+        "primary_exposure_aggregation"
+    ] == "max"
+
+
+def test_agent_plan_runtime_projection_fails_closed_without_patient_grouping() -> None:
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_agent_plan_configuration(
+            study=_aki_study(),
+            agent_plan=_aki_landmark_plan(),
+            runtime_finding_codes=("REPEATED_STAY_IDENTITY_UNAVAILABLE",),
+            patient_cluster_available=False,
+        )
+
+    assert raised.value.code == "agent_plan_patient_grouping_unavailable"
+
+
+def test_agent_plan_runtime_projection_rejects_unowned_runtime_findings() -> None:
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_agent_plan_configuration(
+            study=_aki_study(),
+            agent_plan=_aki_landmark_plan(),
+            runtime_finding_codes=("UNREGISTERED_RUNTIME_GAP",),
+            patient_cluster_available=True,
+        )
+
+    assert raised.value.code == "agent_plan_runtime_finding_unsupported"
 
 
 def test_landmark_choice_fails_closed_without_one_selected_design() -> None:
@@ -237,6 +430,7 @@ def test_adjustment_choice_saves_exact_typed_roster_once() -> None:
     assert compiled.next_action == "replan"
     assert compiled.patch["covariates"] == ["age", "sex"]
     assert compiled.patch["covariate_selection"] == "exact"
+    assert compiled.patch["covariate_authority"] == "user"
     assert compiled.patch["covariate_temporal_roles"] == {
         "age": "baseline_static",
         "sex": "baseline_static",

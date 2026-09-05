@@ -28,6 +28,7 @@ from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
 
 _PREFERRED_METHOD_BY_STRATEGY = {
     "landmark": "landmark_analysis",
+    "first_stay": "first_stay_association",
     "cluster_robust": "cluster_robust_association",
     "restricted_cubic_spline": "restricted_cubic_spline_sensitivity",
     "linear_per_unit": "linear_per_unit_sensitivity",

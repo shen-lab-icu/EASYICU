@@ -637,8 +637,17 @@ class UserPreferences(BaseModel):
         default="planner_selectable",
         description=(
             "Whether covariates remain a Planner-owned choice or are the exact "
-            "user-approved adjustment roster. With 'exact', an empty covariates "
-            "list authorizes only an unadjusted model."
+            "locked adjustment roster. With 'exact', covariate_authority records "
+            "whether the user fixed it or it came from an Agent Plan; an empty "
+            "roster authorizes only an unadjusted model."
+        ),
+    )
+    covariate_authority: Optional[Literal["user", "agent_plan"]] = Field(
+        default=None,
+        description=(
+            "Owner of an exact adjustment roster. None is retained only for "
+            "backward-compatible contexts; new exact rosters must identify "
+            "whether they were user-authored or compiled from an Agent Plan."
         ),
     )
     covariate_rationales: Dict[str, str] = Field(
@@ -708,11 +717,14 @@ class UserPreferences(BaseModel):
                 "covariate decision keys must belong to covariates"
             )
         if self.covariate_selection != "exact" and (
-            rationale_keys or temporal_keys or operational_keys
+            rationale_keys
+            or temporal_keys
+            or operational_keys
+            or self.covariate_authority is not None
         ):
             raise ValueError(
-                "covariate rationales, temporal roles, and operationalizations require "
-                "covariate_selection='exact'"
+                "covariate authority, rationales, temporal roles, and "
+                "operationalizations require covariate_selection='exact'"
             )
         if any(
             not str(value or "").strip()
@@ -908,6 +920,24 @@ class PlannedModelRequirement(BaseModel):
             "is not the same statement as null."
         ),
     )
+    covariate_rationales: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Planner-owned confounding rationale for each selected covariate. "
+            "For an exact user-owned roster this is copied from sealed study "
+            "authority; for a Planner-selectable roster it is proposed and "
+            "reviewed as part of the complete plan."
+        ),
+    )
+    covariate_temporal_roles: Dict[
+        str, Literal["baseline_static", "at_or_before_time_zero"]
+    ] = Field(
+        default_factory=dict,
+        description=(
+            "Typed pre-time-zero eligibility for every selected covariate. "
+            "Availability alone is not temporal adjustment authority."
+        ),
+    )
     model_terms: Optional[List[ModelTermSpec]] = Field(
         default=None,
         description=(
@@ -988,6 +1018,23 @@ class PlannedModelRequirement(BaseModel):
             raise ValueError("covariates must not repeat a name")
         return names
 
+    @field_validator("covariate_rationales")
+    @classmethod
+    def _bounded_planned_covariate_rationales(
+        cls, value: Dict[str, str]
+    ) -> Dict[str, str]:
+        cleaned: Dict[str, str] = {}
+        for raw_name, raw_rationale in value.items():
+            name = str(raw_name or "").strip()
+            rationale = str(raw_rationale or "").strip()
+            if not name or len(rationale) < 8 or len(rationale) > 600:
+                raise ValueError(
+                    "planned covariate rationales require non-empty names and "
+                    "8-600 character explanations"
+                )
+            cleaned[name] = rationale
+        return cleaned
+
     @model_validator(mode="after")
     def _method_family_matches_supported_outcome(self) -> "PlannedModelRequirement":
         supported = (
@@ -1029,6 +1076,15 @@ class PlannedModelRequirement(BaseModel):
                     "covariates must not contain the exposure "
                     f"{self.exposure_source!r}; adjusting for the exposure "
                     "removes the association the requirement declares"
+                )
+        rationale_keys = set(self.covariate_rationales)
+        temporal_keys = set(self.covariate_temporal_roles)
+        if rationale_keys or temporal_keys:
+            expected_covariates = set(self.covariates or ())
+            if rationale_keys != expected_covariates or temporal_keys != expected_covariates:
+                raise ValueError(
+                    "planned covariate rationale and temporal-role maps must "
+                    "cover exactly the declared covariates"
                 )
         if self.model_terms is not None:
             exposure_term, adjustment_terms = validate_model_term_roster(
@@ -2295,8 +2351,16 @@ class AnalysisStep(BaseModel):
                         _normalise_model_contract_token(output_name),
                     )
                 )
+            model_requirement_methods = {
+                PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
+                # The signed landmark route preserves the same explicit
+                # adjusted-association requirement and changes only the
+                # cohort/executor authority. It must survive a plan
+                # serialize/rehydrate boundary after host binding.
+                "signed_landmark_categorical_association",
+            }
             if (
-                method != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD
+                method not in model_requirement_methods
                 or (
                     PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
                     PLANNED_MODEL_REQUIREMENTS_OUTPUT,
@@ -2305,7 +2369,8 @@ class AnalysisStep(BaseModel):
             ):
                 raise ValueError(
                     "model_requirements are currently supported only on "
-                    "method='adjusted_association_models' steps that declare "
+                    "the adjusted-association or signed categorical-landmark "
+                    "methods when they declare "
                     "expected output 'table:adjusted_association_estimates'; "
                     "other analysis families must use their family-specific "
                     "planning and validation contracts"

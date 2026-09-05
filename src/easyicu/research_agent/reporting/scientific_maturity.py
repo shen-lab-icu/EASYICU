@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..planning.scientific_review import (
     association_study as _plan_association_study,
     method_source_facts,
+    model_covariate_plan_authority,
     model_covariates as _plan_model_covariates,
     patient_identity_available as _patient_identity_available,
     post_baseline_exposure as _plan_post_baseline_exposure,
@@ -903,10 +904,17 @@ def build_scientific_maturity_audit(
         if preferences is not None
         else "planner_selectable"
     )
-    covariate_rationales = dict(getattr(preferences, "covariate_rationales", {}) or {})
-    covariate_temporal_roles = dict(
-        getattr(preferences, "covariate_temporal_roles", {}) or {}
-    )
+    if covariate_selection == "exact":
+        covariate_rationales = dict(
+            getattr(preferences, "covariate_rationales", {}) or {}
+        )
+        covariate_temporal_roles = dict(
+            getattr(preferences, "covariate_temporal_roles", {}) or {}
+        )
+    else:
+        covariate_rationales, covariate_temporal_roles = (
+            model_covariate_plan_authority(plan)
+        )
     post_baseline, exposure_window = _post_baseline_exposure(context)
     time_anchor_alignment = primary_exposure_time_anchor_alignment(context)
     patient_identity = _patient_identity_available(context)
@@ -1323,15 +1331,9 @@ def build_scientific_maturity_audit(
                 ),
                 evidence_refs=["research_context.json.cohort.provenance"],
                 remediation=(
-                    "Materialize the patient-level identifier and pre-specify one "
-                    "stay per patient or clustered/mixed estimation; otherwise make "
-                    "the dependence limitation explicit and keep paper authority off."
-                ),
-                requires_user_authorization=True,
-                authorization_question=(
-                    "May a new study version materialize patient identity and choose "
-                    "first-stay or clustered estimation, or should all ICU stays "
-                    "remain the authorized analysis unit?"
+                    "Have EasyICU materialize a verified patient-level identifier "
+                    "when the source can provide one. Otherwise keep the dependence "
+                    "limitation explicit and paper authority off."
                 ),
             )
         )
@@ -1355,6 +1357,7 @@ def build_scientific_maturity_audit(
             )
         )
     if association_study and not covariates:
+        planner_owned = covariate_selection != "exact"
         findings.append(
             ScientificMaturityFinding(
                 code="UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE",
@@ -1370,45 +1373,45 @@ def build_scientific_maturity_audit(
                     "research_context.json.user_preferences",
                 ],
                 remediation=(
-                    "Ask the user to authorize a clinically timed covariate strategy "
-                    "and preserve the unadjusted result as descriptive context; do "
-                    "not silently add covariates."
+                    "Generate and execute a clinically justified pre-time-zero "
+                    "adjustment proposal, or preserve the unadjusted result as "
+                    "descriptive context."
+                    if planner_owned
+                    else "Preserve the user's exact unadjusted result as descriptive context, or create a new user-authorized study version."
                 ),
-                requires_user_authorization=True,
+                requires_user_authorization=not planner_owned,
                 authorization_question=(
-                    "The requested estimate is explicitly unadjusted. Do you want "
-                    "to keep this descriptive analysis, or authorize a new study "
-                    "version with a clinically timed adjustment strategy?"
+                    None
+                    if planner_owned
+                    else "The requested estimate is explicitly unadjusted. Do you want to keep this descriptive analysis, or authorize a new study version with a clinically timed adjustment strategy?"
                 ),
             )
         )
-    if covariates and covariate_selection != "exact":
+    if covariates and covariate_selection != "exact" and (
+        set(covariate_rationales) != set(covariates)
+        or set(covariate_temporal_roles) != set(covariates)
+    ):
         findings.append(
             ScientificMaturityFinding(
-                code="ADJUSTMENT_SET_NOT_USER_CONFIRMED",
+                code="PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE",
                 severity="major",
                 dimension="statistical_design",
                 message=(
-                    "The executed primary model uses a covariate roster that the "
-                    "user had supplied only as Planner-selectable candidates."
+                    "The executed primary model uses an Agent-selected covariate "
+                    "roster without a complete confounding rationale and baseline "
+                    "temporal role for every term."
                 ),
                 evidence_refs=[
                     "manifest.json.current_plan_authority",
-                    "research_context.json.user_preferences",
+                    "analysis_plan.json.model_requirements",
                 ],
                 remediation=(
-                    "Create a new StudyContext revision that records the exact "
-                    "adjustment roster, its clinical rationale, and its baseline "
-                    "temporal role before treating the estimate as article-grade."
-                ),
-                requires_user_authorization=True,
-                authorization_question=(
-                    "Do you approve the executed covariate roster and its clinical/"
-                    "time-zero rationale in a new study version?"
+                    "Revise and rerun the Agent plan with a typed rationale and "
+                    "pre-time-zero role for every selected covariate."
                 ),
             )
         )
-    elif covariates and (
+    elif covariates and covariate_selection == "exact" and (
         set(covariate_rationales) != set(covariates)
         or set(covariate_temporal_roles) != set(covariates)
     ):

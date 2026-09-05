@@ -34,6 +34,7 @@
       if (value.includes('review')) return tr('Running the approved research plan', '正在执行已批准的研究计划');
       if (value.includes('full_run_report_resume')) return tr('Restoring the manuscript and evidence checks', '正在恢复稿件与证据校验');
       if (value.includes('full_run_resume')) return tr('Resuming the approved research run', '正在续跑已批准的科研任务');
+      if (value.includes('full_run_upgrade')) return tr('Preparing analysis data and binding the approved plan', '正在准备分析数据并绑定已审阅计划');
       if (value.includes('full_run')) return tr('Generating the research plan', '正在生成研究计划');
       return tr('EasyICU research task is running', 'EasyICU 科研任务正在运行');
     }
@@ -52,6 +53,8 @@
             ? tr('Manuscript and evidence validation resumed', '已恢复稿件与证据校验')
             : String(code || '').includes('resume')
             ? tr('Approved research run resumed', '已续跑获批的科研任务')
+            : String(code || '').includes('upgrade')
+              ? tr('Analysis data preparation submitted', '已提交分析数据准备任务')
             : tr('Research Agent planning submitted', 'Research Agent 规划任务已提交')
           : code === 'easyicu_review_submitted'
             ? tr('Approved plan submitted for analysis', '已批准计划已提交分析')
@@ -149,7 +152,12 @@
           .then(async () => {
             if (host.session() && sessionIsStale()) await rebind();
             await loadWorkflow();
-            const continued = typeof host.continueSystemOwnedPlanProgression === 'function'
+            // Successful plan stages may advance automatically. A failed or
+            // cancelled background job must stop here: immediately replaying
+            // the same transition hides the failure and can consume provider
+            // calls indefinitely.
+            const continued = event.status === 'done'
+              && typeof host.continueSystemOwnedPlanProgression === 'function'
               ? await host.continueSystemOwnedPlanProgression()
               : false;
             if (!continued) render();

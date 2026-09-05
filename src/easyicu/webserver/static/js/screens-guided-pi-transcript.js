@@ -21,13 +21,29 @@
     'easyicu_mine_ideas',
     'easyicu_search_literature',
   ]);
+  const PLAN_HOST_ACTION_CODES = new Set([
+    'auto_generate_plan',
+    'auto_revise_plan',
+    'generate_plan',
+  ]);
+  // Host receipts prove that EasyICU ran a plan task; they are not authored
+  // conversation turns. A manual click is already shown immediately by the
+  // UI, while replay must never manufacture an editable user quotation.
+  const SYSTEM_ONLY_HOST_ACTION_CODES = new Set([
+    'auto_generate_plan',
+    'auto_revise_plan',
+    'generate_plan',
+  ]);
+  const PLAN_ARTIFACTS = [
+    ['agent_plan.json', 'Open full plan', '打开完整计划'],
+    ['scientific_plan_review.json', 'Open scientific plan review', '打开计划科学审阅'],
+    ['scientific_readiness.json', 'Open scientific readiness review', '打开科学就绪审阅'],
+    ['literature_evidence.json', 'Open literature evidence', '打开文献依据'],
+  ];
   const HOST_ACTION_ARTIFACTS = {
-    generate_plan: [
-      ['agent_plan.json', 'Open full plan', '打开完整计划'],
-      ['scientific_plan_review.json', 'Open scientific plan review', '打开计划科学审阅'],
-      ['scientific_readiness.json', 'Open scientific readiness review', '打开科学就绪审阅'],
-      ['literature_evidence.json', 'Open literature evidence', '打开文献依据'],
-    ],
+    auto_generate_plan: PLAN_ARTIFACTS,
+    auto_revise_plan: PLAN_ARTIFACTS,
+    generate_plan: PLAN_ARTIFACTS,
     prepare_analysis_data: [
       ['cohort_summary.json', 'Open cohort summary', '打开队列摘要'],
       ['source_run_manifest.json', 'Open source manifest', '打开数据来源清单'],
@@ -103,11 +119,31 @@
     const activityHasCompletedAction = host.activityHasCompletedAction || (() => false);
     const workflowActionCode = host.workflowActionCode;
 
+    function hostActionFailed(actionCode, job, status) {
+      const normalizedStatus = String(status || '');
+      if (['failed', 'cancelled', 'interrupted'].includes(normalizedStatus)) return true;
+      if (!PLAN_HOST_ACTION_CODES.has(String(actionCode || '')) || normalizedStatus !== 'done') return false;
+      const refs = Array.isArray(job && job.artifact_refs) ? job.artifact_refs : [];
+      return !refs.some(ref => ref && String(ref.artifact || '') === 'agent_plan.json');
+    }
+
     function hostActionCopy(actionCode, job, status, turn) {
       const normalizedStatus = String(status || '');
       const interrupted = normalizedStatus === 'interrupted';
-      const failed = ['failed', 'cancelled', 'interrupted'].includes(normalizedStatus);
+      const failed = hostActionFailed(actionCode, job, normalizedStatus);
       const copies = {
+        auto_generate_plan: {
+          user: '',
+          running: tr('EasyICU is automatically generating the research plan', 'EasyICU 正在自动生成研究计划'),
+          done: tr('EasyICU automatically generated the plan. Open the complete plan, scientific review, and literature evidence below; analysis has not started.', 'EasyICU 已自动生成计划。可在下方打开完整计划、科学审阅和文献依据；分析尚未开始。'),
+          failed: tr('EasyICU could not complete the automatic research plan. Open the execution details before retrying.', 'EasyICU 未能完成自动研究计划，请查看执行明细后重试。'),
+        },
+        auto_revise_plan: {
+          user: '',
+          running: tr('EasyICU is automatically revising the research plan', 'EasyICU 正在自动修订研究计划'),
+          done: tr('EasyICU automatically revised the plan after its scientific checks. Open the current plan and review evidence below; analysis has not started.', 'EasyICU 已根据科学检查自动修订计划。可在下方打开当前计划和审阅依据；分析尚未开始。'),
+          failed: tr('EasyICU could not complete the automatic plan revision. Open the execution details before retrying.', 'EasyICU 未能完成自动计划修订，请查看执行明细后重试。'),
+        },
         generate_plan: {
           user: tr('Generate the candidate research plan', '生成候选研究计划'),
           running: tr('Generating the research plan', '正在生成研究计划'),
@@ -210,6 +246,20 @@
     function runIdFromActionKey(actionKey) {
       const match = String(actionKey || '').match(/^(run_[^:]+)/);
       return match ? match[1] : '';
+    }
+
+    function hostActionHistoryKey(turn) {
+      const actionCode = String(turn && turn.action_code || '');
+      if (!actionCode) return '';
+      if (PLAN_HOST_ACTION_CODES.has(actionCode)) return 'plan';
+      if (actionCode === 'execute_plan' || actionCode === 'retry_analysis') {
+        return 'analysis_execution';
+      }
+      const artifact = String(turn && turn.action_key || '')
+        .split(':').slice(1).join(':');
+      return actionCode === 'review_results' && artifact
+        ? `${actionCode}:${artifact}`
+        : actionCode;
     }
 
     function sourceJobForHostAction(turn, childJob, session, archivedJobs) {
@@ -463,28 +513,23 @@
         ? session.archived_child_jobs : [];
       const archivedJobs = new Map(archivedJobRows.map(job => [String(job && job.job_id || ''), job]));
       const planTurnIndexes = [];
-      const successfulPlanTurnIndexes = [];
       const planRunIds = new Map();
+      const latestHostTurnByHistoryKey = new Map();
       hostTurns.forEach((turn, turnIndex) => {
-        if (String(turn && turn.action_code || '') !== 'generate_plan') return;
+        const historyKey = hostActionHistoryKey(turn);
+        if (historyKey) latestHostTurnByHistoryKey.set(historyKey, turnIndex);
+        if (!PLAN_HOST_ACTION_CODES.has(String(turn && turn.action_code || ''))) return;
         planTurnIndexes.push(turnIndex);
         const childJobId = String(turn && turn.child_job_id || '');
         const job = archivedJobs.get(childJobId) || null;
         const sourceJob = sourceJobForHostAction(turn, job, session, archivedJobRows);
-        const status = String((job && job.status) || (turn && turn.status) || 'done');
-        const refs = Array.isArray(sourceJob && sourceJob.artifact_refs)
-          ? sourceJob.artifact_refs : [];
         const planRunId = String(sourceJob && sourceJob.run_id || '');
         if (planRunId) planRunIds.set(turnIndex, planRunId);
-        if (status === 'done' && refs.some(ref => (
-          ref && String(ref.artifact || '') === 'agent_plan.json'
-        ))) successfulPlanTurnIndexes.push(turnIndex);
       });
-      const latestSuccessfulPlanTurn = successfulPlanTurnIndexes.at(-1);
       const supersededPlanTurns = new Set(
-        latestSuccessfulPlanTurn == null
-          ? []
-          : planTurnIndexes.filter(turnIndex => turnIndex !== latestSuccessfulPlanTurn),
+        planTurnIndexes.filter(turnIndex => (
+          latestHostTurnByHistoryKey.get('plan') !== turnIndex
+        )),
       );
       const supersededPlanRunIds = new Set(
         Array.from(supersededPlanTurns).map(turnIndex => planRunIds.get(turnIndex)).filter(Boolean),
@@ -492,17 +537,18 @@
       let previousPassiveReview = null;
       hostTurns.forEach((turn, turnIndex) => {
         const actionCode = String(turn && turn.action_code || '');
-        // Persist every plan run and receipt, but only project the latest
-        // successful candidate as an active conversation turn. Showing each
-        // immutable revision as another full user/assistant exchange made one
-        // current plan look like repeated manual generation.
-        if (actionCode === 'generate_plan' && supersededPlanTurns.has(turnIndex)) return;
+        // The replay store keeps every immutable attempt. The main conversation
+        // projects only the latest attempt for each user-visible workflow
+        // action, so one natural-language question does not turn into dozens of
+        // repeated "prepare" or "retry" exchanges after a repair session.
+        const historyKey = hostActionHistoryKey(turn);
+        if (historyKey && latestHostTurnByHistoryKey.get(historyKey) !== turnIndex) return;
         const childJobId = String(turn && turn.child_job_id || '');
         const job = archivedJobs.get(childJobId) || null;
         const sourceJob = sourceJobForHostAction(turn, job, session, archivedJobRows);
         const actionRunId = runIdFromActionKey(turn && turn.action_key);
         if (
-          actionCode !== 'generate_plan'
+          !PLAN_HOST_ACTION_CODES.has(actionCode)
           && actionRunId && supersededPlanRunIds.has(actionRunId)
           && !(sourceJob && sourceJob.analysis_results_available)
         ) return;
@@ -523,12 +569,15 @@
         previousPassiveReview = !childJobId && actionCode === 'review_results'
           ? startedAt : null;
         const actionId = String(turn.job_id || `${actionCode}-${startedAt}`);
-        messages.push({
-          id: 'host-user-' + actionId, role: 'user', text: copy.user, complete: true,
-          hostActionCode: actionCode, timelineAt: startedAt, timelineOrder: turnIndex * 10,
-        });
+        if (!SYSTEM_ONLY_HOST_ACTION_CODES.has(actionCode)) {
+          messages.push({
+            id: 'host-user-' + actionId, role: 'user', text: copy.user, complete: true,
+            hostActionCode: actionCode, timelineAt: startedAt, timelineOrder: turnIndex * 10,
+          });
+        }
         if (childJobId) {
           const activityStatus = status === 'running' ? 'running'
+            : hostActionFailed(actionCode, job || sourceJob, status) ? 'error'
             : (status === 'done' ? 'complete' : (status === 'cancelled' ? 'cancelled' : 'error'));
           const hostActivity = {
             id: 'easyicu-job-' + childJobId, role: 'activity', status: activityStatus,

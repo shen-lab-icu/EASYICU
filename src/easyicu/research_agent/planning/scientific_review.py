@@ -23,13 +23,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
 from ..concept_availability import normalize_database_name
-from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.cohort_product_keys import (
+    is_closed_cohort_product_key,
+    sole_typed_cohort_input,
+)
 from ..contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
 )
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
+from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
@@ -84,8 +88,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/4"] = (
-        "easyicu.plan_scientific_review/4"
+    schema_version: Literal["easyicu.plan_scientific_review/5"] = (
+        "easyicu.plan_scientific_review/5"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -144,6 +148,80 @@ def model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
                 if text and text not in values:
                     values.append(text)
     return tuple(values)
+
+
+def planned_model_outcomes(
+    plan: Optional[AnalysisPlan],
+    context: Optional[ResearchContext] = None,
+) -> tuple[str, ...]:
+    """Return outcomes covered by exact executable analysis contracts.
+
+    Most association owners declare their outcome in ``model_requirements``.
+    The controlled ordered-stratified owner instead carries one fixed typed
+    three-column contract and estimates both its binary and continuous outcome.
+    Count those context-declared outcome inputs as coverage rather than forcing
+    the Planner to invent a duplicate conventional model solely to satisfy the
+    review projection.
+    """
+
+    if plan is None:
+        return ()
+    values: list[str] = []
+    for step in scientific_steps(plan):
+        for requirement in step.model_requirements or ():
+            outcome = str(requirement.outcome or "").strip()
+            if outcome and outcome not in values:
+                values.append(outcome)
+        if context is not None and is_ordered_stratified_analysis_step(step):
+            for input_key in step.inputs:
+                descriptor = context.variable(str(input_key or "").strip())
+                if descriptor is None or str(descriptor.role.value) != "outcome":
+                    continue
+                if descriptor.name not in values:
+                    values.append(descriptor.name)
+    return tuple(values)
+
+
+def requested_outcomes(context: ResearchContext) -> tuple[str, ...]:
+    """Project the data-foundation owner's typed outcome roster.
+
+    ``target_outcome`` remains the primary endpoint used by older single-outcome
+    contracts.  ``cohort.outcome_columns`` is the authoritative roster when a
+    natural research question names more than one outcome.
+    """
+
+    values = [
+        str(value).strip()
+        for value in context.cohort.outcome_columns
+        if str(value).strip()
+    ]
+    primary = str(context.target_outcome or "").strip()
+    if primary and primary not in values:
+        values.append(primary)
+    return tuple(dict.fromkeys(values))
+
+
+def model_covariate_plan_authority(
+    plan: Optional[AnalysisPlan],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return Planner-owned adjustment rationale and timing from the primary model.
+
+    This is distinct from ``UserPreferences`` authority.  When the researcher
+    leaves covariate selection to EasyICU, these maps are part of the Agent's
+    complete reviewable proposal rather than extra form fields for the user.
+    """
+
+    rationales: dict[str, str] = {}
+    temporal_roles: dict[str, str] = {}
+    if plan is None:
+        return rationales, temporal_roles
+    for step in plan.steps:
+        if step.planned_analysis_role != "primary":
+            continue
+        for requirement in step.model_requirements or ():
+            rationales.update(requirement.covariate_rationales)
+            temporal_roles.update(requirement.covariate_temporal_roles)
+    return rationales, temporal_roles
 
 
 def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str]]:
@@ -266,6 +344,7 @@ def patient_identity_available(context: ResearchContext) -> bool:
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
+        "signed_landmark_categorical_association",
         "signed_landmark_survival_suite",
         "time_varying_exposure_model",
         "landmark_analysis",
@@ -379,11 +458,36 @@ def _signed_temporal_result_projection(
 
     if (
         step.planned_analysis_role != "sensitivity"
-        or step.scientific_capability is not None
         or step.model_requirements
         or step.family_primary_result_requirement is not None
         or not step.sensitivity_spec_ids
     ):
+        return False
+    step_cohort_inputs = {
+        str(value)
+        for value in step.inputs
+        if is_closed_cohort_product_key(str(value))
+    }
+    signed_landmark_primaries = [
+        primary
+        for primary in plan.steps
+        if primary.planned_analysis_role == "primary"
+        and _method_head(primary) == "signed_landmark_categorical_association"
+        and any(
+            str(ref).startswith("scientific_runtime_contract:")
+            for ref in primary.icu_rule_refs
+        )
+        and sole_typed_cohort_input(primary) not in {None, ""}
+        and {str(sole_typed_cohort_input(primary))} == step_cohort_inputs
+        and bool(set(primary.expected_outputs) & set(step.inputs))
+    ]
+    if len(signed_landmark_primaries) == 1:
+        # These are refits or projections over the same already-filtered,
+        # digest-bound landmark cohort. This closes only their temporal
+        # eligibility; their own method/execution contracts remain subject to
+        # the separate sensitivity-capability gates.
+        return True
+    if step.scientific_capability is not None:
         return False
     candidates = [
         primary
@@ -927,6 +1031,38 @@ def _sensitivity_facts(
                         )
                     if required_inputs.issubset(step_inputs):
                         executed_spec_ids.add(spec_id)
+            if method == "signed_landmark_categorical_association":
+                signed_refs = {
+                    str(ref)
+                    for ref in step.icu_rule_refs
+                    if str(ref).startswith("scientific_runtime_contract:")
+                }
+                cohort_owners = [
+                    candidate
+                    for candidate in plan.steps
+                    if _method_head(candidate) == "signed_landmark_analysis_cohort"
+                    and signed_refs
+                    & {
+                        str(ref)
+                        for ref in candidate.icu_rule_refs
+                        if str(ref).startswith("scientific_runtime_contract:")
+                    }
+                ]
+                if len(cohort_owners) == 1:
+                    cohort_inputs = set(cohort_owners[0].inputs)
+                    for spec_id, spec in typed_specs.items():
+                        if spec.strategy != "landmark":
+                            continue
+                        required_inputs = {
+                            value
+                            for value in (
+                                spec.event_time_variable,
+                                spec.observation_duration_variable,
+                            )
+                            if value
+                        }
+                        if required_inputs and required_inputs.issubset(cohort_inputs):
+                            executed_spec_ids.add(spec_id)
         else:
             protocol_only.update(axes)
     replay_steps = [
@@ -1268,7 +1404,12 @@ _INDEPENDENT_REVIEW_FINDINGS = frozenset(
         "CLINICAL_DEFINITION_DATABASE_CONFORMANCE_NOT_ESTABLISHED",
     }
 )
-_RUNTIME_CAPABILITY_FINDINGS = frozenset({"TIME_VARYING_RUNTIME_UNAVAILABLE"})
+_RUNTIME_CAPABILITY_FINDINGS = frozenset(
+    {
+        "TIME_VARYING_RUNTIME_UNAVAILABLE",
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+    }
+)
 
 
 def remediation_route_for_finding(
@@ -1278,6 +1419,8 @@ def remediation_route_for_finding(
 
     if finding.requires_user_authorization:
         return "study_authority_change"
+    if finding.remediation_route != "unclassified":
+        return finding.remediation_route
     if finding.code in _RUNTIME_CAPABILITY_FINDINGS:
         return "runtime_capability"
     if finding.code in _EXTERNAL_EVIDENCE_FINDINGS:
@@ -1308,8 +1451,8 @@ def render_agent_plan_revision_contract(review: PlanScientificReview) -> str:
         f"- source_plan_sha256: {review.plan_sha256}",
         f"- source_context_sha256: {review.context_sha256}",
         "- scope: generate a fresh plan; never mutate or resume the reviewed plan.",
-        "- preserve the exact research question, endpoint, cohort, exposure, "
-        "outcome, time window, and user-authorized covariate authority.",
+        "- preserve the exact research question, cohort, exposure, all typed "
+        "outcomes, time window, and user-authorized covariate authority.",
         "- do not claim that this revision closes study-authority, external-"
         "evidence, or independent-review findings.",
         "- fix these plan-owned findings with executable typed steps:",
@@ -1367,12 +1510,22 @@ def build_plan_scientific_review(
     covariate_selection = (
         preferences.covariate_selection if preferences is not None else "planner_selectable"
     )
-    covariate_rationales = adjustment_authority.operational_rationales
-    covariate_temporal_roles = adjustment_authority.operational_temporal_roles
+    if covariate_selection == "exact":
+        covariate_rationales = adjustment_authority.operational_rationales
+        covariate_temporal_roles = adjustment_authority.operational_temporal_roles
+    else:
+        covariate_rationales, covariate_temporal_roles = (
+            model_covariate_plan_authority(plan)
+        )
     capability_assessment = assess_scientific_capability(
         analysis_type=plan.analysis_type,
         context=context,
         plan=plan,
+    )
+    expected_outcomes = requested_outcomes(context)
+    covered_outcomes = planned_model_outcomes(plan, context)
+    missing_model_outcomes = tuple(
+        outcome for outcome in expected_outcomes if outcome not in covered_outcomes
     )
     selected_design = (
         plan.design_selection.selected if plan.design_selection is not None else None
@@ -1602,6 +1755,32 @@ def build_plan_scientific_review(
                 authorization_question="Please confirm the intended clinical endpoint and time horizon in a new study version.",
             )
         )
+    if association_study(plan) and missing_model_outcomes:
+        findings.append(
+            PlanScientificFinding(
+                code="REQUESTED_OUTCOME_COVERAGE_INCOMPLETE",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The association plan does not provide an executable model "
+                    "contract for every outcome identified from the research "
+                    "question: "
+                    + ", ".join(missing_model_outcomes)
+                    + "."
+                ),
+                evidence_refs=[
+                    "research_context.json.cohort.outcome_columns",
+                    "analysis_plan.json.steps.model_requirements",
+                ],
+                remediation=(
+                    "Add one outcome-appropriate executable model requirement "
+                    "for each missing typed outcome, with its own estimand and "
+                    "uncertainty; do not silently reduce a multi-outcome question "
+                    "to the primary endpoint."
+                ),
+                remediation_route="agent_plan_revision",
+            )
+        )
     if clinical_definitions["independent_clinical_review_pending_contracts"]:
         findings.append(
             PlanScientificFinding(
@@ -1733,6 +1912,7 @@ def build_plan_scientific_review(
                 )
             )
         else:
+            selected_temporal_design_declared = selected_design is not None
             findings.append(
                 PlanScientificFinding(
                     code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
@@ -1740,22 +1920,45 @@ def build_plan_scientific_review(
                     dimension="icu_clinical_design",
                     message="Exposure is classified after ICU time zero, but no executable temporal estimator closes exposure opportunity and early events.",
                     evidence_refs=["research_context.json", "analysis_plan.json"],
-                    remediation="Create a new, user-authorized landmark/time-varying study version or keep this version descriptive; a protocol-only step cannot close the bias.",
-                    requires_user_authorization=True,
-                    authorization_question="Should a new study version use a prespecified landmark/time-varying design, or should the current question remain descriptive?",
+                    remediation=(
+                        "Compile the Agent-selected temporal design into an "
+                        "executable typed landmark or time-varying runtime without "
+                        "asking the researcher to choose the method again."
+                        if selected_temporal_design_declared
+                        else (
+                            "Revise the candidate plan so it selects an executable "
+                            "typed landmark or time-varying estimator. Method "
+                            "selection belongs to the Agent plan and remains "
+                            "subject to the later whole-plan review."
+                        )
+                    ),
+                    remediation_route=(
+                        "runtime_capability"
+                        if selected_temporal_design_declared
+                        else "agent_plan_revision"
+                    ),
                 )
             )
     if repeats and not patient_identity and not repeated_unit_design_closed(context, plan):
         findings.append(
             PlanScientificFinding(
                 code="REPEATED_STAY_IDENTITY_UNAVAILABLE",
-                severity="blocker",
+                severity="major",
                 dimension="icu_clinical_design",
-                message="The stay-level cohort does not expose patient identity, so repeated ICU stays cannot be ruled out or handled.",
+                message=(
+                    "The stay-level source does not expose patient identity, so "
+                    "repeated ICU stays cannot be ruled out. Development analysis "
+                    "may continue with this explicit limitation, but patient-level "
+                    "independence and paper authority remain unavailable."
+                ),
                 evidence_refs=["research_context.json.cohort.provenance"],
-                remediation="Materialize an authorized patient identifier for clustered/first-stay inference, or prespecify an executable non-readmission restriction using an owner-issued readmission indicator in a new study version.",
-                requires_user_authorization=True,
-                authorization_question="Should a new study version materialize patient identity for first-stay/clustered estimation, or use a prespecified non-readmission restriction when an owner-issued indicator is available?",
+                remediation=(
+                    "Have EasyICU materialize a verified patient-grouping coordinate "
+                    "when the source can provide one. Until then, retain all stays, "
+                    "state the dependence limitation, and keep paper authority off; "
+                    "an ICU-readmission flag must not be mislabeled as patient identity."
+                ),
+                remediation_route="runtime_capability",
             )
         )
     elif repeats and not repeated_unit_design_closed(context, plan):
@@ -1766,9 +1969,13 @@ def build_plan_scientific_review(
                 dimension="icu_clinical_design",
                 message="Patient identity exists, but no executable estimator addresses repeated ICU stays.",
                 evidence_refs=["research_context.json", "analysis_plan.json"],
-                remediation="Prespecify an executable one-stay, clustered, or mixed model in a new study version.",
-                requires_user_authorization=True,
-                authorization_question="Should the new study use one stay per patient or retain stays with clustered/mixed estimation?",
+                remediation=(
+                    "Revise the Agent plan so it selects and binds one executable "
+                    "one-stay, clustered, or mixed estimator. The researcher reviews "
+                    "the resulting plan as a whole and is not asked to choose the "
+                    "statistical implementation."
+                ),
+                remediation_route="agent_plan_revision",
             )
         )
     repeated_unit_table_one_tests = [
@@ -1821,6 +2028,7 @@ def build_plan_scientific_review(
             )
         )
     if association_study(plan) and not covariates:
+        planner_owned = covariate_selection != "exact"
         findings.append(
             PlanScientificFinding(
                 code="UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE",
@@ -1828,25 +2036,47 @@ def build_plan_scientific_review(
                 dimension="statistical_design",
                 message="The primary association is unadjusted and therefore supports descriptive, not independent-association, interpretation.",
                 evidence_refs=["analysis_plan.json"],
-                remediation="Ask the user to authorize a clinically justified, time-zero-available adjustment strategy or retain an explicitly descriptive claim ceiling.",
-                requires_user_authorization=True,
-                authorization_question="Keep the analysis descriptive, or authorize a new clinically timed adjustment strategy?",
+                remediation=(
+                    "Generate a clinically justified pre-time-zero adjustment "
+                    "proposal, or retain an explicitly descriptive claim ceiling."
+                    if planner_owned
+                    else "Retain the user's exact unadjusted choice and its descriptive claim ceiling, or create a new user-authorized study version."
+                ),
+                remediation_route=(
+                    "agent_plan_revision" if planner_owned else "study_authority_change"
+                ),
+                requires_user_authorization=not planner_owned,
+                authorization_question=(
+                    None
+                    if planner_owned
+                    else "Keep the analysis descriptive, or authorize a new clinically timed adjustment strategy?"
+                ),
             )
         )
-    if covariates and covariate_selection != "exact":
+    if covariates and covariate_selection != "exact" and (
+        set(covariate_rationales) != set(covariates)
+        or set(covariate_temporal_roles) != set(covariates)
+    ):
         findings.append(
             PlanScientificFinding(
-                code="ADJUSTMENT_SET_NOT_USER_CONFIRMED",
+                code="PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE",
                 severity="blocker",
                 dimension="statistical_design",
-                message="The Planner selected an exact covariate roster from candidates the user had not approved as a prespecified adjustment set.",
-                evidence_refs=["research_context.json.user_preferences", "analysis_plan.json.model_requirements"],
-                remediation="Show the proposed roster, clinical rationale, and pre-time-zero availability for explicit user approval in a new StudyContext revision.",
-                requires_user_authorization=True,
-                authorization_question="Do you approve this exact adjustment set and its clinical/time-zero rationale for a new study version?",
+                message=(
+                    "The Agent proposed an adjustment roster without supplying a "
+                    "complete confounding rationale and pre-time-zero role for "
+                    "every covariate."
+                ),
+                evidence_refs=["analysis_plan.json.model_requirements"],
+                remediation=(
+                    "Revise the candidate plan so the Agent justifies every "
+                    "selected covariate and proves its baseline timing; do not ask "
+                    "the researcher to fill these internal planning fields."
+                ),
+                remediation_route="agent_plan_revision",
             )
         )
-    elif covariates and (
+    elif covariates and covariate_selection == "exact" and (
         set(covariate_rationales) != set(covariates)
         or set(covariate_temporal_roles) != set(covariates)
     ):
@@ -1926,16 +2156,14 @@ def build_plan_scientific_review(
                     "analysis_plan.json.robustness_specs",
                 ],
                 remediation=(
-                    "Issue a new user-reviewed sensitivity authority for a "
-                    "task-supported denominator, missingness/measurement, "
-                    "outcome-definition, timing, or model axis. Descriptive "
-                    "studies must not invent an effect-estimate replay grid."
+                    "Have the Agent plan prespecify task-supported executable "
+                    "denominator, missingness/measurement, outcome-definition, "
+                    "timing, or model sensitivities. The researcher reviews the "
+                    "complete plan rather than selecting internal sensitivity "
+                    "implementations. Descriptive studies must not invent an "
+                    "effect-estimate replay grid."
                 ),
-                requires_user_authorization=True,
-                authorization_question=(
-                    "Do you want to prespecify executable, study-family-appropriate "
-                    "sensitivity analyses in a new study version?"
-                ),
+                remediation_route="agent_plan_revision",
             )
         )
     elif robustness_readiness["status"] == "too_narrow":
@@ -2113,6 +2341,9 @@ def build_plan_scientific_review(
             ],
             "repeated_unit_design_executable": repeated_unit_design_closed(context, plan),
             "primary_covariates": list(covariates),
+            "requested_outcomes": list(expected_outcomes),
+            "model_covered_outcomes": list(covered_outcomes),
+            "missing_model_outcomes": list(missing_model_outcomes),
             "covariate_selection": covariate_selection,
             "covariate_rationales": covariate_rationales,
             "covariate_temporal_roles": covariate_temporal_roles,
@@ -2172,6 +2403,8 @@ __all__ = [
     "build_plan_scientific_review",
     "executable_scientific_step",
     "model_covariates",
+    "planned_model_outcomes",
+    "requested_outcomes",
     "method_source_facts",
     "patient_identity_available",
     "post_baseline_exposure",

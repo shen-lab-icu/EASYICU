@@ -122,6 +122,21 @@ _SOFA_COMP = ConceptHint(
     ),
 )
 
+_KDIGO_STAGE = ConceptHint(
+    role=VariableRole.ORDINAL_SCORE,
+    kind=VariableKind.ORDINAL,
+    valid_range=(0.0, 3.0),
+    is_ordinal=True,
+    ordinal_levels=(0, 1, 2, 3),
+    aggregation_default=AggregationRule.MAX_LAST,
+    pitfalls=(
+        "KDIGO AKI stage is ordinal; do not average stages. Report peak/worst "
+        "stage within the prespecified window.",
+        "Creatinine-based KDIGO staging is sensitive to baseline creatinine "
+        "and measurement frequency; audit missingness and baseline assumptions.",
+    ),
+)
+
 
 _CONCEPT_HINTS: Dict[str, ConceptHint] = {
     # --- demographics
@@ -261,30 +276,17 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
             "GCS is ordinal; do not take its mean. Report worst (min) or representative (last/first) GCS.",
         ),
     ),
-    "kdigo_stage": ConceptHint(
-        role=VariableRole.ORDINAL_SCORE,
-        kind=VariableKind.ORDINAL,
-        valid_range=(0.0, 3.0),
-        is_ordinal=True,
-        ordinal_levels=(0, 1, 2, 3),
-        aggregation_default=AggregationRule.MAX_LAST,
-        pitfalls=(
-            "KDIGO AKI stage is ordinal; do not average stages. Report peak/worst stage within the prespecified window.",
-            "Creatinine-based KDIGO staging is sensitive to baseline creatinine and measurement frequency; audit missingness and baseline assumptions.",
-        ),
-    ),
-    "kdigo": ConceptHint(
-        role=VariableRole.ORDINAL_SCORE,
-        kind=VariableKind.ORDINAL,
-        valid_range=(0.0, 3.0),
-        is_ordinal=True,
-        ordinal_levels=(0, 1, 2, 3),
-        aggregation_default=AggregationRule.MAX_LAST,
-        pitfalls=(
-            "KDIGO AKI stage is ordinal; do not average stages. Report peak/worst stage within the prespecified window.",
-            "Creatinine-based KDIGO staging is sensitive to baseline creatinine and measurement frequency; audit missingness and baseline assumptions.",
-        ),
-    ),
+    "kdigo_stage": _KDIGO_STAGE,
+    "kdigo": _KDIGO_STAGE,
+    # Canonical wide-export spellings. These are the actual KDIGO stage values,
+    # not arbitrary columns inferred from a benchmark question. Publishing the
+    # same closed domain lets a zero-row metadata-only planning catalog retain
+    # the clinical contract that a patient-row cohort would otherwise reveal
+    # only by observation.
+    "aki_stage": _KDIGO_STAGE,
+    "aki_stage_creat": _KDIGO_STAGE,
+    "aki_stage_uo": _KDIGO_STAGE,
+    "aki_stage_rrt": _KDIGO_STAGE,
     # --- SOFA components and totals (both sofa and sofa2 conventions)
     "sofa_resp": _SOFA_COMP,
     "sofa_coag": _SOFA_COMP,
@@ -381,6 +383,14 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
             "Vasopressor exposure is confounded by indication; association models should avoid causal treatment-effect language.",
         ),
     ),
+    "vaso_ind": ConceptHint(
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.BINARY,
+        aggregation_default=AggregationRule.MAX_LAST,
+        pitfalls=(
+            "A first-window vasopressor indicator is concurrent treatment/severity information, not an automatically eligible baseline confounder.",
+        ),
+    ),
     "norepi_equiv": ConceptHint(
         role=VariableRole.INTERVENTION,
         kind=VariableKind.CONTINUOUS,
@@ -415,6 +425,14 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         role=VariableRole.INTERVENTION,
         kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.MAX_LAST,
+    ),
+    "mech_vent": ConceptHint(
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.BINARY,
+        aggregation_default=AggregationRule.MAX_LAST,
+        pitfalls=(
+            "Mechanical ventilation observed in the exposure window may be concurrent treatment or a mediator; do not auto-adjust without pre-time-zero authority.",
+        ),
     ),
     "rrt": ConceptHint(
         role=VariableRole.INTERVENTION,

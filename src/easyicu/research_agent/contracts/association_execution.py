@@ -45,6 +45,7 @@ import math
 from typing import Any, Mapping, Optional, Sequence
 
 from .cohort_product_keys import sole_typed_cohort_input
+from .capability_ids import LANDMARK_CATEGORICAL_ANALYSIS_KIND
 from .model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     ADJUSTED_ASSOCIATION_OUTPUT,
@@ -220,7 +221,11 @@ def association_estimator_kind(requirement: Any) -> str:
     return association_estimator_support(requirement).runtime_kind
 
 
-def association_execution_verdict(step: Any) -> OwnershipVerdict:
+def _association_execution_verdict(
+    step: Any,
+    *,
+    allowed_methods: Sequence[str],
+) -> OwnershipVerdict:
     """Own only a single, completely declared adjusted-association model.
 
     Every clause is a thing the host would otherwise have to decide:
@@ -254,12 +259,15 @@ def association_execution_verdict(step: Any) -> OwnershipVerdict:
     method = normalise_model_contract_token(
         str(getattr(step, "method", "") or "").lower().split(" with ", 1)[0]
     )
-    if method != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD:
+    normalized_allowed_methods = tuple(
+        normalise_model_contract_token(value) for value in allowed_methods
+    )
+    if method not in normalized_allowed_methods:
         return OwnershipVerdict.wrong_shape(
             ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
             reason=(
-                f"step method {method!r} is not "
-                f"{PLANNED_MODEL_REQUIREMENTS_STEP_METHOD!r}"
+                f"step method {method!r} is not one of the host-owned "
+                f"adjusted-association methods {normalized_allowed_methods!r}"
             ),
         )
     declared_outputs = [
@@ -341,6 +349,26 @@ def association_execution_verdict(step: Any) -> OwnershipVerdict:
     return OwnershipVerdict.claim(
         ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
         reason="a single, completely declared adjusted-association model",
+    )
+
+
+def association_execution_verdict(step: Any) -> OwnershipVerdict:
+    """Own the generic adjusted-association method and no signed variant."""
+
+    return _association_execution_verdict(
+        step,
+        allowed_methods=(PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,),
+    )
+
+
+def landmark_categorical_association_execution_verdict(
+    step: Any,
+) -> OwnershipVerdict:
+    """Own the signed fixed-landmark wrapper over the same exact model contract."""
+
+    return _association_execution_verdict(
+        step,
+        allowed_methods=(LANDMARK_CATEGORICAL_ANALYSIS_KIND,),
     )
 
 
@@ -427,7 +455,18 @@ def association_binary_sensitivity_plan_verdict(
             reason_code="association_binary_sensitivity_parent_not_preceding",
             reason="the adjusted-association parent must precede its sensitivity child",
         )
-    parent_verdict = association_execution_verdict(parent)
+    # A current-case runtime may replace the generic primary method with its
+    # signed landmark adapter while retaining the same closed model requirement
+    # and output product.  Sensitivity children inherit that exact product, so
+    # validate both host-owned parent spellings here without widening the
+    # generic adjusted-association executor's own claim predicate.
+    parent_verdict = _association_execution_verdict(
+        parent,
+        allowed_methods=(
+            PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
+            LANDMARK_CATEGORICAL_ANALYSIS_KIND,
+        ),
+    )
     requirement = sole_primary_model_requirement(parent)
     if (
         getattr(parent, "planned_analysis_role", None) != "primary"
@@ -579,5 +618,6 @@ __all__ = [
     "association_estimator_kind",
     "association_estimator_support",
     "association_execution_verdict",
+    "landmark_categorical_association_execution_verdict",
     "sole_primary_model_requirement",
 ]

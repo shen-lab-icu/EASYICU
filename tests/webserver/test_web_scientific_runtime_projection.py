@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
+    LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
@@ -20,6 +21,7 @@ from easyicu.research_agent.planning.sensitivity_authority import (
 )
 from easyicu.webserver.scientific_runtime_projection import (
     WebScientificRuntimeProjectionError,
+    compile_web_scientific_runtime_projection,
     compile_landmark_spline_runtime_projection,
 )
 
@@ -68,6 +70,55 @@ def _universe(tmp_path):
         }
     ).to_parquet(path, index=False)
     return path
+
+
+def test_web_routes_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
+    universe = tmp_path / "kdigo_universe.parquet"
+    pd.DataFrame(
+        {
+            "aki_stage_max": pd.Series([0, 1], dtype="int64"),
+            "death": pd.Series([0, 1], dtype="int64"),
+            "death_time_hours": [float("nan"), 72.0],
+            "hospital_followup_time_hours": [96.0, 72.0],
+            "age": [50.0, 70.0],
+            "sex": ["F", "M"],
+        }
+    ).to_parquet(universe, index=False)
+    landmark = PrespecifiedSensitivitySpec.model_validate(
+        {
+            "spec_id": "landmark_24h",
+            "axis": "timing",
+            "strategy": "landmark",
+            "landmark_hours": 24,
+            "require_alive_at_landmark": True,
+            "exclude_negative_event_times": True,
+            "event_time_variable": "death_time_hours",
+            "observation_duration_variable": "hospital_followup_time_hours",
+            "observation_duration_unit": "hours",
+        }
+    )
+
+    projection = compile_web_scientific_runtime_projection(
+        study={"covariate_selection": "exact"},
+        sensitivity_specs=(landmark,),
+        primary_exposure="aki_stage_max",
+        primary_exposure_source="aki_stage",
+        target_outcome="death",
+        declared_covariates=("age", "sex"),
+        covariate_operationalizations={},
+        target_is_event_status=True,
+        universe_path=universe,
+        scientific_configuration_sha256="f" * 64,
+    )
+
+    assert projection is not None
+    authority = load_current_case_scientific_runtime_authority(
+        projection.authority
+    )
+    assert isinstance(authority, LandmarkCategoricalAssociationRuntimeAuthority)
+    assert authority.exposure_levels == ("0", "1", "2", "3")
+    assert authority.exposure_reference_level == "0"
+    assert authority.primary_contrast_level == "3"
 
 
 @pytest.mark.parametrize("duration_unit", ["days", "hours"])

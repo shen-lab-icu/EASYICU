@@ -1,9 +1,9 @@
-"""Compile host-rendered plan choices into typed StudyContext updates.
+"""Compile reviewed plan decisions into typed StudyContext updates.
 
-The browser must never turn a choice button into a synthetic paragraph for the
-LLM to reinterpret.  This owner accepts only known review codes and option ids,
-derives executable coordinates from the reviewed plan, and returns the exact
-StudyContext patch that the host may persist after a human click.
+The browser must never turn a UI action into a synthetic paragraph for the LLM
+to reinterpret.  This owner compiles either a genuine whole-plan review action
+or a structured Agent-plan decision.  Internal method choices remain
+system-owned and never become extra instructions the researcher must write.
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Sequence
 
+from easyicu.research_agent.icu_rules import classify_variable
+from easyicu.research_agent.schema import AggregationRule
 from easyicu.webserver.study_scientific_configuration import ScientificConfiguration
 
 
@@ -33,14 +35,32 @@ class CompiledPlanDecision:
     next_action: str
 
 
+@dataclass(frozen=True)
+class CompiledAgentPlanConfiguration:
+    """Typed StudyContext projection of decisions already made by the Agent."""
+
+    patch: Dict[str, Any]
+    runtime_finding_codes: tuple[str, ...]
+
+
+_AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
+    {
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+    }
+)
+
+
 _AGGREGATION_SUFFIXES = ("_first", "_last", "_min", "_max", "_mean", "_sum")
 _DISPLAY_LABELS_ZH = {
     "death": "院内死亡",
+    "aki_stage": "KDIGO AKI 分级",
     "lact": "最高乳酸水平",
     "sep3_sofa1": "Sepsis-3 状态",
 }
 _DISPLAY_LABELS_EN = {
     "death": "in-hospital mortality",
+    "aki_stage": "KDIGO AKI stage",
     "lact": "maximum lactate level",
     "sep3_sofa1": "Sepsis-3 status",
 }
@@ -58,6 +78,40 @@ def _source_concept(materialized: Any, *, field: str) -> str:
         if value.endswith(suffix) and len(value) > len(suffix):
             return value[: -len(suffix)]
     return value
+
+
+def _source_coordinate(materialized: Any, *, field: str) -> tuple[str, str | None]:
+    """Return a source concept and only an explicitly encoded aggregation."""
+
+    value = str(materialized or "").strip()
+    concept = _source_concept(value, field=field)
+    for suffix in _AGGREGATION_SUFFIXES:
+        if value.endswith(suffix) and len(value) > len(suffix):
+            return concept, suffix[1:]
+    return concept, None
+
+
+def _agent_primary_source_coordinate(
+    materialized: Any, *, fixed_window: bool
+) -> tuple[str, str | None]:
+    """Resolve one Agent-selected exposure through case-neutral ICU policy.
+
+    A structured Plan may name the row-level concept while selecting a fixed
+    observation window.  When the concept owner declares ``max_or_last`` as
+    its default family, the existing acquisition policy prefers ``max``.  The
+    compiler makes that same deterministic choice explicit in StudyContext.
+    Other ambiguous families remain unset and fail closed at materialization.
+    """
+
+    concept, aggregation = _source_coordinate(
+        materialized, field="primary exposure"
+    )
+    if aggregation is not None or not fixed_window:
+        return concept, aggregation
+    hint = classify_variable(concept, "float64")
+    if hint.aggregation_default == AggregationRule.MAX_LAST:
+        return concept, "max"
+    return concept, None
 
 
 def _selected_design(plan: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -174,8 +228,43 @@ def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
     }
 
 
+def _fixed_24h_landmark_candidate(
+    plan: Mapping[str, Any],
+    study: Mapping[str, Any] | None = None,
+) -> bool:
+    """Recognize a typed fixed-window landmark design without naming a concept.
+
+    The original Web decision path special-cased ``lact_max`` even though the
+    Research Agent's selected-design contract is shared by every fixed 0-24 h
+    exposure.  Require both the selected landmark design and the StudyContext's
+    sealed 24-hour window before offering the executable landmark choice.
+    """
+
+    selected = _selected_design(plan)
+    coordinates = _timing_coordinates(plan)
+    if (
+        coordinates["exposure"] == "lact"
+        and coordinates["exposure_materialized"] == "lact_max"
+    ):
+        return True
+    if str(selected.get("design_id") or "").strip() != (
+        "landmark_adjusted_association"
+    ):
+        return False
+    window = study.get("time_window") if isinstance(study, Mapping) else None
+    if not isinstance(window, Mapping):
+        return False
+    try:
+        hours = float(window.get("hours"))
+    except (TypeError, ValueError):
+        return False
+    return hours == 24.0
+
+
 def plan_decision_context(
-    plan: Mapping[str, Any], decision_code: str
+    plan: Mapping[str, Any],
+    decision_code: str,
+    study: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Project plan-bound coordinates needed to render one host decision."""
 
@@ -189,6 +278,7 @@ def plan_decision_context(
     fixed_24h_lactate = (
         exposure == "lact" and coordinates["exposure_materialized"] == "lact_max"
     )
+    fixed_24h_landmark = _fixed_24h_landmark_candidate(plan, study)
     return {
         **coordinates,
         "exposure_label_en": _DISPLAY_LABELS_EN.get(exposure, exposure),
@@ -200,9 +290,221 @@ def plan_decision_context(
         "timing_profile": (
             "fixed_24h_lactate"
             if fixed_24h_lactate
-            else "unspecified_post_baseline"
+            else (
+                "fixed_24h_landmark"
+                if fixed_24h_landmark
+                else "unspecified_post_baseline"
+            )
         ),
     }
+
+
+def compile_agent_plan_configuration(
+    *,
+    study: Mapping[str, Any],
+    agent_plan: Mapping[str, Any],
+    runtime_finding_codes: Sequence[str],
+    patient_cluster_available: bool,
+) -> CompiledAgentPlanConfiguration:
+    """Compile structured Agent decisions into executable study coordinates.
+
+    This is not a user-choice shortcut.  It accepts only runtime gaps published
+    by the scientific reviewer, reads only typed fields from the immutable
+    Agent plan, and leaves the researcher's natural-language question intact.
+    Unsupported or incomplete coordinates fail closed instead of being guessed
+    from prose or repaired with a more detailed prompt.
+    """
+
+    codes = tuple(
+        sorted(
+            {
+                str(value or "").strip()
+                for value in runtime_finding_codes
+                if str(value or "").strip()
+            }
+        )
+    )
+    if not codes:
+        raise PlanDecisionError(
+            "agent_plan_runtime_finding_required",
+            "The reviewed plan has no runtime finding owned by this compiler.",
+        )
+    unsupported = sorted(set(codes) - _AGENT_COMPILED_RUNTIME_FINDINGS)
+    if unsupported:
+        raise PlanDecisionError(
+            "agent_plan_runtime_finding_unsupported",
+            "The reviewed plan requires a runtime owner that this compiler does not provide.",
+            details={"finding_codes": unsupported},
+        )
+    if (
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes
+        and not patient_cluster_available
+    ):
+        raise PlanDecisionError(
+            "agent_plan_patient_grouping_unavailable",
+            "The selected all-stay analysis cannot be compiled without source-owned patient grouping.",
+        )
+
+    selected = _selected_design(agent_plan)
+    requirement = _primary_requirement(agent_plan)
+    coordinates = _timing_coordinates(agent_plan)
+    configuration = ScientificConfiguration.inspect(study)
+    covariates = proposed_adjustment_set(agent_plan)
+    if not covariates:
+        raise PlanDecisionError(
+            "agent_plan_adjustment_set_missing",
+            "The Agent plan does not declare an exact primary adjustment set.",
+        )
+    rationales = requirement.get("covariate_rationales")
+    temporal_roles = requirement.get("covariate_temporal_roles")
+    if not isinstance(rationales, Mapping) or set(rationales) != set(covariates):
+        raise PlanDecisionError(
+            "agent_plan_covariate_rationales_incomplete",
+            "The Agent plan must justify every selected primary covariate.",
+        )
+    if not isinstance(temporal_roles, Mapping) or set(temporal_roles) != set(
+        covariates
+    ):
+        raise PlanDecisionError(
+            "agent_plan_covariate_temporal_roles_incomplete",
+            "The Agent plan must classify the temporal role of every selected covariate.",
+        )
+
+    fixed_window = (
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in codes
+        and _fixed_24h_landmark_candidate(agent_plan, study)
+    )
+    exposure, aggregation = _agent_primary_source_coordinate(
+        coordinates["exposure_materialized"], fixed_window=fixed_window
+    )
+    outcome, _outcome_aggregation = _source_coordinate(
+        coordinates["outcome_materialized"], field="outcome"
+    )
+    execution = dict(study.get("execution_concepts") or {})
+    execution.update(
+        {
+            "outcome": outcome,
+            "primary_exposure": exposure,
+            "covariates": list(covariates),
+        }
+    )
+    if aggregation is not None:
+        execution["primary_exposure_aggregation"] = aggregation
+    else:
+        execution.pop("primary_exposure_aggregation", None)
+
+    patch: Dict[str, Any] = {
+        "execution_concepts": execution,
+        "covariates": list(covariates),
+        "covariate_selection": "exact",
+        "covariate_authority": "agent_plan",
+        "covariate_rationales": {
+            value: str(rationales[value]).strip() for value in covariates
+        },
+        "covariate_temporal_roles": {
+            value: str(temporal_roles[value]).strip() for value in covariates
+        },
+        "covariate_operationalizations": {value: value for value in covariates},
+        "export_format": "parquet",
+    }
+    confirmations = configuration.merge_confirmations(
+        feature_time_window=True,
+        extraction_completed=True,
+        export_format=True,
+        plan_adjustment_set_confirmed=False,
+        agent_plan_configuration_compiled=True,
+    )
+
+    if "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in codes:
+        if not _fixed_24h_landmark_candidate(agent_plan, study):
+            raise PlanDecisionError(
+                "agent_plan_landmark_not_compilable",
+                "The Agent-selected temporal design is not a closed 24-hour landmark contract.",
+                details={
+                    "design_id": str(selected.get("design_id") or ""),
+                    "time_window_hours": (
+                        (study.get("time_window") or {}).get("hours")
+                        if isinstance(study.get("time_window"), Mapping)
+                        else None
+                    ),
+                },
+            )
+        sensitivity = {
+            "spec_id": "agent_plan_landmark_24h",
+            "axis": "timing",
+            "strategy": "landmark",
+            "execution_variables": [
+                coordinates["event_time"],
+                coordinates["observation_duration"],
+            ],
+            "landmark_hours": 24,
+            "require_alive_at_landmark": True,
+            "exclude_negative_event_times": True,
+            "event_time_variable": coordinates["event_time"],
+            "observation_duration_variable": coordinates["observation_duration"],
+            "observation_duration_unit": coordinates["observation_duration_unit"],
+        }
+        patch["sensitivity_specs"] = configuration.replace_sensitivity(
+            axis="timing", replacement=sensitivity
+        )
+        confirmations.update(
+            {
+                "plan_timing_landmark_24h": True,
+                "plan_timing_descriptive_only": False,
+                "plan_timing_time_varying": False,
+            }
+        )
+
+    analysis_design: Dict[str, Any] = {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "model_based",
+    }
+    if "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes:
+        analysis_design.update(
+            {
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+            }
+        )
+        cohort = dict(study.get("cohort") or {})
+        cohort["exclude_readmissions"] = False
+        patch["cohort"] = cohort
+        patch["sensitivity_specs"] = ScientificConfiguration.inspect(
+            {**dict(study), **patch}
+        ).replace_sensitivity(axis="repeated_stays", replacement=None)
+        confirmations.update(
+            {
+                "plan_repeated_stays_clustered": True,
+                "plan_repeated_stays_first": False,
+            }
+        )
+    patch["analysis_design"] = analysis_design
+    patch["confirmations"] = confirmations
+    return CompiledAgentPlanConfiguration(
+        patch=patch,
+        runtime_finding_codes=codes,
+    )
+
+
+def agent_plan_configuration_available(
+    *,
+    study: Mapping[str, Any],
+    agent_plan: Mapping[str, Any],
+    runtime_finding_codes: Sequence[str],
+) -> bool:
+    """Return structural availability; the mutation path rechecks source facts."""
+
+    try:
+        compile_agent_plan_configuration(
+            study=study,
+            agent_plan=agent_plan,
+            runtime_finding_codes=runtime_finding_codes,
+            patient_cluster_available=True,
+        )
+    except PlanDecisionError:
+        return False
+    return True
 
 
 def compile_plan_decision(
@@ -362,6 +664,7 @@ def compile_plan_decision(
             patch={
                 "covariates": covariates,
                 "covariate_selection": "exact",
+                "covariate_authority": "user",
                 "covariate_rationales": rationales,
                 "covariate_temporal_roles": {
                     covariate: "baseline_static" for covariate in covariates
@@ -395,18 +698,22 @@ def compile_plan_decision(
     fixed_24h_lactate = (
         exposure == "lact" and coordinates["exposure_materialized"] == "lact_max"
     )
-    execution = {
-        "outcome": outcome,
-        "primary_exposure": exposure,
-        "primary_exposure_aggregation": "max",
-    }
+    fixed_24h_landmark = _fixed_24h_landmark_candidate(agent_plan, study)
+    execution = dict(study.get("execution_concepts") or {})
+    execution.update(
+        {
+            "outcome": outcome,
+            "primary_exposure": exposure,
+            "primary_exposure_aggregation": "max",
+        }
+    )
 
     if option == "landmark_24h":
-        if not fixed_24h_lactate:
+        if not fixed_24h_landmark:
             raise PlanDecisionError(
                 "plan_decision_option_not_applicable",
-                "A 24-hour landmark is only available when the reviewed plan "
-                "binds the fixed 0-24-hour lactate maximum.",
+                "A 24-hour landmark requires a selected landmark association "
+                "design and a StudyContext-bound 24-hour exposure window.",
                 details={
                     "decision_code": code,
                     "option_id": option,
@@ -460,18 +767,33 @@ def compile_plan_decision(
         return CompiledPlanDecision(
             patch={
                 "question": (
-                    f"在入 ICU 后 24 小时仍存活的 ICU stay 中，评估入 ICU 后 "
-                    f"0–24 小时{exposure_zh}与自第 24 小时起至出院的{outcome_zh}之间的关系。"
-                ),
+                    f"{str(study.get('question') or '').strip()} "
+                    "主要关联估计采用预先设定的 24 小时 landmark，"
+                    "限定于该时点仍存活的 ICU stay。"
+                ).strip(),
                 "purpose": (
-                    f"采用预先设定的 24 小时 landmark 设计，评估 0–24 小时"
-                    f"{exposure_zh}与 landmark 后{outcome_zh}之间的调整后观察性关联。"
-                ),
+                    f"{str(study.get('purpose') or '').strip()} "
+                    "主要关联估计从第 24 小时开始随访，以对齐暴露判定机会。"
+                ).strip(),
                 "cohort": cohort,
-                "outcome": f"{outcome_zh}（第 24 小时起至出院）",
-                "primary_exposure": f"入 ICU 后 0–24 小时{exposure_zh}",
+                "outcome": str(
+                    study.get("outcome")
+                    or (
+                        f"{outcome_zh}（第 24 小时起至出院）"
+                        if fixed_24h_lactate
+                        else outcome_zh
+                    )
+                ),
+                "primary_exposure": str(
+                    study.get("primary_exposure")
+                    or f"入 ICU 后 0–24 小时{exposure_zh}"
+                ),
                 "execution_concepts": execution,
-                "analysis_goal": "24 小时 landmark 后的调整关联分析",
+                "analysis_goal": (
+                    f"{str(study.get('analysis_goal') or '').strip()} "
+                    "主要调整关联采用 24 小时 landmark 并排除 landmark 前死亡；"
+                    "结果适用于入 ICU 后 24 小时仍存活者。"
+                ).strip(),
                 # The timing choice closes an observational association
                 # design, not just its prose description.  Persist the typed
                 # launch contract atomically so the next Planner run can
@@ -528,6 +850,7 @@ def compile_plan_decision(
                 },
                 "covariates": [],
                 "covariate_selection": "exact",
+                "covariate_authority": "user",
                 "covariate_rationales": {},
                 "covariate_temporal_roles": {},
                 "covariate_operationalizations": {},
@@ -590,8 +913,11 @@ def compile_plan_decision(
 
 
 __all__ = [
+    "CompiledAgentPlanConfiguration",
     "CompiledPlanDecision",
     "PlanDecisionError",
+    "agent_plan_configuration_available",
+    "compile_agent_plan_configuration",
     "compile_plan_decision",
     "decision_is_resolved",
     "pending_authorization_questions",

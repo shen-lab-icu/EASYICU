@@ -2196,6 +2196,44 @@ def test_exposure_used_only_as_eligibility_does_not_become_comparator(ra):
     assert decision.disposition == "exclude"
 
 
+def test_exposure_used_as_population_label_does_not_become_comparator(ra):
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        screen_source_backed_direct_comparator,
+    )
+
+    record = CitationRecord(
+        key="gnri_in_aki_population",
+        title=(
+            "The relationship between Geriatric Nutritional Risk Index and "
+            "in-hospital mortality in critically ill patients with Acute "
+            "Kidney Injury"
+        ),
+        year="2024",
+        relevance=(
+            "Study-design excerpt: GNRI scores were associated with in-hospital "
+            "mortality. Patients who were diagnosed with acute kidney injury "
+            "were included. The study investigated the impact of GNRI on "
+            "mortality in critically ill patients with acute kidney injury."
+        ),
+        publication_types=["Observational Study"],
+    )
+
+    decision = screen_source_backed_direct_comparator(
+        exposure="acute kidney injury",
+        outcome="hospital mortality",
+        adult_required=False,
+        record=record,
+        source="pubmed",
+        query="focused query",
+    )
+
+    assert decision.population_match is True
+    assert decision.outcome_match is True
+    assert decision.exposure_match is False
+    assert decision.disposition == "exclude"
+
+
 def test_icu_transfer_outcome_does_not_make_ward_cohort_an_icu_comparator(ra):
     from easyicu.research_agent.literature import (
         CitationRecord,

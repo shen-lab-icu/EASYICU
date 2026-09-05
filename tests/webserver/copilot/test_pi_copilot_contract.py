@@ -759,7 +759,7 @@ def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return current
 
 
-def test_new_research_session_allows_planning_but_blocks_data_tools_until_confirmation(
+def test_bound_project_source_defaults_to_study_required_agent_preparation(
     tmp_path: Path,
     study_state: dict[str, Any],
 ) -> None:
@@ -772,8 +772,10 @@ def test_new_research_session_allows_planning_but_blocks_data_tools_until_confir
     session_id = created["session"]["session_id"]
     authorization = created["session"]["data_source_authorization"]
 
-    assert authorization["status"] == "pending"
-    assert authorization["reason"] == "project_source_confirmation_required"
+    assert authorization["status"] == "confirmed"
+    assert authorization["reason"] is None
+    assert authorization["confirmation_mode"] == "agent_default_study_required"
+    assert authorization["extraction_scope"] == "study_required"
     assert authorization["source"]["database"] == "mimiciv"
     assert authorization["source"]["label"] == "MIMIC-IV"
     assert authorization["source"]["reference_release"] == "3.1"
@@ -803,28 +805,45 @@ def test_new_research_session_allows_planning_but_blocks_data_tools_until_confir
         "session.prompt",
     ]
     context = gateway.tool_contexts[-1]
-    assert context.session.data_source_authorization.status == "pending"
+    assert context.session.data_source_authorization.status == "confirmed"
+    assert (
+        context.session.data_source_authorization.confirmation_mode
+        == "agent_default_study_required"
+    )
 
     listed = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
     assert listed["status"] == "ok"
-    blocked = tool_module.execute_tool("easyicu_review_cohort", {}, context)
-    assert blocked["status"] == "blocked"
-    assert blocked["code"] == "pi_session_data_source_confirmation_required"
 
-    confirmed = service.authorize_data_source(
-        session_id,
-        project_id="project-data-consent",
-        action="reuse_project_source",
+
+def test_legacy_pending_project_source_is_reconciled_without_user_choice(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json", gateway=FakeGateway()
     )
-    assert confirmed["session"]["data_source_authorization"]["status"] == "confirmed"
-    assert (
-        confirmed["session"]["data_source_authorization"]["confirmation_mode"]
-        == "reuse_project_source"
+    created = service.create_session(
+        project_id="project-legacy-data-choice",
+        external_llm_opt_in=True,
+    )["session"]
+    record = service._get_record(created["session_id"])
+    source = record.data_source_authorization.source
+    assert source is not None
+    record.data_source_authorization = PiSessionDataSourceAuthorization(
+        status="pending",
+        reason="project_source_confirmation_required",
+        confirmation_mode=None,
+        source=source,
     )
-    assert (
-        confirmed["session"]["data_source_authorization"]["extraction_scope"]
-        == "reuse_prepared_full"
-    )
+    service._save_record(record)
+
+    restored = service.get_session(
+        created["session_id"], project_id="project-legacy-data-choice"
+    )["session"]["data_source_authorization"]
+
+    assert restored["status"] == "confirmed"
+    assert restored["confirmation_mode"] == "agent_default_study_required"
+    assert restored["extraction_scope"] == "study_required"
 
 
 def test_exact_registered_path_in_message_binds_source_before_provider(
@@ -900,7 +919,7 @@ def test_blank_project_first_turn_gets_typed_entry_clarification(
     submitted = service.send_message(
         created["session"]["session_id"],
         project_id="project-entry-routing",
-        message="液体平衡会不会影响撤机？",
+        message="我想研究成人 ICU 的液体平衡",
     )
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
@@ -1335,7 +1354,7 @@ def test_capacity_rejected_regenerate_does_not_restore_study_context(
     assert session_id not in service._busy_sessions
 
 
-def test_explicit_prepared_source_choice_confirms_same_session_after_binding(
+def test_explicit_prepared_source_reference_preserves_agent_default_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     study_state: dict[str, Any],
@@ -1383,12 +1402,12 @@ def test_explicit_prepared_source_choice_confirms_same_session_after_binding(
     )["session"]
     assert session["data_source_authorization"]["status"] == "confirmed"
     assert session["data_source_authorization"]["confirmation_mode"] == (
-        "reuse_project_source"
+        "agent_default_study_required"
     )
     assert session["binding"]["study_revision"] == study_state["revision"]
 
 
-def test_prepared_local_source_choice_unlocks_the_same_provider_turn(
+def test_prepared_project_source_is_available_in_the_same_provider_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     study_state: dict[str, Any],
@@ -1433,11 +1452,11 @@ def test_prepared_local_source_choice_unlocks_the_same_provider_turn(
     turn_context = gateway.tool_contexts[-1]
     assert turn_context.session.data_source_authorization.status == "confirmed"
     assert turn_context.session.data_source_authorization.confirmation_mode == (
-        "reuse_project_source"
+        "agent_default_study_required"
     )
 
 
-def test_research_question_alone_does_not_confirm_registered_source(
+def test_bound_project_source_needs_no_second_confirmation_in_question_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     study_state: dict[str, Any],
@@ -1481,7 +1500,10 @@ def test_research_question_alone_does_not_confirm_registered_source(
         created["session"]["session_id"],
         project_id="project-source-mention-only",
     )["session"]
-    assert session["data_source_authorization"]["status"] == "pending"
+    authorization = session["data_source_authorization"]
+    assert authorization["status"] == "confirmed"
+    assert authorization["confirmation_mode"] == "agent_default_study_required"
+    assert authorization["extraction_scope"] == "study_required"
 
 
 def test_local_folder_selection_stays_locked_until_study_source_is_saved(
@@ -4461,6 +4483,30 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
     )
     assert explicit_noncausal_goal["code"] == "study_context_updated"
 
+    explicit_output_contract = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "analysis_goal": (
+                "纳入 Table 1、按分期展示的结局图和有序趋势审计；"
+                "不将 KDIGO 分级按连续变量总结。"
+            ),
+            "primary_exposure": (
+                "入 ICU 后前24小时 KDIGO AKI 分级（有序分类变量）"
+            ),
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "把 KDIGO 作为有序分类变量，不用均值或标准差把它当连续变量。"
+                "计划应包含 Table 1、分期结局图和有序趋势审计。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+    assert explicit_output_contract["code"] == "study_context_updated"
+    assert writes[-1]["analysis_goal"].startswith("纳入 Table 1")
+    assert writes[-1]["primary_exposure"].startswith("入 ICU 后前24小时")
+
     synchronized_wording = tool_module.execute_tool(
         "easyicu_update_study_context",
         {"analysis_goal": "描述患病率并评估与院内死亡的调整后关联"},
@@ -5018,6 +5064,86 @@ def test_source_concept_choices_are_exact_module_scoped_and_path_free(
         }
     ]
     assert "/private/" not in json.dumps(result)
+
+
+def test_source_concepts_resolve_bound_source_display_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import (
+        AvailableCatalog,
+        CatalogConcept,
+    )
+
+    source = {
+        "id": "src_full",
+        "path": "/private/full-export",
+        "label": "MIIV",
+        "database": "miiv",
+        "ok": True,
+        "modules": ["renal", "outcome"],
+    }
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {"sources": [source]},
+    )
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "get_context",
+        lambda _context_id: {
+            "id": "study-bound-source",
+            "data_source": {
+                "path": source["path"],
+                "label": "MIMIC-IV",
+                "database": "miiv",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="private-full",
+            concepts=[
+                CatalogConcept(
+                    concept_id="aki_stage",
+                    description="KDIGO AKI stage",
+                    file_name="renal.parquet",
+                    column_role="value",
+                )
+            ],
+        ),
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-bound-source",
+            binding=AuthorityBinding(
+                study_context_id="study-bound-source",
+                study_revision=1,
+            ),
+            data_source_authorization=PiSessionDataSourceAuthorization(
+                status="confirmed",
+                confirmation_mode="reuse_project_source",
+            ),
+        )
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_list_source_concepts",
+        {
+            "source_id": "MIIV",
+            "modules": ["renal"],
+            "query": "KDIGO AKI stage",
+        },
+        context,
+    )
+
+    assert result["code"] == "easyicu_source_concepts_listed"
+    assert result["details"]["source_id"] == "src_full"
+    assert [row["concept_id"] for row in result["details"]["concepts"]] == [
+        "aki_stage"
+    ]
 
 
 def test_conversational_setup_binds_verified_execution_concepts(

@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 from ..contracts.capability_ids import (
     CAPABILITY_FAMILIES,
+    LANDMARK_CATEGORICAL_ANALYSIS_KIND,
+    LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
     LANDMARK_SPLINE_ANALYSIS_KIND,
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
     PHENOTYPING_ANALYSIS_KIND,
@@ -49,7 +51,10 @@ from ..trajectory.runtime_validation import (
     signed_trajectory_plan_claimed,
     signed_trajectory_plan_contract_errors,
 )
-from ..contracts.association_execution import association_execution_verdict
+from ..contracts.association_execution import (
+    association_execution_verdict,
+    landmark_categorical_association_execution_verdict,
+)
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
     EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
@@ -382,6 +387,55 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         scientific_validation="reportable",
         scientific_validator_owner="execution.runners.adjusted_association_executor",
         scientific_validator_contract="AssociationExecutionVerdict",
+    ),
+    ScientificCapability(
+        family="association",
+        label="Association — digest-bound categorical landmark",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed adjusted categorical association in a signed "
+            "fixed-landmark population"
+        ),
+        primary_runner="adjusted_association_estimates",
+        primary_runner_module=(
+            "execution.runners.landmark_categorical_association_executor"
+        ),
+        figure="deterministic",
+        figure_renderer="base_association_skill",
+        data_contract=(
+            "typed cohort input",
+            "signed binary outcome, event-time and observation-duration columns",
+            "signed categorical exposure levels, reference and primary contrast",
+            "signed adjustment set and dependence contract",
+        ),
+        fail_closed=(
+            "The runtime owner rejects authority-digest drift, incomplete landmark "
+            "opportunity, invalid categorical levels, estimator drift, rank loss, "
+            "non-convergence, or a plan that changes the signed estimand."
+        ),
+        notes=(
+            "The caller-reviewed authority owns temporal eligibility and exact model "
+            "coordinates; the host wrapper builds the landmark cohort and delegates "
+            "the sealed model fit to the adjusted-association adapter."
+        ),
+        capability_id=LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
+        result_contract=(
+            "LandmarkCategoricalAssociationRuntimeAuthority + "
+            "easyicu.landmark_categorical_association_runtime_receipt/1"
+        ),
+        required_diagnostics=(
+            "landmark eligibility and observation opportunity",
+            "model-term coding receipt",
+            "primary model contract",
+            "effect/interval reconciliation",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner=(
+            "execution.runners.landmark_categorical_association_executor"
+        ),
+        scientific_validator_contract=(
+            "easyicu.landmark_categorical_association_runtime_receipt/1"
+        ),
     ),
     ScientificCapability(
         family="association",
@@ -1261,6 +1315,38 @@ def resolve_primary_capability(
             owner_claimed=claimed, owner_reason="runtime authority verifies the exact input and counting-process contract",
             **({} if claimed else {"failure_reason": "scientific_capability_step_incompatible",
                                    "detail": "Time-varying execution requires its signed owner contract."}))
+
+    if declared == LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID:
+        landmark_capability = get_capability_by_id(declared)
+        verdict = landmark_categorical_association_execution_verdict(primary)
+        if verdict.claimed:
+            return _verdict_for(
+                landmark_capability,
+                analysis_family=canonical,
+                owner_claimed=True,
+                owner_reason=(
+                    "the primary declares the signed categorical-landmark model "
+                    "contract; runtime authority separately verifies its "
+                    "digest-bound temporal and model coordinates"
+                ),
+            )
+        failure_reason = (
+            "primary_owner_declaration_incomplete"
+            if verdict.missing_declarations
+            else "primary_capability_owner_mismatch"
+        )
+        return _verdict_for(
+            landmark_capability,
+            analysis_family=canonical,
+            owner_claimed=False,
+            owner_reason=verdict.reason,
+            failure_reason=failure_reason,
+            detail=(
+                "The digest-bound categorical-landmark capability requires the "
+                f"exact {LANDMARK_CATEGORICAL_ANALYSIS_KIND!r} model contract: "
+                f"{verdict.reason}"
+            ),
+        )
 
     if declared == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
         landmark_capability = get_capability_by_id(declared)

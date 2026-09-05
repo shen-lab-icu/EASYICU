@@ -29,8 +29,6 @@ from easyicu.webserver.pi_copilot.contracts import (
     plan_approval_allowed,
 )
 from easyicu.webserver.pi_copilot.run_authority import (
-    list_bound_run_history,
-    research_pipeline_project_root,
     research_pipeline_workspace,
 )
 from easyicu.webserver.pi_copilot.workflow import (
@@ -48,6 +46,7 @@ PiProviderConfigStore = research_run_submission.PiProviderConfigStore
 _CANDIDATE_PLAN_WORKFLOW_CODES = frozenset(
     {
         "provider_ready_to_generate_plan",
+        "planner_checkpoint_resume_available",
         "plan_scientific_changes_required",
         "failed_pipeline_requires_fresh_plan",
         "plan_configuration_superseded",
@@ -55,21 +54,6 @@ _CANDIDATE_PLAN_WORKFLOW_CODES = frozenset(
         "scientific_plan_review_policy_stale",
     }
 )
-
-
-def _package_bound_plan_history_present(study_context_id: str) -> bool:
-    """Return whether this study already crossed the patient-data boundary."""
-
-    for row in list_bound_run_history(
-        study_context_id=study_context_id,
-        project_root=research_pipeline_project_root(study_context_id),
-        limit=50,
-    ):
-        project_dir = Path(str(row.get("project_dir") or "")).expanduser()
-        provenance = project_dir / "pipeline_input" / "web_research_universe_provenance.json"
-        if provenance.is_file() and not provenance.is_symlink():
-            return True
-    return False
 
 
 def _candidate_plan_only_authorized(body: Mapping[str, Any]) -> bool:
@@ -87,13 +71,13 @@ def _candidate_plan_only_authorized(body: Mapping[str, Any]) -> bool:
     planner_start_mode = str(
         body.get("planner_start_mode") or ""
     ).strip().lower()
-    plan_revision_source_run_id = str(
-        body.get("plan_revision_source_run_id") or ""
-    ).strip()
-    candidate_launch_shape = planner_start_mode == "fresh" or (
-        planner_start_mode == "auto" and bool(plan_revision_source_run_id)
-    )
-    if not candidate_launch_shape:
+    # ``auto`` may select a digest-verified Planner checkpoint after a failed
+    # candidate run, while the dedicated recovery control names that operation
+    # explicitly as ``resume_checkpoint``. Both remain candidate-plan authority
+    # when the current server-owned workflow says so. Dropping the explicit
+    # mode here silently promoted a plan-only recovery to reviewed analysis and
+    # started execution-runtime preflight before any plan review.
+    if planner_start_mode not in {"fresh", "auto", "resume_checkpoint"}:
         return False
     study_context_id = str(body.get("study_context_id") or "").strip()
     if not study_context_id:
@@ -107,10 +91,10 @@ def _candidate_plan_only_authorized(body: Mapping[str, Any]) -> bool:
     action_code = projection.workflow.next_action_code
     if action_code not in _CANDIDATE_PLAN_WORKFLOW_CODES:
         return False
-    if action_code != "provider_ready_to_generate_plan" and (
-        _package_bound_plan_history_present(study_context_id)
-    ):
-        return False
+    # Candidate-plan authority belongs to this requested transition, not to
+    # whatever an older immutable run happened to materialize.  A prior export
+    # package or failed execution attempt must never promote a fresh/revised
+    # plan to reviewed-analysis authority before the new plan is approved.
     return True
 
 

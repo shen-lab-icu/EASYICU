@@ -666,7 +666,7 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     assert {
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
-        "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
+        "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE",
         "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
         "FIGURE_ROLE_COVERAGE_INCOMPLETE",
     } <= codes
@@ -741,6 +741,150 @@ def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None
     }
 
 
+def test_selected_temporal_design_routes_missing_execution_to_runtime_owner() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                ConceptDescriptor(
+                    name="exposure", role=VariableRole.OTHER, dtype="int64"
+                ),
+                *[item for item in _context().variables if item.name != "exposure"],
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "confirmations": {"feature_time_window": True},
+                        "materialization_window": {
+                            "role": "outer_observation_window",
+                            "anchor": "ICU admission",
+                            "hours": 24,
+                        },
+                    }
+                ),
+            ),
+        }
+    )
+    plan = _plan().model_copy(
+        update={
+            "design_selection": _legacy_design_selection_without_reviewable_plan()
+        }
+    )
+
+    review = build_plan_scientific_review(context=context, plan=plan)
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
+    )
+
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.requires_user_authorization is False
+
+
+def test_multi_outcome_question_requires_one_model_contract_per_outcome() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={"outcome_columns": ["death", "los_icu"]}
+            ),
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="los_icu",
+                    role=VariableRole.OUTCOME,
+                    dtype="float64",
+                ),
+            ],
+        }
+    )
+
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE"
+    )
+
+    assert finding.remediation_route == "agent_plan_revision"
+    assert finding.requires_user_authorization is False
+    assert "los_icu" in finding.message
+    assert review.facts["requested_outcomes"] == ["death", "los_icu"]
+    assert review.facts["model_covered_outcomes"] == ["death"]
+    assert review.facts["missing_model_outcomes"] == ["los_icu"]
+
+
+def test_controlled_ordered_analysis_counts_both_typed_outcomes() -> None:
+    context = ResearchContext(
+        research_question=(
+            "Assess an ordered stage against mortality and length of stay."
+        ),
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_stays=120,
+            id_columns=["stay_id"],
+            outcome_columns=["death", "los_icu"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="stage",
+                role=VariableRole.ORDINAL_SCORE,
+                dtype="int64",
+                is_ordinal=True,
+                ordinal_levels=[0, 1, 2, 3],
+            ),
+            ConceptDescriptor(
+                name="death", role=VariableRole.OUTCOME, dtype="int64"
+            ),
+            ConceptDescriptor(
+                name="los_icu", role=VariableRole.OUTCOME, dtype="float64"
+            ),
+        ],
+        primary_exposure="stage",
+        target_outcome="death",
+        endpoint=EndpointSpec(
+            name="death",
+            kind="binary",
+            absence_semantics="no_absent_rows",
+            levels=[0, 1],
+        ),
+    )
+    primary = _plan().steps[0].model_copy(
+        update={
+            "inputs": ["stage", "death"],
+            "model_requirements": [
+                _plan().steps[0].model_requirements[0].model_copy(
+                    update={"exposure_source": "stage"}
+                )
+            ],
+        }
+    )
+    ordered = AnalysisStep(
+        step_id="ordered_multioutcome_trend",
+        planned_analysis_role="secondary",
+        intent="Estimate ordered gradients for both typed outcomes.",
+        inputs=[
+            "stage",
+            "death",
+            "los_icu",
+            "artifact:analysis_cohort",
+            "table:adjusted_association_estimates",
+        ],
+        expected_outputs=["table:ordered_multioutcome_trend"],
+        method="ordinal_stratified_descriptive_analysis",
+        scientific_action_id="association.ordinal_trend",
+    )
+    plan = _plan().model_copy(update={"steps": [primary, ordered]})
+
+    review = build_plan_scientific_review(context=context, plan=plan)
+
+    assert "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE" not in {
+        item.code for item in review.findings
+    }
+    assert review.facts["model_covered_outcomes"] == ["death", "los_icu"]
+
+
 def test_time_varying_intent_is_a_runtime_blocker_not_a_new_user_decision() -> None:
     context = _context().model_copy(
         update={
@@ -781,7 +925,7 @@ def test_time_varying_intent_is_a_runtime_blocker_not_a_new_user_decision() -> N
     )
 
 
-def test_stay_level_cohort_without_patient_identity_fails_closed_on_dependence() -> None:
+def test_stay_level_cohort_without_patient_identity_limits_paper_authority() -> None:
     context = _context().model_copy(
         update={
             "cohort": _context().cohort.model_copy(
@@ -808,8 +952,9 @@ def test_stay_level_cohort_without_patient_identity_fails_closed_on_dependence()
         for item in review.findings
         if item.code == "REPEATED_STAY_IDENTITY_UNAVAILABLE"
     )
-    assert finding.severity == "blocker"
-    assert review.approval_allowed is False
+    assert finding.severity == "major"
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.requires_user_authorization is False
 
 
 
@@ -840,7 +985,7 @@ def test_equal_patient_and_stay_counts_do_not_raise_dependence_blocker() -> None
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
 
 
-def test_planner_selected_adjustment_roster_requires_new_user_revision() -> None:
+def test_planner_selected_adjustment_roster_is_agent_owned() -> None:
     context = _context().model_copy(
         update={
             "cohort": _context().cohort.model_copy(
@@ -859,11 +1004,55 @@ def test_planner_selected_adjustment_roster_requires_new_user_revision() -> None
     finding = next(
         item
         for item in review.findings
-        if item.code == "ADJUSTMENT_SET_NOT_USER_CONFIRMED"
+        if item.code == "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE"
     )
     assert finding.severity == "blocker"
-    assert finding.requires_user_authorization is True
+    assert finding.remediation_route == "agent_plan_revision"
+    assert finding.requires_user_authorization is False
     assert review.approval_allowed is False
+
+
+def test_complete_planner_adjustment_proposal_needs_no_separate_user_field() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={"n_patients": 94_458, "n_stays": 94_458}
+            )
+        }
+    )
+    plan = _plan()
+    primary = plan.steps[0]
+    requirement = primary.model_requirements[0].model_copy(
+        update={
+            "covariate_rationales": {
+                "age": "Age is a baseline cause of both AKI severity and mortality."
+            },
+            "covariate_temporal_roles": {"age": "baseline_static"},
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "steps": [
+                primary.model_copy(update={"model_requirements": [requirement]}),
+                *plan.steps[1:],
+            ]
+        }
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    codes = {item.code for item in review.findings}
+    assert "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE" not in codes
+    assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" not in codes
+    assert review.facts["covariate_rationales"] == requirement.covariate_rationales
+    assert review.facts["covariate_temporal_roles"] == {
+        "age": "baseline_static"
+    }
 
 
 def test_free_text_cannot_create_a_required_sensitivity_axis() -> None:
@@ -1221,7 +1410,14 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
         "effect_style_grid_required": False,
     }
     assert "ROBUSTNESS_AXES_TOO_NARROW" not in codes
-    assert "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED" in codes
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED"
+    )
+    assert finding.requires_user_authorization is False
+    assert finding.authorization_question is None
+    assert finding.remediation_route == "agent_plan_revision"
 
 
 def test_absolute_risk_difference_without_typed_ceiling_remains_inferential() -> None:
@@ -1998,9 +2194,14 @@ def test_one_clustered_step_cannot_mask_an_unclosed_scientific_model() -> None:
         literature=_literature(),
         figure_strategy=build_article_figure_strategy(context),
     )
-    assert "REPEATED_STAY_METHOD_NOT_DECLARED" in {
-        finding.code for finding in review.findings
-    }
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "REPEATED_STAY_METHOD_NOT_DECLARED"
+    )
+    assert finding.requires_user_authorization is False
+    assert finding.authorization_question is None
+    assert finding.remediation_route == "agent_plan_revision"
 
 
 def test_signed_landmark_runtime_group_input_closes_repeated_stay_design() -> None:
@@ -2580,7 +2781,7 @@ def test_revision_contract_contains_only_agent_owned_findings() -> None:
     contract = render_agent_plan_revision_contract(review)
 
     assert "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED" in contract
-    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in contract
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in contract
     assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" not in contract
     assert "preserve the exact research question" in contract
 

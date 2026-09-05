@@ -34,6 +34,7 @@ from easyicu.research_agent.reporting.readiness import (
 )
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 from easyicu.research_agent.contracts.capability_ids import (
+    LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
     LANDMARK_SPLINE_ANALYSIS_KIND,
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
     PHENOTYPING_ANALYSIS_KIND,
@@ -175,6 +176,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
     assert reportable == {
         "survival_time_to_event_v1",
         "association_adjusted_v1",
+        LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
         LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
         PHENOTYPING_CLUSTER_CAPABILITY_ID,
         "descriptive_exposure_outcome_distribution_v1",
@@ -214,6 +216,7 @@ def test_partition_helpers_are_consistent():
     assert det == {
         "Association — source-bound time-updated Cox",
         "Association — exact single-model adjusted",
+        "Association — digest-bound categorical landmark",
         "Association — digest-bound landmark spline",
         "Descriptive — typed exposure/outcome absolute risks",
         "Prediction / risk modelling",

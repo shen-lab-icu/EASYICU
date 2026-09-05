@@ -37,6 +37,7 @@ from .progressive_contract import (
     ProgressiveSkeletonStep,
     ProgressiveStepMaterialization,
 )
+from .progressive_host_materialization import normalize_progressive_action_contract
 from .scientific_action_catalog import scientific_action_for_id
 
 
@@ -563,6 +564,12 @@ def restore_progressive_resume_prefix(
         materialization = _migrate_installed_runtime_contract(
             materialization,
             analysis_type=outline.analysis_type,
+            available_product_refs=state.available_product_refs,
+        )
+        materialization = normalize_progressive_action_contract(
+            materialization,
+            context=context,
+            outline_step=outline_step,
             available_product_refs=state.available_product_refs,
         )
         try:

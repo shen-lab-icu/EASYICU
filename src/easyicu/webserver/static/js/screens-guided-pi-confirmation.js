@@ -19,6 +19,17 @@
     const sessionIsStale = host.sessionIsStale;
     const cohortEligibilityDecisionHtml = typeof host.cohortEligibilityDecisionHtml === 'function'
       ? host.cohortEligibilityDecisionHtml : () => '';
+    // These are implementation choices the Agent plan must make.  Keep the
+    // guard here as well as in the server projection so archived review
+    // artifacts cannot turn them back into user-facing method questions.
+    const systemOwnedPlanFindingCodes = new Set([
+      'OUTCOME_DEFINITION_UNRESOLVED',
+      'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED',
+      'REPEATED_STAY_IDENTITY_UNAVAILABLE',
+      'REPEATED_STAY_METHOD_NOT_DECLARED',
+      'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED',
+      'REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY',
+    ]);
 
     function preparedDataStatus() {
       const authorization = (host.session() && host.session().data_source_authorization) || {};
@@ -220,6 +231,19 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('View its literature evidence', '查看当前文献依据'), media_type: 'application/json' },
         ],
       };
+      if (code === 'agent_plan_revision_nonconvergent') return {
+        code,
+        nonApprovable: true,
+        hideEdit: true,
+        title: tr(
+          'EasyICU stopped a non-improving plan revision',
+          'EasyICU 已停止没有改进的计划修订',
+        ),
+        note: tr(
+          'The same system-owned plan defects remained after revision, so no further model call was started. This is an EasyICU architecture issue to repair; you do not need to choose statistical methods or rewrite the prompt.',
+          '修订后仍然存在同一批由系统负责的问题，因此不会继续调用模型。这是需要修复的 EasyICU 架构问题；你不需要选择统计方法，也不需要改写提示词。',
+        ),
+      };
       if (code === 'plan_scientific_changes_required') return {
         code, grants: ['provider_run', 'literature'],
         nonApprovable: !(
@@ -263,7 +287,9 @@
       const planPreview = host.workflow() && host.workflow().plan_conversation_preview;
       const decisionItems = confirmation.code === 'plan_scientific_changes_required'
         && review && Array.isArray(review.authorization_questions)
-        ? review.authorization_questions.slice(0, 4)
+        ? review.authorization_questions
+          .filter(item => !systemOwnedPlanFindingCodes.has(String(item && item.code || '')))
+          .slice(0, 4)
         : [];
       const remediationCounts = confirmation.code === 'plan_scientific_changes_required'
         && review && review.remediation_buckets && typeof review.remediation_buckets === 'object'
@@ -327,7 +353,7 @@
         <div><strong>${esc(displayedTitle)}</strong><small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
+          ${decisionActions || confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`}
           ${decisionActions && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
           ${confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}
@@ -407,7 +433,9 @@
         const context = item && item.decision_context && typeof item.decision_context === 'object'
           ? item.decision_context : {};
         const isFixed24hLactate = String(context.timing_profile || '') === 'fixed_24h_lactate';
-        if (!isFixed24hLactate) {
+        const isFixed24hLandmark = ['fixed_24h_lactate', 'fixed_24h_landmark']
+          .includes(String(context.timing_profile || ''));
+        if (!isFixed24hLandmark) {
           const exposureLabel = String(
             window.EU_LANG === 'zh'
               ? context.exposure_label_zh || context.primary_exposure_materialized || tr('the exposure', '当前暴露')
@@ -463,6 +491,58 @@
                   'Requires a new governed extraction with verified timestamps.',
                   '需要重新提取并核验带时间戳的数据。',
                 ),
+              },
+            ],
+          };
+        }
+        if (!isFixed24hLactate) {
+          const exposureLabel = String(
+            window.EU_LANG === 'zh'
+              ? context.exposure_label_zh || tr('the exposure', '当前暴露')
+              : context.exposure_label_en || tr('the exposure', '当前暴露')
+          );
+          return {
+            cardTitle: tr(
+              `Choose how the first-24-hour ${exposureLabel} window should align with mortality follow-up`,
+              `请选择首 24 小时${exposureLabel}窗口如何与死亡随访对齐`,
+            ),
+            context: tr(
+              `${exposureLabel} is classified from ICU hours 0–24, so adjusted mortality follow-up needs an explicit time design.`,
+              `${exposureLabel}由入 ICU 后 0–24 小时的信息判定，因此调整后死亡关联必须明确时间设计。`,
+            ),
+            evidenceLabel: tr('Current plan evidence', '当前计划证据'),
+            evidenceStatus: String(context.time_zero || '').trim() || tr(
+              'Exposure window: ICU admission to 24 hours',
+              '暴露窗：入 ICU 后 0–24 小时',
+            ),
+            evidenceDetail: tr(
+              'Patients with an event before hour 24 cannot contribute a complete fixed-window exposure, while survivors have the full classification opportunity.',
+              '24 小时前发生结局的患者无法贡献完整的固定窗口暴露，而存活者拥有完整的分级机会。',
+            ),
+            guidance: tr(
+              'Recommended for the current fixed-window plan: use a 24-hour landmark. It preserves the selected exposure definition and starts outcome follow-up only after exposure classification is complete.',
+              '当前固定窗口计划推荐采用 24 小时 landmark：保留既定暴露定义，并在暴露分级完成后才开始结局随访。',
+            ),
+            technicalEvidence: String((item && item.evidence) || ''),
+            technicalRemediation: String((item && item.remediation) || ''),
+            options: [
+              {
+                optionId: 'landmark_24h',
+                label: tr('Use a 24-hour landmark (recommended)', '采用 24 小时 landmark（推荐）'),
+                effect: tr('Estimate the association from hour 24 among patients alive then.', '仅在 24 小时仍存活者中，从第 24 小时开始估计关联。'),
+                requirement: tr('Uses the current fixed-window exposure and excludes events before the landmark.', '使用当前固定窗口暴露；排除 landmark 前发生的结局。'),
+              },
+              {
+                optionId: 'descriptive_only',
+                label: tr('Keep this version descriptive', '当前版本仅保留描述性分析'),
+                effect: tr(`Show ${exposureLabel} and outcome distributions without a time-aligned adjusted claim.`, `展示${exposureLabel}和结局分布，不提出时间对齐后的调整关联。`),
+                requirement: tr('Keeps early events but does not answer the adjusted association question.', '保留早期结局，但不能回答调整后的关联问题。'),
+              },
+              {
+                optionId: 'time_varying_reextract',
+                label: tr('Re-extract for a time-varying model', '重新提取并采用时变模型'),
+                effect: tr(`Retain early events and update ${exposureLabel} over time.`, `保留早期结局，并随时间更新${exposureLabel}。`),
+                requirement: tr('Requires a new governed extraction with verified timestamps.', '需要重新提取并核验带时间戳的数据。'),
               },
             ],
           };

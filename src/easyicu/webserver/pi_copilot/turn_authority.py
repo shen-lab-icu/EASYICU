@@ -153,9 +153,11 @@ def infer_explicit_turn_actions(message: str) -> frozenset[str]:
 def infer_research_entry_intent(message: str) -> str:
     """Classify only an unscoped first turn in a blank research project.
 
-    Explicit starter wording wins.  A plain scientific sentence remains
-    ambiguous because completeness of prose does not prove whether the
-    researcher wants exploration or implementation.
+    Explicit starter wording wins.  A natural scientific question that already
+    names a relationship, comparison, effect, or prediction is sufficient
+    implementation intent; the researcher must not have to add workflow
+    instructions merely to reach the planning owner.  A topic fragment without
+    an estimand-shaped relation remains ambiguous.
     """
 
     text = _normalize(message)
@@ -186,6 +188,13 @@ def infer_research_entry_intent(message: str) -> str:
         text,
     ):
         return "idea_mining_entry"
+    if re.search(
+        r"(?:与|和|对).{1,80}(?:关系|相关|关联|影响|效应|差异|风险|预测)|"
+        r"(?:是否|会不会|能否|有没有).{0,80}(?:影响|相关|关联|预测|增加|降低|不同)|"
+        r"(?:relationship|association|effect|impact|difference|risk|predict)",
+        text,
+    ):
+        return "implement_scientific_question"
     return "clarify_research_entry"
 
 

@@ -27,6 +27,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
+from easyicu.research_agent.icu_rules import VariableKind, classify_variable
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
@@ -58,6 +59,33 @@ def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientif
     landmark_coordinates = dict(coordinates)
     landmark_coordinates.pop("literature_citation_keys", None)
     landmark_coordinates.pop("direct_comparator_literature_keys", None)
+    landmark = _one_spec(
+        landmark_coordinates["sensitivity_specs"], strategy="landmark"
+    )
+    if landmark is None:
+        return None
+    exposure_kind, _levels = _primary_exposure_kind(
+        universe_path=landmark_coordinates["universe_path"],
+        primary_exposure=landmark_coordinates.get("primary_exposure"),
+        primary_exposure_source=landmark_coordinates.get("primary_exposure_source"),
+    )
+    if exposure_kind in {
+        VariableKind.ORDINAL,
+        VariableKind.CATEGORICAL,
+        VariableKind.BINARY,
+    }:
+        if _one_spec(
+            landmark_coordinates["sensitivity_specs"],
+            strategy="restricted_cubic_spline",
+        ) is not None:
+            raise WebScientificRuntimeProjectionError(
+                "web_landmark_exposure_model_incompatible",
+                "A categorical or ordinal landmark exposure cannot use the continuous spline runtime.",
+                details={"exposure_kind": exposure_kind.value},
+            )
+        return compile_landmark_categorical_runtime_projection(
+            **landmark_coordinates
+        )
     return compile_landmark_spline_runtime_projection(**landmark_coordinates)
 
 
@@ -83,6 +111,35 @@ def _one_spec(
             details={"strategy": strategy, "spec_ids": [spec.spec_id for spec in matching]},
         )
     return matching[0]
+
+
+def _primary_exposure_kind(
+    *,
+    universe_path: Path,
+    primary_exposure: str | None,
+    primary_exposure_source: str | None,
+) -> tuple[VariableKind, tuple[str, ...]]:
+    """Classify a physical exposure without reading patient rows."""
+
+    dtype = ""
+    if primary_exposure:
+        try:
+            import pyarrow.parquet as pq
+
+            schema = pq.read_schema(universe_path)
+            if primary_exposure in schema.names:
+                dtype = str(schema.field(primary_exposure).type)
+        except Exception as exc:  # noqa: BLE001 - retyped at this owner boundary
+            raise WebScientificRuntimeProjectionError(
+                "web_scientific_runtime_schema_unavailable",
+                "The materialized universe schema could not be read for exposure routing.",
+                details={"artifact": Path(universe_path).name, "reason": str(exc)[:500]},
+            ) from exc
+    hint = classify_variable(
+        str(primary_exposure_source or primary_exposure or ""),
+        dtype,
+    )
+    return hint.kind, tuple(str(value) for value in (hint.ordinal_levels or ()))
 
 
 def _categorical_adjustments(
@@ -172,6 +229,168 @@ def _operational_covariates(
             details={"resolved_covariates": list(resolved)},
         )
     return resolved
+
+
+def compile_landmark_categorical_runtime_projection(
+    *,
+    study: Mapping[str, Any],
+    sensitivity_specs: Sequence[PrespecifiedSensitivitySpec],
+    primary_exposure: str | None,
+    primary_exposure_source: str | None,
+    target_outcome: str | None,
+    declared_covariates: Sequence[str],
+    covariate_operationalizations: Mapping[str, str],
+    target_is_event_status: bool,
+    universe_path: Path,
+    scientific_configuration_sha256: str,
+    dependence: PlannedDependenceRequirement | None = None,
+) -> WebScientificRuntimeProjection | None:
+    """Compile an ordered/categorical exposure through the verified logit adapter."""
+
+    landmark = _one_spec(sensitivity_specs, strategy="landmark")
+    if landmark is None:
+        return None
+    missing_fields: list[str] = []
+    if str(study.get("covariate_selection") or "") != "exact":
+        missing_fields.append("covariate_selection=exact")
+    if not primary_exposure:
+        missing_fields.append("primary_exposure")
+    if not primary_exposure_source:
+        missing_fields.append("primary_exposure_source")
+    if not target_outcome:
+        missing_fields.append("target_outcome")
+    if not target_is_event_status:
+        missing_fields.append("binary_event_status_outcome")
+    if not declared_covariates:
+        missing_fields.append("exact_covariates")
+    if landmark.event_time_variable is None:
+        missing_fields.append("landmark.event_time_variable")
+    if landmark.observation_duration_variable is None:
+        missing_fields.append("landmark.observation_duration_variable")
+    if landmark.observation_duration_unit is None:
+        missing_fields.append("landmark.observation_duration_unit")
+    if not landmark.require_alive_at_landmark:
+        missing_fields.append("landmark.require_alive_at_landmark")
+    if not landmark.exclude_negative_event_times:
+        missing_fields.append("landmark.exclude_negative_event_times")
+    if missing_fields:
+        raise WebScientificRuntimeProjectionError(
+            "web_landmark_categorical_authority_incomplete",
+            "The landmark categorical design lacks executable typed coordinates.",
+            details={"missing_fields": missing_fields},
+        )
+    if float(landmark.landmark_hours or 0.0) != 24.0:
+        raise WebScientificRuntimeProjectionError(
+            "web_landmark_categorical_landmark_unsupported",
+            "The verified categorical association adapter currently supports a 24-hour landmark.",
+            details={"landmark_hours": landmark.landmark_hours},
+        )
+
+    exposure_kind, levels = _primary_exposure_kind(
+        universe_path=universe_path,
+        primary_exposure=primary_exposure,
+        primary_exposure_source=primary_exposure_source,
+    )
+    if exposure_kind not in {
+        VariableKind.ORDINAL,
+        VariableKind.CATEGORICAL,
+        VariableKind.BINARY,
+    }:
+        raise WebScientificRuntimeProjectionError(
+            "web_landmark_categorical_exposure_incompatible",
+            "The selected exposure is not typed as categorical, ordinal, or binary.",
+            details={"exposure_kind": exposure_kind.value},
+        )
+    if not levels:
+        raise WebScientificRuntimeProjectionError(
+            "web_landmark_categorical_levels_unavailable",
+            "The categorical landmark runtime requires a source-owned closed level set.",
+            details={
+                "primary_exposure": primary_exposure,
+                "primary_exposure_source": primary_exposure_source,
+            },
+        )
+
+    covariates = _operational_covariates(
+        universe_path,
+        declared_covariates=tuple(declared_covariates),
+        operationalizations=covariate_operationalizations,
+    )
+    categorical = _categorical_adjustments(universe_path, covariates=covariates)
+    required_columns = {
+        str(primary_exposure),
+        str(target_outcome),
+        str(landmark.event_time_variable),
+        str(landmark.observation_duration_variable),
+        *map(str, covariates),
+        *((dependence.group_source,) if dependence is not None else ()),
+    }
+    try:
+        import pyarrow.parquet as pq
+
+        schema_names = set(pq.read_schema(universe_path).names)
+    except Exception as exc:  # pragma: no cover - classified above
+        raise WebScientificRuntimeProjectionError(
+            "web_scientific_runtime_schema_unavailable",
+            "The materialized universe schema could not be read for runtime binding.",
+            details={"artifact": universe_path.name, "reason": str(exc)[:500]},
+        ) from exc
+    absent = sorted(required_columns - schema_names)
+    if absent:
+        raise WebScientificRuntimeProjectionError(
+            "web_scientific_runtime_columns_missing",
+            "The landmark categorical runtime inputs are absent from the materialized universe.",
+            details={"missing_columns": absent},
+        )
+
+    authority = build_current_case_scientific_runtime_authority(
+        {
+            "schema_version": (
+                "easyicu.landmark_categorical_association_runtime_authority/1"
+            ),
+            "authority_kind": "landmark_categorical_association",
+            "protocol_content_sha256": scientific_configuration_sha256,
+            "cohort_method": "signed_landmark_analysis_cohort",
+            "primary_method": "signed_landmark_categorical_association",
+            "plan_intent": (
+                "Estimate the adjusted categorical association among patients alive "
+                "and observed at the prespecified 24-hour landmark."
+            ),
+            "landmark_spec_id": landmark.spec_id,
+            "cohort_product": "artifact:analysis_cohort",
+            "cohort_flow_product": "table:cohort_flow",
+            "primary_product": "table:adjusted_association_estimates",
+            "exposure_column": primary_exposure,
+            "exposure_kind": exposure_kind.value,
+            "exposure_levels": list(levels),
+            "exposure_reference_level": levels[0],
+            "primary_contrast_level": levels[-1],
+            "outcome_column": target_outcome,
+            "event_time_column": landmark.event_time_variable,
+            "observation_duration_column": landmark.observation_duration_variable,
+            "observation_duration_unit": landmark.observation_duration_unit,
+            "landmark_hours": 24,
+            "exclude_negative_event_times": True,
+            "require_alive_at_landmark": True,
+            "required_adjustment_columns": list(covariates),
+            "categorical_adjustment_columns": list(categorical),
+            "dependence": (
+                dependence.model_dump(mode="json")
+                if dependence is not None
+                else None
+            ),
+            "interpretation": "descriptive_prognostic_association_not_causal",
+        }
+    ).model_dump(mode="json")
+    projection_body = {
+        "schema_version": "easyicu.web_scientific_runtime_projection/1",
+        "study_scientific_configuration_sha256": scientific_configuration_sha256,
+        "deterministic_execution_contract": authority,
+    }
+    return WebScientificRuntimeProjection(
+        authority=authority,
+        projection_sha256=hashlib.sha256(_canonical_bytes(projection_body)).hexdigest(),
+    )
 
 
 def compile_landmark_spline_runtime_projection(
@@ -349,5 +568,6 @@ def compile_landmark_spline_runtime_projection(
 __all__ = [
     "WebScientificRuntimeProjection",
     "WebScientificRuntimeProjectionError",
+    "compile_landmark_categorical_runtime_projection",
     "compile_landmark_spline_runtime_projection",
 ]
