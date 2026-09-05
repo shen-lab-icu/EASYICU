@@ -1,63 +1,72 @@
 # Research-agent run receipts
 
-Machine-generated records that a given research-agent run happened, what it
-produced, and what governance status it carried. Build one with:
+The runtime preserves a digest-bound snapshot whenever its workflow returns a
+terminal `PipelineResult`. Receipt publication happens after the final durable
+review-checkpoint transition. Human-review pauses do not create terminal
+receipts. A missing terminal manifest, corrupt source, or publication conflict
+fails closed with a named receipt error.
 
-```bash
-python tools/preserve_run_receipt.py <run_dir> \
-  --out docs/evidence/run_receipts/<run_id>.json
+The default destination is outside the run scratch tree:
+
+```text
+<EASYICU_HOME or user home>/.easyicu/run_receipts/<run_id>/<receipt_sha256>.json
 ```
 
-Re-check a receipt while its run tree is still on disk:
+`EASYICU_RUN_RECEIPT_ROOT` can select a retained storage root. The shared
+`easyicu.state_paths` owner defines `EASYICU_HOME` consistently for Web state,
+extension registries and receipts. Receipt paths inside the run tree are
+rejected to prevent recursive inventories. Identical publication is idempotent;
+different bytes require a different path. This is application-enforced
+immutability, not storage-level WORM protection.
+
+The discovery launcher preserves another version after its final package
+assessment, because those files are written after pipeline completion. Other
+post-run artifact/signoff updates require another call to
+`preserve_terminal_run_receipt` or the CLI. The automatic hook does not inventory
+the surrounding Web wrapper or intercept arbitrary filesystem writes. Process
+crashes before a terminal manifest require the owning runtime/formal harness's
+failure receipt; a summary must never manufacture a terminal run.
+
+## Retain or verify an explicit copy
 
 ```bash
-python tools/preserve_run_receipt.py <run_dir> \
-  --verify docs/evidence/run_receipts/<run_id>.json
+python tools/preserve_run_receipt.py <run_dir> --out docs/evidence/run_receipts/<run_id>-<version>.json
+python tools/preserve_run_receipt.py <run_dir> --verify docs/evidence/run_receipts/<run_id>-<version>.json
 ```
 
-## Why receipts exist
+## Recorded facts and limits
 
-Run trees live under `output/` and `research_output/`, which `.gitignore`
-excludes as regenerable scratch and which get pruned. The submission plan cites
-those runs as evidence anyway — the active WebApp row cites
-`run_20260829T024326_bfcbf6` ("11/11 analysis steps, 12 tables, 3 figures,
-evidence-bound article draft") and that directory no longer exists anywhere on
-disk. A prose paragraph in a task log is exactly the unauditable claim the
-evidence machinery exists to prevent.
-
-A receipt keeps the run provable after the tree is gone. On a measured run it is
-about 4% of the tree it describes (1.7 MB run → 73 KB receipt, 183 artifacts).
-
-## What a receipt actually is
-
-The run's **own** decisions, copied verbatim, plus a SHA-256 inventory:
-
-| field | source in the run directory |
+| Field | Source |
 |---|---|
-| `run_id`, `research_question`, `started_at`, `finished_at` | `manifest.json` |
-| `status`, `strict_fail_closed`, `gates`, `code_version` | `run_status.json` |
-| `evidence_authority_head` | `.easyicu_evidence_authority_head.json` |
-| `steps` | `steps/*/step_summary.json` |
-| `artifacts` | every regular file, with size and SHA-256 |
+| Run identity, question, timestamps, current plan authority | `manifest.json` |
+| Status, gates, strict mode, code identity | `run_status.json` |
+| Evidence authority head | `.easyicu_evidence_authority_head.json` |
+| Step outcomes | `steps/*/outputs/step_summary.json`, with the legacy step-root fallback |
+| Artifact paths, byte sizes and SHA256 | Regular files in the run tree |
 
-The tool adds no gate and no runtime branch. It never upgrades a status and
-never asserts publication readiness on a run's behalf — a run recorded as
-`analysis_only` stays `analysis_only` in its receipt.
+The inventory is checked before and after reading the projected facts; observed
+source drift is rejected. Verification checks the self digest, complete artifact
+inventory and facts reconstructed from source. It rejects changed, missing,
+unrecorded, duplicate and unsafe artifact paths. An `analysis_only` run remains
+`analysis_only`. A digest is not a human signature or publication authorization.
 
-`--verify` first checks the receipt's own digest, then rebuilds the complete
-artifact inventory and fails closed on changed, missing, newly added, duplicate,
-or unsafe paths. It is meaningful only while the tree still exists; once a run
-is pruned its receipt stays readable evidence but can no longer be re-verified
-against source.
+A receipt retains metadata and commitments to artifact bytes. It does not
+retain those bytes, demonstrate scientific correctness, authenticate a signer,
+or make a deleted run reproducible. Without source, its internal digest can be
+checked but its relationship to the original run cannot be independently
+reverified. Preserve the source tree and the receipt in backed-up storage before
+citing a run in a demo, README, benchmark table or paper.
 
-## Privacy
+## Disclosure
 
-No artifact contents are copied. A receipt holds the research question,
-run-generated relative artifact paths, byte sizes and digests — never row values
-or cohort contents. Run directories whose filenames themselves contain patient
-identifiers are not eligible for preservation and must be remediated first.
+No data tables are copied, but questions, paths, gates, plan references and
+authority-head metadata are copied from the run. Review those fields before
+publicly committing or sharing a receipt; the receipt builder is not a privacy
+redaction gate.
 
-## Current records
+## Current committed records
 
-None yet. The first receipt should be taken the next time a run is cited as
-evidence in `EasyICU_当前投稿主控计划.md`.
+None. The earlier retention audit reported the cited
+`run_20260829T024326_bfcbf6` tree as unavailable. This engineering change cannot
+recover its missing artifacts and has not fabricated a retrospective receipt.
+Synthetic test receipts validate software behavior only.

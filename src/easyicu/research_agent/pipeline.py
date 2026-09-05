@@ -4915,6 +4915,10 @@ class ResearchAgentPipeline:
                     write_human_review_checkpoint(
                         path, checkpoint.transitioned("completed")
                     )
+            if isinstance(outcome.final_result, PipelineResult):
+                from .authority.run_receipt import preserve_terminal_run_receipt
+
+                preserve_terminal_run_receipt(run_dir)
             return outcome.final_result
 
         if not isinstance(outcome, WorkflowPaused):
