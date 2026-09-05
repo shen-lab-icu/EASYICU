@@ -240,3 +240,13 @@ settings. They now restore both spill environment variables and
 directory and covers an intentionally long default temporary path. The
 security rejection assertion is unchanged. Both serial and two-worker runs
 of the 200 affected tests pass. This follow-up changes no production code.
+
+The next full PR run on `7f4e3134` completed with 16,394 passes, 219 skips
+and one governance failure: the socket regression grew the existing Docker
+test module to 2,154 lines, exceeding its frozen 2,150-line ceiling. Both
+socket cases now live in the dedicated `test_docker_socket_mounts.py` module.
+The security assertions, regression scenarios and existing length ceiling
+are unchanged. Validation includes the full governance directory alongside
+the core, Docker, profile and affected Web contract tests before resubmission.
+This combined two-worker run passes 2,631 tests with 54 skips and no
+deselections in 119.41 seconds; lint and whitespace checks also pass.
