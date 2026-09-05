@@ -1030,6 +1030,15 @@ def validate_run_provenance(
             raise ReleaseValidationError(
                 "module-refresh publication checkout was not recorded clean"
             )
+        resource_policy = refresh.get("resource_policy")
+        if (
+            isinstance(resource_policy, dict)
+            and resource_policy.get("formal_release_admissible") is False
+        ):
+            raise ReleaseValidationError(
+                "module-refresh used an unmeasured or overridden resource "
+                "strategy and is benchmark-only, not sealable"
+            )
         if (
             publication_checkout.get("scope")
             != "publication_only_republication"
@@ -1213,6 +1222,11 @@ def seal_release(
     execution_profile: str,
 ) -> Path:
     resolved_run_root = run_root.resolve()
+    benchmark_receipt = resolved_run_root / "resource_benchmark_provenance.json"
+    if benchmark_receipt.exists() or benchmark_receipt.is_symlink():
+        raise ReleaseValidationError(
+            "Resource benchmark output is benchmark-only and cannot be sealed"
+        )
     validation = validate_release(resolved_run_root)
     extraction_timing = validate_extraction_timing(
         run_root=resolved_run_root, validation=validation

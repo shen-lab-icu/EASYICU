@@ -47,6 +47,7 @@ from ..scores.sofa2 import (
     sofa2_cns_proxy_sensitivity,
     sofa2_component_evidence,
 )
+from ..scores.sofa2_aggregate import sofa2_total_structurally_supported
 from ..scores.sepsis import (
     delta_cummin,
     delta_min,
@@ -1036,8 +1037,15 @@ def _merge_tables(
     *,
     how: str = "outer",
     ctx: Optional[ConceptCallbackContext] = None,  # Add ctx parameter
+    sidecar_columns: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> tuple[pd.DataFrame, list[str], Optional[str]]:
-    """Merge component tables into a single DataFrame."""
+    """Merge component tables into a single DataFrame.
+
+    ``sidecar_columns`` lets a concept owner carry a small, explicitly named
+    set of columns through the same indexed concat as its public value.  This
+    avoids rebuilding and joining a second wide frame for provenance columns
+    such as the SOFA-2 observed/available receipts.
+    """
 
     # Enable ID conversion for _merge_tables
     id_columns, index_column, converted_tables = _assert_shared_schema(
@@ -1140,8 +1148,12 @@ def _merge_tables(
             # 对于重复列，只保留第一个
             frame = frame.loc[:, ~frame.columns.duplicated()]
         
-        # 只保留键列和值列,避免合并时的列冲突
-        cols_to_keep = key_cols + [name]
+        # 只保留键列、值列和调用方显式声明的 owner sidecars，避免合并时
+        # 的列冲突。Sidecars 与其值共享同一索引，只应在这一趟 concat 中
+        # 物化一次。
+        owner_sidecars = list((sidecar_columns or {}).get(name, ()))
+        value_columns = list(dict.fromkeys([name, *owner_sidecars]))
+        cols_to_keep = key_cols + value_columns
         # 确保所有列都存在
         cols_to_keep = [c for c in cols_to_keep if c in frame.columns]
         frame = frame[cols_to_keep]
@@ -1206,9 +1218,17 @@ def _merge_tables(
                                     exc_info=True,
                                 )
             indexed = frame.set_index(key_cols, drop=True)
-            # Only keep the value column (concept name)
-            if name in indexed.columns:
-                indexed = indexed[[name]]
+            # Keep the value and its explicitly authorised owner sidecars.
+            selected = [
+                column
+                for column in [
+                    name,
+                    *(sidecar_columns or {}).get(name, ()),
+                ]
+                if column in indexed.columns
+            ]
+            if selected:
+                indexed = indexed[selected]
             indexed_frames.append(indexed)
         
         if indexed_frames:
@@ -3170,18 +3190,21 @@ def _callback_sofa2_score(
     available_columns = [f"{name}_available" for name in required]
     aggregate_columns = [
         "sofa2",
+        "sofa2_observed",
+        "sofa2_available",
         "sofa2_n_observed_components",
         "sofa2_n_available_components",
         "sofa2_n_components",
     ]
     keep_components = ctx.kwargs.get("keep_components", False)
+    source_time_marker = "_sofa2_source_assessment_time"
 
-    data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
-
-    # _merge_tables intentionally retains only each ICUTable's declared value
-    # column. Re-project the sidecar receipts through the same schema-normalizing
-    # merger instead of teaching that generic boundary about SOFA-2 internals.
-    receipt_tables: dict[str, ICUTable] = {}
+    # Component score and its two owner receipts have the same row keys.  Merge
+    # all three columns per component in one indexed concat.  The previous
+    # implementation first built the six-score wide frame, then independently
+    # rebuilt a 12-receipt wide frame, and finally outer-joined both.  At eICU
+    # scale those simultaneously live frames were a primary peak-memory owner.
+    sidecars: dict[str, list[str]] = {}
     issued_observed_receipts: set[str] = set()
     issued_available_receipts: set[str] = set()
     for name, table in tables.items():
@@ -3195,17 +3218,14 @@ def _callback_sofa2_score(
                 issued_observed_receipts.add(receipt_name)
             else:
                 issued_available_receipts.add(receipt_name)
-            receipt_tables[receipt_name] = ICUTable(
-                table.data,
-                id_columns=list(table.id_columns),
-                index_column=table.index_column,
-                value_column=receipt_name,
-            )
-    if receipt_tables:
-        receipt_data, _, _ = _merge_tables(receipt_tables, ctx=ctx, how="outer")
-        if not receipt_data.empty:
-            key_columns = id_columns + ([index_column] if index_column else [])
-            data = data.merge(receipt_data, on=key_columns, how="outer")
+            sidecars.setdefault(name, []).append(receipt_name)
+
+    data, id_columns, index_column = _merge_tables(
+        tables,
+        ctx=ctx,
+        how="outer",
+        sidecar_columns=sidecars,
+    )
 
     if data.empty:
         cols = id_columns + ([index_column] if index_column else [])
@@ -3267,6 +3287,21 @@ def _callback_sofa2_score(
         sort_columns = id_cols_to_group + [index_column]
         data = data.sort_values(sort_columns)
 
+        # Keep the distinction between a real component-owned assessment row
+        # and an empty row introduced only by ``fill_gaps``.  The published
+        # SOFA-2 primary policy normal-imputes a missing patient-level domain,
+        # but it does not create a score observation at an hour where no owner
+        # supplied any row.  Encoding the source time itself lets the rolling
+        # bulk path preserve that distinction with a built-in ``max`` instead
+        # of falling back to the slow per-stay Python implementation.
+        if pd.api.types.is_numeric_dtype(data[index_column]):
+            data[source_time_marker] = pd.to_numeric(
+                data[index_column], errors="coerce"
+            )
+        else:
+            source_time = pd.to_datetime(data[index_column], errors="coerce")
+            data[source_time_marker] = source_time.astype("int64") / 1_000_000_000
+
         if id_cols_to_group and len(data) > 1:
             diffs = (
                 data.groupby(id_cols_to_group, sort=False)[index_column]
@@ -3300,6 +3335,10 @@ def _callback_sofa2_score(
                         ctx,
                     ),
                     method="none",
+                    # SOFA-2 components and binary evidence receipts are small
+                    # ordinals.  A float32 gap grid represents them exactly and
+                    # avoids doubling this callback's largest dense frame.
+                    value_dtype="float32",
                 )
 
         # Observation is a per-window event. Availability follows the score's
@@ -3322,6 +3361,7 @@ def _callback_sofa2_score(
                 for name in observed_columns + available_columns
             }
         )
+        agg_dict[source_time_marker] = "max_or_na"
         data = slide(
             data,
             list(id_columns),
@@ -3340,12 +3380,61 @@ def _callback_sofa2_score(
         data[available_columns].fillna(0).sum(axis=1).astype(int)
     )
     data["sofa2_n_components"] = data["sofa2_n_available_components"]
-    # A missing component must not be silently summed as 0. When fewer than
-    # all six components are available for a row, the total is unknown (NA);
-    # n_available_components still reports how many contributed.
-    data["sofa2"] = (
-        data[required].sum(axis=1, min_count=len(required)).round().astype("Int64")
+    available_frame = data[available_columns].fillna(0).eq(1)
+    all_available = available_frame.all(axis=1)
+    all_observed = data[observed_columns].fillna(0).eq(1).all(axis=1)
+    component_valid = data[required].notna().all(axis=1)
+    # SOFA-2's primary published missing-data policy assigns an unavailable
+    # patient-level domain its normal value (zero).  Owner receipts remain
+    # authoritative for the complete-case sensitivity flag: a non-zero value
+    # with a false receipt is ignored here rather than allowed to inflate the
+    # score.  A database lacking an entire organ-domain owner still fails
+    # closed and publishes no total.
+    effective_components = data[required].where(
+        available_frame.to_numpy(),
+        0,
     )
+    primary_total = (
+        effective_components.fillna(0).sum(axis=1).round().astype("Int64")
+    )
+    component_support = (
+        data[required].notna().any(axis=1)
+        | available_frame.any(axis=1)
+        | data[observed_columns].fillna(0).eq(1).any(axis=1)
+    )
+    if source_time_marker in data:
+        if pd.api.types.is_numeric_dtype(data[index_column]):
+            current_time = pd.to_numeric(data[index_column], errors="coerce")
+            source_row = np.isclose(
+                pd.to_numeric(data[source_time_marker], errors="coerce"),
+                current_time,
+                rtol=0.0,
+                atol=0.01,
+                equal_nan=False,
+            )
+        else:
+            current_time = (
+                pd.to_datetime(data[index_column], errors="coerce").astype("int64")
+                / 1_000_000_000
+            )
+            source_row = np.isclose(
+                pd.to_numeric(data[source_time_marker], errors="coerce"),
+                current_time,
+                rtol=0.0,
+                atol=256.0,
+                equal_nan=False,
+            )
+        scoring_domain = component_support | source_row
+    else:
+        scoring_domain = pd.Series(True, index=data.index)
+    data["sofa2"] = primary_total.where(scoring_domain)
+    database = getattr(getattr(ctx.data_source, "config", None), "name", "")
+    structural_support = sofa2_total_structurally_supported(database)
+    if not structural_support:
+        data["sofa2"] = pd.Series(pd.NA, index=data.index, dtype="Int64")
+    complete = all_available & component_valid & structural_support
+    data["sofa2_available"] = complete.astype("int8")
+    data["sofa2_observed"] = (complete & all_observed).astype("int8")
 
     cols = id_columns + ([index_column] if index_column else [])
     if keep_components:
@@ -8419,7 +8508,46 @@ def apply_vent_mode_frame(frame, value_column, db_name, axis, out_column):
 
     frame = frame.copy()
     frame[out_column] = mapped
-    return frame.dropna(subset=[out_column]).reset_index(drop=True)
+    frame = frame.dropna(subset=[out_column]).reset_index(drop=True)
+    if frame.empty:
+        return frame
+
+    # Resolve exact-time conflicts on the NATIVE label, before the two axes
+    # are reduced independently by change_interval(first). Selecting the
+    # alphabetically first derived value per axis can invent a combination
+    # absent from every source row (e.g. CPPV + SIMV_ASB -> unspecified /
+    # controlled). Both callbacks see the same native records and must choose
+    # the same one. This tie-break is deterministic, not a clinical priority.
+    id_column = next(
+        (c for c in ("stay_id", "icustay_id", "admissionid", "patientunitstayid",
+                     "patientid", "CaseID") if c in frame.columns),
+        None,
+    )
+    time_column = next(
+        (c for c in ("charttime", "measuredat", "datetime", "observationoffset",
+                     "respchartoffset", "measuredat_minutes") if c in frame.columns),
+        None,
+    )
+    if id_column is None or time_column is None:
+        raise ValueError("ventilator-mode harmonisation requires a stay/time key")
+    duplicate = frame.duplicated([id_column, time_column], keep=False)
+    if not duplicate.any():
+        return frame
+    # Sort only the narrow conflicting subset; do not sort/copy the complete
+    # raw table twice. Preserve all non-conflicting rows and exact timestamps.
+    native_keys = keys.loc[mapped.notna()].reset_index(drop=True)
+    order = frame.loc[duplicate, [id_column, time_column]].copy()
+    order["_native_mode"] = native_keys.loc[duplicate].astype("string")
+    sort_columns = [id_column, time_column, "_native_mode"]
+    if "itemid" in frame.columns:
+        order["_source_item"] = frame.loc[duplicate, "itemid"].astype("string")
+        sort_columns.append("_source_item")
+    selected = order.sort_values(sort_columns, kind="mergesort").drop_duplicates(
+        [id_column, time_column], keep="first"
+    ).index
+    keep = ~duplicate
+    keep.loc[selected] = True
+    return frame.loc[keep].reset_index(drop=True)
 
 
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {

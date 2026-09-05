@@ -21,6 +21,10 @@ from ..base import BaseICULoader, detect_database_type, get_default_data_path
 from ..concept.catalog import CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
+from ..scores.sofa2_aggregate import (
+    SOFA2_COMPONENT_NAMES,
+    sofa2_total_structurally_supported,
+)
 from .cohort import get_all_patient_ids_impl
 from .concepts import (
     _concepts_need_sofa2,
@@ -116,6 +120,69 @@ _STREAM_BATCH_MAX = 67_000
 _STREAM_BATCH_RETRY_FACTOR = 0.75
 _STREAM_BATCH_MAX_RETRIES = 3
 
+# ``resource_budget_mb`` is an execution contract, not only a batch-planning
+# hint.  Without a worker envelope, an 8-GiB release launched on a large shared
+# server still configured the resolver from the host's 1.5-TiB RAM and 384
+# CPUs (64 workers, eight Arrow/DuckDB threads and a hundreds-of-GiB cache).
+# Keep the derived limits machine-readable and install them inside each fresh
+# extraction worker before a loader or DuckDB connection is constructed.
+_RESOURCE_BUDGET_AVAILABLE_FRACTION = 0.70
+_RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB = 512
+_RESOURCE_BUDGET_MAX_DUCKDB_MEMORY_MB = 4 * 1024
+_RESOURCE_BUDGET_MAX_ENGINE_THREADS = 8
+
+
+def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, object]:
+    """Return deterministic lower-layer limits for an available-memory budget."""
+
+    budget_mb = float(resource_budget_mb)
+    if budget_mb <= 0:
+        raise ValueError("resource_budget_mb must be positive")
+
+    available_gb = budget_mb / 1024.0
+    # ``EASYICU_OVERRIDE_MEMORY_GB`` models total memory and derives available
+    # memory as 70%.  The public resource budget is explicitly *available*
+    # memory, so invert that model rather than silently shrinking the contract.
+    modeled_total_gb = available_gb / _RESOURCE_BUDGET_AVAILABLE_FRACTION
+    if modeled_total_gb >= 128:
+        worker_cap = 64
+    elif modeled_total_gb >= 64:
+        worker_cap = 32
+    elif modeled_total_gb >= 32:
+        worker_cap = 16
+    elif modeled_total_gb > 16:
+        worker_cap = 8
+    else:
+        worker_cap = 2
+    engine_threads = max(
+        1,
+        min(_RESOURCE_BUDGET_MAX_ENGINE_THREADS, worker_cap),
+    )
+    duckdb_memory_mb = max(
+        1024,
+        min(
+            _RESOURCE_BUDGET_MAX_DUCKDB_MEMORY_MB,
+            int(budget_mb * 0.25),
+        ),
+    )
+    cache_budget_mb = (
+        _RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB
+        if modeled_total_gb <= 24
+        else max(
+            _RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB,
+            int(budget_mb * 0.25),
+        )
+    )
+    return {
+        "resource_budget_mb": round(budget_mb, 1),
+        "modeled_total_memory_gb": round(modeled_total_gb, 6),
+        "parallel_max_workers": worker_cap,
+        "arrow_threads": engine_threads,
+        "duckdb_threads": engine_threads,
+        "duckdb_memory_limit_mb": duckdb_memory_mb,
+        "resolver_cache_budget_mb": cache_budget_mb,
+    }
+
 # A full-cohort one-shot is not admitted merely because the generic
 # per-stay formula happens to cover the cohort.  The 2026-08-03 full-six run
 # showed that source-table shape and score-grid construction dominate that
@@ -147,6 +214,26 @@ _STREAM_CALIBRATED_REFERENCE = {
 # currently available is enough for a full MIMIC-IV one-shot.
 _MEASURED_ONESHOT_HEADROOM = 1.10
 _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "aumc": {
+        # Full-cohort module measurements from the sealed 23,106-stay AUMC
+        # extraction. These owners are outside the later IMV/SOFA semantic
+        # repair; the deterministic worker envelope only reduces their lower-
+        # layer concurrency/cache limits. Keep the three historically heavy
+        # owners (respiratory, ventilator and other_scores) out of this table;
+        # all three now have current 8-GiB batch evidence below.
+        "demographics": {"cohort_stays": 23_106, "peak_rss_mb": 210.1, "seconds": 0.4},
+        "outcome": {"cohort_stays": 23_106, "peak_rss_mb": 193.5, "seconds": 0.3},
+        "blood_gas": {"cohort_stays": 23_106, "peak_rss_mb": 2_207.2, "seconds": 11.7},
+        "hematology": {"cohort_stays": 23_106, "peak_rss_mb": 2_060.8, "seconds": 78.9},
+        "chemistry": {"cohort_stays": 23_106, "peak_rss_mb": 1_665.7, "seconds": 74.9},
+        "vasopressors": {"cohort_stays": 23_106, "peak_rss_mb": 2_253.5, "seconds": 7.4},
+        "vitals": {"cohort_stays": 23_106, "peak_rss_mb": 4_101.1, "seconds": 73.5},
+        "renal": {"cohort_stays": 23_106, "peak_rss_mb": 4_101.8, "seconds": 67.2},
+        "medications": {"cohort_stays": 23_106, "peak_rss_mb": 3_782.0, "seconds": 29.5},
+        "neurological": {"cohort_stays": 23_106, "peak_rss_mb": 2_035.7, "seconds": 13.1},
+        "circulatory": {"cohort_stays": 23_106, "peak_rss_mb": 3_677.6, "seconds": 29.6},
+        "sepsis_shared": {"cohort_stays": 23_106, "peak_rss_mb": 1_531.7, "seconds": 1.3},
+    },
     "eicu": {
         "demographics": {"cohort_stays": 200_859, "peak_rss_mb": 1_194.6, "seconds": 2.951},
         "outcome": {"cohort_stays": 200_859, "peak_rss_mb": 1_114.3, "seconds": 2.624},
@@ -160,8 +247,9 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
         "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
         "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
-        "sofa2_score": {"cohort_stays": 200_859, "peak_rss_mb": 6_926.6, "seconds": 558.108},
-        "sepsis3_sofa2": {"cohort_stays": 200_859, "peak_rss_mb": 6_268.4, "seconds": 372.807},
+        # ``sofa2_score`` and ``sepsis3_sofa2`` remain excluded from the
+        # one-shot registry after the 2026-09-04 eICU IMV ascertainment update.
+        # Their replacement 25k streamed measurements live below.
     },
     "miiv": {
         "demographics": {
@@ -277,6 +365,29 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
     }
 }
 
+# A profile is evidence for the exact dependency/semantic implementation that
+# produced it, not a permanent property of a module name.  Keep invalidations
+# executable and testable instead of leaving a warning only in release notes.
+# A key listed here must not also appear in either measured profile registry.
+_INVALIDATED_MEASURED_PROFILES: Mapping[
+    tuple[str, str], Mapping[str, str]
+] = {
+    (
+        "eicu",
+        "sofa2_score",
+    ): {
+        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
+        "invalidated_by": "resource_budget_execution_envelope_20260904",
+    },
+    (
+        "eicu",
+        "sepsis3_sofa2",
+    ): {
+        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
+        "invalidated_by": "resource_budget_execution_envelope_20260904",
+    },
+}
+
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
 # recorded batch size (or a smaller one), never an unmeasured one-shot. This is
@@ -284,6 +395,73 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # that respiratory/circulatory need five balanced patient batches at 8 GiB,
 # while three larger batches cross the same hard RSS limit.
 _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "aumc": {
+        # SOFA-1: the smallest rounded two-partition candidate (12k) crossed
+        # the hard stop, while 8k completed the three-partition closure.  The
+        # external process-tree peak is the larger of the two samplers.
+        "sofa1_score": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 6_535.4,
+            "seconds": 574.9,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 857.4,
+            "seconds": 2.8,
+        },
+        # Exact post-SOFA2-semantics boundary search under the deterministic
+        # 8,192-MiB execution envelope.  Both 7k and 6k crossed the 7,447-MiB
+        # hard stop; 5k completed all five partitions at commit 2964e85a.
+        # Use the larger internal sampler peak rather than the lower external
+        # process-tree sample so the admission threshold remains conservative.
+        "sofa2_score": {
+            "cohort_stays": 23_106,
+            "batch_size": 5_000,
+            "peak_rss_mb": 6_583.5,
+            "seconds": 927.2,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 23_106,
+            "batch_size": 5_000,
+            "peak_rss_mb": 1_110.9,
+            "seconds": 2.4,
+        },
+        # With isolated batches and deferred merging, 5k completed five
+        # partitions. Larger candidates failed EARLIER implementations, not
+        # this final path: this is a measured plan, not a minimum-batch proof.
+        # Use the largest internal batch sample because
+        # it exceeded the external monitor's coarser whole-run peak.
+        "respiratory": {
+            "cohort_stays": 23_106,
+            "batch_size": 5_000,
+            "peak_rss_mb": 7_254.6,
+            "seconds": 836.0,
+        },
+        # After the native-mode and raw tidal-volume repairs (a86b4fd6), 8k
+        # completed all three same-process partitions and native publication
+        # at a 6,281.5-MiB external peak. Independent full-source oracles passed
+        # for both axes and pooled tidal volume (at its float32 precision).
+        # Larger failed candidates used older code; this is a verified plan,
+        # not proof of the minimum partition count or globally fastest time.
+        "ventilator": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 6_281.5,
+            "seconds": 399.5,
+        },
+        # The 12k rounded two-partition candidate crossed the 7,447-MiB hard
+        # stop. The 8k candidate completed all three same-process streamed
+        # partitions with a 7,069.1-MiB external peak and exact logical
+        # equality to the sealed 2,580,685-row native table.
+        "other_scores": {
+            "cohort_stays": 23_106,
+            "batch_size": 8_000,
+            "peak_rss_mb": 7_069.1,
+            "seconds": 436.3,
+        },
+    },
     "eicu": {
         "respiratory": {
             "cohort_stays": 200_859,
@@ -315,6 +493,8 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 6_294.5,
             "seconds": 586.933,
         },
+        # Post-IMV SOFA-2 entries remain invalidated above until the exact
+        # 8-GiB lower-layer execution envelope has a complete benchmark.
     },
     "mimic": {
         "medications": {
@@ -375,6 +555,20 @@ def _normalise_stream_database(database: str) -> str:
     }.get(normalized, normalized)
 
 
+def _invalidated_profile_modules(
+    database: str,
+    modules: Optional[Sequence[str]],
+) -> tuple[str, ...]:
+    """Return requested modules whose old resource evidence is quarantined."""
+
+    normalized = _normalise_stream_database(database)
+    return tuple(
+        module
+        for module in dict.fromkeys(str(module) for module in modules or ())
+        if (normalized, module) in _INVALIDATED_MEASURED_PROFILES
+    )
+
+
 def _stream_calibration(database: str) -> Optional[tuple[int, float]]:
     """Return the conservative release calibration for one database alias."""
 
@@ -414,7 +608,7 @@ def _measured_batch_recommendation(
     modules: Optional[Sequence[str]],
     num_patients: int,
 ) -> Optional[tuple[int, float, float]]:
-    """Return the fastest fully-covered measured batch recommendation.
+    """Return the registered fully-covered measured batch recommendation.
 
     The tuple is ``(batch_size, required_available_mb, measured_peak_mb)``.
     One-shot-profiled modules do not constrain a mixed request's batch size;
@@ -428,6 +622,7 @@ def _measured_batch_recommendation(
     normalized_database = _normalise_stream_database(database)
     oneshot_profiles = _MEASURED_ONESHOT_PROFILES.get(normalized_database, {})
     batch_profiles = _MEASURED_BATCH_PROFILES.get(normalized_database, {})
+    selected_profiles = []
     selected_batches = []
     for module in requested_modules:
         batch_profile = batch_profiles.get(module)
@@ -435,13 +630,17 @@ def _measured_batch_recommendation(
         profile = batch_profile or oneshot_profile
         if profile is None or int(num_patients) > int(profile["cohort_stays"]):
             return None
+        selected_profiles.append(profile)
         if batch_profile is not None:
             selected_batches.append(batch_profile)
     if not selected_batches:
         return None
     batch_size = min(int(profile["batch_size"]) for profile in selected_batches)
+    # The aggregate request is only a summary, but it must still be
+    # conservative: a one-shot module executes sequentially beside the batch
+    # modules and can own the largest peak (for example eICU ventilator).
     measured_peak_mb = max(
-        float(profile["peak_rss_mb"]) for profile in selected_batches
+        float(profile["peak_rss_mb"]) for profile in selected_profiles
     )
     return (
         min(int(num_patients), batch_size),
@@ -737,7 +936,7 @@ def plan_extraction_resources(
     *,
     available_memory_mb: Optional[float] = None,
 ) -> ExtractionResourcePlan:
-    """Choose the fastest evidence-supported extraction strategy.
+    """Choose a measured strategy, preferring one-shot when it fits.
 
     Automatic patient batching is a fallback only.  A fully measured module
     request runs one-shot whenever its measured process-tree peak plus 10%
@@ -845,14 +1044,14 @@ def plan_extraction_resources(
             modules=selected_modules,
             advisory=(
                 f"Available memory {available_gib:.2f} GiB is below the measured "
-                f"fastest-batch threshold {required_gib:.2f} GiB. EasyICU will "
-                "use smaller patient batches, which is slower. Close memory-heavy "
-                "apps or free memory to restore the fastest verified batch size."
+                f"recorded-batch threshold {required_gib:.2f} GiB. EasyICU will "
+                "use smaller patient batches, which may be slower. Close memory-heavy "
+                "apps or free memory to restore the recorded batch size."
             ),
             advisory_zh=(
-                f"当前可用内存 {available_gib:.2f} GiB，低于实测最快批次门槛 "
-                f"{required_gib:.2f} GiB。EasyICU 将使用更小的患者批次，速度会变慢；"
-                "关闭占内存程序或清理内存后可恢复最快已验证批次。"
+                f"当前可用内存 {available_gib:.2f} GiB，低于已登记批次门槛 "
+                f"{required_gib:.2f} GiB。EasyICU 将使用更小的患者批次，速度可能变慢；"
+                "关闭占内存程序或清理内存后可恢复已验证批次；这不代表全局最快。"
             ),
         )
 
@@ -882,9 +1081,27 @@ def plan_extraction_resources(
     threshold_text_zh = (
         f"{required_mb / 1024.0:.0f} GiB" if required_mb is not None else "安全门槛"
     )
+    invalidated_modules = _invalidated_profile_modules(
+        database,
+        selected_modules,
+    )
+    reason_code = (
+        "invalidated_profile_memory_guard"
+        if invalidated_modules
+        else "unmeasured_profile_memory_guard"
+    )
+    invalidation_text = (
+        " Previous measurements were invalidated after a dependency or "
+        "semantic change."
+        if invalidated_modules
+        else ""
+    )
+    invalidation_text_zh = (
+        " 旧实测已因依赖或语义变更而失效。" if invalidated_modules else ""
+    )
     return ExtractionResourcePlan(
         mode=mode,
-        reason_code="unmeasured_profile_memory_guard",
+        reason_code=reason_code,
         batch_size=batch_size,
         available_memory_mb=available,
         required_available_memory_mb=required_mb,
@@ -893,12 +1110,14 @@ def plan_extraction_resources(
         advisory=(
             f"Available memory is {available_gib:.2f} GiB; this module set has no "
             f"full-cohort measurement below {threshold_text}. EasyICU will use "
-            "patient batches, which is slower. Close memory-heavy apps or free "
+            f"patient batches, which is slower.{invalidation_text} Close "
+            "memory-heavy apps or free "
             "memory before retrying the fastest mode."
         ),
         advisory_zh=(
             f"当前可用内存为 {available_gib:.2f} GiB；这组模块在 {threshold_text_zh} "
             "以下还没有全队列实测依据。EasyICU 将按患者分批，速度会变慢；"
+            f"{invalidation_text_zh}"
             "关闭占内存程序或清理内存后可再尝试最快模式。"
         ),
     )
@@ -1058,19 +1277,50 @@ def _build_default_db_paths() -> Dict[str, str]:
 _SPECIAL_OUTPUT_DIRNAME = "_special"
 
 
-def _extract_worker_env_setup(data_path: str) -> None:
+def _extract_worker_env_setup(
+    data_path: str,
+    resource_budget_mb: Optional[float] = None,
+) -> None:
     """提取子进程入口的共享环境准备。
 
-    本 worker 已是隔离子进程：模块退出后 OS 完整回收内存，模块间无碎片累积。
-    因此模块内部应一次性 in-process 加载，绝不要让 load_concepts 再启动“每批
-    子进程 fork”——每次 fork 都会重读共享源表(chartevents/labevents…)，是数倍
-    慢的根源。强制 in-process，让模块内单次扫表。
+    常规模块 worker 退出后由 OS 回收内存，所以 ``load_concepts`` 自身保持
+    in-process，避免其旧式内部 fork 重读共享源表。只有经过实测登记的外层流式
+    模块会由导出器显式为每个患者批次创建一个全新 spawn worker；其子 worker
+    内部仍然是 in-process。这两个层级不能混淆。
     """
     import os
     import sys
 
     os.environ.setdefault("EASYICU_DATA_PATH", data_path)
     os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
+    if resource_budget_mb is not None:
+        limits = _resource_budget_execution_limits(resource_budget_mb)
+        os.environ["EASYICU_RESOURCE_BUDGET_MB"] = str(
+            limits["resource_budget_mb"]
+        )
+        os.environ["EASYICU_OVERRIDE_MEMORY_GB"] = str(
+            limits["modeled_total_memory_gb"]
+        )
+        os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = str(
+            limits["parallel_max_workers"]
+        )
+        os.environ["EASYICU_ARROW_THREADS"] = str(limits["arrow_threads"])
+        os.environ["EASYICU_DUCKDB_THREADS"] = str(limits["duckdb_threads"])
+        os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = (
+            f"{limits['duckdb_memory_limit_mb']}MB"
+        )
+        os.environ["EASYICU_CACHE_BUDGET_MB"] = str(
+            limits["resolver_cache_budget_mb"]
+        )
+        # A compatibility caller may invoke worker setup after importing the
+        # cached planner.  Reset it so the explicit contract, not an earlier
+        # host-sized decision, owns all subsequent loader choices.
+        try:
+            from ..runtime.parallel_config import reset_global_config
+
+            reset_global_config()
+        except Exception:
+            pass
     _src_dir = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -1462,6 +1712,36 @@ _VITAL_STREAM_DERIVED_CONCEPTS = (
     "diastolic_shock_index",
 )
 
+# These exact database/module implementations retain large native allocator
+# arenas after a completed patient batch.  Running every batch in a fresh
+# spawned interpreter makes the process boundary, rather than allocator-
+# specific trim heuristics, the memory-release contract.  Keep the scope tied
+# to measured evidence: an eICU finding must not silently change another
+# database's execution strategy.
+_ISOLATED_STREAM_BATCH_TARGETS = frozenset(
+    {
+        ("eicu", "sofa2_score"),
+        # Full-cohort AUMC respiratory boundary runs retained Arrow/native
+        # allocator pages across successive batches: 8k, 7k and 6k all crossed
+        # the same 7,447-MiB process-tree stop late in the run even though their
+        # first-batch peaks fell from 5.43 GiB to 3.84 GiB. A fresh interpreter
+        # per batch makes the measured batch boundary real instead of allowing
+        # cumulative allocator residency to dominate it.
+        ("aumc", "respiratory"),
+    }
+)
+
+# Deferred merging was measured only for AUMC respiratory. eICU SOFA-2 keeps
+# its established append-after-each-child schedule until separately measured.
+_DEFERRED_STREAM_MERGE_TARGETS = frozenset({("aumc", "respiratory")})
+
+
+def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:
+    return (
+        _normalise_stream_database(database),
+        str(module_name),
+    ) in _ISOLATED_STREAM_BATCH_TARGETS
+
 
 def _clear_stream_loader_caches(loader) -> None:
     if loader is None:
@@ -1587,6 +1867,107 @@ def _load_stream_module_batch(
     return result
 
 
+def _write_isolated_stream_batch(
+    module_name: str,
+    concepts: List[str],
+    load_kwargs: Dict,
+    patient_ids: Dict,
+    destination: str,
+) -> None:
+    """Extract one patient batch and atomically write it from a fresh process."""
+
+    import os
+    from pathlib import Path
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from easyicu import load_concepts as _lc
+
+    data_path = str(load_kwargs.get("data_path") or "")
+    _extract_worker_env_setup(data_path)
+    target = Path(destination)
+    partial = target.with_name(f".{target.name}.partial")
+    if target.exists() or target.is_symlink() or partial.exists() or partial.is_symlink():
+        raise ValueError(f"refusing stale isolated batch output: {target}")
+
+    batch = None
+    frame = None
+    table = None
+    try:
+        batch = _load_stream_module_batch(
+            _lc,
+            module_name=module_name,
+            concepts=concepts,
+            load_kwargs=load_kwargs,
+            patient_ids=patient_ids,
+            loader=None,
+            pyarrow_module=pa,
+        )
+        frame = _normalise_module_frame_for_parquet(
+            batch,
+            concepts,
+            reorder=False,
+        )
+        if frame is None:
+            return
+        id_col, requested_ids = next(iter(patient_ids.items()))
+        if id_col in frame.columns:
+            outside_batch = frame[id_col].notna() & ~frame[id_col].isin(requested_ids)
+            if bool(outside_batch.any()):
+                outside_count = int(frame.loc[outside_batch, id_col].nunique())
+                raise ValueError(
+                    f"{module_name}: isolated streamed batch returned "
+                    f"{outside_count} {id_col} values outside the requested "
+                    "patient partition"
+                )
+        table = _module_arrow_table(
+            frame,
+            concepts,
+            pa,
+            module=module_name,
+        )
+        pq.write_table(table, partial, compression="snappy")
+        os.replace(partial, target)
+    finally:
+        partial.unlink(missing_ok=True)
+        del table, frame, batch
+        _clear_stream_loader_caches(None)
+        _release_stream_batch_memory(pa)
+
+
+def _append_isolated_stream_batch(
+    source: Path,
+    *,
+    writer,
+    schema,
+    pyarrow_module,
+    parquet_module,
+) -> int:
+    """Append one child-produced file without materialising its full table."""
+
+    parquet_file = parquet_module.ParquetFile(source)
+    output_rows = int(parquet_file.metadata.num_rows)
+    for record_batch in parquet_file.iter_batches(batch_size=64 * 1024):
+        table = pyarrow_module.Table.from_batches([record_batch])
+        # Match ``_module_arrow_table(..., schema=first_schema)`` without
+        # converting this bounded Arrow batch back to pandas.  Later source
+        # batches can omit context fields present in the first batch or expose
+        # additional context fields that are not part of the frozen output
+        # contract.
+        for field in schema:
+            if field.name not in table.column_names:
+                table = table.append_column(
+                    field,
+                    pyarrow_module.nulls(len(table), type=field.type),
+                )
+        table = table.select(schema.names)
+        if table.schema != schema:
+            table = table.cast(schema)
+        writer.write_table(table)
+        del table
+    return output_rows
+
+
 def _stream_module_batches_to_parquet(
     module_name: str,
     concepts: List[str],
@@ -1607,6 +1988,7 @@ def _stream_module_batches_to_parquet(
     their output on an external disk never use the system volume for it.
     """
     import os
+    import multiprocessing as mp
     from pathlib import Path
 
     import pyarrow as pa
@@ -1636,10 +2018,21 @@ def _stream_module_batches_to_parquet(
     current_batch_size = int(batch_size)
     batch_load_kwargs = dict(load_kwargs)
     batch_load_kwargs.pop("patient_ids", None)
+    isolate_batch_process = _requires_isolated_stream_batch(
+        str(load_kwargs.get("database") or ""),
+        module_name,
+    )
+    defer_merge = isolate_batch_process and (
+        _normalise_stream_database(str(load_kwargs.get("database") or "")),
+        module_name,
+    ) in _DEFERRED_STREAM_MERGE_TARGETS
+    batch_process_context = _get_extraction_mp_context(mp) if isolate_batch_process else None
+    part_files: list[Path] = []
     try:
         start = 0
         while start < len(all_ids):
             table = None
+            batch = None
             batch_ids = all_ids[start : start + current_batch_size]
             # Keep the inner ``load_concepts`` boundary identical to the outer
             # writer boundary.  After first-batch adaptation, retaining the
@@ -1650,55 +2043,123 @@ def _stream_module_batches_to_parquet(
             batch_sampler = _RSSPeakSampler().start()
             frame = None
             output_rows = 0
+            batch_part = destination.with_name(
+                f".{module_name}.batch-{len(batch_telemetry) + 1:05d}.parquet"
+            )
             try:
-                batch = _load_stream_module_batch(
-                    _lc,
-                    module_name=module_name,
-                    concepts=concepts,
-                    load_kwargs=batch_load_kwargs,
-                    patient_ids={id_col: batch_ids},
-                    loader=loader,
-                    pyarrow_module=pa,
-                )
-                frame = _normalise_module_frame_for_parquet(
-                    batch,
-                    concepts,
-                    reorder=False,
-                )
-                if frame is not None:
-                    if id_col in frame.columns:
-                        outside_batch = frame[id_col].notna() & ~frame[id_col].isin(
-                            batch_ids
+                if isolate_batch_process:
+                    assert batch_process_context is not None
+                    if batch_part.exists() or batch_part.is_symlink():
+                        raise ValueError(
+                            f"refusing stale isolated batch output: {batch_part}"
                         )
-                        if bool(outside_batch.any()):
-                            outside_count = int(
-                                frame.loc[outside_batch, id_col].nunique()
-                            )
-                            raise ValueError(
-                                f"{module_name}: streamed batch returned "
-                                f"{outside_count} {id_col} values outside the "
-                                "requested patient partition"
-                            )
-                    produced_concepts.update(
-                        concept for concept in concepts if concept in frame.columns
+                    # Register the path before starting the child so every
+                    # failure path, including a non-zero child exit after an
+                    # atomic rename, removes it.
+                    part_files.append(batch_part)
+                    process = batch_process_context.Process(
+                        target=_write_isolated_stream_batch,
+                        args=(
+                            module_name,
+                            concepts,
+                            batch_load_kwargs,
+                            {id_col: batch_ids},
+                            str(batch_part),
+                        ),
+                        daemon=False,
                     )
-                    table = _module_arrow_table(
-                        frame,
+                    process.start()
+                    process.join()
+                    if process.exitcode != 0:
+                        raise RuntimeError(
+                            f"{module_name}: isolated batch worker exited "
+                            f"with code {process.exitcode}"
+                        )
+                    if batch_part.exists():
+                        part_schema = pq.read_schema(batch_part)
+                        if schema is None:
+                            schema = part_schema
+                        produced_concepts.update(
+                            concept
+                            for concept in concepts
+                            if concept in part_schema.names
+                        )
+                        # Keep the atomic child output until every extraction
+                        # batch has exited. Appending here leaves Arrow writer
+                        # pages resident in this parent while the next heavy
+                        # child is alive; measured AUMC respiratory runs then
+                        # crossed the same RSS stop even at smaller batches.
+                        # Deferred append separates extraction and merge peaks.
+                        output_rows = int(
+                            pq.ParquetFile(batch_part).metadata.num_rows
+                        )
+                        rows += output_rows
+                        if not defer_merge:
+                            if writer is None:
+                                writer = pq.ParquetWriter(
+                                    partial, schema, compression="snappy"
+                                )
+                            _append_isolated_stream_batch(
+                                batch_part,
+                                writer=writer,
+                                schema=schema,
+                                pyarrow_module=pa,
+                                parquet_module=pq,
+                            )
+                            batch_part.unlink()
+                            part_files.remove(batch_part)
+                    else:
+                        # An empty source batch intentionally produces no part.
+                        part_files.remove(batch_part)
+                else:
+                    batch = _load_stream_module_batch(
+                        _lc,
+                        module_name=module_name,
+                        concepts=concepts,
+                        load_kwargs=batch_load_kwargs,
+                        patient_ids={id_col: batch_ids},
+                        loader=loader,
+                        pyarrow_module=pa,
+                    )
+                    frame = _normalise_module_frame_for_parquet(
+                        batch,
                         concepts,
-                        pa,
-                        module=module_name,
-                        schema=schema,
+                        reorder=False,
                     )
-                    if writer is None:
-                        schema = table.schema
-                        writer = pq.ParquetWriter(
-                            partial,
-                            schema,
-                            compression="snappy",
+                    if frame is not None:
+                        if id_col in frame.columns:
+                            outside_batch = frame[id_col].notna() & ~frame[id_col].isin(
+                                batch_ids
+                            )
+                            if bool(outside_batch.any()):
+                                outside_count = int(
+                                    frame.loc[outside_batch, id_col].nunique()
+                                )
+                                raise ValueError(
+                                    f"{module_name}: streamed batch returned "
+                                    f"{outside_count} {id_col} values outside the "
+                                    "requested patient partition"
+                                )
+                        produced_concepts.update(
+                            concept for concept in concepts if concept in frame.columns
                         )
-                    writer.write_table(table)
-                    output_rows = len(frame)
-                    rows += output_rows
+                        table = _module_arrow_table(
+                            frame,
+                            concepts,
+                            pa,
+                            module=module_name,
+                            schema=schema,
+                        )
+                        if writer is None:
+                            schema = table.schema
+                            writer = pq.ParquetWriter(
+                                partial,
+                                schema,
+                                compression="snappy",
+                            )
+                        writer.write_table(table)
+                        output_rows = len(frame)
+                        rows += output_rows
             finally:
                 batch_memory = batch_sampler.stop()
 
@@ -1709,6 +2170,7 @@ def _stream_module_batches_to_parquet(
                     "stays": len(batch_ids),
                     "inner_load_batch_size": int(batch_load_kwargs["batch_size"]),
                     "output_rows": output_rows,
+                    "batch_process_isolation": isolate_batch_process,
                     **batch_memory,
                 }
             )
@@ -1728,14 +2190,37 @@ def _stream_module_batches_to_parquet(
                     available_memory_mb=batch_memory["available_memory_mb_at_start"],
                     remaining_patients=len(all_ids) - start,
                 )
-        if writer is None:
+        if defer_merge:
+            if not part_files:
+                return None
+            assert schema is not None
+            writer = pq.ParquetWriter(partial, schema, compression="snappy")
+            for part_file in list(part_files):
+                appended_rows = _append_isolated_stream_batch(
+                    part_file,
+                    writer=writer,
+                    schema=schema,
+                    pyarrow_module=pa,
+                    parquet_module=pq,
+                )
+                if appended_rows != int(pq.ParquetFile(part_file).metadata.num_rows):
+                    raise RuntimeError(
+                        f"{module_name}: isolated batch row count changed during "
+                        f"deferred merge: {part_file.name}"
+                    )
+                part_file.unlink()
+                part_files.remove(part_file)
+                _release_stream_batch_memory(pa)
+        elif writer is None:
             return None
         writer.close()
         writer = None
         os.replace(partial, destination)
-    except Exception:
+    except BaseException:
         if writer is not None:
             writer.close()
+        for part_file in part_files:
+            part_file.unlink(missing_ok=True)
         partial.unlink(missing_ok=True)
         raise
 
@@ -1748,6 +2233,8 @@ def _stream_module_batches_to_parquet(
         "final_planned_batch_size": current_batch_size,
         "adaptive_batch_growth": bool(adaptive_batch_growth),
         "patient_partition_strategy": "source_order_interleaved_v1",
+        "batch_process_isolation": isolate_batch_process,
+        "deferred_batch_merge": defer_merge,
         "initial_planned_partition_count": planned_partition_count,
     }
 
@@ -1942,6 +2429,11 @@ def _run_module_extraction(
         manifest["initial_planned_partition_count"] = stream_info.get(
             "initial_planned_partition_count"
         )
+        manifest["batch_process_isolation"] = stream_info.get(
+            "batch_process_isolation",
+            False,
+        )
+        manifest["deferred_batch_merge"] = stream_info.get("deferred_batch_merge", False)
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
@@ -2015,6 +2507,82 @@ def _require_timed_positive_suspicion(
     )
 
 
+def _consolidate_special_score_dependency(
+    frame,
+    *,
+    score_name: str,
+    id_col: str,
+    time_col: str,
+    database: str = "",
+):
+    """Build one score per stay/time before applying a Sepsis delta window.
+
+    Streamed score artifacts are producer outputs, not yet native-v2 files.
+    Multiple component rows may therefore share a key. A Sepsis delta over
+    those arbitrary within-key row orders can create a false same-time rise;
+    collapse component severity first and derive the total second.
+    """
+
+    import pandas as pd
+
+    if score_name == "sofa":
+        components = list(_SOFA1_COMPONENT_NAMES)
+        required = {id_col, time_col, *components}
+        missing = required.difference(frame.columns)
+        if missing:
+            raise ValueError(
+                f"SOFA-1 Sepsis dependency lacks columns: {sorted(missing)}"
+            )
+        grouped = (
+            frame[[id_col, time_col, *components]]
+            .groupby([id_col, time_col], as_index=False, sort=False, dropna=False)
+            .max()
+        )
+        grouped[score_name] = grouped[components].sum(axis=1, skipna=True)
+        return grouped[[id_col, time_col, score_name]]
+
+    if score_name != "sofa2":
+        raise ValueError(f"Unsupported Sepsis score dependency: {score_name}")
+    components = list(SOFA2_COMPONENT_NAMES)
+    available = [f"{component}_available" for component in components]
+    required = {id_col, time_col, *components, *available}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(
+            f"SOFA-2 Sepsis dependency lacks columns: {sorted(missing)}"
+        )
+    working = frame[[id_col, time_col, *components, *available]].copy()
+    for component, receipt in zip(components, available):
+        valid = working[receipt].astype("boolean").fillna(False)
+        working[component] = pd.to_numeric(
+            working[component], errors="coerce"
+        ).where(valid)
+    grouped = working.groupby(
+        [id_col, time_col],
+        as_index=False,
+        sort=False,
+        dropna=False,
+    ).agg({**{component: "max" for component in components}, **{receipt: "max" for receipt in available}})
+    # The primary SOFA-2 analysis imputes a patient-level missing domain to
+    # its normal score of zero. Availability receipts are retained for
+    # complete-case sensitivity analyses and prevent a disclaimed non-zero
+    # value from entering the primary total. An entirely unsupported database
+    # domain remains a structural failure rather than patient-level missingness.
+    grouped[score_name] = (
+        grouped[components]
+        .where(grouped[available].astype("boolean").fillna(False).to_numpy(), 0)
+        .fillna(0)
+        .sum(axis=1)
+    )
+    if not sofa2_total_structurally_supported(database):
+        grouped[score_name] = pd.Series(
+            pd.NA,
+            index=grouped.index,
+            dtype="Float64",
+        )
+    return grouped[[id_col, time_col, score_name]]
+
+
 def _stream_special_extraction_batches(
     special_modules: List[str],
     database: str,
@@ -2079,7 +2647,12 @@ def _stream_special_extraction_batches(
     module_memory_sampler = _RSSPeakSampler().start()
     source_root = Path(published_output_dir)
 
-    def _read_dependency(module_name: str, ids: List) -> "pd.DataFrame":
+    def _read_dependency(
+        module_name: str,
+        ids: List,
+        *,
+        value_columns: Sequence[str],
+    ) -> "pd.DataFrame":
         source = source_root / f"{module_name}.parquet"
         if not source.is_file():
             # A normal module can complete successfully with zero rows (for
@@ -2100,12 +2673,57 @@ def _stream_special_extraction_batches(
                 and not manifest.get("saved")
             ):
                 raise FileNotFoundError(f"missing streamed dependency module: {source}")
-            return pd.DataFrame(columns=[id_col, *EXTRACT_MODULES.get(module_name, [])])
-        return (
-            ds.dataset(source, format="parquet")
-            .to_table(filter=ds.field(id_col).isin(ids))
-            .to_pandas()
+            return pd.DataFrame(columns=[id_col, *value_columns])
+        dataset = ds.dataset(source, format="parquet")
+        # A selected-module refresh can combine a newly extracted producer
+        # artifact (which still uses the database-native identifier) with a
+        # hash-verified dependency copied from a sealed native-v2 package
+        # (whose public identifier is ``stay_id``).  Resolve the identifier
+        # per dependency and normalize it back to the worker's native name.
+        # This is an identifier-only adapter: values and time semantics remain
+        # byte-for-byte those of the sealed dependency.
+        dependency_id_col = (
+            id_col
+            if id_col in dataset.schema.names
+            else "stay_id"
+            if "stay_id" in dataset.schema.names
+            else None
         )
+        if dependency_id_col is None:
+            raise ValueError(
+                f"streamed dependency {module_name} lacks patient identifier "
+                f"{id_col!r} or canonical 'stay_id'"
+            )
+        time_column = next(
+            (
+                name
+                for name in (
+                    "charttime",
+                    "time",
+                    "starttime",
+                    "datetime",
+                    "Offset",
+                    "measuredat_minutes",
+                    "measuredat",
+                )
+                if name in dataset.schema.names
+            ),
+            None,
+        )
+        projected = [
+            column
+            for column in dict.fromkeys(
+                [dependency_id_col, time_column, *value_columns]
+            )
+            if column is not None and column in dataset.schema.names
+        ]
+        frame = dataset.to_table(
+            columns=projected,
+            filter=ds.field(dependency_id_col).isin(ids),
+        ).to_pandas()
+        if dependency_id_col != id_col:
+            frame = frame.rename(columns={dependency_id_col: id_col})
+        return frame
 
     def _append_frame(concept: str, frame) -> None:
         if frame is None or frame.empty:
@@ -2120,60 +2738,105 @@ def _stream_special_extraction_batches(
         writers[concept].write_table(table)
         rows[concept] += len(frame)
 
-    def _suspicion_timeline(susp, time_col: str):
-        """Return validated, event-timed suspected-infection flags."""
-        _require_timed_positive_suspicion(
-            susp,
-            id_col=id_col,
-            time_col=time_col,
-            database=database,
+    def _time_column(frame):
+        return next(
+            (
+                name
+                for name in (
+                    "charttime",
+                    "time",
+                    "starttime",
+                    "datetime",
+                    "Offset",
+                    "measuredat_minutes",
+                    "measuredat",
+                )
+                if name in frame.columns
+            ),
+            None,
         )
-        if time_col not in susp.columns:
-            return pd.DataFrame(columns=[id_col, time_col, "susp_inf"])
-        return susp[[id_col, time_col, "susp_inf"]]
+
+    def _suspicion_timeline(susp, *, source_time_col, target_time_col: str):
+        """Project a validated SI timeline onto the score's time-column name."""
+
+        if source_time_col is None:
+            return pd.DataFrame(columns=[id_col, target_time_col, "susp_inf"])
+        projected = susp[[id_col, source_time_col, "susp_inf"]].copy()
+        if source_time_col != target_time_col:
+            projected = projected.rename(columns={source_time_col: target_time_col})
+        return projected
 
     try:
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
-            susp = _read_dependency("sepsis_shared", ids)
+            susp = _read_dependency(
+                "sepsis_shared",
+                ids,
+                value_columns=("susp_inf",),
+            )
             # No strict infection evidence means Sepsis-3 is structurally
             # unavailable, not a cohort-wide negative label.  Leave both
             # derived modules empty so the native publisher can emit typed
             # structural placeholders.
             if susp.empty:
                 continue
-            sofa1 = _read_dependency("sofa1_score", ids) if need_sofa1 else None
-            sofa2 = _read_dependency("sofa2_score", ids) if need_sofa2 else None
             if "susp_inf" not in susp.columns:
                 errors.append("streamed Sepsis dependency sepsis_shared lacks susp_inf")
                 continue
-
-            def _score_time_column(score):
-                return next(
-                    (
-                        name
-                        for name in (
-                            "charttime",
-                            "time",
-                            "starttime",
-                            "datetime",
-                            "Offset",
-                            "measuredat_minutes",
-                            "measuredat",
-                        )
-                        if name in score.columns
-                    ),
-                    None,
+            suspicion_time_col = _time_column(susp)
+            _require_timed_positive_suspicion(
+                susp,
+                id_col=id_col,
+                time_col=suspicion_time_col or "charttime",
+                database=database,
+            )
+            # A batch without a positive timed SI event cannot yield Sepsis-3.
+            # Avoid reading either multi-million-row score dependency for it.
+            if not bool(susp["susp_inf"].eq(True).fillna(False).any()):
+                continue
+            sofa1 = (
+                _read_dependency(
+                    "sofa1_score",
+                    ids,
+                    value_columns=_SOFA1_COMPONENT_NAMES,
                 )
+                if need_sofa1
+                else None
+            )
+            sofa2 = (
+                _read_dependency(
+                    "sofa2_score",
+                    ids,
+                    value_columns=(
+                        *SOFA2_COMPONENT_NAMES,
+                        *(
+                            f"{component}_available"
+                            for component in SOFA2_COMPONENT_NAMES
+                        ),
+                    ),
+                )
+                if need_sofa2
+                else None
+            )
 
-            if need_sofa1 and sofa1 is not None and "sofa" in sofa1.columns:
+            if need_sofa1 and sofa1 is not None:
                 from ..scores.sepsis import sep3 as _sep3
 
-                time_col = _score_time_column(sofa1)
+                time_col = _time_column(sofa1)
                 if time_col is None:
                     errors.append("streamed SOFA-1 dependency lacks a time index")
                 else:
-                    susp1 = _suspicion_timeline(susp, time_col)
+                    sofa1 = _consolidate_special_score_dependency(
+                        sofa1,
+                        score_name="sofa",
+                        id_col=id_col,
+                        time_col=time_col,
+                    )
+                    susp1 = _suspicion_timeline(
+                        susp,
+                        source_time_col=suspicion_time_col,
+                        target_time_col=time_col,
+                    )
                     frame = _sep3(
                         sofa1[[id_col, time_col, "sofa"]],
                         susp1,
@@ -2183,14 +2846,25 @@ def _stream_special_extraction_batches(
                     if "sep3_sofa1" in frame.columns:
                         frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
                     _append_frame("sep3_sofa1", frame)
-            if need_sofa2 and sofa2 is not None and "sofa2" in sofa2.columns:
+            if need_sofa2 and sofa2 is not None:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
 
-                time_col = _score_time_column(sofa2)
+                time_col = _time_column(sofa2)
                 if time_col is None:
                     errors.append("streamed SOFA-2 dependency lacks a time index")
                 else:
-                    susp2 = _suspicion_timeline(susp, time_col)
+                    sofa2 = _consolidate_special_score_dependency(
+                        sofa2,
+                        score_name="sofa2",
+                        id_col=id_col,
+                        time_col=time_col,
+                        database=database,
+                    )
+                    susp2 = _suspicion_timeline(
+                        susp,
+                        source_time_col=suspicion_time_col,
+                        target_time_col=time_col,
+                    )
                     frame = _sep3_sofa2(
                         sofa2[[id_col, time_col, "sofa2"]],
                         susp2,
@@ -2466,6 +3140,7 @@ def _extract_module_group_worker(
     stream_output_batches: bool = False,
     published_output_dir: Optional[str] = None,
     adaptive_stream_batches: bool = False,
+    resource_budget_mb: Optional[float] = None,
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
 
@@ -2480,7 +3155,7 @@ def _extract_module_group_worker(
     import os
     import traceback
 
-    _extract_worker_env_setup(data_path)
+    _extract_worker_env_setup(data_path, resource_budget_mb)
     from easyicu.api import keep_cache as _keep_cache
 
     with _keep_cache(
@@ -2661,6 +3336,14 @@ _NATIVE_EXPORT_ID_COLUMNS = (
 )
 
 _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
+_SOFA1_COMPONENT_NAMES = (
+    "sofa_resp",
+    "sofa_coag",
+    "sofa_liver",
+    "sofa_cardio",
+    "sofa_cns",
+    "sofa_renal",
+)
 
 # Event status and event time are different physical claims.  The outcome
 # module is published at the stay-level ICU-admission coordinate (charttime=0),
@@ -2858,7 +3541,12 @@ def _canonicalise_native_export_frame(
                 )
             canonical[concept] = numeric.astype("float64")
 
-    return canonical
+    return _recompute_native_derived_score_aggregates_frame(
+        canonical,
+        module=module,
+        requested_concepts=requested_concepts,
+        database=normalized_database,
+    )
 
 
 def _restore_native_export_storage_dtypes(
@@ -2888,6 +3576,246 @@ def _restore_native_export_storage_dtypes(
     return frame
 
 
+def _native_sofa2_aggregate_dependencies_present(
+    requested_concepts: Sequence[str],
+    columns: Sequence[str],
+) -> bool:
+    """Return whether a native frame can deterministically rebuild SOFA-2."""
+
+    required = set(SOFA2_COMPONENT_NAMES)
+    required_receipts = {
+        f"{component}_{suffix}"
+        for component in SOFA2_COMPONENT_NAMES
+        for suffix in ("observed", "available")
+    }
+    return (
+        "sofa2" in requested_concepts
+        and required.issubset(requested_concepts)
+        and required.union(required_receipts).issubset(columns)
+        and {"sofa2", "sofa2_observed", "sofa2_available"}.issubset(columns)
+    )
+
+
+def _recompute_native_sofa1_aggregate_frame(
+    frame,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    """Rebuild SOFA-1 from its consolidated organ components."""
+
+    if not (
+        module == "sofa1_score"
+        and "sofa" in requested_concepts
+        and set(_SOFA1_COMPONENT_NAMES).issubset(requested_concepts)
+        and {"sofa", *_SOFA1_COMPONENT_NAMES}.issubset(frame.columns)
+    ):
+        return frame
+    # The established SOFA-1 callback uses rowSums(..., na.rm=TRUE): a missing
+    # organ contributes zero, including the all-missing row.
+    frame["sofa"] = frame[list(_SOFA1_COMPONENT_NAMES)].sum(
+        axis=1,
+        skipna=True,
+    ).astype("float64")
+    return frame
+
+
+def _recompute_native_sofa2_aggregate_frame(
+    frame,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+    database: str = "",
+):
+    """Rebuild a derived SOFA-2 total after row-level transformations.
+
+    Native publication can merge several source rows into one ICU-hour key.
+    Medians of a precomputed total are not generally equal to the sum of the
+    independently consolidated components. The six component values and their
+    owner receipts therefore remain authoritative at this boundary.
+    """
+
+    if module != "sofa2_score" or not _native_sofa2_aggregate_dependencies_present(
+        requested_concepts,
+        frame.columns,
+    ):
+        return frame
+
+    components = list(SOFA2_COMPONENT_NAMES)
+    observed = [f"{component}_observed" for component in components]
+    available = [f"{component}_available" for component in components]
+    component_valid = frame[components].notna().all(axis=1)
+    available_frame = frame[available].astype("boolean").fillna(False)
+    all_available = available_frame.all(axis=1)
+    all_observed = frame[observed].astype("boolean").fillna(False).all(axis=1)
+    complete = component_valid & all_available
+    # Primary SOFA-2 totals use normal-value imputation for patient-level
+    # missing domains.  Complete-case status remains explicit in the aggregate
+    # receipts and therefore does not alter the score itself.
+    frame["sofa2"] = (
+        frame[components]
+        .where(available_frame.to_numpy(), 0)
+        .fillna(0)
+        .sum(axis=1)
+        .astype("float64")
+    )
+    structural_support = sofa2_total_structurally_supported(database)
+    if not structural_support:
+        frame["sofa2"] = float("nan")
+        complete = pd.Series(False, index=frame.index)
+    frame["sofa2_available"] = complete.astype("boolean")
+    frame["sofa2_observed"] = (complete & all_observed).astype("boolean")
+    return frame
+
+
+def _recompute_native_sofa2_aggregate_arrow(
+    table,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+    database: str = "",
+):
+    """Arrow-bounded counterpart of the pandas SOFA-2 aggregate rebuild."""
+
+    if module != "sofa2_score" or not _native_sofa2_aggregate_dependencies_present(
+        requested_concepts,
+        table.column_names,
+    ):
+        return table
+
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    first_component, *remaining_components = SOFA2_COMPONENT_NAMES
+    first_values = table[first_component]
+    complete = pc.and_(
+        pc.fill_null(table[f"{first_component}_available"], False),
+        pc.is_valid(first_values),
+    )
+    all_observed = pc.fill_null(
+        table[f"{first_component}_observed"], False
+    )
+    total = pc.if_else(
+        pc.fill_null(table[f"{first_component}_available"], False),
+        pc.fill_null(first_values, 0.0),
+        0.0,
+    )
+    for component in remaining_components:
+        values = table[component]
+        available = pc.fill_null(table[f"{component}_available"], False)
+        observed = pc.fill_null(table[f"{component}_observed"], False)
+        complete = pc.and_(complete, pc.and_(available, pc.is_valid(values)))
+        all_observed = pc.and_(all_observed, observed)
+        total = pc.add(
+            total,
+            pc.if_else(available, pc.fill_null(values, 0.0), 0.0),
+        )
+    if not sofa2_total_structurally_supported(database):
+        total = pa.nulls(len(table), type=pa.float64())
+        complete = pc.and_(complete, pa.scalar(False))
+    replacements = {
+        "sofa2": total,
+        "sofa2_observed": pc.and_(complete, all_observed),
+        "sofa2_available": complete,
+    }
+    for name, values in replacements.items():
+        index = table.column_names.index(name)
+        table = table.set_column(index, table.schema.field(name), values)
+    return table
+
+
+def _recompute_native_sofa1_aggregate_arrow(
+    table,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+):
+    """Arrow-bounded counterpart of the pandas SOFA-1 aggregate rebuild."""
+
+    if not (
+        module == "sofa1_score"
+        and "sofa" in requested_concepts
+        and set(_SOFA1_COMPONENT_NAMES).issubset(requested_concepts)
+        and {"sofa", *_SOFA1_COMPONENT_NAMES}.issubset(table.column_names)
+    ):
+        return table
+
+    import pyarrow.compute as pc
+
+    first_component, *remaining_components = _SOFA1_COMPONENT_NAMES
+    total = pc.fill_null(table[first_component], 0.0)
+    for component in remaining_components:
+        total = pc.add(total, pc.fill_null(table[component], 0.0))
+    index = table.column_names.index("sofa")
+    return table.set_column(index, table.schema.field("sofa"), total)
+
+
+def _recompute_native_derived_score_aggregates_frame(
+    frame,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+    database: str = "",
+):
+    frame = _recompute_native_sofa1_aggregate_frame(
+        frame,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
+    return _recompute_native_sofa2_aggregate_frame(
+        frame,
+        module=module,
+        requested_concepts=requested_concepts,
+        database=database,
+    )
+
+
+def _recompute_native_derived_score_aggregates_arrow(
+    table,
+    *,
+    module: str,
+    requested_concepts: Sequence[str],
+    database: str = "",
+):
+    table = _recompute_native_sofa1_aggregate_arrow(
+        table,
+        module=module,
+        requested_concepts=requested_concepts,
+    )
+    return _recompute_native_sofa2_aggregate_arrow(
+        table,
+        module=module,
+        requested_concepts=requested_concepts,
+        database=database,
+    )
+
+
+def _native_longitudinal_aggregation_policy(module: str) -> Dict[str, str]:
+    """Describe the exact duplicate-key rule sealed into native-v2 receipts."""
+
+    policy = {
+        "boolean": "any_non_null_preserving_all_null",
+        "numeric": "median_non_null_preserving_all_null",
+        "owner_receipted_numeric": (
+            "median_owner_available_non_null_preserving_all_unavailable"
+        ),
+        "string": "single_non_null_value_or_fail_on_conflict",
+    }
+    if module in {"sofa1_score", "sofa2_score"}:
+        policy["score_component"] = "max_non_null_worst_state"
+        policy["derived_score_total"] = (
+            "recomputed_after_component_consolidation"
+        )
+    if module == "sofa2_score":
+        policy["primary_missing_domain"] = (
+            "normal_value_zero_when_database_domain_is_structurally_supported"
+        )
+        policy["aggregate_availability_receipt"] = (
+            "all_six_owner_available_for_complete_case_sensitivity"
+        )
+    return policy
+
+
 def _consolidate_native_export_row_grain(
     frame,
     *,
@@ -2895,6 +3823,7 @@ def _consolidate_native_export_row_grain(
     requested_concepts: List[str],
     dictionary,
     source_charttime=None,
+    database: str = "",
 ):
     """Enforce one deterministic physical row per native-v2 primary key.
 
@@ -2906,8 +3835,10 @@ def _consolidate_native_export_row_grain(
 
     Every other module has the null-equal key ``(stay_id, charttime)``. Exact
     key collisions are consolidated by the physical type family: logical any,
-    numeric median, and a single non-null string value. Conflicting strings are
-    publication errors because silently choosing one would invent a category.
+    numeric median, and a single non-null string value. SOFA component ordinals
+    use the worst state and their totals are then re-derived. Conflicting
+    strings are publication errors because silently choosing one would invent
+    a category.
     """
     import numpy as np
     import pandas as pd
@@ -3075,18 +4006,7 @@ def _consolidate_native_export_row_grain(
             }
             for concept in _native_export_physical_value_columns(requested_concepts):
                 kind = _native_export_storage_kind(concept, dictionary)
-                available_column = f"{concept}_available"
-                if (
-                    concept in requested_concepts
-                    and concept.startswith("sofa2")
-                    and available_column in group
-                ):
-                    owner_available = (
-                        group[available_column].astype("boolean").fillna(False)
-                    )
-                    values = group.loc[owner_available, concept].dropna()
-                else:
-                    values = group[concept].dropna()
+                values = group[concept].dropna()
                 if values.empty:
                     record[concept] = pd.NA if kind in {"boolean", "string"} else np.nan
                 elif kind == "boolean":
@@ -3104,6 +4024,13 @@ def _consolidate_native_export_row_grain(
                             f"{distinct.astype(str).tolist()!r}"
                         )
                     record[concept] = distinct.iloc[0]
+                elif concept in {*_SOFA1_COMPONENT_NAMES, *SOFA2_COMPONENT_NAMES}:
+                    # Component scores already represent severity ordinals.
+                    # Same-hour duplicates therefore collapse to the worst
+                    # state, matching the callback's trailing-window max.
+                    record[concept] = float(
+                        pd.to_numeric(values, errors="raise").max()
+                    )
                 else:
                     record[concept] = float(
                         pd.to_numeric(values, errors="raise").median()
@@ -3120,6 +4047,12 @@ def _consolidate_native_export_row_grain(
     else:
         consolidated = working
 
+    consolidated = _recompute_native_derived_score_aggregates_frame(
+        consolidated,
+        module=module,
+        requested_concepts=requested_concepts,
+        database=database,
+    )
     physical_values = _native_export_physical_value_columns(requested_concepts)
     consolidated = consolidated[["stay_id", "charttime", *physical_values]].reset_index(
         drop=True
@@ -3147,14 +4080,7 @@ def _consolidate_native_export_row_grain(
         "duplicate_excess_rows_before": duplicate_excess,
         "rows_consolidated": duplicate_excess,
         "duplicate_excess_rows_after": duplicate_after,
-        "aggregation_policy": {
-            "boolean": "any_non_null_preserving_all_null",
-            "numeric": "median_non_null_preserving_all_null",
-            "owner_receipted_numeric": (
-                "median_owner_available_non_null_preserving_all_unavailable"
-            ),
-            "string": "single_non_null_value_or_fail_on_conflict",
-        },
+        "aggregation_policy": _native_longitudinal_aggregation_policy(module),
     }
     return consolidated, audit
 
@@ -3452,14 +4378,7 @@ def _native_export_arrow_row_grain_audit(
         "duplicate_excess_rows_before": duplicate_excess,
         "rows_consolidated": 0,
         "duplicate_excess_rows_after": duplicate_excess,
-        "aggregation_policy": {
-            "boolean": "any_non_null_preserving_all_null",
-            "numeric": "median_non_null_preserving_all_null",
-            "owner_receipted_numeric": (
-                "median_owner_available_non_null_preserving_all_unavailable"
-            ),
-            "string": "single_non_null_value_or_fail_on_conflict",
-        },
+        "aggregation_policy": _native_longitudinal_aggregation_policy(module),
         "publication_backend": "pyarrow_record_batches",
         "uniqueness_backend": "duckdb_bounded_spillable_hash_aggregate",
         "uniqueness_memory_limit_mb": memory_mb,
@@ -3473,6 +4392,7 @@ def _native_export_duckdb_consolidate_row_grain(
     requested_concepts: List[str],
     dictionary,
     before_audit: Dict[str, object],
+    database: str = "",
 ) -> tuple[Dict[str, object], Dict[str, int]]:
     """Consolidate a large duplicate-bearing longitudinal parquet boundedly.
 
@@ -3534,12 +4454,12 @@ def _native_export_duckdb_consolidate_row_grain(
                 f"first({column} ORDER BY _row_order) "
                 f"FILTER (WHERE {column} IS NOT NULL)::VARCHAR AS {alias}"
             )
+        elif concept in SOFA2_COMPONENT_NAMES:
+            expression = f"max({column})::DOUBLE AS {alias}"
+        elif concept in _SOFA1_COMPONENT_NAMES:
+            expression = f"max({column})::DOUBLE AS {alias}"
         elif concept in requested_concepts and concept.startswith("sofa2"):
-            available = quote_identifier(f"{concept}_available")
-            expression = (
-                f"(median({column}) FILTER (WHERE {available} IS TRUE))"
-                f"::DOUBLE AS {alias}"
-            )
+            expression = f"median({column})::DOUBLE AS {alias}"
         else:
             expression = f"median({column})::DOUBLE AS {alias}"
         aggregate_expressions.append(expression)
@@ -3674,6 +4594,12 @@ def _native_export_duckdb_consolidate_row_grain(
                 use_threads=False,
             ):
                 table = pa.Table.from_batches([batch]).cast(target_schema, safe=True)
+                table = _recompute_native_derived_score_aggregates_arrow(
+                    table,
+                    module=module,
+                    requested_concepts=requested_concepts,
+                    database=database,
+                )
                 for concept in requested_concepts:
                     column = table[concept]
                     concept_non_null[concept] += int(len(column) - column.null_count)
@@ -4137,6 +5063,7 @@ def _try_publish_native_export_arrow_fast_path(
             requested_concepts=requested_concepts,
             dictionary=dictionary,
             before_audit=row_grain_audit,
+            database=database,
         )
 
     return {
@@ -4776,6 +5703,7 @@ def _publish_native_export_v2(
                         requested_concepts=requested_concept_plan[module],
                         dictionary=dictionary,
                         source_charttime=source_charttime,
+                        database=normalized_database,
                     )
                     post_consolidation_bounds = _enforce_native_export_concept_bounds(
                         frame,
@@ -4800,6 +5728,7 @@ def _publish_native_export_v2(
                         module=module,
                         requested_concepts=requested_concept_plan[module],
                         dictionary=dictionary,
+                        database=normalized_database,
                     )
                 row_grain_audit["publication_backend"] = (
                     "pandas_bounded_row_grain_fallback"
@@ -5040,6 +5969,7 @@ def _publish_native_export_v2(
         "resource_plan": result.get("resource_plan"),
         "module_resource_plans": result.get("module_resource_plans"),
         "resource_budget_mb": result.get("resource_budget_mb"),
+        "resource_execution_limits": result.get("resource_execution_limits"),
         "time_window_authority": time_window_authority,
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
@@ -5075,7 +6005,7 @@ def extract_database(
     batch_size: Optional[int] = None,
     group_modules: bool = True,
     native_export_v2: Optional[bool] = None,
-    stream_output_batches: bool = False,
+    stream_output_batches: Optional[bool] = None,
     verbose: bool = True,
     adaptive_stream_batches: Optional[bool] = None,
     resource_budget_mb: Optional[float] = None,
@@ -5094,14 +6024,14 @@ def extract_database(
         chartevents/labevents 等重表每组只扫一次，而不是每模块重扫一遍；
         SOFA 闭包只算一次并被 sofa1/sofa2/sep3_* 复用。缓存受
         EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%）；
-        低内存整库安全性由下述 streamed pilot 与重试合同共同保证。
+        固定预算同时限制线程、缓冲区和缓存；运行时硬上限仍需外部监控。
       * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
         arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
         EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
       * 自动策略以最快为目标：若所选模块已有全队列实测，且当前可用内存可容纳
         实测进程树峰值 + 10% 余量，则直接 one-shot；内存不足才按患者分批并返回
         结构化提醒。未实测的 MIMIC-III、MIMIC-IV 和 AUMC 模块组继续使用 24 GiB
-        保护线。每个流式模块再根据首批真实工作集调整后续批次，上限 67,000 stays。
+        保护线。默认固定执行模块计划，不根据服务器空闲内存自动扩大后续批次。
       * 参考实测：MIMIC-III 全量 61,532 stays 的 SOFA-2 六分量 ~6 分钟。
 
     Args:
@@ -5112,9 +6042,8 @@ def extract_database(
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
         batch_size: 模块内患者分批大小。None(默认) = 优先采用所选模块的实测
-            one-shot 最快路径；只有当前可用内存低于安全门槛时才分批。流式提取
-            会根据首批实测工作集调整后续批次（上限 67,000 stays）。仅在需要
-            覆盖默认策略时显式传值。
+            one-shot 路径；内存不足才分批。已登记批次按固定计划执行；未实测
+            模块保留保守保护线。仅在需要覆盖默认策略时显式传值。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -5123,17 +6052,17 @@ def extract_database(
             跨库统一 schema 与 typed metadata sidecar，不会重读原始表。传
             False 可显式保留旧版未封装输出。若任何模块或 metadata 绑定失败，
             不会发布根 ``_manifest.json``。
-        stream_output_batches: 将显式患者批次直接追加写入模块 parquet，不在
+        stream_output_batches: None 自动在有 output_dir 的分批提取中启用流式
+            写出；True 将患者批次直接追加写入模块 parquet，不在
             worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
             外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
         verbose: 是否打印进度
-        adaptive_stream_batches: ``None`` 保持公共默认：自动选择的流式 batch
-            会自适应，用户显式 ``batch_size`` 固定不变。六库 launcher 会同时
-            显式传入有 provenance 的首批计划和 ``True``，从而保证 plan 与实际
-            首批一致，同时允许后续批次继续按实测增长或收缩。
+        adaptive_stream_batches: None/False 固定执行资源计划。True 仅供没有显式
+            resource_budget_mb 的自适应试验；固定预算禁止运行中增批。
         resource_budget_mb: 资源规划可使用的内存预算（MiB）。None 使用当前
             可用内存；可复现的正式 release 应显式传入其资源合同（例如 8192），
-            避免同一任务仅因换到大内存服务器就绕过已验证的分批边界。
+            避免同一任务仅因换到大内存服务器就绕过已验证的分批边界。显式预算
+            同时限制 worker、Arrow/DuckDB 线程、DuckDB buffer 与 resolver cache。
 
     Note:
         提取 worker 在所有平台均使用 ``spawn`` 以隔离 Arrow/DuckDB 原生状态。
@@ -5232,8 +6161,13 @@ def extract_database(
     # The resource plan is the single policy used by API, launcher, and Web.
     # Automatic batching is a last-resort degradation, never the default for a
     # measured module that fits currently available memory.
-    if adaptive_stream_batches and not stream_output_batches:
+    if adaptive_stream_batches and stream_output_batches is False:
         raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
+    if adaptive_stream_batches and resource_budget_mb is not None:
+        raise ValueError(
+            "adaptive_stream_batches cannot override a fixed resource_budget_mb; "
+            "use adaptive_stream_batches=False to execute the reviewed batch plan"
+        )
 
     automatic_batch = batch_size is None
     if resource_budget_mb is not None and float(resource_budget_mb) <= 0:
@@ -5242,6 +6176,11 @@ def extract_database(
         _available_memory_mb()
         if resource_budget_mb is None
         else float(resource_budget_mb)
+    )
+    resource_execution_limits = (
+        None
+        if resource_budget_mb is None
+        else _resource_budget_execution_limits(resource_budget_mb)
     )
     resource_plan = plan_extraction_resources(
         database,
@@ -5258,6 +6197,21 @@ def extract_database(
         None if automatic_batch else batch_size,
         available_memory_mb=planning_available_mb,
     )
+    has_patient_batches = any(
+        plan.mode != "one_shot" for plan in module_resource_plans.values()
+    )
+    if stream_output_batches is None:
+        stream_output_batches = output_dir is not None and has_patient_batches
+    if adaptive_stream_batches and not stream_output_batches:
+        raise ValueError("adaptive_stream_batches requires stream_output_batches=True")
+    if resource_budget_mb is not None and has_patient_batches and (
+        output_dir is None or not stream_output_batches
+    ):
+        raise ValueError(
+            "A fixed resource budget with patient batches requires an output_dir "
+            "and stream_output_batches=True; collecting the complete module in "
+            "memory is outside the measured streaming contract"
+        )
     # A mixed request must not force light modules through the strictest
     # module's batches.  Each module was profiled in an isolated process, so
     # automatic release execution uses that same per-module unit of planning.
@@ -5271,11 +6225,7 @@ def extract_database(
         or len({plan.batch_size for plan in module_resource_plans.values()}) > 1
     ):
         group_modules = False
-    _adaptive_stream_batches = bool(stream_output_batches) and (
-        automatic_batch
-        if adaptive_stream_batches is None
-        else bool(adaptive_stream_batches)
-    )
+    _adaptive_stream_batches = bool(stream_output_batches and adaptive_stream_batches)
     _auto_one_shot = all(
         plan.mode == "one_shot" for plan in module_resource_plans.values()
     )
@@ -5328,6 +6278,7 @@ def extract_database(
             for module, plan in module_resource_plans.items()
         },
         "resource_budget_mb": round(planning_available_mb, 1),
+        "resource_execution_limits": resource_execution_limits,
         "modules": {},
         "total_elapsed": 0,
         "output_dir": output_dir,
@@ -5405,6 +6356,8 @@ def extract_database(
             "peak_rss_mb": 0.0,
             "peak_working_set_mb": 0.0,
             "stream_batches": [],
+            "batch_process_isolation": False,
+            "deferred_batch_merge": False,
         }
         manifest_path = os.path.join(tmp_mod_dir, "_manifest.json")
         if not os.path.exists(manifest_path):
@@ -5423,6 +6376,11 @@ def extract_database(
             0.0,
         )
         mod_result["stream_batches"] = manifest.get("stream_batches", [])
+        mod_result["batch_process_isolation"] = manifest.get(
+            "batch_process_isolation",
+            False,
+        )
+        mod_result["deferred_batch_merge"] = manifest.get("deferred_batch_merge", False)
         output_manifest = {
             "module": mod_name,
             "saved": {},
@@ -5438,6 +6396,8 @@ def extract_database(
                 0.0,
             ),
             "stream_batches": mod_result["stream_batches"],
+            "batch_process_isolation": mod_result["batch_process_isolation"],
+            "deferred_batch_merge": mod_result["deferred_batch_merge"],
             "initial_batch_size": manifest.get("initial_batch_size"),
             "final_planned_batch_size": manifest.get("final_planned_batch_size"),
             "adaptive_batch_growth": manifest.get(
@@ -5449,6 +6409,7 @@ def extract_database(
                 "initial_planned_partition_count"
             ),
             "resource_plan": module_resource_plans[mod_name].to_dict(),
+            "resource_execution_limits": resource_execution_limits,
         }
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
         # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
@@ -5577,6 +6538,7 @@ def extract_database(
                         "initial_planned_partition_count"
                     ),
                     "resource_plan": module_resource_plans[mod_name].to_dict(),
+                    "resource_execution_limits": resource_execution_limits,
                 }
                 for c_name in concepts:
                     info = manifest.get("saved", {}).get(c_name)
@@ -5647,6 +6609,13 @@ def extract_database(
             label = " + ".join(group_mods + group_special)
             print(f"\n⏳ {label} ... RSS={rss:.0f}MB")
 
+        requires_batch_process_isolation = (
+            group_stream_output_batches
+            and any(
+                _requires_isolated_stream_batch(database, module)
+                for module in group_mods
+            )
+        )
         proc = mp_ctx.Process(
             target=_extract_module_group_worker,
             args=(
@@ -5661,8 +6630,11 @@ def extract_database(
                 group_stream_output_batches,
                 output_dir,
                 group_adaptive_stream_batches,
+                resource_budget_mb,
             ),
-            daemon=True,
+            # A memory-heavy streamed module may create one fresh process per
+            # patient batch so the OS, not allocator heuristics, owns teardown.
+            daemon=not requires_batch_process_isolation,
         )
         proc.start()
         proc.join()

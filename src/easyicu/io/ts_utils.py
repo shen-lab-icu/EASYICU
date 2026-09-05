@@ -922,6 +922,7 @@ def fill_gaps(
     interval: pd.Timedelta,
     limits: Optional[Any] = None,
     method: str = "none",
+    value_dtype: Optional[Union[str, np.dtype]] = None,
 ) -> pd.DataFrame:
     """Fill time gaps in a time series (R ricu fill_gaps).
 
@@ -934,6 +935,10 @@ def fill_gaps(
             `ICUTable`, or any length-2 sequence specifying global
             lower/upper bounds (matching ricu's difftime vector support)
         method: Fill method ('ffill', 'bfill', 'interpolate', or 'none')
+        value_dtype: Optional numeric dtype for non-key values in the generated
+            grid.  The default preserves the historical float64 path.  Small
+            ordinal owners may request float32 to halve grid memory without
+            changing their values.
 
     Returns:
         DataFrame with filled gaps
@@ -1206,9 +1211,20 @@ def fill_gaps(
 
                             # Pre-allocate result arrays
                             result_dict = {id_col_name: id_arr, index_col: time_arr}
+                            target_value_dtype = (
+                                np.dtype(value_dtype)
+                                if value_dtype is not None
+                                else np.dtype(np.float64)
+                            )
                             for col in data_cols:
-                                arr = np.full(total_rows, np.nan, dtype=np.float64)
-                                src = pd.to_numeric(data[col], errors='coerce').values
+                                arr = np.full(
+                                    total_rows,
+                                    np.nan,
+                                    dtype=target_value_dtype,
+                                )
+                                src = pd.to_numeric(
+                                    data[col], errors='coerce'
+                                ).to_numpy(dtype=target_value_dtype, copy=False)
                                 # Last-write-wins for duplicates (same as drop_duplicates keep='last')
                                 arr[_gpos_valid] = src[_valid]
                                 result_dict[col] = arr
@@ -1304,6 +1320,15 @@ def fill_gaps(
         return pd.DataFrame(columns=data.columns)
 
     result = pd.concat(filled_groups, ignore_index=True)
+    if value_dtype is not None:
+        value_columns = [
+            column
+            for column in result.columns
+            if column not in {*id_cols, index_col}
+            and pd.api.types.is_numeric_dtype(result[column])
+        ]
+        if value_columns:
+            result[value_columns] = result[value_columns].astype(value_dtype)
     return result
 
 def replace_na(
