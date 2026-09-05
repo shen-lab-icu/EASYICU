@@ -296,6 +296,13 @@ AUMC tidal-volume pre-resampling defect also requires a fresh module receipt;
 the old timing and equality statement above are historical, not acceptance
 of the corrected implementation.
 
+The corrected `a86b4fd6` implementation subsequently completed the full cohort
+with fixed 8,000/8,000/7,106 batches: 402.636 seconds including publication,
+6,281.5 MiB external RSS, and a 6,909.65 MiB admission threshold. The full raw
+mode and tidal-volume oracles pass, and all 11 unaffected base fields are
+unchanged. See `extraction_review_fixes_20260905.md` for the intentional
+tidal-volume corrections, precision contract and non-sealable candidate paths.
+
 Finally, the AUMC `other_scores` rounded two-partition candidate of 12,000
 stays crossed the same hard stop at 7,576.7 MiB after 68.1 seconds. The 8,000-
 stay candidate completed three partitions in 439.1 seconds (436.3 seconds in
