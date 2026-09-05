@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -42,7 +43,11 @@ def test_visual_variety_is_advice_while_scientific_coverage_still_gates(
     monkeypatch.setattr(
         owner, "build_article_figure_strategy", lambda *args, **kwargs: strategy
     )
-    monkeypatch.setattr(owner, "_read_panels", lambda *args, **kwargs: panels)
+    directory = tmp_path / "publication_figures"
+    directory.mkdir()
+    (directory / "primary.figure_contract.json").write_text(
+        json.dumps({"figure_id": "primary", "panels": panels}), encoding="utf-8",
+    )
     status = owner.summarize_article_figure_strategy_coverage(
         context=SimpleNamespace(), run_dir=tmp_path
     )

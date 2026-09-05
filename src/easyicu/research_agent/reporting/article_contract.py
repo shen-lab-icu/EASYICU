@@ -23,7 +23,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..figures.contracts import figure_contract_paths
+from ..figures.contracts import FigureContractInventory
 from ..authority.runtime_artifacts import (
     current_evidence_records,
     current_successful_step_records,
@@ -889,46 +889,12 @@ def _verified_primary_lineage_step_ids(
     return allowed
 
 
-# Shared with figure_strategy / display_suite via figures.contracts so all
-# article-level audits see the identical contract list.
-_figure_contract_paths = figure_contract_paths
-
-
-def _figure_contract_text(path: Path) -> str:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-    if not isinstance(raw, dict):
-        return ""
-    parts: List[str] = [
-        str(raw.get("figure_id") or ""),
-        str(raw.get("title") or ""),
-        str(raw.get("core_claim") or ""),
-        str(raw.get("statistics_note") or ""),
-    ]
-    panels = raw.get("panels")
-    if isinstance(panels, list):
-        for panel in panels:
-            if not isinstance(panel, dict):
-                continue
-            parts.extend(
-                [
-                    str(panel.get("panel_id") or ""),
-                    str(panel.get("title") or ""),
-                    str(panel.get("role") or ""),
-                    str(panel.get("claim") or ""),
-                    str(panel.get("review_risk") or ""),
-                ]
-            )
-    return _normalise_space("\n".join(parts))
-
-
 def _artifact_texts(
     *,
     evidence_records: Sequence[Any],
     per_step_records: Sequence[Mapping[str, Any]],
     run_dir: Path,
+    figure_contracts: FigureContractInventory,
     allowed_step_ids: Optional[Set[str]] = None,
 ) -> List[str]:
     texts: List[str] = []
@@ -954,21 +920,11 @@ def _artifact_texts(
         text = _step_summary_text(record)
         if text:
             texts.append(text)
-    figure_records: Sequence[Mapping[str, Any]] = per_step_records
-    if allowed_step_ids is not None:
-        figure_records = [
-            record
-            for record in current_records
-            if str(record.get("step_id") or "").strip() in allowed_step_ids
-        ]
-    for path in _figure_contract_paths(
-        run_dir,
-        per_step_records=figure_records,
-        include_publication_figures=allowed_step_ids is None,
-    ):
-        text = _figure_contract_text(path)
-        if text:
-            texts.append(text)
+    texts.extend(
+        _normalise_space(text)
+        for text in figure_contracts.texts(allowed_step_ids=allowed_step_ids)
+        if text
+    )
     return texts
 
 
@@ -978,11 +934,16 @@ def roles_covered_by_artifacts(
     evidence_records: Sequence[Any],
     per_step_records: Sequence[Mapping[str, Any]],
     run_dir: Path,
+    figure_contracts: FigureContractInventory | None = None,
 ) -> Set[str]:
+    contracts = FigureContractInventory.load(
+        run_dir, per_step_records=per_step_records, current=figure_contracts,
+    )
     texts = _artifact_texts(
         evidence_records=evidence_records,
         per_step_records=per_step_records,
         run_dir=run_dir,
+        figure_contracts=contracts,
     )
     current_records = current_successful_step_records(per_step_records)
     primary_lineage_ids = _verified_primary_lineage_step_ids(
@@ -997,6 +958,7 @@ def roles_covered_by_artifacts(
             per_step_records=per_step_records,
             run_dir=run_dir,
             allowed_step_ids=primary_lineage_ids,
+            figure_contracts=contracts,
         )
     planner_owned_roles = set(contract.planner_owned_result_roles)
     covered: Set[str] = set()
@@ -1019,7 +981,11 @@ def summarize_article_contract_coverage(
     evidence_records: Sequence[Any],
     per_step_records: Sequence[Mapping[str, Any]],
     run_dir: Path,
+    figure_contracts: FigureContractInventory | None = None,
 ) -> Dict[str, Any]:
+    contracts = FigureContractInventory.load(
+        run_dir, per_step_records=per_step_records, current=figure_contracts,
+    )
     contract = build_article_analysis_contract(
         context,
         analysis_type=plan.analysis_type if plan is not None else None,
@@ -1030,6 +996,7 @@ def summarize_article_contract_coverage(
         evidence_records=evidence_records,
         per_step_records=per_step_records,
         run_dir=run_dir,
+        figure_contracts=contracts,
     )
     required_roles = set(contract.required_roles)
     missing_plan_roles = sorted(required_roles - plan_roles)
@@ -1039,7 +1006,7 @@ def summarize_article_contract_coverage(
         for req in contract.requirements
         if req.required and req.role in missing_artifact_roles
     ]
-    errors: List[str] = []
+    errors = contracts.error_messages()
     if missing_artifact_roles:
         errors.append(
             "Missing required article artifact role(s): "

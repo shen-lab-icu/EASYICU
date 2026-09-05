@@ -9,7 +9,6 @@ keyed by study-design family rather than a benchmark variable or database.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set
@@ -20,7 +19,7 @@ from ..contracts.figure_plan import (
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
 )
-from ..figures.contracts import figure_contract_paths, panel_chart_type, panel_text
+from ..figures.contracts import FigureContractInventory, panel_chart_type, panel_text
 from ..schema import ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
 from .study_design_playbook import StudyDesignFamily
@@ -549,19 +548,6 @@ def _normalise(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
-# Shared with display_suite / review_artifacts via figures.contracts so the
-# audits cannot disagree about which contracts exist.
-_contract_paths = figure_contract_paths
-
-
-def _is_primary_publication_contract(path: Path, run_dir: Path) -> bool:
-    try:
-        path.resolve().relative_to((run_dir / "publication_figures").resolve())
-    except ValueError:
-        return False
-    return path.name.endswith(".figure_contract.json")
-
-
 _panel_text = panel_text
 
 
@@ -685,53 +671,22 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
     return bool(family_aliases.get(chart_type, set()) & accepted)
 
 
-def _read_panels(
-    run_dir: Path,
-    *,
-    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
-    panels: List[Dict[str, Any]] = []
-    for path in _contract_paths(
-        run_dir,
-        per_step_records=per_step_records,
-    ):
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(raw, dict):
-            continue
-        raw_panels = raw.get("panels")
-        if not isinstance(raw_panels, list):
-            continue
-        for panel in raw_panels:
-            if not isinstance(panel, dict):
-                continue
-            item = dict(panel)
-            item["_contract_path"] = str(path)
-            item["_figure_id"] = str(raw.get("figure_id") or path.stem)
-            item["_chart_type"] = _panel_chart_type(item)
-            item["_role"] = _panel_role(item)
-            item["_primary_publication_contract"] = _is_primary_publication_contract(
-                path,
-                run_dir,
-            )
-            panels.append(item)
-    return panels
-
-
 def summarize_article_figure_strategy_coverage(
     *,
     context: ResearchContext,
     run_dir: Path,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
     analysis_family: StudyDesignFamily | None = None,
+    figure_contracts: FigureContractInventory | None = None,
 ) -> Dict[str, Any]:
     strategy = build_article_figure_strategy(
         context,
         analysis_family=analysis_family,
     )
-    panels = _read_panels(run_dir, per_step_records=per_step_records)
+    contracts = FigureContractInventory.load(
+        run_dir, per_step_records=per_step_records, current=figure_contracts,
+    )
+    panels = contracts.panel_projections()
     primary_panels = [
         panel for panel in panels if panel.get("_primary_publication_contract")
     ]
@@ -808,7 +763,7 @@ def summarize_article_figure_strategy_coverage(
         for role in strategy.role_strategies
         if role.required and role.placement == "main"
     }
-    errors = list(role_errors)
+    errors = [*contracts.error_messages(), *role_errors]
     primary_minimum_required_role_count = min(
         len(required_main_roles),
         _PRIMARY_PUBLICATION_MIN_ROLES.get(

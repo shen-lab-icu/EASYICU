@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from ..authority.evidence_store import EvidenceStore
 from ..figures.contracts import (
-    figure_contract_paths,
+    FigureContractInventory,
     figure_contract_text,
     figure_contract_tier,
     panel_chart_type,
@@ -272,6 +272,7 @@ def summarize_display_suite_status(
     run_dir: Path,
     publication: Dict[str, Any],
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    figure_contracts: FigureContractInventory | None = None,
 ) -> Dict[str, Any]:
     """Summarise article-level display coverage.
 
@@ -308,10 +309,10 @@ def summarize_display_suite_status(
     result_like_tokens = _RESULT_LIKE_BASE_TOKENS + _RESULT_LIKE_FAMILY_TOKENS.get(
         family, ()
     )
-    contract_paths = figure_contract_paths(
-        run_dir,
-        per_step_records=per_step_records,
+    contracts = FigureContractInventory.load(
+        run_dir, per_step_records=per_step_records, current=figure_contracts,
     )
+    contract_paths = contracts.paths
     primary_contract_paths = [
         path
         for path in contract_paths
@@ -342,14 +343,9 @@ def summarize_display_suite_status(
     has_absolute_risk_visual = False
     primary_has_absolute_risk_visual = False
     supporting_has_absolute_risk_visual = False
-    for contract_path in contract_paths:
-        tier = figure_contract_tier(contract_path, run_dir)
-        try:
-            raw = json.loads(contract_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(raw, dict):
-            continue
+    for snapshot in contracts.snapshots:
+        tier = snapshot.tier
+        raw = snapshot.to_payload()
         text = figure_contract_text(raw)
         categories.update(_display_categories_for_text(text))
         panels = raw.get("panels")
@@ -394,7 +390,7 @@ def summarize_display_suite_status(
     has_table_one = "table_one" in categories
     has_audit_context = bool(categories & _AUDIT_DISPLAY_CATEGORIES)
     figure_contract_count = len(contract_paths)
-    errors: List[str] = []
+    errors = contracts.error_messages()
     design_advice: List[str] = []
     if table_one_expected and not has_table_one:
         errors.append(
