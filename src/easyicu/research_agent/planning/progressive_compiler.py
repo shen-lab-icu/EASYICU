@@ -1415,27 +1415,6 @@ def _compile_adjusted_association(
         step_index=step_index,
         path="adjusted_association",
     )
-    ordinal_multi_outcome = resolve_ordinal_multi_outcome_contract(context)
-    if (
-        ordinal_multi_outcome is not None
-        and exposure == ordinal_multi_outcome.exposure
-        and outcome == ordinal_multi_outcome.binary_outcome
-    ):
-        exposure_terms = [
-            term
-            for term in step.model_terms
-            if term.role == "exposure" and term.name == exposure
-        ]
-        if len(exposure_terms) != 1 or exposure_terms[0].coding != "categorical":
-            raise _fail(
-                "progressive_ordinal_multi_outcome_primary_coding_invalid",
-                "an ordinal multi-outcome study requires categorical primary "
-                "stage effects; the separate ordered-trend action owns the "
-                "linear trend test",
-                step=step,
-                step_index=step_index,
-                path="model_terms",
-            )
     adjustment_authority = AdjustmentSetAuthority.from_context(context)
     temporal_roles = adjustment_authority.operational_temporal_roles
     authorized_time_zero_covariates = frozenset(

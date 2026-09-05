@@ -1445,9 +1445,11 @@ def test_pipeline_resume_passes_invalidated_evidence_step_to_execution(
     )
 
 
+@pytest.mark.parametrize("omit_outcome_roster", [False, True])
 def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohort(
     ra,
     tmp_path: Path,
+    omit_outcome_roster: bool,
 ):
     pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
     evidence = EvidenceStore(run_dir)
@@ -1548,6 +1550,22 @@ def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohor
         source_files=None,
         disable_icu_context=False,
     )
+    if omit_outcome_roster:
+        scientific_identity["outcome_columns"] = []
+        with pytest.raises(RunInputIdentityError, match="outcome_columns"):
+            prepare_existing_resume_input(
+                run_dir=run_dir,
+                resume_state=partial,
+                scientific_identity=scientific_identity,
+                current_environment=build_environment_identity(llm_signature="mock"),
+                cohort=run_kwargs["cohort"],
+                question=run_kwargs["question"],
+                resume_from_step_id=None,
+                enforcement_mode="soft",
+                load_compatible_plan=_load_compatible_resume_plan,
+            )
+        assert not (run_dir / RUN_INPUT_CAPSULE_FILENAME).exists()
+        return
     prepared = prepare_existing_resume_input(
         run_dir=run_dir,
         resume_state=partial,

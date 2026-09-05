@@ -267,6 +267,7 @@ def outbound_safe_context_payload(
                 "id_columns": context.cohort.id_columns,
                 "time_columns": context.cohort.time_columns,
                 "outcome_columns": context.cohort.outcome_columns,
+                "requested_outcome_columns": context.cohort.requested_outcome_columns,
             },
             "primary_exposure": context.primary_exposure,
             "target_outcome": context.target_outcome,

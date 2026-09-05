@@ -223,6 +223,7 @@ def test_deterministic_cohort_renderer_gets_digest_bound_panel_contract() -> Non
             "chart_type": "cohort_flow",
             "placement": "main",
             "source_products": ["table:cohort_flow"],
+            "presentation": None,
         }
     ]
     assert findings[0].detail["reason"] == "deterministic_figure_panels_bound"
@@ -344,6 +345,7 @@ def test_grouped_distribution_draft_is_normalized_to_point_range() -> None:
             "chart_type": "point_range",
             "placement": "main",
             "source_products": ["table:distribution_prevalence"],
+            "presentation": None,
         }
     ]
     assert findings[0].detail["reason"] == ("deterministic_figure_panels_normalized")
@@ -802,6 +804,7 @@ def test_typed_measurement_alias_is_normalized_to_availability_panel() -> None:
             "chart_type": "availability_panel",
             "placement": "main",
             "source_products": ["table:missingness_data_quality"],
+            "presentation": None,
         }
     ]
     assert findings[0].detail["reason"] == ("deterministic_figure_panels_normalized")
