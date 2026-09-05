@@ -8508,7 +8508,46 @@ def apply_vent_mode_frame(frame, value_column, db_name, axis, out_column):
 
     frame = frame.copy()
     frame[out_column] = mapped
-    return frame.dropna(subset=[out_column]).reset_index(drop=True)
+    frame = frame.dropna(subset=[out_column]).reset_index(drop=True)
+    if frame.empty:
+        return frame
+
+    # Resolve exact-time conflicts on the NATIVE label, before the two axes
+    # are reduced independently by change_interval(first). Selecting the
+    # alphabetically first derived value per axis can invent a combination
+    # absent from every source row (e.g. CPPV + SIMV_ASB -> unspecified /
+    # controlled). Both callbacks see the same native records and must choose
+    # the same one. This tie-break is deterministic, not a clinical priority.
+    id_column = next(
+        (c for c in ("stay_id", "icustay_id", "admissionid", "patientunitstayid",
+                     "patientid", "CaseID") if c in frame.columns),
+        None,
+    )
+    time_column = next(
+        (c for c in ("charttime", "measuredat", "datetime", "observationoffset",
+                     "respchartoffset", "measuredat_minutes") if c in frame.columns),
+        None,
+    )
+    if id_column is None or time_column is None:
+        raise ValueError("ventilator-mode harmonisation requires a stay/time key")
+    duplicate = frame.duplicated([id_column, time_column], keep=False)
+    if not duplicate.any():
+        return frame
+    # Sort only the narrow conflicting subset; do not sort/copy the complete
+    # raw table twice. Preserve all non-conflicting rows and exact timestamps.
+    native_keys = keys.loc[mapped.notna()].reset_index(drop=True)
+    order = frame.loc[duplicate, [id_column, time_column]].copy()
+    order["_native_mode"] = native_keys.loc[duplicate].astype("string")
+    sort_columns = [id_column, time_column, "_native_mode"]
+    if "itemid" in frame.columns:
+        order["_source_item"] = frame.loc[duplicate, "itemid"].astype("string")
+        sort_columns.append("_source_item")
+    selected = order.sort_values(sort_columns, kind="mergesort").drop_duplicates(
+        [id_column, time_column], keep="first"
+    ).index
+    keep = ~duplicate
+    keep.loc[selected] = True
+    return frame.loc[keep].reset_index(drop=True)
 
 
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {

@@ -461,16 +461,25 @@ def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
     assert exported["charttime"].iloc[2] == 5.0
 
 
+@pytest.mark.parametrize("database", ["eicu", "aumc"])
 def test_isolated_stream_batches_preserve_output_and_remove_parts(
     monkeypatch,
     tmp_path,
+    database,
 ) -> None:
     calls = []
     daemon_flags = []
+    events = []
+    original_append = api._append_isolated_stream_batch
+
+    def tracked_append(*args, **kwargs):
+        events.append("append")
+        return original_append(*args, **kwargs)
 
     def fake_load_concepts(**kwargs):
         ids = list(kwargs["patient_ids"]["stay_id"])
         calls.append(ids)
+        events.append("extract")
         return pd.DataFrame(
             {
                 "stay_id": ids,
@@ -497,18 +506,20 @@ def test_isolated_stream_batches_preserve_output_and_remove_parts(
         Process = InlineProcess
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+    monkeypatch.setattr(api, "_append_isolated_stream_batch", tracked_append)
     monkeypatch.setattr(api, "_extract_worker_env_setup", lambda _path: None)
     monkeypatch.setattr(api, "_get_extraction_mp_context", lambda _mp: InlineContext())
     monkeypatch.setattr(
         api,
         "_ISOLATED_STREAM_BATCH_TARGETS",
-        {("eicu", "test_module")},
+        {(database, "test_module")},
     )
+    monkeypatch.setattr(api, "_DEFERRED_STREAM_MERGE_TARGETS", {("aumc", "test_module")})
 
     api._run_module_extraction(
         "test_module",
         ["test_signal"],
-        "eicu",
+        database,
         str(tmp_path),
         {"stay_id": [1, 2, 3, 4]},
         2,
@@ -520,6 +531,11 @@ def test_isolated_stream_batches_preserve_output_and_remove_parts(
     exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
     assert manifest["errors"] == []
     assert manifest["batch_process_isolation"] is True
+    assert manifest["deferred_batch_merge"] is (database == "aumc")
+    assert events == (
+        ["extract", "extract", "append", "append"] if database == "aumc"
+        else ["extract", "append", "extract", "append"]
+    )
     assert calls == [[1, 3], [2, 4]]
     assert daemon_flags == [False, False]
     assert exported["stay_id"].tolist() == [1, 3, 2, 4]
