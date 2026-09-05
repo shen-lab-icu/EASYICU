@@ -256,18 +256,33 @@ def test_repository_includes_ci_workflow() -> None:
 def test_ci_workflow_runs_supported_python_matrix() -> None:
     """CI must still prove every supported Python, and prove it unfiltered.
 
-    2026-08-17: the matrix became event-conditional so a pull request gates on
-    one version while ``main`` / ``workflow_dispatch`` keep the full sweep. The
-    old assertion pinned the literal list ``["3.10", "3.11", "3.12"]``, so it
-    failed on formatting rather than on lost coverage. This asserts the two
-    properties that actually matter: every supported version is still reachable
-    in the matrix, and the suite runs with the marker filter cancelled (the
-    pytest.ini dev default is ``-m "not slow"``, which must never silently
-    narrow a CI run).
+    A pull request gates on one version; a declared ``workflow_dispatch``
+    checkpoint reaches the full sweep. Pushes to main must not automatically
+    spend the exhaustive matrix. The suite always cancels the pytest.ini
+    development marker filter (``-m "not slow"``).
     """
     workflow_path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
     workflow = workflow_path.read_text(encoding="utf-8")
     parsed = yaml.safe_load(workflow)
+
+    triggers = parsed.get("on", parsed.get(True))
+    assert "push" not in triggers
+    assert "pull_request" in triggers
+    dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+    assert dispatch_inputs["checkpoint_reason"]["required"] is True
+    assert dispatch_inputs["checkpoint_reason"]["options"] == [
+        "final_aggregate_merge",
+        "freeze",
+        "release",
+        "formal_experiment",
+        "explicit_user_request",
+    ]
+    assert dispatch_inputs["expected_head_sha"]["required"] is True
+    assert parsed["concurrency"]["cancel-in-progress"] is True
+    checkpoint = parsed["jobs"]["checkpoint"]
+    checkpoint_source = str(checkpoint)
+    assert "EXPECTED_HEAD_SHA" in checkpoint_source
+    assert "GITHUB_SHA" in checkpoint_source
 
     matrix_versions = parsed["jobs"]["test"]["strategy"]["matrix"]["python-version"]
     rendered = matrix_versions if isinstance(matrix_versions, str) else str(matrix_versions)
@@ -276,6 +291,8 @@ def test_ci_workflow_runs_supported_python_matrix() -> None:
 
     assert "python-version: ${{ matrix.python-version }}" in workflow
     assert "ruff check src tests" in workflow
+    for job in ("portability", "test", "packaging"):
+        assert parsed["jobs"][job]["needs"] == "checkpoint"
 
     # Every pytest invocation in CI must cancel the dev-default marker filter.
     unfiltered = [
