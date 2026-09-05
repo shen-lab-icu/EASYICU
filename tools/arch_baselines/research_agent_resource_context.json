@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json"
+      "src/easyicu/data/sofa2-dict.json"
     ],
     "summary_changes": {}
   },
@@ -437,9 +437,16 @@
         "src/easyicu/data/concept-dict.json"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Reconcile the offline context fixture with the reviewed SOFA-2 dictionary description from the extraction branch. Only the sofa2-dict.json source digest changes; prompt sizes, selected resources, zero provider calls and zero patient-data reads remain unchanged. Preserve prior baseline history and frozen profile coordinates.",
+      "source_digest_changes": [
+        "src/easyicu/data/sofa2-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Rebind the offline context fixture to the audited 2026-09-04 concept dictionary after main reconciliation.",
+  "baseline_reason": "Reconcile the offline context fixture with the reviewed SOFA-2 dictionary description from the extraction branch. Only the sofa2-dict.json source digest changes; prompt sizes, selected resources, zero provider calls and zero patient-data reads remain unchanged. Preserve prior baseline history and frozen profile coordinates.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -450,7 +457,7 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/data/concept-dict.json": "fd122adc01693d78e760e19e61cb415ce8aef849ff2712f747dd79c289d48313",
-    "src/easyicu/data/sofa2-dict.json": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
+    "src/easyicu/data/sofa2-dict.json": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
     "src/easyicu/research_agent/agents/core.py": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
     "src/easyicu/research_agent/agents/planner.py": "eaf03b422afabec41388e0400aae7566e9b407d883a3d0551c3c54736aa7bbb7",
     "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",

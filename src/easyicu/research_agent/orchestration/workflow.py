@@ -341,7 +341,7 @@ def _plan_authority_payload(
         "plan_step_ids": [
             str(step["step_id"]) for step in plan_payload.get("steps", ())
         ],
-        "plan_evidence_sha256": authority.evidence_sha256,
+        "plan_evidence_sha256": dict(authority.evidence_sha256),
         "plan_review_authority": authority.model_dump(mode="json"),
     }
 

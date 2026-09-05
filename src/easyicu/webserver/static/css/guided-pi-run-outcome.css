@@ -24,6 +24,11 @@
 .gpi-run-outcome-copy small { display: block; margin-top: 10px; color: var(--muted, #66716f); }
 .gpi-run-outcome-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .gpi-run-outcome-actions .gpi-resource-link { margin: 0; }
+.gpi-run-outcome-copy .gpi-run-outcome-figure-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted, #66716f);
+}
 .gpi-run-outcome-more { margin-top: 10px; }
 .gpi-run-outcome-more > summary {
   width: max-content;

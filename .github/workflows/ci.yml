@@ -1,34 +1,63 @@
 name: CI
 
+run-name: >-
+  CI · ${{ github.event_name == 'workflow_dispatch' && inputs.checkpoint_reason || 'pull_request' }} · ${{ github.ref_name }}
+
 on:
-  # 2026-08-17: a bare `push:` ran the entire matrix on every feature-branch
-  # push AND again on the pull_request event -- the same 13,982 tests twice per
-  # iteration. Pushes now gate `main` only; PRs are the branch-level gate, and
-  # workflow_dispatch covers an on-demand full run before a freeze.
-  push:
-    branches: [main]
+  # Pull requests prove one supported Python/OS path. The exhaustive matrix is
+  # a declared checkpoint, never an automatic side effect of each merge to
+  # main. Batch all known in-scope merges first, then dispatch it once.
   pull_request:
   workflow_dispatch:
+    inputs:
+      checkpoint_reason:
+        description: Why this exact candidate needs the exhaustive matrix
+        required: true
+        type: choice
+        options:
+          - final_aggregate_merge
+          - freeze
+          - release
+          - formal_experiment
+          - explicit_user_request
+      expected_head_sha:
+        description: Exact 40-character commit SHA being certified
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  # 2026-08-30: no workflow declared a concurrency group, so a burst of pushes
-  # left several full runs (ci.yml medians ~39 min) racing to completion and
-  # only the last one mattered. Feature branches and PRs now cancel the run
-  # they supersede; main keeps every run so the merge record stays complete.
+  # Only the newest run for one ref can consume the exhaustive matrix. Exact
+  # SHA validation below prevents a moved branch from being certified by a
+  # declaration for an older candidate.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
+  checkpoint:
+    name: checkpoint declaration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify declared exact candidate
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          CHECKPOINT_REASON: ${{ inputs.checkpoint_reason }}
+        run: |
+          test -n "$CHECKPOINT_REASON"
+          test "${#EXPECTED_HEAD_SHA}" -eq 40
+          test "$EXPECTED_HEAD_SHA" = "$GITHUB_SHA"
+
   portability:
     name: portability (${{ matrix.os }})
+    needs: checkpoint
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # Full three-OS sweep on main / dispatch; PRs gate on ubuntu only.
+        # Full three-OS sweep on declared dispatch; PRs gate on ubuntu only.
         # CLAUDE.md reserves the exhaustive matrix for the checkpoint run.
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-14","windows-latest"]') }}
     steps:
@@ -52,6 +81,7 @@ jobs:
 
   test:
     name: tests (py${{ matrix.python-version }})
+    needs: checkpoint
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -122,6 +152,7 @@ jobs:
 
   packaging:
     name: wheel + sdist install
+    needs: checkpoint
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, fields
 import json
 from pathlib import Path
 import re
@@ -116,7 +117,7 @@ def publication_authorized(
     article_figure_strategy_complete: bool,
     plan_not_truncated: bool = True,
 ) -> bool:
-    """Return the existing fail-closed publication conjunction.
+    """Legacy name for the publication-content conjunction, not paper authority.
 
     ``plan_not_truncated`` closes a gap the other terms cannot see. They all
     ask whether what the run *did* is sound; none asks whether the run did
@@ -142,51 +143,169 @@ def publication_authorized(
     )
 
 
-def run_completion_axes(
-    *,
-    execution_ok: bool,
-    artifact_valid: bool,
-    scientific_requirement_complete: bool,
-    paper_authorized: bool,
-) -> dict[str, object]:
-    """Expose existing authoritative gates under four explicit user axes."""
+@dataclass(frozen=True, slots=True)
+class RunCompletionFacts:
+    """Verdicts supplied by the existing validators, never inferred from prose."""
 
-    return {
-        "completion_schema_version": "easyicu.run_completion_axes/1",
-        "execution_ok": bool(execution_ok),
-        "artifact_valid": bool(artifact_valid),
-        "scientific_requirement_complete": bool(scientific_requirement_complete),
-        "paper_authorized": bool(paper_authorized),
-    }
+    execution_complete: bool
+    evidence_complete: bool
+    numeric_verified: bool
+    analysis_validated: bool
+    publication_figure_bundle_ready: bool
+    publication_provenance_ready: bool
+    display_suite_complete: bool
+    article_contract_complete: bool
+    article_figure_strategy_complete: bool
+    scientific_maturity_article_grade: bool
+    plan_truncated: bool
+    replan_budget_exhausted: bool
+    administrative_metadata_verified: bool
+
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            if type(getattr(self, field.name)) is not bool:
+                raise TypeError(f"completion_fact_requires_boolean: {field.name}")
 
 
-def paper_authority_gates(
-    publication_artifacts_ready: bool,
-    execution_paper_eligible: bool,
-    plan_authority_verified: bool,
-    plan_authority_sha256: str | None,
-) -> dict[str, object]:
-    """Bind paper authorization to one verified immutable plan digest."""
+def _content_status(
+    *, diagnostic: bool, publication: bool, manuscript: bool, execution: bool
+) -> str:
+    if diagnostic:
+        return "diagnostic_only"
+    if publication:
+        return "publication_ready"
+    if manuscript:
+        return "manuscript_ready"
+    return "analysis_only" if execution else "diagnostic_only"
 
-    digest = str(plan_authority_sha256 or "").strip().lower()
-    plan_bound = bool(
-        plan_authority_verified and re.fullmatch(r"[0-9a-f]{64}", digest)
-    )
-    return {
-        "plan_authority_verified": plan_bound,
-        "plan_authority_sha256": digest if plan_bound else None,
-        "paper_authorized": bool(
-            publication_artifacts_ready and execution_paper_eligible and plan_bound
+
+@dataclass(frozen=True, slots=True)
+class RunCompletionDecision:
+    """One final completion decision, including content and execution authority.
+
+    The default execution identity cannot authorize a paper. Reporting hosts
+    consume the finished projection; there is no intermediate paper permission
+    for an artifact writer to correct later. This composes existing verdicts,
+    and does not replace plan approval, validation, or human sign-off owners.
+    """
+
+    facts: RunCompletionFacts
+    forced_diagnostic_only: bool = False
+    execution_paper_eligible: bool = False
+    plan_authority_verified: bool = False
+    plan_authority_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.facts, RunCompletionFacts):
+            raise TypeError("completion_requires_typed_facts")
+        for name in (
+            "forced_diagnostic_only",
+            "execution_paper_eligible",
+            "plan_authority_verified",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"completion_authority_requires_boolean: {name}")
+        digest = str(self.plan_authority_sha256 or "").strip().lower()
+        bound = bool(
+            self.plan_authority_verified and re.fullmatch(r"[0-9a-f]{64}", digest)
+        )
+        object.__setattr__(self, "plan_authority_verified", bound)
+        object.__setattr__(self, "plan_authority_sha256", digest if bound else None)
+
+    @property
+    def manuscript_ready(self) -> bool:
+        return (
+            self.facts.execution_complete
+            and self.facts.evidence_complete
+            and self.facts.numeric_verified
+            and self.facts.analysis_validated
+        )
+
+    @property
+    def publication_ready(self) -> bool:
+        return (
+            publication_authorized(
+                manuscript_ready=self.manuscript_ready,
+                publication_figure_bundle_ready=self.facts.publication_figure_bundle_ready,
+                publication_provenance_ready=self.facts.publication_provenance_ready,
+                display_suite_complete=self.facts.display_suite_complete,
+                article_contract_complete=self.facts.article_contract_complete,
+                article_figure_strategy_complete=self.facts.article_figure_strategy_complete,
+                plan_not_truncated=not self.facts.plan_truncated,
+            )
+            and self.facts.scientific_maturity_article_grade
+        )
+
+    @property
+    def status(self) -> str:
+        return _content_status(
+            diagnostic=self.forced_diagnostic_only
+            or self.facts.replan_budget_exhausted,
+            publication=self.publication_ready,
+            manuscript=self.manuscript_ready,
+            execution=self.facts.execution_complete,
+        )
+
+    @property
+    def publication_artifacts_ready(self) -> bool:
+        return self.publication_ready and self.status == "publication_ready"
+
+    @property
+    def paper_authorized(self) -> bool:
+        return (
+            self.publication_artifacts_ready
+            and self.execution_paper_eligible
+            and self.plan_authority_verified
+        )
+
+    def to_gates(self) -> dict[str, object]:
+        return {
+            **{
+                field.name: getattr(self.facts, field.name)
+                for field in fields(self.facts)
+            },
+            "completion_schema_version": "easyicu.run_completion_axes/1",
+            "completion_status": self.status,
+            "execution_ok": self.facts.execution_complete,
+            "artifact_valid": self.facts.evidence_complete,
+            "scientific_requirement_complete": self.facts.analysis_validated,
+            "manuscript_ready": self.manuscript_ready,
+            "publication_ready": self.publication_ready,
+            # Existing content + administrative-metadata readiness; final
+            # scientific permission is exposed separately as paper_authorized.
+            "submission_ready": self.publication_ready
+            and self.facts.administrative_metadata_verified,
+            "publication_artifacts_ready": self.publication_artifacts_ready,
+            "execution_paper_eligible": self.execution_paper_eligible,
+            "plan_authority_verified": self.plan_authority_verified,
+            "plan_authority_sha256": self.plan_authority_sha256,
+            "paper_authorized": self.paper_authorized,
+            "forced_diagnostic_only": self.forced_diagnostic_only,
+        }
+
+
+def readiness_status(gates: Mapping[str, Any]) -> str:
+    """Read a completed projection, with the same ladder for legacy reports."""
+    expected = _content_status(
+        diagnostic=bool(
+            gates.get("forced_diagnostic_only") or gates.get("replan_budget_exhausted")
         ),
-    }
+        publication=bool(gates.get("publication_ready")),
+        manuscript=bool(gates.get("manuscript_ready")),
+        execution=bool(gates.get("execution_complete")),
+    )
+    if "completion_status" in gates and gates["completion_status"] != expected:
+        raise ValueError("completion_status_projection_mismatch")
+    return expected
 
 
 __all__ = [
     "count_missing_evidence_markers",
     "count_writer_attempts",
     "has_figure_only_output_contract",
-    "paper_authority_gates",
+    "RunCompletionDecision",
+    "RunCompletionFacts",
     "publication_authorized",
-    "run_completion_axes",
+    "readiness_status",
     "step_completion_projection",
 ]

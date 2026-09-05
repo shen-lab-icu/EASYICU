@@ -22,8 +22,16 @@ from easyicu.scores.sofa2 import (
     sofa2_resp,
     sofa2_score,
 )
+from easyicu.scores.sofa2_aggregate import sofa2_total_structurally_supported
 from easyicu.scores.sofa2_validation import validate_numeric_input
 from easyicu.table import ICUTable
+
+
+def test_sofa2_total_structural_support_distinguishes_sicdb_alias() -> None:
+    assert sofa2_total_structurally_supported("aumc")
+    assert sofa2_total_structurally_supported("eicu")
+    assert not sofa2_total_structurally_supported("sic")
+    assert not sofa2_total_structurally_supported("sicdb")
 
 
 def _assert_reason(
@@ -227,13 +235,13 @@ def test_sofa2_aggregate_uses_only_trusted_or_explicit_identity_columns(
     assert "source_note" not in result.columns
 
 
-def test_sofa2_aggregate_masks_score_disclaimed_by_availability_receipt() -> None:
+def test_sofa2_aggregate_normal_imputes_score_disclaimed_by_receipt() -> None:
     frames = _component_frames()
     frames["sofa2_resp"]["sofa2_resp_available"] = 0
 
     result = sofa2_score(frames)
 
-    assert pd.isna(result.loc[0, "sofa2"])
+    assert result.loc[0, "sofa2"] == 5
     assert result.loc[0, "sofa2_n_available_components"] == 5
 
 

@@ -54,9 +54,35 @@ _METHOD_TO_KEY = {
 
 
 def _pipeline():
-    import easyicu.research_agent.pipeline as pipeline  # binds its two renderers
+    import easyicu.research_agent.pipeline as pipeline
 
     return pipeline
+
+
+@pytest.mark.parametrize("family", ["association", "sensitivity_analysis"])
+def test_prior_output_renderers_have_lower_layer_owners_without_pipeline_providers(family, monkeypatch):
+    key = FIGURE_BUNDLES._owner_of_family(family)
+    route = FIGURE_BUNDLES._route(key)
+    monkeypatch.setattr(route, "provider", None)
+    monkeypatch.setattr(route, "renderer", None)
+    renderer = FIGURE_BUNDLES.renderer_for_analysis_family(family)
+    assert renderer.__module__.startswith("easyicu.research_agent.figures.")
+
+
+def test_pipeline_does_not_implement_prior_output_rendering():
+    import ast
+    from pathlib import Path
+
+    pipeline = _pipeline()
+    definitions = {
+        node.name for node in ast.parse(Path(pipeline.__file__).read_text()).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert not definitions.intersection({
+        "_render_association_publication_bundle_from_prior_outputs",
+        "_render_sensitivity_publication_bundle_from_prior_outputs",
+        "_resolve_upstream_analysis_method", "_planned_primary_association_contract",
+    })
 
 
 @pytest.mark.parametrize(("family", "key"), sorted(_FAMILY_TO_KEY.items()))

@@ -7336,13 +7336,26 @@ def test_readiness_publication_ready_requires_article_display_suite(
     assert "baseline_context" in gates["article_missing_artifact_roles"]
     assert "data_quality" in gates["article_missing_artifact_roles"]
     assert any("Table 1" in err for err in gates["display_suite_errors"])
-    assert any("fewer than two panels" in err for err in gates["display_suite_errors"])
+    assert any("fewer than two panels" in err for err in gates["display_design_advice"])
 
 
+@pytest.mark.parametrize("completion_kwargs,expected_status,authorized", [
+    ({}, "publication_ready", False),
+    ({"execution_paper_eligible": True}, "publication_ready", False),
+    ({"execution_paper_eligible": True, "plan_authority_verified": True,
+      "plan_authority_sha256": "a" * 64}, "publication_ready", True),
+    ({"execution_paper_eligible": True, "plan_authority_verified": True,
+      "plan_authority_sha256": "invalid"}, "publication_ready", False),
+    ({"execution_paper_eligible": True, "plan_authority_verified": True,
+      "plan_authority_sha256": "a" * 64, "force_diagnostic_only": True}, "diagnostic_only", False),
+])
 def test_readiness_publication_ready_accepts_complete_display_suite(
     ra,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    completion_kwargs,
+    expected_status,
+    authorized,
 ):
     _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
@@ -7408,6 +7421,15 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
+    initial_gates = readiness_module._compute_readiness_gates(
+        context=context, plan=plan, findings=[],
+        per_step_records=_authoritative_readiness_records(plan, bound_evidence),
+        evidence=evidence, run_dir=tmp_path, manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+    assert initial_gates["publication_ready"] is True
+    assert initial_gates["paper_authorized"] is False
+
     gates, artifact_paths = _write_readiness_artifacts(
         context=context,
         plan=plan,
@@ -7417,6 +7439,7 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         run_dir=tmp_path,
         manuscript_path=bound_path,
         stop_after_analysis=False,
+        **completion_kwargs,
     )
 
     assert gates["display_suite_complete"] is True
@@ -7427,6 +7450,16 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     assert gates["display_absolute_risk_visual_present"] is True
     assert "dot_interval_absolute_risk" in gates["display_chart_types"]
     assert gates["publication_ready"] is True
+    assert gates["paper_authorized"] is authorized
+    status_payload = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+    assert status_payload["status"] == gates["completion_status"] == expected_status
+    assert status_payload["gates"]["paper_authorized"] is authorized
+    report = readiness_module.render_report(
+        context=context, plan=plan, findings=[],
+        per_step_records=_authoritative_readiness_records(plan, bound_evidence),
+        evidence=evidence, readiness=gates,
+    )
+    assert f"## Status: {expected_status.upper().replace('_', ' ')}" in report
     assert (tmp_path / artifact_paths["display_suite_audit"]).exists()
     assert (tmp_path / artifact_paths["article_contract_audit"]).exists()
     assert (tmp_path / artifact_paths["article_figure_strategy_audit"]).exists()
@@ -7576,11 +7609,11 @@ def test_display_suite_keeps_step_contracts_supporting_not_primary(
     assert gates["display_supporting_absolute_risk_visual_present"] is True
     assert any(
         "Primary publication figure exposes fewer" in err
-        for err in gates["display_suite_errors"]
+        for err in gates["display_design_advice"]
     )
     assert any(
         "Primary publication figure lacks panel-role" in err
-        for err in gates["display_suite_errors"]
+        for err in gates["display_design_advice"]
     )
     assert any(
         "Primary association figure lacks" in err
@@ -8048,7 +8081,7 @@ def test_association_display_suite_rejects_generic_chart_only_bundle(
         "lacks a visual prevalence" in err for err in gates["display_suite_errors"]
     )
     assert any(
-        "generic bar/forest/heatmap" in err for err in gates["display_suite_errors"]
+        "generic bar/forest/heatmap" in err for err in gates["display_design_advice"]
     )
 
 

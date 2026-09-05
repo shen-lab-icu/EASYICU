@@ -4,9 +4,9 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5679,
-      "sha256": "cc06d24d88f2d02b7ff8dae3b50113b3348345bfc9bda536c76aba93b9486e5b",
-      "intra_package_import_edges": 101,
+      "loc": 5636,
+      "sha256": "f1c1ce99e0d8e70d4bd1b61319ad1c911ff7e8de336a8b36d1c4785974d8a43e",
+      "intra_package_import_edges": 100,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
@@ -22,9 +22,9 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8458,
-      "sha256": "9f315c23bc0e4396078b89765889a4cc86f098471878a5829fc87b9cc4f70314",
-      "intra_package_import_edges": 122,
+      "loc": 7062,
+      "sha256": "d807de6caa31ceb2507b2d1a5db6b36923a61334165476e8e656eed22b6ce0de",
+      "intra_package_import_edges": 127,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
@@ -34,9 +34,9 @@
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 3067,
-      "sha256": "bf874ae38a0cf0fc026464047711f14ebef530cc6c4c84dffd2c7169c072e686",
-      "intra_package_import_edges": 35,
+      "loc": 3009,
+      "sha256": "12a3374d3f7cbf72660deb556a0284a918c22448bdcfeac8ef2d89b5ac214015",
+      "intra_package_import_edges": 40,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
@@ -406,13 +406,7 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Progressive Planner now returns one atomic output-and-provenance result; attempt state moved to a dedicated owner module.",
-  "baseline_accepted_growth": {
-    "agents/progressive_planner.py": {
-      "loc_was": 4122,
-      "loc_now": 4160
-    }
-  },
+  "baseline_reason": "Tighten only execution/phase.py and reporting/readiness.py after the three reviewed module-depth changes at a7b0ded38dd8ac4c276311fbc1f1ef259b9d4dd4. No LOC growth accepted; unrelated measured files and function ceilings retained. Evidence: docs/architecture/module_depth_20260905.md.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -905,6 +899,28 @@
         "agents/progressive_planner.py": {
           "loc_was": 4122,
           "loc_now": 4160
+        }
+      }
+    },
+    {
+      "reason": "2026-09-04 authority closure: move association and sensitivity renderers and prior-output contracts to figure owners; tighten only pipeline LOC from 8458 to 7062. Other file/function budgets remain unchanged. See docs/architecture/authority_closure_review_20260904.md.",
+      "tightened_limits": {
+        "pipeline.py.loc": {
+          "was": 8458,
+          "now": 7062
+        }
+      }
+    },
+    {
+      "reason": "Tighten only execution/phase.py and reporting/readiness.py after the three reviewed module-depth changes at a7b0ded38dd8ac4c276311fbc1f1ef259b9d4dd4. No LOC growth accepted; unrelated measured files and function ceilings retained. Evidence: docs/architecture/module_depth_20260905.md.",
+      "tightened_files": {
+        "execution/phase.py": {
+          "loc_was": 5679,
+          "loc_now": 5636
+        },
+        "reporting/readiness.py": {
+          "loc_was": 3067,
+          "loc_now": 3009
         }
       }
     }

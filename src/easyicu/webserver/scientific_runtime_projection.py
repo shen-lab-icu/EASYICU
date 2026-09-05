@@ -53,7 +53,12 @@ def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientif
     from .time_varying_runtime_projection import compile_time_varying_runtime_projection
 
     projection = compile_time_varying_runtime_projection(**coordinates)
-    return projection if projection is not None else compile_landmark_spline_runtime_projection(**coordinates)
+    if projection is not None:
+        return projection
+    landmark_coordinates = dict(coordinates)
+    landmark_coordinates.pop("literature_citation_keys", None)
+    landmark_coordinates.pop("direct_comparator_literature_keys", None)
+    return compile_landmark_spline_runtime_projection(**landmark_coordinates)
 
 
 def _canonical_bytes(value: Any) -> bytes:

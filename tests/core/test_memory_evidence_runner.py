@@ -80,3 +80,26 @@ def test_memory_evidence_runner_stops_process_tree_at_rss_limit(
     assert evidence["rss_limit_mb"] == 32
     assert evidence["stopped_for_rss"] is True
     assert evidence["peak_process_tree_rss_mb"] >= 32
+
+
+def test_memory_evidence_runner_records_interruption_and_stops_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output = tmp_path / "memory.json"
+
+    def interrupt(_process):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, "_process_tree_memory_mb", interrupt)
+    exit_code = runner.run(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        output=output,
+        interval=0.05,
+    )
+
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 130
+    assert evidence["status"] == "interrupted"
+    assert evidence["process_exit_code"] == 130
+    assert evidence["ended_at_utc"] is not None
+    assert evidence["stopped_for_rss"] is False

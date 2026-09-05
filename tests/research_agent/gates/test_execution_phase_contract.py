@@ -1072,7 +1072,7 @@ def test_stability_standard_executor_supersedes_stale_resume_capsule():
         + "\n"
         + inspect.getsource(pipeline_execute._execute_step)
     )
-    assignment = source[source.index("standard_executor = select_standard_executor(") :]
+    assignment = source[source.index("executor_decision = resolve_standard_executor(") :]
     assignment = assignment[: assignment.index("preflight_figure_code =")]
     stability_executor = next(
         executor
@@ -1082,6 +1082,9 @@ def test_stability_standard_executor_supersedes_stale_resume_capsule():
 
     assert callable(stability_executor.owns)
     assert callable(stability_executor.render)
+    assert assignment.index("standard_executor = executor_decision.render_selection()") < assignment.index(
+        "preflight_standard_code = standard_executor.code"
+    )
     assert "preflight_standard_code = standard_executor.code" in assignment
     assert "plausibility_scope=plausibility_authority.scope" in assignment
     assert "selected_resume_capsule" not in assignment

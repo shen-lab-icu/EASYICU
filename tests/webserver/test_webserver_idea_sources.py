@@ -591,9 +591,9 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     canonical = DiscoveryHandoffPacket.model_validate(frozen["canonical_handoff"])
     assert canonical.human_confirmed is False
     assert canonical.analysis_ready is False
-    assert frozen["canonical_handoff_path"] == "discovery_handoff.json"
+    assert frozen["canonical_handoff_path"] == f"handoffs/{canonical.handoff_sha256}.json"
     assert len(frozen["canonical_handoff_sha256"]) == 64
-    assert (idea_mining._run_dir(run["run_id"]) / "discovery_handoff.json").is_file()
+    assert (idea_mining._run_dir(run["run_id"]) / frozen["canonical_handoff_path"]).is_file()
 
 
 def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) -> None:
@@ -633,6 +633,16 @@ def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) ->
         plan=plan,
         pre_experiment=pre,
     )
+    (tmp_path / "idea_mining_run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.web_idea_mining/1",
+                "idea_ledger": [idea],
+                "source_evidence": [source],
+                "pre_experiment": pre,
+            }
+        )
+    )
     adapter_packet = build_web_handoff_packet(
         idea=idea,
         source=source,
@@ -651,15 +661,31 @@ def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) ->
         research_question=plan["research_question"],
         inclusion_criteria=[plan["cohort"]["default"]],
         human_confirmed=False,
+        candidate_transformation=adapter_packet.candidate_source.transformation,
     )
     adapter_payload = adapter_packet.model_dump(mode="json")
     core_payload = core_packet.model_dump(mode="json")
     adapter_payload.pop("created_at")
+    adapter_payload.pop("handoff_sha256")
+    core_payload.pop("handoff_sha256")
     core_payload.pop("created_at")
     assert adapter_payload == core_payload
 
 
 def test_web_handoff_without_database_stays_unspecified(tmp_path: Path) -> None:
+    idea = {
+        "idea_id": "idea_unknown_db",
+        "idea_title": "Unknown-database ICU candidate",
+        "go_no_go": "hold",
+        "go_no_go_reason": "No active export is selected.",
+        "outcome": "In-hospital mortality",
+        "mapped_concepts": [],
+    }
+    (tmp_path / "idea_mining_run.json").write_text(
+        json.dumps(
+            {"schema_version": "easyicu.web_idea_mining/1", "idea_ledger": [idea]}
+        )
+    )
     packet = build_web_handoff_packet(
         idea={
             "idea_id": "idea_unknown_db",
@@ -705,10 +731,10 @@ def test_agent_project_rejects_tampered_canonical_handoff(
         }
     )
     idea = run["idea_ledger"][0]
-    idea_mining.create_handoff({"run_id": run["run_id"], "idea_id": idea["idea_id"]})
+    handoff = idea_mining.create_handoff({"run_id": run["run_id"], "idea_id": idea["idea_id"]})
     run_dir = idea_mining._run_dir(run["run_id"])
     if tamper_target in {"artifact", "artifact_with_replan"}:
-        path = run_dir / "discovery_handoff.json"
+        path = run_dir / handoff["canonical_handoff_path"]
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["candidate_topic"] = "tampered artifact"
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -766,7 +792,7 @@ def test_legacy_handoff_refreshes_to_locked_unconfirmed_agent_seed(
     legacy.pop("canonical_handoff_path")
     legacy.pop("canonical_handoff_sha256")
     (run_dir / "idea_handoff.json").write_text(json.dumps(legacy), encoding="utf-8")
-    (run_dir / "discovery_handoff.json").unlink()
+    (run_dir / handoff["canonical_handoff_path"]).unlink()
 
     result = idea_mining.create_agent_project(
         {"run_id": run["run_id"], "idea_id": idea["idea_id"]}

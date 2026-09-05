@@ -12,11 +12,9 @@ The renderers are deep and stay exactly where they are. This module owns only
 the routing: each renderer *declares* what it owns, in one place, and the
 pipeline asks.
 
-Renderers are bound lazily. Most are named by a loader so importing this module
-does not drag in matplotlib and every figure module behind it; the two that
-still live inside ``pipeline`` bind themselves at pipeline import time via
-:meth:`FigureBundleRegistry.bind`, because a lower layer must not import the
-pipeline to reach them.
+Every renderer is bound lazily by its owning module, so importing this registry
+does not drag in matplotlib or require pipeline initialization. Optional
+pipeline compatibility providers preserve existing substitution seams.
 """
 
 from __future__ import annotations
@@ -193,18 +191,18 @@ def _load(module: str, name: str) -> RendererLoader:
 
 FIGURE_BUNDLES = FigureBundleRegistry()
 
-# Renderers that live below this module and can name themselves. `association`
-# and `sensitivity` are declared here too but bound by `pipeline`, which is
-# where they still live.
+# Every route has an owner loader; pipeline compatibility providers are optional.
 for _route in (
     FigureBundleRoute(
         key="association",
         analysis_families=("association", "dose_response"),
+        loader=_load("..figures.association_prior_outputs", "_render_association_publication_bundle_from_prior_outputs"),
     ),
     FigureBundleRoute(
         key="sensitivity",
         analysis_families=("cohort_definition_sensitivity", "sensitivity_analysis"),
         methods=("cohort_definition_sensitivity",),
+        loader=_load("..figures.sensitivity_prior_outputs", "_render_sensitivity_publication_bundle_from_prior_outputs"),
     ),
     FigureBundleRoute(
         key="prediction",

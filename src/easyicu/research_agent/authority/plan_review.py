@@ -12,9 +12,10 @@ import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from ..canonical_json import canonical_sha256
+from ..contracts.frozen_payload import freeze_payload, thaw_payload
 from ..schema import AnalysisPlan
 
 
@@ -46,14 +47,14 @@ class PlanReviewAuthority(BaseModel):
     analysis_plan_schema_version: Literal["easyicu.analysis_plan/1"] = (
         "easyicu.analysis_plan/1"
     )
-    plan_payload: dict[str, Any]
+    plan_payload: Mapping[str, Any]
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    evidence_sha256: dict[str, str] = Field(default_factory=dict)
+    evidence_sha256: Mapping[str, str] = Field(default_factory=dict, validate_default=True)
     execution: ReviewExecutionAuthority | None = None
 
     @field_validator("evidence_sha256")
     @classmethod
-    def _validate_evidence_digests(cls, value: dict[str, str]) -> dict[str, str]:
+    def _validate_evidence_digests(cls, value: Mapping[str, str]) -> Mapping[str, str]:
         cleaned: dict[str, str] = {}
         for raw_id, raw_digest in value.items():
             evidence_id = str(raw_id).strip()
@@ -65,11 +66,20 @@ class PlanReviewAuthority(BaseModel):
                     f"review evidence {evidence_id!r} must have a SHA-256 digest"
                 )
             cleaned[evidence_id] = digest
-        return dict(sorted(cleaned.items()))
+        return freeze_payload(dict(sorted(cleaned.items())))
+
+    @field_validator("plan_payload")
+    @classmethod
+    def _freeze_plan(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return freeze_payload(value)
+
+    @field_serializer("plan_payload", "evidence_sha256")
+    def _wire_payload(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return thaw_payload(value)
 
     @model_validator(mode="after")
     def _plan_digest_matches_payload(self) -> "PlanReviewAuthority":
-        if canonical_sha256(self.plan_payload) != self.plan_sha256:
+        if canonical_sha256(thaw_payload(self.plan_payload)) != self.plan_sha256:
             raise ValueError("plan_sha256 does not bind plan_payload")
         return self
 
