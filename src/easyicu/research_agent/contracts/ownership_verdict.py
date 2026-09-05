@@ -55,7 +55,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Tuple
 
-__all__ = ["OwnershipVerdict"]
+__all__ = ["OwnershipVerdict", "OwnershipContractDetail"]
+
+
+@dataclass(frozen=True, slots=True)
+class OwnershipContractDetail:
+    """An adapter's diagnostic sub-contract, never an ownership claim."""
+
+    analysis_kind: str
+    matches: bool
+    error: str | None = None
 
 
 @dataclass(frozen=True)

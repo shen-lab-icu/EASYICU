@@ -16,10 +16,12 @@ from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
 from ...schema import AnalysisPlan, AnalysisStep
 from ..step_executor_registry import (
+    AmbiguousExecutorOwnership,
     StandardExecutorCandidate,
     StandardExecutorSelection,
     StepExecutor,
     StepExecutorContext,
+    StepExecutorDecision,
     StepExecutorRegistry,
 )
 from .adjusted_association_executor import (
@@ -91,6 +93,7 @@ from .deterministic_missingness import (
     is_missingness_complete_case_contract,
     missingness_audit_cohort_input_key,
     missingness_audit_executor_owns_step,
+    missingness_contract_details,
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
@@ -231,6 +234,7 @@ __all__ = [
     "StandardExecutorCandidate",
     "StandardExecutorSelection",
     "select_standard_executor",
+    "resolve_standard_executor",
 ]
 
 
@@ -786,6 +790,7 @@ def _build_registry() -> StepExecutorRegistry:
         ),
         StepExecutor(
             key="missingness_audit",
+            contract_details=lambda c: missingness_contract_details(c.step),
             owns=lambda c: missingness_audit_executor_owns_step(c.step),
             render=lambda c: missingness_measurement_audit_code(
                 c.step, plausibility_scope=c.plausibility_scope
@@ -894,7 +899,7 @@ def _build_registry() -> StepExecutorRegistry:
 STANDARD_EXECUTORS = _build_registry()
 
 
-def select_standard_executor(
+def resolve_standard_executor(
     step: AnalysisStep,
     *,
     plan: AnalysisPlan,
@@ -903,9 +908,8 @@ def select_standard_executor(
     trajectory_scientific_runtime_authority: Mapping[str, Any] | None = None,
     current_case_scientific_runtime_authority: Mapping[str, Any] | None = None,
     scientific_runtime_projection_sha256: str | None = None,
-    trace: list[StandardExecutorCandidate] | None = None,
-) -> StandardExecutorSelection | None:
-    """Select by exact typed contract, never prose or benchmark identity."""
+) -> StepExecutorDecision:
+    """Resolve ownership by exact typed contract without generating code."""
 
     if plausibility_scope is not None:
         plausibility_scope.require_step(step.step_id)
@@ -927,4 +931,34 @@ def select_standard_executor(
             scientific_runtime_projection_sha256 or ""
         ),
     )
-    return STANDARD_EXECUTORS.select(context, trace=trace)
+    return STANDARD_EXECUTORS.resolve(context)
+
+
+def select_standard_executor(
+    step: AnalysisStep,
+    *,
+    plan: AnalysisPlan,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+    resolved_bindings: Mapping[str, Any] | None = None,
+    trajectory_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    current_case_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    scientific_runtime_projection_sha256: str | None = None,
+    trace: list[StandardExecutorCandidate] | None = None,
+) -> StandardExecutorSelection | None:
+    """Select by exact typed contract, never prose or benchmark identity."""
+
+    try:
+        decision = resolve_standard_executor(
+            step, plan=plan, plausibility_scope=plausibility_scope,
+            resolved_bindings=resolved_bindings,
+            trajectory_scientific_runtime_authority=trajectory_scientific_runtime_authority,
+            current_case_scientific_runtime_authority=current_case_scientific_runtime_authority,
+            scientific_runtime_projection_sha256=scientific_runtime_projection_sha256,
+        )
+    except AmbiguousExecutorOwnership as exc:
+        if trace is not None:
+            trace.extend(exc.candidates)
+        raise
+    if trace is not None:
+        trace.extend(decision.candidates)
+    return decision.render_selection()
