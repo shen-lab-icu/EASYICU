@@ -40,6 +40,7 @@ env/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .tox/
@@ -51,13 +52,14 @@ htmlcov/
 src/easyicu/test-results/
 
 # Root-level ad hoc test/benchmark scripts and outputs
-test_*
+/test_*
 /benchmark_*.json
 /benchmark_*.log
 
 # Logs
 logs/
 *.log
+!docs/evidence/**/*.log
 
 # Data files - 不上传测试数据
 # test_data_50patients/
@@ -72,11 +74,9 @@ src/easyicu/data/*.bak_before_*
 # Local scratch concept dictionaries are not package data.
 src/easyicu/data/concept-dict2.json
 
-# Demo、示例和工具 - 不上传示例代码
-demo.py
-demo/
-!src/easyicu/webserver/static/assets/demo/
-!src/easyicu/webserver/static/assets/demo/*.png
+# Local demo work; curated examples and product demo assets are tracked.
+/demo.py
+/demo/
 dictionary/
 # examples/ is now shipped (curated onboarding scripts); keep only its caches out
 examples/__pycache__/
@@ -125,58 +125,29 @@ tools/run_tier2_jury.py
 tools/run_lactate_map_vaso_export_fullflow.py
 tools/run_pilot_phase1.sh
 
-# 测试文件 - 不上传测试代码
-# test_main.py
-TEST_SUMMARY.md
-CLEANUP_PLAN.md
-tests/
-!tests/
-!tests/**/*.py
+# Local scratch reports; tests and their fixtures are tracked.
+/TEST_SUMMARY.md
+/CLEANUP_PLAN.md
 # Internal-only tests coupled to manuscript/pilot tooling kept out of the package
 tests/research_agent/test_pilot_exit_status_capture.py
 tests/research_agent/test_case_b_bootstrap.py
-scripts/*
-!scripts/launch_easyicu.py
-!scripts/figures/
-!scripts/figures/*.py
-!scripts/releases/
-!scripts/releases/*.py
-
-# 环境文件
+# Credentials and per-machine state
 .env
-.env.local
-.gitignore
+.env.*
+!.env.example
+!.env.template
+/AGENTS.md
+/CLAUDE.md
+/uv.lock
+.learnings/
+.streamlit/
+scripts/_local/
 
 # Agent roadmap — local-only, contains credentials
 AGENT_PLAN.md
 pilot_runs/
 
-# 其他
-*.md
-!README.md
-!README_zh.md
-!CONTRIBUTING.md
-!SECURITY.md
-!.github/pull_request_template.md
-!baselines/REGISTRY.md
-!docs/architecture_glossary.md
-!docs/capability_matrix.md
-!docs/analysis_method_suite.md
-!docs/deprecation_policy.md
-!docs/pi_copilot_integration_architecture.md
-!docs/release_checklist.md
-!docs/repository_layout.md
-!docs/research_agent_capability_inventory.md
-!docs/qa/
-!docs/qa/*.md
-!docs/evidence/
-!docs/evidence/*.md
-!src/easyicu/webserver/pi_copilot/node_app/README.md
-!src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
-!benchmarks/meta_generalization/README.md
-!benchmarks/agent_experiments/README.md
-# Internal audit dumps — kept locally, not part of the public docs tree.
-# The public docs/ tree is markdown-only; keep audit JSON/TXT dumps out.
+# Private audit data. Public Markdown, scripts, tests, and fixtures are tracked.
 docs/_internal/
 docs/*.json
 docs/*.txt
@@ -200,3 +171,66 @@ src/easyicu/webserver/pi_copilot/node_app/node_modules/
 /robustness_summary.csv
 /step_summary.json
 baselines/_checkouts/
+
+# Preserve existing private files at their current paths. New private material
+# belongs in docs/_internal/ or scripts/_local/; do not add extension-wide rules.
+/baselines/easyicu_vs_baselines_systematic_comparison_20260528.md
+/docs/architecture_integrity_audit_v1.md
+/docs/concept_coverage_matrix_20260609.md
+/docs/concept_coverage_matrix_20260609.md.md
+/docs/concept_coverage_matrix_20260609_v2.md
+/docs/concept_dict_audit_log.md
+/docs/concept_lineage_schema_v1.md
+/docs/figure4_baseline_comparison_design_v1.md
+/docs/fluid_balance_design.md
+/docs/icu_agent_bench.md
+/docs/icu_pitfall_crosswalk.md
+/docs/idea_mining_design_draft_20260604.md
+/docs/idea_mining_task_plan_20260604.md
+/docs/legacy_streamlit_fallback_baseline_stage21b.md
+/docs/qc_eligibility_gate_design_v1_20260610.md
+/docs/repair_registry_and_provenance_design_v1.md
+/docs/research_agent_module_map_20260527.md
+/docs/research_agent_vs_HealthFlow_OpenLens_M4.md
+/docs/ricu_audit_results_20260608.md
+/docs/ricu_sofa1_error_attribution_20260608.md
+/docs/ricu_sofa1_parity_20260608.md
+/docs/scientific_capability_coverage_roadmap.md
+/docs/t41_numeric_claim_binding_completeness.md
+/docs/t51_unbound_claim_negative_control.md
+/docs/user_added_concepts_tracker.md
+/scripts/audit/README.md
+/scripts/audit/audit_concept_strict.py
+/scripts/audit/audit_cvp_comprehensive.py
+/scripts/audit/build_aumc_itemdict.py
+/scripts/audit/regenerate_user_concept_tracker.py
+/scripts/audit/run_full_audit.sh
+/scripts/audit/verify_concept_dict_changes.py
+/scripts/bench_convert.py
+/scripts/bench_coverage_report.py
+/scripts/bench_csv_reader.py
+/scripts/bench_modules.py
+/scripts/bench_modules_all.py
+/scripts/bench_report.py
+/scripts/build_h3_trajectory_cohort.py
+/scripts/build_question_universe.py
+/scripts/coverage_matrix.py
+/scripts/discovery_aki_definition_sensitivity.py
+/scripts/full_export_modules.py
+/scripts/perf_smoke.py
+/scripts/pilot_cross_db.py
+/scripts/pilot_real_llm.py
+/scripts/probe_databases.py
+/scripts/probe_databases_report.json
+/scripts/profile_convert.py
+/scripts/r3_table1_extract.py
+/scripts/r4_fig4_plot.py
+/scripts/rebucket_mimic_chartevents.py
+/scripts/reconvert_mimic_chartevents.py
+/scripts/reshard_eicu_vitalperiodic.py
+/scripts/run_per_module_export.sh
+/scripts/run_q1_e2e.py
+/scripts/verify_arrow_convert.py
+/src/easyicu/RESEARCH_AGENT_UX_CHANGELOG.md
+/src/easyicu/research_agent/ROADMAP.md
+/src/easyicu/research_agent/authority/REVIEW_evidence_signature.md
