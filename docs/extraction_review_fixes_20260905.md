@@ -229,3 +229,14 @@ its append-only history. The measured payload changes only at
 resources, provider calls (zero) and patient-data reads (zero) are unchanged.
 The 53-test profile/baseline regression run and lint pass after this repair;
 the integrated commit must still pass the PR checks before merging.
+
+The full PR run on `3154b5d1` subsequently completed with 16,393 passes,
+219 skips and one failure (the separately executed runner gate had 48 passes
+and three skips). The remaining failure was `AF_UNIX path too long` while a
+Docker security fixture created its socket, before the security check ran.
+Real API dispatch tests had not restored process-wide temporary-directory
+settings. They now restore both spill environment variables and
+`tempfile.tempdir`; the socket fixture additionally uses a private short
+directory and covers an intentionally long default temporary path. The
+security rejection assertion is unchanged. Both serial and two-worker runs
+of the 200 affected tests pass. This follow-up changes no production code.

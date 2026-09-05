@@ -626,28 +626,32 @@ def test_docker_runner_rejects_unsafe_auto_mounted_path_env(
             candidate.unlink(missing_ok=True)
 
 
+@pytest.mark.parametrize("long_default_tmp", [False, True])
 def test_docker_runner_rejects_socket_inside_extra_mount_directory(
     ra,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    long_default_tmp: bool,
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
-    source = Path(tempfile.mkdtemp(prefix="easyicu-mount-")).resolve()
-    socket_path = source / "service.sock"
-    listener = socket.socket(socket.AF_UNIX)
-    listener.bind(str(socket_path))
-    try:
-        with pytest.raises(ValueError, match="unsafe special file"):
-            ra.DockerRunner(
-                workdir=tmp_path / "run",
-                cohort_parquet=cohort,
-                extra_mounts=[(str(source), "/easyicu-extra/source", "ro")],
-            )
-    finally:
-        listener.close()
-        socket_path.unlink(missing_ok=True)
-        shutil.rmtree(source)
+    if long_default_tmp:
+        deep = tmp_path / ("nested-" * 20)
+        deep.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(deep))
+    # AF_UNIX addresses have a small OS limit. A prior extraction test or an
+    # xdist worker may set a much longer default spill path; keep the real
+    # socket in a private short directory, as in the socket-env test above.
+    with tempfile.TemporaryDirectory(prefix="easyicu-mount-", dir="/tmp") as directory:
+        source = Path(directory).resolve()
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(source / "service.sock"))
+            with pytest.raises(ValueError, match="unsafe special file"):
+                ra.DockerRunner(
+                    workdir=tmp_path / "run",
+                    cohort_parquet=cohort,
+                    extra_mounts=[(str(source), "/easyicu-extra/source", "ro")],
+                )
 
 
 @pytest.mark.parametrize(

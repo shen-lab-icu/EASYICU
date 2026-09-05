@@ -1,6 +1,8 @@
 """Exercise the real API dispatch without opening raw ICU tables or spawning."""
 
 import inspect
+import os
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +12,23 @@ from easyicu.api import extraction as api
 
 class DispatchCaptured(Exception):
     pass
+
+
+@pytest.fixture(autouse=True)
+def preserve_process_temporary_settings():
+    """The real API sets spill globals; do not leak them into other tests."""
+    names = ("EASYICU_DUCKDB_TEMP_DIR", "TMPDIR")
+    original_environment = {name: os.environ.get(name) for name in names}
+    original_tempdir = tempfile.tempdir
+    try:
+        yield
+    finally:
+        tempfile.tempdir = original_tempdir
+        for name, value in original_environment.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @pytest.mark.parametrize("module,expected_batch", [("respiratory", 5000), ("other_scores", 8000)])
