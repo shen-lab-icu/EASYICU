@@ -87,6 +87,7 @@ def landmark_eligibility_mask(
 ):
     """Return the exact alive-and-observed landmark eligibility mask."""
 
+    import numpy as np
     import pandas as pd
 
     missing = sorted(
@@ -123,11 +124,19 @@ def landmark_eligibility_mask(
         raise LandmarkCategoricalExecutionError(
             "landmark eligibility cannot time every outcome event"
         )
+    if not bool(np.isfinite(event_time.dropna()).all()):
+        raise LandmarkCategoricalExecutionError(
+            "landmark event time is non-finite"
+        )
     duration_source = frame[observation_duration_column]
     duration = pd.to_numeric(duration_source, errors="coerce")
     if bool((duration_source.notna() & duration.isna()).any()):
         raise LandmarkCategoricalExecutionError(
             "landmark observation duration is non-numeric"
+        )
+    if not bool(np.isfinite(duration.dropna()).all()):
+        raise LandmarkCategoricalExecutionError(
+            "landmark observation duration is non-finite"
         )
     if bool((duration.dropna() < 0.0).any()):
         raise LandmarkCategoricalExecutionError(
@@ -276,8 +285,8 @@ def landmark_categorical_cohort_executor_code(
         if plausibility_scope is not None and plausibility_scope.expected_columns
         else ""
     )
-    return textwrap.dedent(
-        f"""
+    prologue = textwrap.dedent(
+        """
         import json
         import os
         from pathlib import Path
@@ -290,7 +299,10 @@ def landmark_categorical_cohort_executor_code(
 
         source = Path(os.environ["COHORT_PARQUET"]).resolve()
         frame = pd.read_parquet(source)
-        {receipt_code}
+        """
+    ).strip()
+    execution = textwrap.dedent(
+        f"""
         summary = run_landmark_categorical_cohort(
             frame=frame,
             source_path=source,
@@ -307,6 +319,9 @@ def landmark_categorical_cohort_executor_code(
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
         """
     ).strip()
+    return "\n\n".join(
+        block for block in (prologue, receipt_code.strip(), execution) if block
+    )
 
 
 def run_landmark_categorical_primary(
@@ -401,7 +416,7 @@ def landmark_categorical_primary_executor_code(
         if plausibility_scope is not None and plausibility_scope.expected_columns
         else ""
     )
-    return textwrap.dedent(
+    prologue = textwrap.dedent(
         f"""
         import json
         import os
@@ -417,7 +432,10 @@ def landmark_categorical_primary_executor_code(
         frame, cohort_path = load_step_cohort_frame(
             typed_cohort_input={sealed.cohort_product!r},
         )
-        {receipt_code}
+        """
+    ).strip()
+    execution = textwrap.dedent(
+        f"""
         summary = run_landmark_categorical_primary(
             frame=frame,
             cohort_path=cohort_path,
@@ -435,6 +453,9 @@ def landmark_categorical_primary_executor_code(
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
         """
     ).strip()
+    return "\n\n".join(
+        block for block in (prologue, receipt_code.strip(), execution) if block
+    )
 
 
 __all__ = [
