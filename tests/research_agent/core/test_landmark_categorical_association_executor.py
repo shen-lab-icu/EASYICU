@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     LandmarkCategoricalAssociationRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
 from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
 from easyicu.research_agent.contracts.capability_ids import (
     LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
 )
 from easyicu.research_agent.execution.runners.landmark_categorical_association_executor import (
+    LandmarkCategoricalExecutionError,
+    landmark_categorical_cohort_executor_code,
+    landmark_categorical_primary_executor_code,
+    landmark_eligibility_mask,
     run_landmark_categorical_cohort,
     run_landmark_categorical_primary,
 )
@@ -300,3 +306,85 @@ def test_signed_landmark_categorical_owner_filters_then_fits(tmp_path) -> None:
         "2",
         "3",
     ]
+
+
+@pytest.mark.parametrize("owner", ["cohort", "primary"])
+@pytest.mark.parametrize("with_obligations", [False, True])
+def test_landmark_generated_script_compiles_with_plausibility_scope(
+    tmp_path, owner, with_obligations
+) -> None:
+    _, projection, authority = _projection(tmp_path)
+    plan = authority.bind_plan(_draft_plan())
+    if owner == "cohort":
+        step = authority.governed_cohort_step(plan)
+        renderer = landmark_categorical_cohort_executor_code
+        column = "death"
+    else:
+        step = authority.governed_primary_step(plan)
+        renderer = landmark_categorical_primary_executor_code
+        column = "age"
+    scope = FlagOnlyPlausibilityScope(
+        step_id=step.step_id,
+        expected_columns=(column,) if with_obligations else (),
+        source_contracts_sha256="a" * 64,
+        authority_kind="synthetic_raw_input_contracts",
+    )
+
+    code = renderer(
+        step,
+        plan=plan,
+        authority=authority,
+        runtime_projection_sha256=projection.projection_sha256,
+        plausibility_scope=scope,
+    )
+
+    compile(code, f"<{owner}-landmark-script>", "exec")
+
+
+@pytest.mark.parametrize(
+    ("column", "nonfinite", "message"),
+    [
+        ("event_time", np.inf, "event time is non-finite"),
+        ("event_time", -np.inf, "event time is non-finite"),
+        ("duration", np.inf, "observation duration is non-finite"),
+        ("duration", -np.inf, "observation duration is non-finite"),
+    ],
+)
+def test_landmark_eligibility_refuses_nonfinite_temporal_evidence(
+    column, nonfinite, message
+) -> None:
+    frame = pd.DataFrame(
+        {"death": [1, 0], "event_time": [48.0, np.nan], "duration": [72.0, 48.0]}
+    )
+    frame.loc[0 if column == "event_time" else 1, column] = nonfinite
+
+    with pytest.raises(LandmarkCategoricalExecutionError, match=message):
+        landmark_eligibility_mask(
+            frame,
+            outcome_column="death",
+            event_time_column="event_time",
+            observation_duration_column="duration",
+            observation_duration_unit="hours",
+            landmark_hours=24,
+        )
+
+
+def test_landmark_eligibility_preserves_missing_censoring_and_exact_thresholds() -> None:
+    frame = pd.DataFrame(
+        {
+            "death": [0, 0, 1, 1, 1],
+            "event_time": [np.nan, np.nan, 24.0, 25.0, -1.0],
+            "duration": [1.0, np.nan, 1.0, 1.0, 1.0],
+        }
+    )
+
+    nonnegative, alive, observed = landmark_eligibility_mask(
+        frame,
+        outcome_column="death",
+        event_time_column="event_time",
+        observation_duration_column="duration",
+        observation_duration_unit="days",
+        landmark_hours=24,
+    )
+
+    assert (nonnegative & alive & observed).tolist() == [True, False, False, True, False]
