@@ -1,9 +1,10 @@
-"""提取分批的统一默认：任何库/模块，auto_batch_size 都不得切超过 MAX_EXTRACT_CHUNKS 份。
+"""提取资源策略的通用上限和逐数据库、逐模块实测覆盖。
 
-背景：ICU 队列即使 ~20 万患者（eICU 最大库），配合每模块流式落盘 + DuckDB 溢出落盘，
-至多 3 份即可提取。历史上估算高估会把队列切成很多份，重复扫共享大表、拖慢数倍。
-这是所有调用方共用的默认，不应由使用者每次手调 batch_size —— 故用测试锁死。
+通用 ``auto_batch_size`` 保留最多三份的旧交互式约束；正式 release 优先使用逐模块
+实测 profile，已知重模块可以超过三份。语义或依赖改变后，旧 profile 必须显式失效，
+不能继续准入 one-shot。
 """
+import os
 import sys
 from pathlib import Path
 
@@ -18,9 +19,14 @@ from easyicu.runtime.memory_manager import (
 )
 from easyicu.api import EXTRACT_MODULES
 from easyicu.api.extraction import (
+    _INVALIDATED_MEASURED_PROFILES,
+    _MEASURED_BATCH_PROFILES,
+    _MEASURED_ONESHOT_PROFILES,
     _adapt_stream_batch_size_from_first_batch,
     _interleave_stream_patient_ids,
     _next_stream_retry_batch_size,
+    _extract_worker_env_setup,
+    _resource_budget_execution_limits,
     _resolve_stream_batch_size,
     plan_extraction_resources,
     plan_module_extraction_resources,
@@ -218,6 +224,33 @@ def test_explicit_stream_batch_size_always_wins():
     )
 
 
+def test_8gib_resource_budget_owns_lower_layer_worker_limits(monkeypatch):
+    limits = _resource_budget_execution_limits(8 * 1024)
+
+    assert limits == {
+        "resource_budget_mb": 8192.0,
+        "modeled_total_memory_gb": pytest.approx(11.428571),
+        "parallel_max_workers": 2,
+        "arrow_threads": 2,
+        "duckdb_threads": 2,
+        "duckdb_memory_limit_mb": 2048,
+        "resolver_cache_budget_mb": 512,
+    }
+
+    # A reproducible explicit contract replaces host-sized defaults inside the
+    # dedicated worker.  The worker process exits after extraction, so these
+    # values cannot leak back to the calling application in production.
+    monkeypatch.setenv("EASYICU_PARALLEL_MAX_WORKERS", "64")
+    monkeypatch.setenv("EASYICU_DUCKDB_MEMORY_LIMIT", "4GB")
+    _extract_worker_env_setup("/data/aumc", 8 * 1024)
+    assert os.environ["EASYICU_RESOURCE_BUDGET_MB"] == "8192.0"
+    assert os.environ["EASYICU_PARALLEL_MAX_WORKERS"] == "2"
+    assert os.environ["EASYICU_ARROW_THREADS"] == "2"
+    assert os.environ["EASYICU_DUCKDB_THREADS"] == "2"
+    assert os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] == "2048MB"
+    assert os.environ["EASYICU_CACHE_BUDGET_MB"] == "512"
+
+
 def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
     """1.66-GiB measured peak + 10% headroom fits inside 2 GiB."""
 
@@ -252,6 +285,94 @@ def test_measured_eicu_profile_can_authorize_full_cohort_above_legacy_size_cap()
     assert plan.advisory is None
 
 
+@pytest.mark.parametrize(
+    ("module", "expected_peak_mb"),
+    [
+        ("demographics", 210.1),
+        ("outcome", 193.5),
+        ("blood_gas", 2_207.2),
+        ("hematology", 2_060.8),
+        ("chemistry", 1_665.7),
+        ("vasopressors", 2_253.5),
+        ("vitals", 4_101.1),
+        ("renal", 4_101.8),
+        ("medications", 3_782.0),
+        ("neurological", 2_035.7),
+        ("circulatory", 3_677.6),
+        ("sepsis_shared", 1_531.7),
+    ],
+)
+def test_measured_aumc_light_modules_preserve_full_cohort_one_shot(
+    module, expected_peak_mb
+):
+    plan = plan_extraction_resources(
+        "aumc",
+        [module],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 23_106
+    assert plan.measured_peak_rss_mb == pytest.approx(expected_peak_mb)
+    assert plan.required_available_memory_mb == pytest.approx(
+        expected_peak_mb * 1.10
+    )
+    assert plan.advisory is None
+
+
+def test_measured_aumc_ventilator_uses_minimum_verified_three_batches():
+    plan = plan_extraction_resources(
+        "aumc",
+        ["ventilator"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 8_000
+    assert plan.measured_peak_rss_mb == pytest.approx(6_281.5)
+    assert plan.required_available_memory_mb == pytest.approx(6_909.65)
+    assert _n_chunks(23_106, plan.batch_size) == 3
+    assert plan.advisory is None
+
+
+def test_measured_aumc_other_scores_uses_minimum_verified_three_batches():
+    plan = plan_extraction_resources(
+        "aumc",
+        ["other_scores"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 8_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_069.1)
+    assert plan.required_available_memory_mb == pytest.approx(7_776.01)
+    assert _n_chunks(23_106, plan.batch_size) == 3
+    assert plan.advisory is None
+
+
+def test_measured_aumc_respiratory_uses_minimum_verified_five_batches():
+    plan = plan_extraction_resources(
+        "aumc",
+        ["respiratory"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 5_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_254.6)
+    assert plan.required_available_memory_mb == pytest.approx(7_980.06)
+    assert _n_chunks(23_106, plan.batch_size) == 5
+    assert plan.advisory is None
+
+
 def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
     plan = plan_extraction_resources(
         "eicu",
@@ -270,7 +391,53 @@ def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
     assert plan.advisory_zh is None
 
 
-def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
+def test_measured_aumc_sofa2_uses_fastest_verified_five_batches():
+    plans = plan_module_extraction_resources(
+        "aumc",
+        ["sofa2_score", "sepsis3_sofa2"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert {module: plan.batch_size for module, plan in plans.items()} == {
+        "sofa2_score": 5_000,
+        "sepsis3_sofa2": 5_000,
+    }
+    assert all(
+        plan.reason_code == "measured_profile_fastest_safe_batch"
+        for plan in plans.values()
+    )
+    assert plans["sofa2_score"].measured_peak_rss_mb == pytest.approx(6_583.5)
+    assert plans["sofa2_score"].required_available_memory_mb == pytest.approx(
+        7_241.85
+    )
+    assert _n_chunks(23_106, plans["sofa2_score"].batch_size) == 5
+
+
+def test_measured_aumc_sofa1_uses_minimum_verified_three_batches():
+    plans = plan_module_extraction_resources(
+        "aumc",
+        ["sofa1_score", "sepsis3_sofa1"],
+        23_106,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert {module: plan.batch_size for module, plan in plans.items()} == {
+        "sofa1_score": 8_000,
+        "sepsis3_sofa1": 8_000,
+    }
+    assert all(
+        plan.reason_code == "measured_profile_fastest_safe_batch"
+        for plan in plans.values()
+    )
+    assert plans["sofa1_score"].measured_peak_rss_mb == pytest.approx(6_535.4)
+    assert plans["sofa1_score"].required_available_memory_mb == pytest.approx(
+        7_188.94
+    )
+    assert _n_chunks(23_106, plans["sofa1_score"].batch_size) == 3
+
+
+def test_eicu_full_request_remains_guarded_after_execution_envelope_change():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -278,10 +445,46 @@ def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
         available_memory_mb=8 * 1024,
     )
 
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.measured_peak_rss_mb is None
+    assert plan.advisory
+
+
+def test_mixed_batch_summary_includes_larger_oneshot_peak(monkeypatch):
+    monkeypatch.setitem(
+        _MEASURED_ONESHOT_PROFILES,
+        "fixture",
+        {"light": {"cohort_stays": 10_000, "peak_rss_mb": 7_000.0}},
+    )
+    monkeypatch.setitem(
+        _MEASURED_BATCH_PROFILES,
+        "fixture",
+        {
+            "heavy": {
+                "cohort_stays": 10_000,
+                "batch_size": 5_000,
+                "peak_rss_mb": 6_000.0,
+            }
+        },
+    )
+
+    plan = plan_extraction_resources(
+        "fixture",
+        ["light", "heavy"],
+        10_000,
+        available_memory_mb=8 * 1024,
+    )
+
     assert plan.reason_code == "measured_profile_fastest_safe_batch"
-    assert plan.batch_size == 50_000
-    assert plan.required_available_memory_mb == pytest.approx(7_163.53)
-    assert plan.advisory is None
+    assert plan.batch_size == 5_000
+    assert plan.measured_peak_rss_mb == 7_000.0
+    assert plan.required_available_memory_mb == pytest.approx(7_700.0)
+
+
+def test_invalidated_profiles_cannot_remain_in_measured_registries():
+    for database, module in _INVALIDATED_MEASURED_PROFILES:
+        assert module not in _MEASURED_ONESHOT_PROFILES.get(database, {})
+        assert module not in _MEASURED_BATCH_PROFILES.get(database, {})
 
 
 def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
@@ -303,11 +506,17 @@ def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
         "respiratory": 50_000,
         "sepsis_shared": 200_859,
         "sofa1_score": 67_000,
-        "sofa2_score": 200_859,
+        "sofa2_score": 25_000,
         "sepsis3_sofa1": 67_000,
-        "sepsis3_sofa2": 200_859,
+        "sepsis3_sofa2": 25_000,
     }
     assert plans["sepsis_shared"].mode == "one_shot"
+    assert plans["sofa2_score"].reason_code == (
+        "invalidated_profile_memory_guard"
+    )
+    assert plans["sepsis3_sofa2"].reason_code == (
+        "invalidated_profile_memory_guard"
+    )
     assert plans["respiratory"].reason_code == (
         "measured_profile_fastest_safe_batch"
     )
@@ -416,9 +625,9 @@ def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
 
     assert plan.reason_code == "measured_profile_insufficient_memory"
     assert plan.batch_size == 40_000
-    assert "fastest-batch threshold" in plan.advisory
-    assert "最快批次门槛" in plan.advisory_zh
-    assert "速度会变慢" in plan.advisory_zh
+    assert "recorded-batch threshold" in plan.advisory
+    assert "已登记批次门槛" in plan.advisory_zh
+    assert "速度可能变慢" in plan.advisory_zh
 
 
 def test_measured_module_batches_and_warns_only_below_its_threshold():

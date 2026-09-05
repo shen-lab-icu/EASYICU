@@ -76,6 +76,31 @@ def test_sofa_auto_chunk_size_is_capped_for_large_cohorts(monkeypatch):
 
 # --- gap filling and numeric-axis rounding (2026-08-16 IO review) ---
 
+def test_fill_gaps_can_build_an_exact_float32_ordinal_grid() -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 2.0],
+            "score": [0, 4],
+            "observed": [1, 1],
+        }
+    )
+    limits = pd.DataFrame({"stay_id": [1], "start": [0.0], "end": [2.0]})
+
+    result = fill_gaps(
+        frame,
+        ["stay_id"],
+        "charttime",
+        pd.Timedelta(hours=1),
+        limits=limits,
+        value_dtype="float32",
+    )
+
+    assert result["score"].dtype == np.dtype("float32")
+    assert result["observed"].dtype == np.dtype("float32")
+    assert result["score"].iloc[[0, 2]].tolist() == [0.0, 4.0]
+    assert pd.isna(result["score"].iloc[1])
+
 def test_fill_gaps_fast_path_preserves_off_grid_observations() -> None:
     frame = pd.DataFrame(
         {"stay_id": [1, 1], "time": [0.5, 1.0], "value": [5.0, 10.0]}

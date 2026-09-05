@@ -14,18 +14,35 @@ def _concept_frame(name: str, values: list[float]) -> pd.DataFrame:
     )
 
 
-def test_load_circ_failure_uses_vasopressin_and_level1_drugs():
+def _complete_preloaded_data(**drug_values):
+    """Give the drug-recognition fixtures explicit, complete zero-rate evidence."""
     preloaded = {
         "lact": _concept_frame("lact", [3.0, 3.0, 3.0]),
         "map": _concept_frame("map", [80.0, 80.0, 80.0]),
-        "norepi_rate": _concept_frame("norepi_rate", [0.0, 0.0, 0.0]),
-        "epi_rate": _concept_frame("epi_rate", [0.0, 0.0, 0.0]),
-        "adh_rate": _concept_frame("adh_rate", [0.03, 0.0, 0.0]),
-        "dobu_rate": _concept_frame("dobu_rate", [0.0, 0.0, 0.0]),
-        "dopa_rate": _concept_frame("dopa_rate", [0.0, 0.0, 0.0]),
-        "phn_rate": _concept_frame("phn_rate", [0.0, 0.2, 0.0]),
-        "milrinone": _concept_frame("milrinone", [0.0, 0.0, 1.0]),
     }
+    for name in (
+        "norepi_rate", "epi_rate", "adh_rate", "dobu_rate", "dopa_rate",
+        "phn_rate", "milrinone", "levo_rate", "theo_rate",
+    ):
+        preloaded[name] = _concept_frame(name, drug_values.get(name, [0.0] * 3))
+    return preloaded
+
+
+@pytest.fixture(autouse=True)
+def forbid_live_concept_loading(monkeypatch):
+    """These are unit tests; an accidental supplementary raw load is a failure."""
+    def forbidden(*args, **kwargs):
+        pytest.fail("circulatory unit tests must not load real ICU data")
+
+    monkeypatch.setattr("easyicu.api.load_concepts", forbidden)
+
+
+def test_load_circ_failure_uses_vasopressin_and_level1_drugs():
+    preloaded = _complete_preloaded_data(
+        adh_rate=[0.03, 0.0, 0.0],
+        phn_rate=[0.0, 0.2, 0.0],
+        milrinone=[0.0, 0.0, 1.0],
+    )
 
     result = load_circ_failure(
         "miiv",
@@ -40,12 +57,9 @@ def test_load_circ_failure_uses_vasopressin_and_level1_drugs():
 
 
 def test_load_circ_failure_uses_levosimendan_and_theophylline() -> None:
-    preloaded = {
-        "lact": _concept_frame("lact", [3.0, 3.0, 3.0]),
-        "map": _concept_frame("map", [80.0, 80.0, 80.0]),
-        "levo_rate": _concept_frame("levo_rate", [1.0, 0.0, 0.0]),
-        "theo_rate": _concept_frame("theo_rate", [0.0, 1.0, 0.0]),
-    }
+    preloaded = _complete_preloaded_data(
+        levo_rate=[1.0, 0.0, 0.0], theo_rate=[0.0, 1.0, 0.0],
+    )
 
     result = load_circ_failure(
         "miiv",
@@ -56,6 +70,45 @@ def test_load_circ_failure_uses_levosimendan_and_theophylline() -> None:
 
     assert result["circ_event"].tolist() == [1, 1, 0]
     assert result["level1_drugs"].tolist() == [True, True, False]
+
+
+def test_preloaded_missing_rate_remains_unknown_without_being_reloaded():
+    preloaded = _complete_preloaded_data(
+        levo_rate=[1.0, 1.0, 0.0], norepi_rate=[0.0, pd.NA, 0.0],
+    )
+    result = load_circ_failure("miiv", preloaded_data=preloaded, verbose=False)
+
+    pd.testing.assert_series_equal(
+        result["circ_event"].reset_index(drop=True),
+        pd.Series([1, pd.NA, 0], dtype="Int64", name="circ_event"),
+    )
+    assert pd.isna(result["circ_failure"].iloc[1])
+
+
+def test_partially_supplied_optional_stream_preserves_unmatched_unknowns(monkeypatch):
+    preloaded = _complete_preloaded_data(
+        levo_rate=[1.0, 0.0, 0.0], theo_rate=[0.0, 1.0, 0.0],
+    )
+    del preloaded["norepi_rate"]
+    calls = []
+
+    def load_missing(**kwargs):
+        calls.append(kwargs)
+        return {"norepi_rate": _concept_frame("norepi_rate", [0.0] * 3).iloc[:1]}
+
+    monkeypatch.setattr("easyicu.api.load_concepts", load_missing)
+    result = load_circ_failure(
+        "miiv", preloaded_data=preloaded, patient_ids=[1], verbose=False,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["concepts"] == ["norepi_rate"]
+    assert calls[0]["patient_ids"] == [1]
+    pd.testing.assert_series_equal(
+        result["circ_event"].reset_index(drop=True),
+        pd.Series([1, pd.NA, pd.NA], dtype="Int64", name="circ_event"),
+    )
+    assert result["circ_failure"].isna().tolist() == [False, True, True]
 
 
 def test_rolling_window_does_not_promote_event_from_single_drugged_point():

@@ -432,6 +432,36 @@ def test_sofa2_aggregate_golden_vector_preserves_completeness() -> None:
         fixture["expected_available_components"]
     ]
 
+    imputed = fixture["normal_imputation_case"]
+    imputed_result = sofa2_score(
+        {
+            name: pd.DataFrame({"stay_id": [1], name: [score]})
+            for name, score in imputed["components"].items()
+        }
+    )
+    imputed_production = _callback_sofa2_score(
+        {
+            name: _clinical_table(name, [score])
+            for name, score in imputed["components"].items()
+        },
+        _clinical_context("sofa2"),
+    ).data
+
+    assert imputed_result["sofa2"].tolist() == [imputed["expected_total"]]
+    assert imputed_result["sofa2_n_observed_components"].tolist() == [
+        imputed["expected_observed_components"]
+    ]
+    assert imputed_result["sofa2_n_available_components"].tolist() == [
+        imputed["expected_available_components"]
+    ]
+    assert imputed_production["sofa2"].tolist() == [imputed["expected_total"]]
+    assert imputed_production["sofa2_n_observed_components"].tolist() == [
+        imputed["expected_observed_components"]
+    ]
+    assert imputed_production["sofa2_n_available_components"].tolist() == [
+        imputed["expected_available_components"]
+    ]
+
 
 @pytest.mark.clinical_conformance
 def test_sofa2_aggregate_spec_vector_executes_independently() -> None:
@@ -453,6 +483,22 @@ def test_sofa2_aggregate_spec_vector_executes_independently() -> None:
     ]
     assert result["sofa2_n_available_components"].tolist() == [
         fixture["expected_available_components"]
+    ]
+
+    imputed = fixture["normal_imputation_case"]
+    imputed_result = sofa2_score(
+        {
+            name: pd.DataFrame({"stay_id": [1], name: [score]})
+            for name, score in imputed["components"].items()
+        }
+    )
+
+    assert imputed_result["sofa2"].tolist() == [imputed["expected_total"]]
+    assert imputed_result["sofa2_n_observed_components"].tolist() == [
+        imputed["expected_observed_components"]
+    ]
+    assert imputed_result["sofa2_n_available_components"].tolist() == [
+        imputed["expected_available_components"]
     ]
 
 
@@ -495,7 +541,7 @@ def test_shipped_sofa2_aggregate_resolver_graph_uses_component_receipts() -> Non
         concept_workers=1,
     )["sofa2"].data
 
-    assert pd.isna(loaded.loc[0, "sofa2"])
+    assert loaded.loc[0, "sofa2"] == 0
     assert loaded["sofa2_n_observed_components"].tolist() == [5]
     assert loaded["sofa2_n_available_components"].tolist() == [5]
     assert loaded["sofa2_n_components"].tolist() == [5]

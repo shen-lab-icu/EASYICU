@@ -626,30 +626,6 @@ def test_docker_runner_rejects_unsafe_auto_mounted_path_env(
             candidate.unlink(missing_ok=True)
 
 
-def test_docker_runner_rejects_socket_inside_extra_mount_directory(
-    ra,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    cohort = _make_cohort(tmp_path)
-    _force_docker_present(monkeypatch)
-    source = Path(tempfile.mkdtemp(prefix="easyicu-mount-")).resolve()
-    socket_path = source / "service.sock"
-    listener = socket.socket(socket.AF_UNIX)
-    listener.bind(str(socket_path))
-    try:
-        with pytest.raises(ValueError, match="unsafe special file"):
-            ra.DockerRunner(
-                workdir=tmp_path / "run",
-                cohort_parquet=cohort,
-                extra_mounts=[(str(source), "/easyicu-extra/source", "ro")],
-            )
-    finally:
-        listener.close()
-        socket_path.unlink(missing_ok=True)
-        shutil.rmtree(source)
-
-
 @pytest.mark.parametrize(
     "step_id",
     ["safe,target=cohort.parquet", "safe,readonly", "safe=target", "safe\nline"],

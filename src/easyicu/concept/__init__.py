@@ -505,6 +505,40 @@ class ConceptResolver:
         self.cache_schema_version = "1"
         self.dictionary_signature = self._compute_dictionary_signature()
 
+    def _active_requested_result(
+        self,
+        concept_name: str,
+        cache_key: tuple,
+    ) -> Optional[ICUTable]:
+        """Return a result already owned by the active top-level request.
+
+        The bounded cache may correctly refuse a large component, but when the
+        same component is also a requested output its frame must remain alive
+        for the final merge anyway.  Reuse that existing owner reference
+        instead of reading and calculating it again.  This request-local map
+        is deliberately separate from the byte-budgeted reusable caches: it
+        owns no extra copy and is cleared at the top-level call boundary.
+        """
+
+        requested = getattr(self._thread_local, "requested_names", None)
+        results = getattr(self._thread_local, "requested_results", None)
+        if requested is None or results is None or concept_name not in requested:
+            return None
+        return results.get(cache_key)
+
+    def _remember_active_requested_result(
+        self,
+        concept_name: str,
+        cache_key: tuple,
+        result: ICUTable,
+    ) -> None:
+        """Keep one zero-copy reference for a requested recursive dependency."""
+
+        requested = getattr(self._thread_local, "requested_names", None)
+        results = getattr(self._thread_local, "requested_results", None)
+        if requested is not None and results is not None and concept_name in requested:
+            results[cache_key] = result
+
     def available_concepts(self) -> List[str]:
         return sorted(self.dictionary.keys())
 
@@ -1098,6 +1132,14 @@ class ConceptResolver:
         # 🔧 嵌套调用深度跟踪：递归概念会嵌套调用 load_concepts
         # 只有顶层调用才应该清除缓存
         is_top_level = self._load_depth == 0
+        if is_top_level:
+            # A recursive parent can calculate a component that is also an
+            # explicitly requested output (SOFA-2 is the production example).
+            # Keep only those requested results, by reference, for this call.
+            # Deep implementation-only dependencies remain governed by the
+            # normal byte-bounded caches.
+            self._thread_local.requested_names = frozenset(names)
+            self._thread_local.requested_results = {}
         self._load_depth += 1
         
         # 🚀 性能优化: 不要清空 _concept_cache，保留用于递归调用的缓存
@@ -1890,7 +1932,15 @@ class ConceptResolver:
                         self._drop_cache_accounting('concept', 'data')
                     # 清除当前线程的inflight集合
                     self._get_inflight().clear()
-                
+
+                # Drop request-owned component references before asking the
+                # allocator to release memory.  Keeping them until after
+                # ``release_memory`` made that call ineffective for exactly
+                # the large SOFA component frames this map is designed to
+                # reuse.
+                self._thread_local.requested_names = None
+                self._thread_local.requested_results = None
+
                 # 🔧 释放碎片内存
                 from ..runtime.memory_manager import release_memory
                 release_memory()
@@ -3226,7 +3276,18 @@ class ConceptResolver:
                     # - aumc_rate_kg: 先median再/kg ≠ 先/kg再median
                     # 🔧 FIX 2026-02: 对所有有callback的源都跳过预降采样
                     has_callback = getattr(source, 'callback', None) is not None
-                    skip_resample = has_callback
+                    # AUMC tidal_vol must obey its raw pooled/bounds contract.
+                    # Otherwise crossing 1,000
+                    # source rows changes results: [0, 2849] becomes 1424.5
+                    # before the 2,000-mL upper bound can reject the outlier.
+                    # Per-source medians also cannot be pooled into a median.
+                    # Keep this repair scoped to the independently reproduced
+                    # source contract; do not silently reprofile other modules
+                    # by changing every high-frequency fallback here.
+                    skip_resample = (
+                        has_callback
+                        or (db_name == "aumc" and concept_name == "tidal_vol")
+                    )
                     
                     if is_high_freq_db and table.index_column and len(frame) > 1000 and not skip_resample:
                         time_col = table.index_column
@@ -8031,14 +8092,29 @@ class ConceptResolver:
         # 🔧 修复: 对不可哈希的值（如list）转换为字符串
         def _hashable_kwargs_items(kw):
             for k, v in sorted(kw.items()):
+                # Error-handling policy does not alter a successfully loaded
+                # concept's value. Recursive parents add this flag internally;
+                # including it in the key made the same requested child miss
+                # both the bounded cache and the request-local zero-copy map.
+                if k == "_allow_missing_concept":
+                    continue
                 try:
                     hash(v)
                     yield (k, v)
                 except TypeError:
                     yield (k, str(v))
-        kwargs_hash = hash(frozenset(_hashable_kwargs_items(kwargs))) if kwargs else 0
+        cache_kwargs = tuple(_hashable_kwargs_items(kwargs)) if kwargs else ()
+        kwargs_hash = hash(frozenset(cache_kwargs)) if cache_kwargs else 0
         concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value), kwargs_hash)
         raw_cache_scope = self._raw_cache_scope(kwargs)
+
+        if not _skip_concept_cache:
+            active_result = self._active_requested_result(
+                concept_name,
+                concept_cache_key,
+            )
+            if active_result is not None:
+                return active_result
         
         # 🔧 如果 _skip_concept_cache=True，跳过所有缓存检查和缓存写入
         # 这用于回调内部加载概念，避免污染主缓存
@@ -8052,6 +8128,11 @@ class ConceptResolver:
                     # 调用方如需修改，应自行copy（如_to_r_format已自己copy）
                     cached = self._concept_data_cache[concept_cache_key]
                     self._cache_touch('data', concept_cache_key)
+                    self._remember_active_requested_result(
+                        concept_name,
+                        concept_cache_key,
+                        cached,
+                    )
                     return cached
                 
                 # �🚀🚀 关键优化：如果原始数据已存在于 _raw_concept_cache，
@@ -8097,6 +8178,11 @@ class ConceptResolver:
                     
                     # 缓存处理后的结果
                     self._bounded_cache_store('data', concept_cache_key, result)
+                    self._remember_active_requested_result(
+                        concept_name,
+                        concept_cache_key,
+                        result,
+                    )
                     return result
                 
                 # �🔧 FIX: 移除旧的简单缓存和概念缓存回退逻辑
@@ -8167,7 +8253,12 @@ class ConceptResolver:
                     self._get_inflight().discard(concept_name)
                 # Return a copy to prevent caller from corrupting cached data
                 if hasattr(disk_hit, 'copy'):
-                    return disk_hit.copy()
+                    disk_hit = disk_hit.copy()
+                self._remember_active_requested_result(
+                    concept_name,
+                    concept_cache_key,
+                    disk_hit,
+                )
                 return disk_hit
 
         try:
@@ -8339,6 +8430,12 @@ class ConceptResolver:
             # 仅清除 inflight 标记
             with self._cache_lock:
                 self._get_inflight().discard(concept_name)
+        if not _skip_concept_cache:
+            self._remember_active_requested_result(
+                concept_name,
+                concept_cache_key,
+                result,
+            )
         return result
 
     def _apply_aggregation_to_icutable(

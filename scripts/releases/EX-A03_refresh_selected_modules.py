@@ -15,9 +15,10 @@ Only correctness modules and their declared downstream closure are allowlisted.
 owner-issued death-event time companion required by landmark analyses.
 ``respiratory`` removes
 implicit room-air FiO2 imputation and therefore expands to ``sofa1_score`` and
-``sofa2_score``, the shared infection evidence required at execution time, and
-the two Sepsis-SOFA labels that consume those scores. This is not a generic way
-to bypass the full extraction controller.
+``sofa2_score`` and the two Sepsis-SOFA labels that consume those scores. The
+sealed shared-infection timeline is staged as a hash-verified read-only
+dependency rather than reread from raw data. This is not a generic way to
+bypass the full extraction controller.
 """
 
 from __future__ import annotations
@@ -45,8 +46,13 @@ if str(SOURCE_ROOT) not in sys.path:
 from easyicu.api import extract_database  # noqa: E402
 from easyicu.api.extraction import (  # noqa: E402
     EXTRACT_MODULES,
+    _publish_native_export_v2,
+    _resource_budget_execution_limits,
     plan_extraction_resources,
     plan_module_extraction_resources,
+)
+from easyicu.scores.sofa2_aggregate import (  # noqa: E402
+    sofa2_total_structurally_supported,
 )
 
 
@@ -66,24 +72,26 @@ REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
 DIRECT_REFRESHABLE_MODULES = frozenset(
-    {"outcome", "renal", "respiratory", "sofa2_score"}
+    {"outcome", "renal", "respiratory", "sofa1_score", "sofa2_score"}
 )
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
     "outcome": ("outcome",),
     "renal": ("renal",),
     "respiratory": (
         "respiratory",
-        "sepsis_shared",
         "sofa1_score",
         "sofa2_score",
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     ),
+    "sofa1_score": (
+        "sofa1_score",
+        "sepsis3_sofa1",
+    ),
     # Targeted repair path for owner-issued SOFA-2 receipt companions. The
     # parent candidate must already contain a raw-refreshed respiratory input;
     # downstream M1 validates that parent provenance before using the child.
     "sofa2_score": (
-        "sepsis_shared",
         "sofa2_score",
         "sepsis3_sofa2",
     ),
@@ -91,7 +99,15 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
 SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v2"
 LEGACY_SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 RESOURCE_PLAN_SCHEMA_VERSION = "easyicu_selected_module_resource_plan_v1"
+RESOURCE_BENCHMARK_SCHEMA_VERSION = "easyicu_selected_module_resource_benchmark_v1"
+RESOURCE_BENCHMARK_FILENAME = "resource_benchmark_provenance.json"
 DEFAULT_RELEASE_MEMORY_BUDGET_MB = 8 * 1024
+FORMALLY_MEASURED_RESOURCE_REASONS = frozenset(
+    {
+        "measured_profile_fast_path",
+        "measured_profile_fastest_safe_batch",
+    }
+)
 
 
 class ModuleRefreshError(ValueError):
@@ -127,6 +143,31 @@ def _parse_data_path_overrides(values: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
+def _parse_database_module_scopes(
+    values: Sequence[str],
+) -> dict[str, tuple[str, ...]]:
+    """Parse repeatable ``DATABASE=MODULE[,MODULE]`` refresh scopes."""
+
+    parsed: dict[str, tuple[str, ...]] = {}
+    for raw in values:
+        database, separator, module_text = raw.partition("=")
+        database = database.strip()
+        modules = tuple(
+            module.strip() for module in module_text.split(",") if module.strip()
+        )
+        if not separator or database not in DATABASES or not modules:
+            raise ModuleRefreshError(
+                "--database-module must be DATABASE=MODULE[,MODULE] for one of "
+                f"{', '.join(DATABASES)}; got {raw!r}"
+            )
+        if database in parsed:
+            raise ModuleRefreshError(
+                f"Duplicate --database-module scope: {database}"
+            )
+        parsed[database] = _validate_modules(modules)
+    return parsed
+
+
 def _validate_databases(databases: Sequence[str]) -> tuple[str, ...]:
     """Return a canonical non-empty subset of the six release databases."""
 
@@ -142,7 +183,7 @@ def _validate_databases(databases: Sequence[str]) -> tuple[str, ...]:
 def _resolve_data_paths(
     source_manifest: Mapping[str, Any],
     overrides: Mapping[str, str],
-    databases: Sequence[str] = DATABASES,
+    databases: Sequence[str] | None = None,
 ) -> dict[str, str]:
     recorded = source_manifest.get("data_paths")
     if not isinstance(recorded, dict):
@@ -172,7 +213,7 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     if disallowed:
         raise ModuleRefreshError(
             "This audited refresh entry point currently allows only outcome, "
-            "renal, respiratory and sofa2_score; "
+            "renal, respiratory, sofa1_score and sofa2_score; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -188,6 +229,42 @@ def _expand_module_dependency_closure(modules: Sequence[str]) -> tuple[str, ...]
         for module in MODULE_DEPENDENCY_CLOSURE[requested_module]
     }
     return tuple(module for module in MODULES if module in required)
+
+
+def _resolve_database_module_scope(
+    *,
+    modules: Sequence[str],
+    databases: Sequence[str],
+    database_module_scope: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[
+    tuple[str, ...],
+    dict[str, tuple[str, ...]],
+    dict[str, tuple[str, ...]],
+]:
+    """Resolve requested and dependency-closed modules for each database."""
+
+    if database_module_scope:
+        if modules or databases:
+            raise ModuleRefreshError(
+                "Per-database module scope cannot be combined with global "
+                "modules/databases"
+            )
+        selected_databases = _validate_databases(tuple(database_module_scope))
+        requested_by_database = {
+            database: _validate_modules(database_module_scope[database])
+            for database in selected_databases
+        }
+    else:
+        selected_databases = _validate_databases(databases)
+        requested = _validate_modules(modules)
+        requested_by_database = {
+            database: requested for database in selected_databases
+        }
+    closed_by_database = {
+        database: _expand_module_dependency_closure(requested_by_database[database])
+        for database in selected_databases
+    }
+    return selected_databases, requested_by_database, closed_by_database
 
 
 def _source_cohort_size(
@@ -220,35 +297,59 @@ def _build_refresh_resource_plan(
     databases: Sequence[str],
     memory_budget_mb: float,
     requested_batch_size: int | None = None,
+    database_module_scope: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Build a read-only database-by-module release execution plan."""
 
-    selected_databases = _validate_databases(databases)
-    requested = _validate_modules(requested_modules)
-    closure = _expand_module_dependency_closure(requested)
+    selected_databases, requested_by_database, closed_by_database = (
+        _resolve_database_module_scope(
+            modules=requested_modules,
+            databases=databases,
+            database_module_scope=database_module_scope,
+        )
+    )
+    requested = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in requested_by_database[database]
+            for database in selected_databases
+        )
+    )
+    closure = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in closed_by_database[database]
+            for database in selected_databases
+        )
+    )
     budget = float(memory_budget_mb)
     if budget <= 0:
         raise ModuleRefreshError("memory budget must be positive")
 
     database_plans: dict[str, Any] = {}
     for database in selected_databases:
+        database_closure = closed_by_database[database]
         cohort_size = _source_cohort_size(source_run_manifest, database)
         aggregate = plan_extraction_resources(
             database,
-            closure,
+            database_closure,
             cohort_size,
             requested_batch_size,
             available_memory_mb=budget,
         )
         module_plans = plan_module_extraction_resources(
             database,
-            closure,
+            database_closure,
             cohort_size,
             requested_batch_size,
             available_memory_mb=budget,
         )
         database_plans[database] = {
             "cohort_stays": cohort_size,
+            "requested_modules": list(requested_by_database[database]),
+            "dependency_closure": list(database_closure),
             "aggregate_request_plan": aggregate.to_dict(),
             "modules": {
                 module: {
@@ -258,15 +359,39 @@ def _build_refresh_resource_plan(
                 for module, plan in module_plans.items()
             },
         }
+    unmeasured_modules = {
+        database: [
+            module
+            for module, module_plan in database_plans[database]["modules"].items()
+            if module_plan["reason_code"] not in FORMALLY_MEASURED_RESOURCE_REASONS
+        ]
+        for database in selected_databases
+    }
+    unmeasured_modules = {
+        database: modules
+        for database, modules in unmeasured_modules.items()
+        if modules
+    }
     return {
         "schema_version": RESOURCE_PLAN_SCHEMA_VERSION,
         "read_only": True,
         "raw_database_reread": False,
         "memory_budget_mb": budget,
+        "resource_execution_limits": _resource_budget_execution_limits(budget),
         "requested_modules": list(requested),
         "dependency_closure": list(closure),
+        "per_database_requested_modules": {
+            database: list(requested_by_database[database])
+            for database in selected_databases
+        },
+        "per_database_dependency_closure": {
+            database: list(closed_by_database[database])
+            for database in selected_databases
+        },
         "selected_databases": list(selected_databases),
         "explicit_batch_override": requested_batch_size,
+        "formal_release_admissible": not unmeasured_modules,
+        "unmeasured_or_overridden_modules": unmeasured_modules,
         "databases": database_plans,
     }
 
@@ -508,31 +633,356 @@ def _module_is_canonical_refresh(database_root: Path, modules: Sequence[str]) ->
     return True
 
 
-def _validate_refreshed_score_content(
-    database_root: Path, modules: Sequence[str]
+def _module_is_complete_producer_staging(
+    database_root: Path,
+    modules: Sequence[str],
+) -> bool:
+    """Recognise complete pre-native module outputs without assuming native IDs."""
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - package is release-required
+        raise ModuleRefreshError(
+            "pyarrow is required to inspect producer staging"
+        ) from exc
+
+    for module in modules:
+        manifest_path = database_root / f"{module}.manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            return False
+        try:
+            manifest = _read_json(
+                manifest_path,
+                label=f"{module} staged producer manifest",
+            )
+        except ModuleRefreshError:
+            return False
+        if manifest.get("module") != module or manifest.get("errors"):
+            return False
+        saved = manifest.get("saved")
+        if not isinstance(saved, Mapping):
+            return False
+        # An explicitly empty saved mapping is a complete structural absence;
+        # native-v2 owns creation of its typed zero-row placeholder.
+        if not saved:
+            continue
+        parquet = database_root / f"{module}.parquet"
+        if parquet.is_symlink() or not parquet.is_file():
+            return False
+        try:
+            columns = set(pq.read_schema(parquet).names)
+        except Exception:
+            return False
+        produced: set[str] = set()
+        for saved_name, record in saved.items():
+            if isinstance(saved_name, str):
+                produced.add(saved_name)
+            if isinstance(record, Mapping):
+                produced.update(
+                    str(concept)
+                    for concept in (record.get("concepts") or [])
+                    if isinstance(concept, str)
+                )
+        declared = set(EXTRACT_MODULES[module])
+        if not declared.intersection(produced) or not declared.intersection(columns):
+            return False
+    return True
+
+
+def _requires_outcome_time_bounds(modules: Sequence[str]) -> bool:
+    """Return whether native publication needs the sealed ICU-stay bounds."""
+
+    return any(module not in {"demographics", "outcome"} for module in modules)
+
+
+def _stage_outcome_time_bound_dependency(
+    *,
+    source_database_root: Path,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> Path | None:
+    """Expose sealed ``outcome.los_icu`` to a selected-module publisher.
+
+    ``outcome`` is an input authority here, not a refreshed output. Copy the
+    already-published Parquet rather than rereading raw outcome data or sharing
+    its inode with writable staging. The native publisher only reads this file
+    because ``outcome`` is absent from ``modules``; SHA-256 is checked before
+    use.
+    """
+
+    if not _requires_outcome_time_bounds(modules) or "outcome" in modules:
+        return None
+
+    source = source_database_root / "outcome.parquet"
+    destination = staging_root / "outcome.parquet"
+    _require_regular_file(source, label="sealed outcome time-bound dependency")
+    staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    if destination.exists() or destination.is_symlink():
+        _require_regular_file(
+            destination,
+            label="staged outcome time-bound dependency",
+        )
+        if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(
+            source
+        ):
+            raise ModuleRefreshError(
+                "Staged outcome time-bound dependency differs from the sealed source"
+            )
+        return destination
+
+    shutil.copy2(source, destination)
+    if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(source):
+        destination.unlink(missing_ok=True)
+        raise ModuleRefreshError(
+            "Failed to stage an exact outcome time-bound dependency"
+        )
+    return destination
+
+
+def _stage_sepsis_shared_dependency(
+    *,
+    source_database_root: Path,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> Path | None:
+    """Stage sealed suspected-infection evidence without refreshing it.
+
+    Sepsis-3 is a derived consumer of both a refreshed SOFA trajectory and the
+    existing `sepsis_shared` timeline. The latter is independent of IMV and of
+    the native SOFA row-grain repair, so rereading its raw sources would expand
+    the mutation scope without adding information. Copy and hash-check only its
+    Parquet dependency; it is excluded from the publisher's module list and is
+    removed with staging after the derived labels are published.
+    """
+
+    needs_sepsis = any(
+        module in {"sepsis3_sofa1", "sepsis3_sofa2"} for module in modules
+    )
+    if not needs_sepsis or "sepsis_shared" in modules:
+        return None
+
+    source = source_database_root / "sepsis_shared.parquet"
+    destination = staging_root / "sepsis_shared.parquet"
+    _require_regular_file(source, label="sealed sepsis_shared dependency")
+    staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    if destination.exists() or destination.is_symlink():
+        _require_regular_file(destination, label="staged sepsis_shared dependency")
+        if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(
+            source
+        ):
+            raise ModuleRefreshError(
+                "Staged sepsis_shared dependency differs from the sealed source"
+            )
+        return destination
+
+    shutil.copy2(source, destination)
+    if REPUBLICATION._sha256_file(destination) != REPUBLICATION._sha256_file(source):
+        destination.unlink(missing_ok=True)
+        raise ModuleRefreshError(
+            "Failed to stage an exact sepsis_shared dependency"
+        )
+    return destination
+
+
+def _stage_refresh_read_dependencies(
+    *,
+    source_database_root: Path,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> dict[str, str]:
+    """Stage and receipt every sealed module used only as a read dependency."""
+
+    staged = {}
+    for name, path in (
+        (
+            "outcome",
+            _stage_outcome_time_bound_dependency(
+                source_database_root=source_database_root,
+                staging_root=staging_root,
+                modules=modules,
+            ),
+        ),
+        (
+            "sepsis_shared",
+            _stage_sepsis_shared_dependency(
+                source_database_root=source_database_root,
+                staging_root=staging_root,
+                modules=modules,
+            ),
+        ),
+    ):
+        if path is not None:
+            staged[name] = REPUBLICATION._sha256_file(path)
+    return staged
+
+
+def _recover_native_staging_publication(
+    *,
+    database: str,
+    data_path: str,
+    staging_root: Path,
+    modules: Sequence[str],
+    resource_budget_mb: float,
 ) -> None:
-    """Refuse a structurally valid refresh whose primary score is all null.
+    """Finish native-v2 publication from complete producer artifacts.
+
+    A process can finish every expensive module and then fail in the publisher.
+    Reconstruct only the small in-memory receipt needed by native-v2; never
+    reopen the raw database or recompute a module during recovery.
+    """
+
+    module_results: dict[str, dict[str, Any]] = {}
+    module_resource_plans: dict[str, Any] = {}
+    for module in modules:
+        manifest = _read_json(
+            staging_root / f"{module}.manifest.json",
+            label=f"{module} staged producer manifest",
+        )
+        errors = list(manifest.get("errors") or [])
+        if errors:
+            raise ModuleRefreshError(
+                f"Cannot recover {module} native publication: {errors}"
+            )
+        module_results[module] = {
+            "errors": [],
+            "elapsed": float(manifest.get("elapsed_sec") or 0.0),
+            "peak_rss_mb": float(manifest.get("peak_rss_mb") or 0.0),
+            "peak_working_set_mb": float(
+                manifest.get("peak_working_set_mb") or 0.0
+            ),
+        }
+        if manifest.get("resource_plan") is not None:
+            module_resource_plans[module] = manifest["resource_plan"]
+
+    _publish_native_export_v2(
+        database=database,
+        data_path=data_path,
+        output_dir=str(staging_root),
+        modules=list(modules),
+        max_patients=None,
+        result={
+            "modules": module_results,
+            "stream_retry_history": [],
+            "resource_plan": None,
+            "module_resource_plans": module_resource_plans,
+            "resource_budget_mb": float(resource_budget_mb),
+            "resource_execution_limits": _resource_budget_execution_limits(
+                resource_budget_mb
+            ),
+        },
+        require_stay_time_bounds=True,
+    )
+
+
+def _validate_existing_staging_native_manifest(
+    *,
+    database: str,
+    staging_root: Path,
+    modules: Sequence[str],
+) -> None:
+    """Reject a stale or unrelated root manifest before staged promotion."""
+
+    manifest_path = staging_root / "_manifest.json"
+    _require_regular_file(manifest_path, label="staged native-v2 manifest")
+    manifest = _read_json(manifest_path, label="staged native-v2 manifest")
+    if manifest.get("schema_version") != "easyicu_native_export_v2":
+        raise ModuleRefreshError("Staged refresh lacks a native-v2 root manifest")
+    if manifest.get("database") != database:
+        raise ModuleRefreshError(
+            "Staged native-v2 manifest belongs to a different database"
+        )
+    files = manifest.get("files")
+    if not isinstance(files, list) or not all(
+        isinstance(entry, Mapping) for entry in files
+    ):
+        raise ModuleRefreshError("Staged native-v2 file receipts are invalid")
+    files_by_module = {str(entry.get("module")): entry for entry in files}
+    if set(files_by_module) != set(modules):
+        raise ModuleRefreshError(
+            "Staged native-v2 module scope differs from the requested refresh"
+        )
+    if _requires_outcome_time_bounds(modules):
+        authority = manifest.get("time_window_authority")
+        try:
+            bounded_stays = int(authority.get("bounded_stays") or 0)
+        except (AttributeError, TypeError, ValueError):
+            bounded_stays = 0
+        if not (
+            isinstance(authority, Mapping)
+            and authority.get("required") is True
+            and authority.get("source") == "outcome.los_icu"
+            and bounded_stays > 0
+        ):
+            raise ModuleRefreshError(
+                "Staged longitudinal modules lack outcome.los_icu time authority"
+            )
+    for module in modules:
+        parquet = staging_root / f"{module}.parquet"
+        _require_regular_file(parquet, label=f"{module} staged native Parquet")
+        expected_sha256 = files_by_module[module].get("parquet_sha256")
+        if not isinstance(expected_sha256, str) or (
+            REPUBLICATION._sha256_file(parquet) != expected_sha256
+        ):
+            raise ModuleRefreshError(
+                f"{module} staged Parquet differs from its native-v2 receipt"
+            )
+
+
+def _validate_refreshed_score_content(
+    database_root: Path,
+    modules: Sequence[str],
+    *,
+    database: str,
+) -> None:
+    """Refuse null or internally incoherent refreshed SOFA trajectories.
 
     Schema checks alone did not catch the 2026-09 IMV regression: both SOFA
     files had the expected columns and millions of rows, but interval handling
-    had displaced their components so every total score was missing. Scan only
-    the primary score column in bounded Arrow batches before any candidate file
-    is promoted.
+    had displaced their components so every total score was missing. A later
+    audit also found totals aggregated independently from duplicate-hour organ
+    components. Scan bounded Arrow batches before any candidate file is
+    promoted and require the public score/receipt identities exactly.
     """
 
     try:
+        import pandas as pd
         import pyarrow.parquet as pq
     except ImportError as exc:  # pragma: no cover - package is release-required
         raise ModuleRefreshError(
             "pyarrow is required to validate refreshed score content"
         ) from exc
 
-    for module, score_column in (
-        ("sofa1_score", "sofa"),
-        ("sofa2_score", "sofa2"),
-    ):
+    score_specs = {
+        "sofa1_score": {
+            "score": "sofa",
+            "components": (
+                "sofa_resp",
+                "sofa_coag",
+                "sofa_liver",
+                "sofa_cardio",
+                "sofa_cns",
+                "sofa_renal",
+            ),
+        },
+        "sofa2_score": {
+            "score": "sofa2",
+            "components": (
+                "sofa2_resp",
+                "sofa2_coag",
+                "sofa2_liver",
+                "sofa2_cardio",
+                "sofa2_cns",
+                "sofa2_renal",
+            ),
+        },
+    }
+    for module, spec in score_specs.items():
         if module not in modules:
             continue
+        score_column = str(spec["score"])
+        components = tuple(spec["components"])
         path = database_root / f"{module}.parquet"
         _require_regular_file(path, label=f"{module} staged Parquet")
         parquet = pq.ParquetFile(path)
@@ -540,18 +990,142 @@ def _validate_refreshed_score_content(
             raise ModuleRefreshError(
                 f"{module} staged Parquet lacks primary score {score_column!r}"
             )
+        required = {score_column, *components}
+        if module == "sofa2_score":
+            required.update(
+                f"{component}_{suffix}"
+                for component in components
+                for suffix in ("observed", "available")
+            )
+            required.update({"sofa2_observed", "sofa2_available"})
+        missing = required.difference(parquet.schema_arrow.names)
+        if missing:
+            raise ModuleRefreshError(
+                f"{module} refresh lacks score-consistency columns: {sorted(missing)}"
+            )
+
         rows = 0
         non_null = 0
+        inconsistent = 0
+        invalid_component = 0
+        disclaimed_nonzero_component = 0
+        component_non_null = {component: 0 for component in components}
+        availability_true = {component: 0 for component in components}
+        consistency_columns = [score_column, *components]
+        if module == "sofa2_score":
+            consistency_columns.extend(
+                f"{component}_{suffix}"
+                for component in components
+                for suffix in ("observed", "available")
+            )
+            consistency_columns.extend(["sofa2_observed", "sofa2_available"])
         for batch in parquet.iter_batches(
-            batch_size=262_144, columns=[score_column], use_threads=False
+            batch_size=262_144,
+            columns=consistency_columns,
+            use_threads=False,
         ):
-            column = batch.column(0)
-            rows += len(column)
-            non_null += len(column) - column.null_count
-        if rows == 0 or non_null == 0:
+            frame = batch.to_pandas()
+            rows += len(frame)
+            component_frame = frame[list(components)].apply(
+                lambda column: pd.to_numeric(column, errors="coerce")
+            )
+            for component in components:
+                component_non_null[component] += int(
+                    component_frame[component].notna().sum()
+                )
+            invalid_component += int(
+                ((component_frame < 0) | (component_frame > 4)).any(axis=1).sum()
+            )
+            score = pd.to_numeric(frame[score_column], errors="coerce")
+            non_null += int(score.notna().sum())
+            if module == "sofa1_score":
+                expected = component_frame.sum(axis=1, skipna=True)
+                coherent = score.eq(expected)
+            else:
+                available_columns = [
+                    f"{component}_available" for component in components
+                ]
+                observed_columns = [
+                    f"{component}_observed" for component in components
+                ]
+                available = (
+                    frame[available_columns]
+                    .astype("boolean")
+                    .fillna(False)
+                )
+                for component, receipt in zip(components, available_columns):
+                    availability_true[component] += int(available[receipt].sum())
+                observed = (
+                    frame[observed_columns]
+                    .astype("boolean")
+                    .fillna(False)
+                )
+                complete = component_frame.notna().all(axis=1) & available.all(
+                    axis=1
+                )
+                disclaimed_nonzero_component += int(
+                    (
+                        component_frame.fillna(0).ne(0)
+                        & ~available.set_axis(components, axis=1)
+                    )
+                    .any(axis=1)
+                    .sum()
+                )
+                expected = (
+                    component_frame
+                    .where(available.to_numpy(), 0)
+                    .fillna(0)
+                    .sum(axis=1)
+                )
+                if not sofa2_total_structurally_supported(database):
+                    expected = pd.Series(float("nan"), index=frame.index)
+                coherent = score.eq(expected) | (score.isna() & expected.isna())
+                coherent &= (
+                    frame["sofa2_available"]
+                    .astype("boolean")
+                    .fillna(False)
+                    .eq(complete)
+                )
+                coherent &= (
+                    frame["sofa2_observed"]
+                    .astype("boolean")
+                    .fillna(False)
+                    .eq(complete & observed.all(axis=1))
+                )
+            inconsistent += int((~coherent.fillna(False)).sum())
+
+        structurally_unavailable_sic_sofa2 = (
+            module == "sofa2_score"
+            and database == "sic"
+            and rows > 0
+            and non_null == 0
+            and all(count > 0 for count in component_non_null.values())
+            and availability_true["sofa2_cns"] == 0
+            and all(
+                availability_true[component] > 0
+                for component in components
+                if component != "sofa2_cns"
+            )
+        )
+        if rows == 0 or (non_null == 0 and not structurally_unavailable_sic_sofa2):
             raise ModuleRefreshError(
                 f"{module} refresh is unusable: {score_column} has "
                 f"{non_null} non-null values across {rows} rows"
+            )
+        if invalid_component:
+            raise ModuleRefreshError(
+                f"{module} refresh has {invalid_component} rows with organ "
+                "components outside the valid 0-4 range"
+            )
+        if disclaimed_nonzero_component:
+            raise ModuleRefreshError(
+                f"{module} refresh has {disclaimed_nonzero_component} rows with "
+                "a non-zero organ score disclaimed by its availability receipt"
+            )
+        if inconsistent:
+            raise ModuleRefreshError(
+                f"{module} refresh has {inconsistent} rows whose total/receipts "
+                "do not match the post-consolidation organ components"
             )
 
 
@@ -559,8 +1133,8 @@ def _quote_identifier(value: str) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
 
-def _parquet_multiset_receipt(connection: Any, path: Path) -> dict[str, Any]:
-    """Return an order-independent logical-content receipt for one Parquet."""
+def _parquet_schema(connection: Any, path: Path) -> list[tuple[str, str]]:
+    """Return the DuckDB-visible physical schema for one Parquet."""
 
     escaped_path = str(path.resolve()).replace("'", "''")
     relation = f"read_parquet('{escaped_path}')"
@@ -568,6 +1142,30 @@ def _parquet_multiset_receipt(connection: Any, path: Path) -> dict[str, Any]:
     schema = [(str(row[0]), str(row[1])) for row in described]
     if not schema:
         raise ModuleRefreshError(f"Cannot audit a zero-column Parquet: {path}")
+    return schema
+
+
+def _parquet_multiset_receipt(
+    connection: Any,
+    path: Path,
+    *,
+    columns: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Return an order-independent logical-content receipt for one Parquet."""
+
+    escaped_path = str(path.resolve()).replace("'", "''")
+    relation = f"read_parquet('{escaped_path}')"
+    full_schema = _parquet_schema(connection, path)
+    schema_by_name = dict(full_schema)
+    if columns is None:
+        schema = full_schema
+    else:
+        missing = [column for column in columns if column not in schema_by_name]
+        if missing:
+            raise ModuleRefreshError(
+                f"Cannot audit missing Parquet columns {missing}: {path}"
+            )
+        schema = [(column, schema_by_name[column]) for column in columns]
     columns = ", ".join(_quote_identifier(name) for name, _dtype in schema)
     row_hash = f"hash({columns})"
     row_count, hash_xor, hash_sum, hash_min, hash_max = connection.execute(
@@ -601,7 +1199,12 @@ def _validate_publication_only_database_semantics(
     The dual commutative 64-bit row-hash aggregates, row count, extrema and
     schema digest make this insensitive to row ordering and Parquet encoding
     while still failing closed on any observed logical-content difference.
-    DuckDB is bounded to one thread and 1 GiB with spill beside the candidate.
+    A newer publisher may materialize a catalog-declared unavailable concept
+    as a typed all-null column. Such schema completion is accepted only when
+    every source column retains its type and multiset of values, the added
+    column is declared unavailable in the candidate manifest, and it contains
+    no non-null value. DuckDB is bounded to one thread and 1 GiB with spill
+    beside the candidate.
     """
 
     try:
@@ -612,6 +1215,20 @@ def _validate_publication_only_database_semantics(
         ) from exc
 
     receipts: dict[str, dict[str, Any]] = {}
+    candidate_manifest = _read_json(
+        candidate_database_root / "_manifest.json",
+        label=f"{candidate_database_root.name} candidate native manifest",
+    )
+    raw_unavailable = candidate_manifest.get("unavailable_concepts") or []
+    if not isinstance(raw_unavailable, list):
+        raise ModuleRefreshError(
+            f"{candidate_database_root.name}: unavailable_concepts must be a list"
+        )
+    declared_unavailable = {
+        (str(entry.get("module")), str(entry.get("concept")))
+        for entry in raw_unavailable
+        if isinstance(entry, Mapping)
+    }
     audit_parent = candidate_database_root.parents[1]
     with tempfile.TemporaryDirectory(
         prefix=f".semantic-audit-{candidate_database_root.name}-",
@@ -633,9 +1250,63 @@ def _validate_publication_only_database_semantics(
                 _require_regular_file(
                     candidate_path, label=f"{module} publication-only Parquet"
                 )
-                source_receipt = _parquet_multiset_receipt(connection, source_path)
+                source_schema = _parquet_schema(connection, source_path)
+                candidate_schema = _parquet_schema(connection, candidate_path)
+                candidate_schema_by_name = dict(candidate_schema)
+                missing_or_retyped = [
+                    (name, dtype, candidate_schema_by_name.get(name))
+                    for name, dtype in source_schema
+                    if candidate_schema_by_name.get(name) != dtype
+                ]
+                if missing_or_retyped:
+                    raise ModuleRefreshError(
+                        f"{candidate_database_root.name}/{module}: publication-only "
+                        "repackaging removed or retyped source columns; "
+                        f"differences={missing_or_retyped}"
+                    )
+                source_names = [name for name, _dtype in source_schema]
+                added_columns = [
+                    name for name, _dtype in candidate_schema if name not in source_names
+                ]
+                undeclared_additions = [
+                    name
+                    for name in added_columns
+                    if (module, name) not in declared_unavailable
+                ]
+                if undeclared_additions:
+                    raise ModuleRefreshError(
+                        f"{candidate_database_root.name}/{module}: publication-only "
+                        "repackaging added columns not declared unavailable; "
+                        f"columns={undeclared_additions}"
+                    )
+                if added_columns:
+                    quoted_added = ", ".join(
+                        f"count({_quote_identifier(name)})" for name in added_columns
+                    )
+                    escaped_candidate_path = str(candidate_path.resolve()).replace(
+                        "'", "''"
+                    )
+                    non_null_counts = connection.execute(
+                        f"SELECT {quoted_added} FROM "
+                        f"read_parquet('{escaped_candidate_path}')"
+                    ).fetchone()
+                    if non_null_counts is None or any(
+                        int(value) != 0 for value in non_null_counts
+                    ):
+                        raise ModuleRefreshError(
+                            f"{candidate_database_root.name}/{module}: publication-only "
+                            "schema completion added a column with data; "
+                            f"columns={added_columns}, counts={non_null_counts}"
+                        )
+                source_receipt = _parquet_multiset_receipt(
+                    connection,
+                    source_path,
+                    columns=source_names,
+                )
                 candidate_receipt = _parquet_multiset_receipt(
-                    connection, candidate_path
+                    connection,
+                    candidate_path,
+                    columns=source_names,
                 )
                 if source_receipt != candidate_receipt:
                     raise ModuleRefreshError(
@@ -643,7 +1314,10 @@ def _validate_publication_only_database_semantics(
                         "repackaging changed logical table content; "
                         f"source={source_receipt}, candidate={candidate_receipt}"
                     )
-                receipts[module] = source_receipt
+                receipts[module] = {
+                    **source_receipt,
+                    "candidate_added_declared_all_null_columns": added_columns,
+                }
         finally:
             connection.close()
     return {
@@ -821,7 +1495,11 @@ def _refresh_one_database(
             source_database_root, destination_database_root, modules
         )
     ):
-        _validate_refreshed_score_content(destination_database_root, modules)
+        _validate_refreshed_score_content(
+            destination_database_root,
+            modules,
+            database=database,
+        )
         return {
             "database": database,
             "data_path": data_path,
@@ -836,8 +1514,46 @@ def _refresh_one_database(
             ),
         }
     if staging_root.exists() or staging_root.is_symlink():
-        if _module_is_canonical_refresh(staging_root, modules):
-            _validate_refreshed_score_content(staging_root, modules)
+        native_manifest = staging_root / "_manifest.json"
+        canonical_staging = _module_is_canonical_refresh(staging_root, modules)
+        producer_staging = _module_is_complete_producer_staging(
+            staging_root,
+            modules,
+        )
+        if canonical_staging or producer_staging:
+            read_dependencies = _stage_refresh_read_dependencies(
+                source_database_root=source_database_root,
+                staging_root=staging_root,
+                modules=modules,
+            )
+            if native_manifest.exists() or native_manifest.is_symlink():
+                if not canonical_staging:
+                    raise ModuleRefreshError(
+                        "Staged root manifest exists before module files satisfy "
+                        "the native schema"
+                    )
+                _validate_existing_staging_native_manifest(
+                    database=database,
+                    staging_root=staging_root,
+                    modules=modules,
+                )
+            else:
+                _recover_native_staging_publication(
+                    database=database,
+                    data_path=data_path,
+                    staging_root=staging_root,
+                    modules=modules,
+                    resource_budget_mb=resource_budget_mb,
+                )
+                if not _module_is_canonical_refresh(staging_root, modules):
+                    raise ModuleRefreshError(
+                        "Recovered native publication did not produce canonical modules"
+                    )
+            _validate_refreshed_score_content(
+                staging_root,
+                modules,
+                database=database,
+            )
             _replace_selected_module_files(
                 staging_root=staging_root,
                 destination_database_root=destination_database_root,
@@ -853,11 +1569,17 @@ def _refresh_one_database(
                 "total_elapsed_seconds": None,
                 "modules": metrics,
                 "recovery_mode": "completed_staging_promoted",
+                "read_only_dependencies": read_dependencies,
             }
         raise ModuleRefreshError(
             f"Existing refresh staging is incomplete or not canonical: {staging_root}"
         )
     staging_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    read_dependencies = _stage_refresh_read_dependencies(
+        source_database_root=source_database_root,
+        staging_root=staging_root,
+        modules=modules,
+    )
     extraction = extract_database(
         database,
         data_path=data_path,
@@ -874,7 +1596,11 @@ def _refresh_one_database(
         verbose=True,
     )
     metrics = _module_runtime_metrics(extraction, modules)
-    _validate_refreshed_score_content(staging_root, modules)
+    _validate_refreshed_score_content(
+        staging_root,
+        modules,
+        database=database,
+    )
     _replace_selected_module_files(
         staging_root=staging_root,
         destination_database_root=destination_database_root,
@@ -890,10 +1616,14 @@ def _refresh_one_database(
         "num_patients": extraction.get("num_patients"),
         "batch_size": extraction.get("batch_size"),
         "resource_budget_mb": extraction.get("resource_budget_mb"),
+        "resource_execution_limits": extraction.get(
+            "resource_execution_limits"
+        ),
         "resource_plan": extraction.get("resource_plan"),
         "module_resource_plans": extraction.get("module_resource_plans"),
         "total_elapsed_seconds": extraction.get("total_elapsed"),
         "modules": metrics,
+        "read_only_dependencies": read_dependencies,
     }
 
 
@@ -1007,23 +1737,86 @@ def refresh_candidate(
     resource_budget_mb: float = DEFAULT_RELEASE_MEMORY_BUDGET_MB,
     resource_policy_override_reason: str | None = None,
     databases: Sequence[str] = DATABASES,
+    database_module_scope: Mapping[str, Sequence[str]] | None = None,
     resume: bool = False,
     repair_finalized: bool = False,
+    benchmark_only: bool = False,
 ) -> Path:
     source = source_run_root.resolve()
     destination = output_root.expanduser().absolute()
     if source == destination:
         raise ModuleRefreshError("Source and destination run roots must differ")
-    selected_databases = _validate_databases(databases)
+    if batch_size is not None and not str(
+        resource_policy_override_reason or ""
+    ).strip():
+        raise ModuleRefreshError(
+            "An explicit batch size is benchmark-only and requires a recorded "
+            "resource-policy override reason"
+        )
+    resolved_databases: Sequence[str] = (
+        ()
+        if database_module_scope
+        else DATABASES if databases is None else databases
+    )
+    selected_databases, requested_by_database, selected_by_database = (
+        _resolve_database_module_scope(
+            modules=modules,
+            databases=resolved_databases,
+            database_module_scope=database_module_scope,
+        )
+    )
     if resume and set(selected_databases) != set(DATABASES):
         raise ModuleRefreshError(
             "Database-subset refreshes must use a fresh candidate; their "
             "interrupted state is not yet transaction-bound for safe resume"
         )
-    requested_modules = _validate_modules(modules)
-    selected_modules = _expand_module_dependency_closure(requested_modules)
+    requested_modules = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in requested_by_database[database]
+            for database in selected_databases
+        )
+    )
+    selected_modules = tuple(
+        module
+        for module in MODULES
+        if any(
+            module in selected_by_database[database]
+            for database in selected_databases
+        )
+    )
+    if benchmark_only and len(selected_databases) != 1:
+        raise ModuleRefreshError(
+            "--benchmark-only requires exactly one selected database"
+        )
+    if benchmark_only and batch_size is None:
+        raise ModuleRefreshError(
+            "--benchmark-only requires an explicit measured --batch-size"
+        )
+    if benchmark_only and (resume or repair_finalized):
+        raise ModuleRefreshError(
+            "--benchmark-only cannot resume or repair a release candidate"
+        )
     publication_commit = REPUBLICATION._require_clean_checkout()
     source_run_manifest = REPUBLICATION._validate_source(source)
+    execution_resource_plan = _build_refresh_resource_plan(
+        source_run_manifest,
+        requested_modules=modules,
+        databases=resolved_databases,
+        memory_budget_mb=resource_budget_mb,
+        requested_batch_size=batch_size,
+        database_module_scope=database_module_scope,
+    )
+    if (
+        batch_size is None
+        and not execution_resource_plan["formal_release_admissible"]
+    ):
+        raise ModuleRefreshError(
+            "Formal selected-module refresh refuses unmeasured fallback "
+            "batches; profile and register these database/modules first: "
+            f"{execution_resource_plan['unmeasured_or_overridden_modules']}"
+        )
     data_paths = _resolve_data_paths(
         source_run_manifest, data_path_overrides, selected_databases
     )
@@ -1135,11 +1928,72 @@ def refresh_candidate(
                 data_path=data_paths[database],
                 source_database_root=source / "exports" / database,
                 candidate_root=destination,
-                modules=selected_modules,
+                modules=selected_by_database[database],
                 batch_size=batch_size,
                 resource_budget_mb=resource_budget_mb,
                 reuse_completed_export=resume and not repair_finalized,
             )
+
+        if benchmark_only:
+            database = selected_databases[0]
+            output_receipts = {}
+            for module in selected_by_database[database]:
+                parquet = destination / "exports" / database / f"{module}.parquet"
+                manifest_path = (
+                    destination / "exports" / database / f"{module}.manifest.json"
+                )
+                _require_regular_file(parquet, label=f"{database}/{module} benchmark")
+                _require_regular_file(
+                    manifest_path,
+                    label=f"{database}/{module} benchmark producer manifest",
+                )
+                manifest = _read_json(
+                    manifest_path,
+                    label=f"{database}/{module} benchmark producer manifest",
+                )
+                saved = manifest.get("saved") or {}
+                output_receipts[module] = {
+                    "parquet_sha256": REPUBLICATION._sha256_file(parquet),
+                    "parquet_bytes": parquet.stat().st_size,
+                    "producer_manifest_sha256": REPUBLICATION._sha256_file(
+                        manifest_path
+                    ),
+                    "producer_rows": sum(
+                        int(receipt.get("rows") or 0)
+                        for receipt in saved.values()
+                        if isinstance(receipt, Mapping)
+                    ),
+                }
+            benchmark_provenance = {
+                "schema_version": RESOURCE_BENCHMARK_SCHEMA_VERSION,
+                "created_at": _utc_now(),
+                "benchmark_only": True,
+                "sealable": False,
+                "source_run_root": str(source),
+                "source_run_manifest_sha256": source_run_manifest_sha256,
+                "source_database_receipt": source_receipts[database],
+                "easyicu_git_commit": publication_commit,
+                "easyicu_git_dirty": False,
+                "database": database,
+                "requested_modules": list(requested_by_database[database]),
+                "dependency_closure": list(selected_by_database[database]),
+                "resource_policy_override_reason": (
+                    resource_policy_override_reason
+                ),
+                "resource_plan": execution_resource_plan,
+                "runtime": refreshed[database],
+                "output_receipts": output_receipts,
+                "formal_release_admissible": False,
+                "next_step": (
+                    "independently review memory evidence and register an exact "
+                    "measured profile before any formal release refresh"
+                ),
+            }
+            REPUBLICATION._atomic_write_json(
+                destination / RESOURCE_BENCHMARK_FILENAME,
+                benchmark_provenance,
+            )
+            return destination
 
         lineage_base = prior_provenance or source_refresh_provenance
         base_scope = source_refresh_scope
@@ -1163,7 +2017,9 @@ def refresh_candidate(
         per_database_refreshed_modules = {}
         for database in DATABASES:
             current_modules = (
-                set(selected_modules) if database in selected_databases else set()
+                set(selected_by_database[database])
+                if database in selected_databases
+                else set()
             )
             inherited_modules = set(base_scope[database])
             per_database_refreshed_modules[database] = [
@@ -1234,6 +2090,11 @@ def refresh_candidate(
                         current.get("resource_budget_mb")
                         if current.get("resource_budget_mb") is not None
                         else previous.get("resource_budget_mb")
+                    ),
+                    "resource_execution_limits": (
+                        current.get("resource_execution_limits")
+                        if current.get("resource_execution_limits") is not None
+                        else previous.get("resource_execution_limits")
                     ),
                     "resource_plan": (
                         current.get("resource_plan")
@@ -1315,12 +2176,13 @@ def refresh_candidate(
             )
             _rebind_manifest_metrics(manifest, reconstructed_metrics)
             if database in selected_databases:
+                database_selected_modules = selected_by_database[database]
                 manifest["source_extraction_provenance"] = {
                     **(manifest.get("source_extraction_provenance") or {}),
                     "publication_only": False,
                     "raw_database_reread": True,
-                    "refreshed_modules": list(selected_modules),
-                    "current_refreshed_modules": list(selected_modules),
+                    "refreshed_modules": list(database_selected_modules),
+                    "current_refreshed_modules": list(database_selected_modules),
                     "inherited_refreshed_modules": list(base_scope[database]),
                     "cumulative_refreshed_modules": list(
                         per_database_refreshed_modules[database]
@@ -1328,7 +2190,7 @@ def refresh_candidate(
                     "reused_modules": [
                         module
                         for module in MODULES
-                        if module not in selected_modules
+                        if module not in database_selected_modules
                     ],
                     "latest_module_refresh_runtime": refreshed[database],
                     "cumulative_module_refresh_runtime": combined_runtime[database],
@@ -1370,6 +2232,21 @@ def refresh_candidate(
             for database in DATABASES
             if database not in selected_databases
         }
+        reused_module_semantic_audit = {}
+        for database in selected_databases:
+            reused_modules = tuple(
+                module
+                for module in MODULES
+                if module not in selected_by_database[database]
+            )
+            if reused_modules:
+                reused_module_semantic_audit[database] = (
+                    _validate_publication_only_database_semantics(
+                        source / "exports" / database,
+                        destination / "exports" / database,
+                        modules=reused_modules,
+                    )
+                )
         REPUBLICATION._rebind_extraction_timing_receipts(
             destination / "database_extraction_timing.csv", native_manifests
         )
@@ -1387,6 +2264,14 @@ def refresh_candidate(
             "dependency_closure_applied": list(all_refreshed_modules),
             "latest_requested_modules": list(requested_modules),
             "latest_dependency_closure_applied": list(selected_modules),
+            "latest_per_database_requested_modules": {
+                database: list(requested_by_database[database])
+                for database in selected_databases
+            },
+            "latest_per_database_dependency_closure": {
+                database: list(selected_by_database[database])
+                for database in selected_databases
+            },
             "inherited_requested_modules": inherited_requested_modules,
             "inherited_refreshed_modules": inherited_refreshed_modules,
             "selected_databases": list(selected_databases),
@@ -1414,12 +2299,27 @@ def refresh_candidate(
                 "override_reason": resource_policy_override_reason,
                 "execution_grain": "database_by_module",
                 "adaptive_batch_growth": False,
+                "formal_release_admissible": execution_resource_plan[
+                    "formal_release_admissible"
+                ],
             },
+            "latest_resource_plan": execution_resource_plan,
             "per_database_runtime": combined_runtime,
+            "latest_read_only_dependencies": {
+                database: dict(
+                    refreshed[database].get("read_only_dependencies") or {}
+                )
+                for database in selected_databases
+            },
             "publication_only_semantic_audit": publication_only_semantic_audit,
+            "reused_module_semantic_audit": reused_module_semantic_audit,
             "reused_module_count_per_database": {
                 database: len(MODULES)
-                - (len(selected_modules) if database in selected_databases else 0)
+                - (
+                    len(selected_by_database[database])
+                    if database in selected_databases
+                    else 0
+                )
                 for database in DATABASES
             },
             "cumulative_reused_module_count_per_database": {
@@ -1485,6 +2385,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Resume an unsealed candidate after recovering canonical staged modules.",
     )
     parser.add_argument(
+        "--benchmark-only",
+        action="store_true",
+        help=(
+            "Extract and validate one database's closure, write a non-sealable "
+            "resource benchmark receipt, and skip six-database republication."
+        ),
+    )
+    parser.add_argument(
         "--repair-finalized",
         action="store_true",
         help=(
@@ -1509,7 +2417,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help=(
             "Raw-derived module to refresh (outcome, renal, respiratory or "
-            "sofa2_score); repeatable."
+            "sofa1_score/sofa2_score); repeatable."
+        ),
+    )
+    parser.add_argument(
+        "--database-module",
+        action="append",
+        default=[],
+        metavar="DATABASE=MODULE[,MODULE]",
+        help=(
+            "Audited per-database module scope; repeat once per database. "
+            "Cannot be combined with --database or --module."
         ),
     )
     parser.add_argument(
@@ -1552,6 +2470,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--memory-budget-mb must be positive")
     if args.plan_output is not None and not args.plan_only:
         parser.error("--plan-output requires --plan-only")
+    if args.database_module and (args.database or args.module):
+        parser.error(
+            "--database-module cannot be combined with --database or --module"
+        )
     if not args.plan_only and args.output_root is None:
         parser.error("--output-root is required unless --plan-only is used")
     if args.batch_size is not None and not args.allow_resource_policy_override:
@@ -1564,12 +2486,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.resource_policy_override_reason or ""
     ).strip():
         parser.error("--batch-size requires --resource-policy-override-reason")
+    if args.benchmark_only and args.batch_size is None:
+        parser.error("--benchmark-only requires --batch-size")
+    if args.benchmark_only and (args.resume or args.repair_finalized):
+        parser.error("--benchmark-only cannot be combined with resume/repair")
     return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        database_module_scope = _parse_database_module_scopes(
+            args.database_module
+        )
         if args.plan_only:
             source_manifest = REPUBLICATION._validate_source(
                 args.source_run_root.resolve()
@@ -1577,9 +2506,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan = _build_refresh_resource_plan(
                 source_manifest,
                 requested_modules=args.module,
-                databases=args.database or DATABASES,
+                databases=(
+                    () if database_module_scope else args.database or DATABASES
+                ),
                 memory_budget_mb=args.memory_budget_mb,
                 requested_batch_size=args.batch_size,
+                database_module_scope=database_module_scope or None,
             )
             plan["source_run_root"] = str(args.source_run_root.resolve())
             plan["resource_policy_override_reason"] = (
@@ -1599,9 +2531,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             resource_policy_override_reason=(
                 args.resource_policy_override_reason
             ),
-            databases=args.database or DATABASES,
+            databases=(
+                () if database_module_scope else args.database or DATABASES
+            ),
+            database_module_scope=database_module_scope or None,
             resume=args.resume,
             repair_finalized=args.repair_finalized,
+            benchmark_only=args.benchmark_only,
         )
     except (ModuleRefreshError, OSError, ValueError) as exc:
         print(f"selected-module refresh failed: {exc}", file=sys.stderr)
