@@ -22,9 +22,9 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8458,
-      "sha256": "9f315c23bc0e4396078b89765889a4cc86f098471878a5829fc87b9cc4f70314",
-      "intra_package_import_edges": 122,
+      "loc": 7062,
+      "sha256": "d807de6caa31ceb2507b2d1a5db6b36923a61334165476e8e656eed22b6ce0de",
+      "intra_package_import_edges": 127,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
@@ -406,13 +406,7 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Progressive Planner now returns one atomic output-and-provenance result; attempt state moved to a dedicated owner module.",
-  "baseline_accepted_growth": {
-    "agents/progressive_planner.py": {
-      "loc_was": 4122,
-      "loc_now": 4160
-    }
-  },
+  "baseline_reason": "2026-09-04 authority closure: move association and sensitivity renderers and prior-output contracts to figure owners; tighten only pipeline LOC from 8458 to 7062. Other file/function budgets remain unchanged. See docs/architecture/authority_closure_review_20260904.md.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -905,6 +899,15 @@
         "agents/progressive_planner.py": {
           "loc_was": 4122,
           "loc_now": 4160
+        }
+      }
+    },
+    {
+      "reason": "2026-09-04 authority closure: move association and sensitivity renderers and prior-output contracts to figure owners; tighten only pipeline LOC from 8458 to 7062. Other file/function budgets remain unchanged. See docs/architecture/authority_closure_review_20260904.md.",
+      "tightened_limits": {
+        "pipeline.py.loc": {
+          "was": 8458,
+          "now": 7062
         }
       }
     }

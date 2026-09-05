@@ -1,0 +1,39 @@
+{
+  "base_commit": "89cb7ed00dd08545bf1a455f2e63ed86ad87fff8",
+  "pipeline_before": {
+    "loc": 8444,
+    "intra_package_import_edges": 124
+  },
+  "pipeline_after": {
+    "loc": 7062,
+    "sha256": "d807de6caa31ceb2507b2d1a5db6b36923a61334165476e8e656eed22b6ce0de",
+    "intra_package_import_edges": 127,
+    "shim_bypass_violations": []
+  },
+  "graph_before": {
+    "module_count": 635,
+    "top_level_module_count": 34,
+    "package_count": 32,
+    "edge_count": 2613,
+    "cyclic_scc_count": 0,
+    "cyclic_module_count": 0,
+    "largest_scc_size": 0
+  },
+  "graph_after": {
+    "cyclic_module_count": 0,
+    "cyclic_scc_count": 0,
+    "edge_count": 2632,
+    "largest_scc_size": 0,
+    "module_count": 640,
+    "package_count": 32,
+    "top_level_module_count": 34
+  },
+  "added_owner_modules": [
+    "easyicu.research_agent.authority.run_receipt",
+    "easyicu.research_agent.contracts.frozen_payload",
+    "easyicu.research_agent.figures.association_prior_outputs",
+    "easyicu.research_agent.figures.prior_output_contracts",
+    "easyicu.research_agent.figures.sensitivity_prior_outputs"
+  ],
+  "authority": "engineering measurement only; no formal run or paper authorization"
+}
