@@ -552,7 +552,11 @@ def read_run_record(project_dir: str) -> RunRecordReadResult:
     gate = (payloads.get("quality_gate.json") or {}).get("gate") or {}
     signoff = payloads.get("human_signoff.json")
 
-    artifacts = _run_artifacts(run_dir)
+    artifacts = loaded["artifacts"]
+    if artifacts != _run_artifacts(run_dir):
+        return RunRecordReadError(ok=False, error="run_record_changed_during_read", directory=directory)
+    if run_context.get("run_id") and ledger.get("run_id") and run_context["run_id"] != ledger["run_id"]:
+        return RunRecordReadError(ok=False, error="run_record_identity_conflict", directory=directory)
     signoff_integrity = run_artifact_disclosure.signoff_integrity(signoff, artifacts)
     readiness = _readiness_from_gate(
         gate,
@@ -634,7 +638,7 @@ def create_human_signoff(
             "reason": gate.reason,
             "reportable": False,
             "draft_unlocked": False,
-            "checks": [dict(check) for check in gate.checks],
+            "checks": gate.to_dict().get("checks", []),
         },
         "artifact_names": [
             item.name
@@ -1348,12 +1352,16 @@ def _artifact_media_type(name: str) -> str:
 
 def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
     payloads: Dict[str, Dict[str, Any]] = {}
-    for name in _RUN_ARTIFACT_NAMES:
+    artifacts: List[Dict[str, Any]] = []
+    for name in [*_RUN_ARTIFACT_NAMES, *_RUN_DOCUMENT_SPECS]:
         path, raw, path_error = _read_safe_artifact_bytes(run_dir, name)
         if path_error == "artifact_not_found":
             continue
         if path is None or raw is None:
             return {"ok": False, "error": path_error, "artifact": name}
+        artifacts.append(_artifact_from_raw(path, run_dir, raw))
+        if name not in _RUN_ARTIFACT_NAMES:
+            continue
         try:
             payload = json.loads(raw.decode("utf-8"))
         except UnicodeDecodeError:
@@ -1373,7 +1381,7 @@ def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
             payloads[name] = payload
         else:
             return {"ok": False, "error": "artifact_json_not_object", "artifact": name}
-    return {"ok": True, "payloads": payloads}
+    return {"ok": True, "payloads": payloads, "artifacts": artifacts}
 
 
 def _readiness_from_gate(

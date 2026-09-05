@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -393,11 +394,12 @@ def persist_canonical_handoff(
     """Persist the fixed canonical artifact and return envelope reference fields."""
 
     run_path = Path(run_dir)
-    path = write_handoff_packet(packet, run_path / CANONICAL_HANDOFF_FILENAME)
+    relative_path = f"handoffs/{packet.handoff_sha256}.json"
+    path = write_handoff_packet(packet, run_path / relative_path)
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {
         "canonical_handoff": packet.model_dump(mode="json"),
-        "canonical_handoff_path": CANONICAL_HANDOFF_FILENAME,
+        "canonical_handoff_path": relative_path,
         "canonical_handoff_sha256": digest,
     }
 
@@ -416,9 +418,9 @@ def load_validated_canonical_handoff(
     """Re-read, hash-check, and validate the canonical packet fail-closed."""
 
     relative_path = str(envelope.get("canonical_handoff_path") or "").strip()
-    if relative_path != CANONICAL_HANDOFF_FILENAME:
+    if not re.fullmatch(r"handoffs/[0-9a-f]{64}\.json", relative_path):
         raise CanonicalHandoffIntegrityError(
-            "canonical handoff path must be discovery_handoff.json"
+            "canonical handoff path must identify a sealed handoff version"
         )
     expected_hash = str(envelope.get("canonical_handoff_sha256") or "").strip()
     if len(expected_hash) != 64:
@@ -426,7 +428,7 @@ def load_validated_canonical_handoff(
             "canonical handoff envelope is missing a valid sha256"
         )
 
-    path = Path(run_dir) / CANONICAL_HANDOFF_FILENAME
+    path = Path(run_dir) / relative_path
     if not path.is_file():
         raise CanonicalHandoffIntegrityError("canonical handoff artifact is missing")
     raw = path.read_bytes()
@@ -448,6 +450,12 @@ def load_validated_canonical_handoff(
         raise CanonicalHandoffIntegrityError(
             "canonical handoff envelope does not match the frozen artifact"
         )
+    if relative_path != f"handoffs/{file_packet.handoff_sha256}.json":
+        raise CanonicalHandoffIntegrityError("canonical handoff version mismatch")
+    try:
+        file_packet.verify_source()
+    except ValueError as exc:
+        raise CanonicalHandoffIntegrityError(str(exc)) from exc
     _validate_legacy_identity(envelope, file_packet)
     return file_packet
 

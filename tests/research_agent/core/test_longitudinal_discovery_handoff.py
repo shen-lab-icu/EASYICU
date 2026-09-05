@@ -8,6 +8,7 @@ import pytest
 
 from easyicu.research_agent.discovery.longitudinal_handoff import (
     DEFAULT_LONGITUDINAL_PROTOCOL_CONFIRMATIONS,
+    LongitudinalAnalysisTaskPack,
     build_longitudinal_analysis_task_pack,
 )
 
@@ -68,7 +69,7 @@ def test_longitudinal_discovery_builds_six_database_style_child_handoffs(
     assert pack.go_no_go == "hold"
     assert pack.protocol_status == "awaiting_human_confirmation"
     assert pack.paper_authorized is False
-    assert pack.required_protocol_confirmations == list(
+    assert pack.required_protocol_confirmations == tuple(
         DEFAULT_LONGITUDINAL_PROTOCOL_CONFIRMATIONS
     )
     assert {task.database for task in pack.database_tasks} == {"miiv", "eicu"}
@@ -103,3 +104,18 @@ def test_longitudinal_task_pack_rejects_unknown_concept(tmp_path: Path):
             output_dir=tmp_path / "task",
             concept="peep",
         )
+
+
+def test_longitudinal_pack_and_children_are_frozen_and_digest_bound(tmp_path):
+    from pydantic import ValidationError
+    pack = build_longitudinal_analysis_task_pack(_manifest(tmp_path), output_dir=tmp_path / "task")
+    with pytest.raises(ValidationError, match="frozen"):
+        pack.database_tasks[0].artifact_sha256 = "0" * 64
+    with pytest.raises(AttributeError):
+        pack.database_tasks.append(pack.database_tasks[0])
+    payload = pack.model_dump(mode="json")
+    assert len(payload["selected_candidate_sha256"]) == 64
+    assert LongitudinalAnalysisTaskPack.model_validate(payload).task_pack_sha256 == pack.task_pack_sha256
+    payload["database_tasks"][0]["artifact_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="longitudinal_task_pack_digest_mismatch"):
+        LongitudinalAnalysisTaskPack.model_validate(payload)

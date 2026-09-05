@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Union
 
+from easyicu.research_agent.contracts.frozen_payload import freeze_payload, thaw_payload
+
 
 @dataclass(frozen=True)
 class RunDirectory:
@@ -60,12 +62,12 @@ class RunGate:
             reason=str(payload["reason"]) if payload.get("reason") is not None else None,
             reportable=bool(payload.get("reportable")),
             draft_unlocked=bool(payload.get("draft_unlocked")),
-            checks=tuple(dict(row) for row in rows if isinstance(row, Mapping)),
-            payload=dict(payload),
+            checks=tuple(freeze_payload(row) for row in rows if isinstance(row, Mapping)),
+            payload=freeze_payload(payload),
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return dict(self.payload)
+        return thaw_payload(self.payload)
 
 
 @dataclass(frozen=True)
@@ -139,7 +141,7 @@ class RunArtifact:
             bytes=int(payload.get("bytes") or 0),
             sha256=str(payload.get("sha256") or ""),
             kind=str(payload.get("kind") or ""),
-            summary=payload.get("summary"),
+            summary=freeze_payload(payload.get("summary")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -152,7 +154,7 @@ class RunArtifact:
             "kind": self.kind,
         }
         if self.summary is not None:
-            payload["summary"] = self.summary
+            payload["summary"] = thaw_payload(self.summary)
         return payload
 
 
@@ -171,11 +173,11 @@ class RunSignoff:
             reviewer=str(payload["reviewer"]) if payload.get("reviewer") is not None else None,
             signed_at=str(payload["signed_at"]) if payload.get("signed_at") is not None else None,
             status=str(payload["status"]) if payload.get("status") is not None else None,
-            payload=dict(payload),
+            payload=freeze_payload(payload),
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return dict(self.payload)
+        return thaw_payload(self.payload)
 
 
 @dataclass(frozen=True)
@@ -226,10 +228,10 @@ class RunRecord:
             gate=RunGate.from_payload(gate_payload),
             readiness=RunReadiness.from_payload(readiness_payload),
             signoff_stale=bool(signoff_integrity.get("signoff_stale")),
-            signoff_integrity=dict(signoff_integrity),
+            signoff_integrity=freeze_payload(signoff_integrity),
             signoff=(RunSignoff.from_payload(signoff_payload) if signoff_payload is not None else None),
             artifacts=tuple(RunArtifact.from_payload(item) for item in artifacts),
-            artifact_payloads={name: dict(payload) for name, payload in artifact_payloads.items()},
+            artifact_payloads=freeze_payload(artifact_payloads),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -246,10 +248,10 @@ class RunRecord:
             "readiness": self.readiness.to_dict(),
             "signed": self.signed,
             "signoff_stale": self.signoff_stale,
-            "signoff_integrity": dict(self.signoff_integrity),
+            "signoff_integrity": thaw_payload(self.signoff_integrity),
             "signoff": self.signoff.to_dict() if self.signoff is not None else None,
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
-            "artifact_payloads": {name: dict(payload) for name, payload in self.artifact_payloads.items()},
+            "artifact_payloads": thaw_payload(self.artifact_payloads),
         }
 
 

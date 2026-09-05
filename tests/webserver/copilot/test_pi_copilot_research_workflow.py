@@ -7913,9 +7913,11 @@ def test_web_runner_enables_live_pubmed_only_with_host_authorization(
     assert captured["config"].enable_pubmed is True
 
 
+@pytest.mark.parametrize("invalid_seed", [False, True])
 def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    invalid_seed: bool,
 ) -> None:
     _assume_execution_runtime_ready(monkeypatch)
     universe = tmp_path / "universe.parquet"
@@ -7951,6 +7953,8 @@ def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
         },
         "screening_decisions": [],
     }
+    if invalid_seed:
+        seed["citations"] = None
     study = {**_complete_study(), "literature_authority": {"status": "searched"}}
     monkeypatch.setattr(
         provider_adapter,
@@ -8013,6 +8017,12 @@ def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
         def emit(self, _event: dict[str, Any]) -> None:
             return None
 
+    if invalid_seed:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as caught:
+            runner(Job())
+        assert caught.value.code == "bound_literature_schema_invalid"
+        assert "config" not in captured
+        return
     runner(Job())
 
     assert (
