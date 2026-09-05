@@ -333,6 +333,15 @@ class ProgressiveModelTermIntent(BaseModel):
     role: Literal["exposure", "covariate"]
     coding: ModelTermCoding
     reference_level_index: Optional[int] = Field(default=None, ge=0)
+    clinical_rationale: Optional[str] = Field(
+        default=None,
+        min_length=16,
+        max_length=500,
+        description=(
+            "Agent-authored clinical confounding rationale; required for a "
+            "covariate and omitted for the exposure."
+        ),
+    )
 
     @model_validator(mode="after")
     def _reference_matches_coding(self) -> "ProgressiveModelTermIntent":
@@ -341,6 +350,11 @@ class ProgressiveModelTermIntent(BaseModel):
             raise ValueError(
                 "binary/categorical terms require a reference index; continuous/"
                 "ordinal_linear terms must omit it"
+            )
+        if (self.role == "covariate") != (self.clinical_rationale is not None):
+            raise ValueError(
+                "covariate terms require an Agent-authored clinical_rationale; "
+                "exposure terms must omit it"
             )
         return self
 

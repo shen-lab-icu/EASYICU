@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from ...authority.current_case_scientific_runtime import (
     AssociationModelGridRuntimeAuthority,
+    LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     LandmarkSurvivalRuntimeAuthority,
     SourceFeasibilityRuntimeAuthority,
@@ -122,6 +123,14 @@ from .host_bound_cohort_executor import (
     HOST_BOUND_COHORT_ANALYSIS_KIND,
     host_bound_cohort_executor_code,
     host_bound_cohort_executor_owns_step,
+)
+from .landmark_categorical_association_executor import (
+    LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+    LANDMARK_CATEGORICAL_PRIMARY_ANALYSIS_KIND,
+    landmark_categorical_cohort_executor_code,
+    landmark_categorical_cohort_executor_owns_step,
+    landmark_categorical_primary_executor_code,
+    landmark_categorical_primary_executor_owns_step,
 )
 from .landmark_association_figure_executor import (
     landmark_association_figure_executor_code,
@@ -305,6 +314,54 @@ def _build_registry() -> StepExecutorRegistry:
                 c.current_case_scientific_runtime_authority.cohort_product,
                 c.current_case_scientific_runtime_authority.parent_product,
             ),
+        ),
+        StepExecutor(
+            key=LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                LandmarkCategoricalAssociationRuntimeAuthority,
+            ),
+            owns=lambda c: landmark_categorical_cohort_executor_owns_step(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+            ),
+            render=lambda c: landmark_categorical_cohort_executor_code(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+                runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+            selection_reason="signed_landmark_categorical_cohort_contract_preflight",
+            progress_message="Building the signed fixed-landmark analysis cohort",
+            consumed_input_keys=lambda _c: (),
+        ),
+        StepExecutor(
+            key=LANDMARK_CATEGORICAL_PRIMARY_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                LandmarkCategoricalAssociationRuntimeAuthority,
+            ),
+            owns=lambda c: landmark_categorical_primary_executor_owns_step(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+            ),
+            render=lambda c: landmark_categorical_primary_executor_code(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+                runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            selection_reason=(
+                "signed_landmark_categorical_association_contract_preflight"
+            ),
+            progress_message="Using the signed categorical landmark association",
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
         ),
         StepExecutor(
             key=LANDMARK_SURVIVAL_ANALYSIS_KIND,

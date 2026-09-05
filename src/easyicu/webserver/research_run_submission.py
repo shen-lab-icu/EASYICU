@@ -363,7 +363,6 @@ def submit_research_run(
             )
         if (
             not development_resume_source_job_id
-            and not plan_revision_source_run_id
             and not execution_resume_source_run_id
             and planner_start_mode != "fresh"
         ):

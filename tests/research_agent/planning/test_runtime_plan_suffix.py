@@ -250,3 +250,76 @@ def test_runtime_suffix_strict_schema_binds_only_the_next_coordinate() -> None:
     assert agent.last_prompt_metrics["total_bytes"] == (
         agent.last_prompt_metrics["message_payload_bytes"] + request.payload_bytes
     )
+
+
+@pytest.mark.parametrize(
+    "duplicate_field", [None, "covariate_rationales", "covariate_temporal_roles"]
+)
+def test_runtime_suffix_decodes_closed_covariate_decisions_before_authority_validation(
+    duplicate_field,
+) -> None:
+    base = _plan()
+    primary = AnalysisStep(
+        step_id="02_model",
+        intent="Estimate the stage and death association adjusted for baseline age.",
+        planned_analysis_role="primary",
+        method="adjusted_association_models",
+        inputs=["artifact:analysis_cohort", "stage", "death", "age"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        model_requirements=[
+            {
+                "requirement_id": "age_adjusted",
+                "outcome": "death",
+                "outcome_type": "binary",
+                "method_family": "statsmodels_logit_mle",
+                "exposure_source": "stage",
+                "analysis_role": "primary",
+                "analysis_set": "source_aware",
+                "covariates": ["age"],
+                "covariate_rationales": {
+                    "age": "Baseline age may influence both exposure and outcome."
+                },
+                "covariate_temporal_roles": {"age": "baseline_static"},
+            }
+        ],
+    )
+    plan = base.model_copy(
+        update={
+            "analysis_type": "association_study",
+            "steps": [base.steps[0], primary],
+        }
+    )
+    replacement = primary.model_dump(mode="json")
+    wire_requirement = replacement["model_requirements"][0]
+    for field in ("covariate_rationales", "covariate_temporal_roles"):
+        wire_requirement[field] = [
+            {"key": key, "value": value} for key, value in wire_requirement[field].items()
+        ]
+    response = {
+        "replace_from_step_id": primary.step_id,
+        "replacement_step": replacement,
+        "rationale": "Retain the declared adjustment after observing the cohort.",
+    }
+    valid_response = json.dumps(response)
+    responses = []
+    if duplicate_field is not None:
+        wire_requirement[duplicate_field].append(
+            {**wire_requirement[duplicate_field][0], "key": " age "}
+        )
+        responses.append(json.dumps(response))
+    responses.append(valid_response)
+    llm = ScriptedMockLLMClient(responses)
+    llm.supports_strict_json_schema = True
+
+    revised = ReplannerAgent(llm).run(
+        context=_context(),
+        current_plan=plan,
+        completed_step_records=[{"step_id": "01_cohort", "status": "ok"}],
+        suffix_only=True,
+    )
+
+    assert revised.steps[0] == base.steps[0]
+    assert revised.steps[1].model_requirements == primary.model_requirements
+    assert len(llm.calls) == len(responses)
+    if duplicate_field is not None:
+        assert f"{duplicate_field} repeats key" in llm.calls[1][0][-1].content

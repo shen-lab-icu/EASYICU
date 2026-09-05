@@ -9,9 +9,15 @@ first ID column in a file.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal, Mapping, Sequence
 
 import pandas as pd
+
+from ..contracts.dependence import (
+    PlannedDependenceRequirement,
+    PatientGroupResolutionError,
+    resolve_patient_groups,
+)
 
 __all__ = [
     "CohortGranularity",
@@ -49,6 +55,7 @@ class CohortGranularity:
     row_count: int
     stay_id_columns: tuple[str, ...]
     patient_id_columns: tuple[str, ...]
+    patient_grouping_source: str | None
     n_patients: int | None
 
     @property
@@ -65,7 +72,11 @@ class CohortGranularity:
             "n_patients_source": (
                 self.patient_id_columns[0]
                 if self.patient_id_columns
-                else "unavailable"
+                else (
+                    f"{self.patient_grouping_source}:prefix_before_:s"
+                    if self.patient_grouping_source
+                    else "unavailable"
+                )
             ),
         }
 
@@ -84,6 +95,7 @@ def resolve_cohort_granularity(
     *,
     frame: pd.DataFrame,
     id_columns: Sequence[str],
+    replacement_row_identity: Mapping[str, object] | None = None,
 ) -> CohortGranularity:
     """Resolve granularity from exact identifier roles.
 
@@ -103,13 +115,52 @@ def resolve_cohort_granularity(
         for column in available
         if column.strip().lower() in _STAY_ID_NAMES
     )
+    patient_grouping_source: str | None = None
     n_patients = (
         int(frame[patient_ids[0]].nunique(dropna=True)) if patient_ids else None
     )
+    if not patient_ids and replacement_row_identity is not None:
+        source = replacement_row_identity.get("output_identity_column")
+        derivation = replacement_row_identity.get("patient_group_derivation")
+        if (
+            isinstance(source, str)
+            and source in available
+            and derivation
+            == {"algorithm": "prefix_before_:s", "delimiter": ":s"}
+        ):
+            patient_grouping_source = source
+            # Metadata-only planning catalogs intentionally expose the verified
+            # grouping coordinate but contain zero patient rows.  They can
+            # authorize a clustered design without making a patient-count claim;
+            # execution cohorts below still have to resolve every value.
+            if frame.empty:
+                return CohortGranularity(
+                    analysis_unit="icu_stay" if stay_ids else "row",
+                    row_count=0,
+                    stay_id_columns=stay_ids,
+                    patient_id_columns=patient_ids,
+                    patient_grouping_source=patient_grouping_source,
+                    n_patients=None,
+                )
+            try:
+                resolved = resolve_patient_groups(
+                    frame[source].tolist(),
+                    requirement=PlannedDependenceRequirement(
+                        group_source=source,
+                        group_derivation="prefix_before_delimiter",
+                        delimiter=":s",
+                    ),
+                )
+            except PatientGroupResolutionError as exc:
+                raise ValueError(
+                    "verified replacement patient grouping is invalid"
+                ) from exc
+            n_patients = resolved.cluster_count
     return CohortGranularity(
         analysis_unit="icu_stay" if stay_ids else "row",
         row_count=int(len(frame)),
         stay_id_columns=stay_ids,
         patient_id_columns=patient_ids,
+        patient_grouping_source=patient_grouping_source,
         n_patients=n_patients,
     )

@@ -601,6 +601,9 @@ def build_research_context(
         Name of the primary outcome column. Used by validators to
         confirm the analysis actually predicts this column and not a
         proxy.
+    outcome_columns
+        Explicit analysis endpoint roster. When omitted, column inference only
+        identifies available outcomes and does not request additional analyses.
     cross_database_validation
         Other databases to replicate this analysis on. The pipeline
         records these targets in every single-database run. The
@@ -660,6 +663,9 @@ def build_research_context(
     # --- cohort descriptor
     id_columns = list(id_columns) if id_columns else _guess_id_columns(df)
     time_columns = list(time_columns) if time_columns else _guess_time_columns(df)
+    requested_outcome_columns = (
+        list(outcome_columns) if outcome_columns is not None else None
+    )
     outcome_columns = (
         list(outcome_columns) if outcome_columns else _guess_outcome_columns(df)
     )
@@ -676,9 +682,20 @@ def build_research_context(
         cohort_path=cohort_path_str,
     )
 
+    planning_catalog_provenance = _planning_catalog_provenance(df)
+    replacement_row_identity = (
+        legacy_materialization_provenance.get("replacement_row_identity")
+        if legacy_materialization_provenance is not None
+        else planning_catalog_provenance.get("replacement_row_identity")
+    )
     granularity = resolve_cohort_granularity(
         frame=df,
         id_columns=episode.id_columns,
+        replacement_row_identity=(
+            replacement_row_identity
+            if isinstance(replacement_row_identity, dict)
+            else None
+        ),
     )
     n_stays = int(len(df))
 
@@ -692,10 +709,11 @@ def build_research_context(
         id_columns=episode.id_columns,
         time_columns=episode.time_columns,
         outcome_columns=episode.outcome_columns,
+        requested_outcome_columns=requested_outcome_columns,
         provenance={
             **episode.provenance,
             **granularity.provenance(),
-            **_planning_catalog_provenance(df),
+            **planning_catalog_provenance,
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
             **(
@@ -1378,6 +1396,9 @@ def build_naive_research_context(
         id_columns=id_cols,
         time_columns=time_cols,
         outcome_columns=out_cols,
+        requested_outcome_columns=(
+            list(outcome_columns) if outcome_columns is not None else None
+        ),
         provenance={
             **granularity.provenance(),
             **_planning_catalog_provenance(df),

@@ -282,6 +282,49 @@ def test_landmark_and_cluster_choices_become_separate_executable_steps() -> None
     }
 
 
+def test_first_stay_spec_becomes_an_executable_reestimation_step() -> None:
+    context = _context()
+    context = context.model_copy(
+        update={
+            "variables": [
+                *context.variables,
+                ConceptDescriptor(
+                    name="icu_readmission",
+                    role=VariableRole.OTHER,
+                    dtype="int64",
+                ),
+            ],
+            "user_preferences": UserPreferences.model_validate(
+                {
+                    **context.user_preferences.model_dump(mode="json"),
+                    "sensitivity_specs": [
+                        {
+                            "spec_id": "first_icu_stay",
+                            "axis": "repeated_stays",
+                            "strategy": "first_stay",
+                            "execution_variables": ["icu_readmission"],
+                        }
+                    ],
+                }
+            ),
+        }
+    )
+
+    shaped, findings = ensure_prespecified_sensitivity_steps(
+        plan=_plan(),
+        context=context,
+    )
+
+    step = next(
+        item for item in shaped.steps if item.step_id == "sensitivity_first_icu_stay"
+    )
+    assert step.method == "first_stay_association"
+    assert "icu_readmission" in step.inputs
+    assert step.scientific_capability == "association_freeform_v1"
+    assert step.sensitivity_spec_ids == ["first_icu_stay"]
+    assert findings[0].detail["strategy"] == "first_stay"
+
+
 def test_time_varying_choice_is_not_projected_without_a_registered_runtime() -> None:
     context = _context()
     preferences = UserPreferences.model_validate(

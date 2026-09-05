@@ -1440,6 +1440,7 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
     gate = review.gate
     artifacts = review.artifacts
     artifact_payloads = review.artifact_payloads
+    agent_plan = artifact_payloads.get("agent_plan.json")
     source_manifest = artifact_payloads.get("source_run_manifest.json") or {}
     pending_reviews = source_manifest.get("pending_reviews") or []
     pending_reason_codes = sorted(
@@ -1476,6 +1477,12 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "scientific_plan_review_score": source_manifest.get(
             "scientific_plan_review_score"
         ),
+        "plan_revision_source_run_id": source_manifest.get(
+            "plan_revision_source_run_id"
+        ),
+        "plan_revision_nonconvergent": source_manifest.get(
+            "plan_revision_nonconvergent"
+        ),
         "readiness_status": readiness.status,
         "signed": review.signed,
         "signoff_stale": review.signoff_stale,
@@ -1484,6 +1491,11 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "draft_unlocked": False,
         "artifact_count": len(artifacts),
         "artifact_names": [artifact.name for artifact in artifacts],
+        # Blocked projections intentionally write an empty diagnostic
+        # agent_plan.json. File presence alone is therefore not plan authority.
+        "plan_available": bool(
+            isinstance(agent_plan, Mapping) and agent_plan
+        ),
         "updated_at_epoch": updated,
         "updated_at": datetime.fromtimestamp(updated, timezone.utc)
         .isoformat()

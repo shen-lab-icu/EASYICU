@@ -24,14 +24,21 @@
     'scientific_plan_review_policy_stale',
     'plan_scientific_changes_required',
   ]);
+  const AUTOMATIC_PROVIDER_RUN_CODES = new Set([
+    'provider_ready_to_generate_plan',
+    'plan_execution_upgrade_required',
+    'scientific_plan_review_policy_stale',
+    'plan_configuration_superseded',
+    'plan_scientific_changes_required',
+  ]);
+  const BARE_CONTINUATION = /^(?:(?:请|麻烦)?\s*(?:继续|开始|往下做|接着做)(?:一下|吧|做|执行|推进)?|(?:please\s+)?(?:continue|proceed|go\s+ahead))(?:[。.!！]?)$/i;
 
   function create(host) {
     const tr = host.tr;
     const regeneration = host.regeneration;
     const nextActions = host.nextActions;
     const replay = host.replay;
-    let automaticScientificRevisionStarted = false;
-    let automaticExecutionUpgradeStarted = false;
+    const startedTransitions = new Set();
 
     function unavailable() {
       return !host.session() || host.busy() || host.sessionIsStale();
@@ -39,6 +46,42 @@
 
     function workflowCode() {
       return String((host.workflow() && host.workflow().next_action_code) || '');
+    }
+
+    function transitionKey(reasonCode) {
+      const session = host.session() || {};
+      const binding = session.binding || {};
+      // Host-action persistence may advance the study revision even when the
+      // scientific configuration and reviewed run are unchanged.  A failed
+      // candidate-to-package upgrade must therefore stay deduplicated by its
+      // exact source run; otherwise each bookkeeping revision starts the same
+      // failed job again. Initial plan generation still uses the revision
+      // because it has no source run coordinate yet.
+      const revisionCoordinate = reasonCode === 'provider_ready_to_generate_plan'
+        || reasonCode === 'agent_plan_configuration_required'
+        ? String(binding.study_revision || '')
+        : '';
+      return [
+        String(session.session_id || ''),
+        String(binding.study_context_id || ''),
+        revisionCoordinate,
+        String(binding.run_id || ''),
+        String(reasonCode || ''),
+      ].join(':');
+    }
+
+    function latestArchivedAgentRunFailed() {
+      const session = host.session() || {};
+      const rows = Array.isArray(session.archived_child_jobs)
+        ? session.archived_child_jobs : [];
+      let latest = null;
+      rows.forEach(row => {
+        if (!row || String(row.kind || '') !== 'agent-run') return;
+        if (!latest || Number(row.created_at_epoch || 0) >= Number(latest.created_at_epoch || 0)) {
+          latest = row;
+        }
+      });
+      return Boolean(latest && ['failed', 'cancelled'].includes(String(latest.status || '')));
     }
 
     function setPending(value) {
@@ -75,7 +118,7 @@
     }
 
     async function startFormalPlanGeneration(reasonCode, options = {}) {
-      if (unavailable()) return;
+      if (unavailable()) return false;
       const automatic = Boolean(options && options.automatic);
       const request = generationRequest(String(reasonCode || ''));
       const session = host.session() || {};
@@ -84,6 +127,8 @@
       const studyContextId = String(binding.study_context_id || '').trim();
       const revisingScientificPlan = reasonCode === 'plan_scientific_changes_required';
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
+      const retryingFailedPlan = reasonCode === 'failed_pipeline_requires_fresh_plan';
+      const staleScientificPolicy = reasonCode === 'scientific_plan_review_policy_stale';
       // Both a plan-owned revision and a candidate-to-package upgrade must be
       // bound to the exact reviewed run.  The server distinguishes the two by
       // the digest-verified scientific review: non-approvable reviews produce
@@ -92,12 +137,17 @@
       const revisionSourceRunId = revisingScientificPlan || executionUpgrade
         ? String(binding.run_id || '').trim()
         : '';
-      // A user- or agent-initiated continuation already consumes the matching
-      // automatic progression for this page lifetime. Without these guards,
-      // the terminal callback can see the same workflow snapshot and launch
-      // an identical second run.
-      if (revisingScientificPlan) automaticScientificRevisionStarted = true;
-      if (executionUpgrade) automaticExecutionUpgradeStarted = true;
+      // A user- or agent-initiated transition consumes only this exact
+      // session/revision/run coordinate. A page can host several studies, so a
+      // process-wide boolean would incorrectly suppress later conversations.
+      const guardedTransition = [
+        'provider_ready_to_generate_plan',
+        'plan_scientific_changes_required',
+        'plan_execution_upgrade_required',
+        'scientific_plan_review_policy_stale',
+      ].includes(String(reasonCode || ''));
+      const guardKey = transitionKey(reasonCode);
+      if (guardedTransition) startedTransitions.add(guardKey);
       const api = host.api();
       if (
         !studyContextId
@@ -109,7 +159,8 @@
           '当前已准备研究不可用，请刷新项目后重试。',
         ));
         host.render();
-        return;
+        if (guardedTransition) startedTransitions.delete(guardKey);
+        return false;
       }
       if (!automatic) {
         host.appendMessage({
@@ -133,9 +184,9 @@
           llm_provider: String(provider.provider || ''),
           credential_source: String(provider.credential_source || ''),
           external_llm_opt_in: true,
-          // The visible planning confirmation authorizes literature support as
-          // well as the provider turn.  Dropping this flag made every Web
-          // revision repeat the same "no direct evidence search" finding.
+          // The natural research request authorizes evidence gathering for the
+          // candidate plan. Dropping this flag made every Web revision repeat
+          // the same "no direct evidence search" finding.
           literature_search_authorized: true,
           engine: 'research_agent_pipeline',
           // A scientific revision is not a fresh, context-free plan.  Bind the
@@ -143,14 +194,16 @@
           // own findings instead of rediscovering them on every user click.
           planner_start_mode: reasonCode === 'planner_checkpoint_resume_available'
             ? 'resume_checkpoint'
-            : revisingScientificPlan || executionUpgrade
+            : revisingScientificPlan || executionUpgrade || retryingFailedPlan || staleScientificPolicy
               ? 'auto'
               : 'fresh',
           plan_revision_source_run_id: revisionSourceRunId,
         });
         await host.recordHostAction(
           automatic && !executionUpgrade
-            ? 'auto_revise_plan'
+            ? reasonCode === 'provider_ready_to_generate_plan'
+              ? 'auto_generate_plan'
+              : 'auto_revise_plan'
             : executionUpgrade
             ? 'prepare_analysis_data'
             : 'generate_plan',
@@ -158,31 +211,115 @@
           String(payload.job_id || ''),
         );
         host.setBusy(false);
-        host.watchChildJob(String(payload.job_id || ''), 'easyicu_full_run_submitted');
+        host.watchChildJob(
+          String(payload.job_id || ''),
+          executionUpgrade
+            ? 'easyicu_full_run_upgrade_submitted'
+            : 'easyicu_full_run_submitted',
+        );
+        return true;
       } catch (error) {
+        if (guardedTransition) startedTransitions.delete(guardKey);
         host.setBusy(false);
         host.setError(host.errorText(error));
         host.render();
+        return false;
       }
     }
 
-    async function continueSystemOwnedPlanProgression() {
+    async function compileAgentPlanConfiguration() {
+      if (unavailable()) return false;
+      const actionCode = 'agent_plan_configuration_required';
+      const guardKey = transitionKey(actionCode);
+      if (startedTransitions.has(guardKey)) return false;
+      const session = host.session() || {};
+      const binding = session.binding || {};
+      const expectedRevision = Number(binding.study_revision || 0);
+      const runId = String(binding.run_id || '').trim();
+      const api = host.api();
+      if (
+        !expectedRevision
+        || !runId
+        || typeof api.applyPiCopilotAgentPlanConfiguration !== 'function'
+      ) return false;
+      startedTransitions.add(guardKey);
+      setPending(true);
+      try {
+        const payload = await api.applyPiCopilotAgentPlanConfiguration(
+          session.session_id,
+          {
+            project_id: host.projectId(),
+            expected_revision: expectedRevision,
+            run_id: runId,
+          },
+        );
+        await host.refreshSession(true);
+        await host.loadWorkflow();
+        host.setBusy(false);
+        host.render();
+        if (payload && payload.next_action === 'fresh_plan') {
+          return startFormalPlanGeneration(
+            'plan_configuration_superseded', {automatic: true},
+          );
+        }
+        return true;
+      } catch (error) {
+        startedTransitions.delete(guardKey);
+        host.setBusy(false);
+        host.setError(host.errorText(error));
+        host.render();
+        return false;
+      }
+    }
+
+    async function continueSystemOwnedPlanProgression(options = {}) {
       const workflow = host.workflow() || {};
       const actionCode = String(workflow.next_action_code || '');
       if (unavailable()) return false;
+      // Opening, restoring, or rebinding a conversation is a read operation.
+      // It must never be treated as fresh user authority to start another
+      // Provider-backed plan (or a deterministic hop that immediately starts
+      // one). Active message/job completion calls omit this passive flag and
+      // may continue the already-authorized workflow once.
+      if (Boolean(options && options.passive)) return false;
+      if (actionCode === 'agent_plan_configuration_required') {
+        return compileAgentPlanConfiguration();
+      }
+      // Automatic continuation is allowed once after the natural request, but
+      // never as an automatic retry.  All Provider-backed plan paths share the
+      // same failure boundary so reopening a project cannot bounce between
+      // several reason-code branches and repeatedly spend on the same question.
+      if (
+        AUTOMATIC_PROVIDER_RUN_CODES.has(actionCode)
+        && latestArchivedAgentRunFailed()
+      ) return false;
+      if (actionCode === 'provider_ready_to_generate_plan') {
+        if (startedTransitions.has(transitionKey(actionCode))) return false;
+        return startFormalPlanGeneration(actionCode, {automatic: true});
+      }
       if (actionCode === 'plan_execution_upgrade_required') {
         const session = host.session() || {};
         const binding = session.binding || {};
         const reviewedRunId = String(binding.run_id || '').trim();
         const studyContextId = String(binding.study_context_id || '').trim();
         if (
-          automaticExecutionUpgradeStarted
+          startedTransitions.has(transitionKey(actionCode))
+          // A failed or cancelled package-bound attempt is durable session
+          // evidence.  Do not turn a reload/rebind into an unbounded automatic
+          // retry loop; an explicit retry remains available after the runtime
+          // or architecture defect is repaired.
           || !reviewedRunId
           || !studyContextId
         ) return false;
-        automaticExecutionUpgradeStarted = true;
-        await startFormalPlanGeneration(actionCode, {automatic: true});
-        return true;
+        return startFormalPlanGeneration(actionCode, {automatic: true});
+      }
+      if (actionCode === 'scientific_plan_review_policy_stale') {
+        if (startedTransitions.has(transitionKey(actionCode))) return false;
+        return startFormalPlanGeneration(actionCode, {automatic: true});
+      }
+      if (actionCode === 'plan_configuration_superseded') {
+        if (startedTransitions.has(transitionKey(actionCode))) return false;
+        return startFormalPlanGeneration(actionCode, {automatic: true});
       }
       const questions = workflow.plan_review_summary
         && Array.isArray(workflow.plan_review_summary.authorization_questions)
@@ -197,13 +334,37 @@
         actionCode !== 'plan_scientific_changes_required'
         || questions.length
         || !plannerOwnedFindings.length
-        || automaticScientificRevisionStarted
+        || startedTransitions.has(transitionKey(actionCode))
       ) return false;
-      automaticScientificRevisionStarted = true;
-      await startFormalPlanGeneration(
+      return startFormalPlanGeneration(
         'plan_scientific_changes_required', {automatic: true},
       );
-      return true;
+    }
+
+    async function continueUserRequestedSystemProgression(text) {
+      const message = String(text || '').trim();
+      const workflow = host.workflow() || {};
+      const questions = workflow.plan_review_summary
+        && Array.isArray(workflow.plan_review_summary.authorization_questions)
+        ? workflow.plan_review_summary.authorization_questions
+        : [];
+      const repairs = workflow.plan_review_summary
+        && workflow.plan_review_summary.remediation_buckets
+        && Array.isArray(workflow.plan_review_summary.remediation_buckets.agent_plan_revision)
+        ? workflow.plan_review_summary.remediation_buckets.agent_plan_revision
+        : [];
+      if (
+        !BARE_CONTINUATION.test(message)
+        || String(workflow.next_action_code || '') !== 'plan_scientific_changes_required'
+        || questions.length
+        || !repairs.length
+      ) return false;
+      host.appendMessage({
+        id: 'user-' + Date.now(), role: 'user', text: message, complete: true,
+      });
+      if (typeof host.setDraft === 'function') host.setDraft('');
+      host.render();
+      return continueSystemOwnedPlanProgression();
     }
 
     function regenerationAuthority(text, regenerationIntent) {
@@ -425,6 +586,7 @@
       confirmDecision,
       confirmWorkflow,
       continueSystemOwnedPlanProgression,
+      continueUserRequestedSystemProgression,
       governedNextChoiceGrants,
       regenerationAuthority,
       rejectWorkflow,

@@ -116,7 +116,8 @@
       // The current candidate-plan card immediately below this receipt owns
       // its plan, evidence, and review links. Repeating the same artifacts in
       // the receipt gives the researcher two competing review surfaces.
-      if (String(row && row.hostActionCode || '') === 'generate_plan') return '';
+      if (['auto_generate_plan', 'auto_revise_plan', 'generate_plan']
+        .includes(String(row && row.hostActionCode || ''))) return '';
       const grouped = groupForMessage(row, limit);
       const hasLiterature = grouped.topicLiterature.length || grouped.methodLiterature.length;
       const hasDataWorkbench = ['prepare_analysis_data', 'review_prepared_data']

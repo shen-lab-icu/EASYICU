@@ -146,6 +146,17 @@ class ScientificConfiguration:
             )
         return selection
 
+    def covariate_authority(self) -> Optional[str]:
+        authority = str(self.study.get("covariate_authority") or "").strip()
+        if not authority:
+            return None
+        if authority not in {"user", "agent_plan"}:
+            raise ScientificConfigurationError(
+                "research_pipeline_covariate_authority_invalid",
+                "StudyContext covariate_authority must be user or agent_plan.",
+            )
+        return authority
+
     def sensitivity_specs(self) -> tuple[Any, ...]:
         from easyicu.research_agent.planning.sensitivity_authority import (
             normalize_prespecified_sensitivities,
@@ -233,6 +244,13 @@ class ScientificConfiguration:
     def decision_is_resolved(self, decision_code: str) -> bool:
         confirmations = _mapping(self.study.get("confirmations"))
         code = str(decision_code or "").strip()
+        if code == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
+            # A complete Agent Plan may own the exact adjustment proposal. It
+            # is reviewed with the whole plan; it must not be relabelled as a
+            # separate user confirmation merely to satisfy an older gate.
+            if self.covariate_authority() == "agent_plan":
+                return confirmations.get("agent_plan_configuration_compiled") is True
+            return confirmations.get("plan_adjustment_set_confirmed") is True
         if code == "REPEATED_STAY_IDENTITY_UNAVAILABLE":
             design = _mapping(self.study.get("analysis_design"))
             cohort = _mapping(self.study.get("cohort"))
@@ -280,7 +298,6 @@ class ScientificConfiguration:
                 == "descriptive_epidemiology"
             )
         keys = {
-            "ADJUSTMENT_SET_NOT_USER_CONFIRMED": ("plan_adjustment_set_confirmed",),
             "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY": (
                 "plan_required_sensitivities_executable",
             ),

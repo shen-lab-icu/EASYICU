@@ -347,6 +347,21 @@ def test_register_pipeline_work_root_prunes_deleted_roots(tmp_path) -> None:
     assert payload["work_roots"] == [str(current.resolve())]
 
 
+def test_default_work_root_capacity_covers_the_recovery_record_capacity(
+    tmp_path,
+) -> None:
+    index = tmp_path / "review-index.json"
+    roots = []
+    for position in range(33):
+        root = tmp_path / f"project-{position}"
+        root.mkdir()
+        roots.append(root)
+        register_pipeline_work_root(root, path=index)
+
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    assert payload["work_roots"] == [str(root.resolve()) for root in roots]
+
+
 def test_register_pipeline_work_root_retains_unavailable_non_temporary_roots(
     tmp_path, monkeypatch
 ) -> None:

@@ -583,7 +583,16 @@ def roles_covered_by_plan(
         )
     planner_owned_roles = set(contract.planner_owned_result_roles)
     runtime_roles_by_step: Dict[str, Set[str]] = {}
+    typed_roles_by_step: Dict[str, Set[str]] = {}
     for step in plan.steps:
+        # MeasurementAuditSpec is the host's typed statement that this step
+        # emits one or more real measurement/data-quality audits.  Credit the
+        # contract itself rather than forcing its product ids through the
+        # legacy display-name matcher; otherwise a valid host-compiled audit
+        # stops counting as data quality as soon as its bounded products use a
+        # more precise run-specific name.
+        if step.measurement_audit_spec is not None:
+            typed_roles_by_step.setdefault(step.step_id, set()).add("data_quality")
         if step.scientific_action_id is None:
             continue
         try:
@@ -613,8 +622,16 @@ def roles_covered_by_plan(
             or step_id in primary_lineage_ids
             for role in roles
         }
+        eligible_typed_roles = {
+            role
+            for step_id, roles in typed_roles_by_step.items()
+            if requirement.role not in planner_owned_roles
+            or step_id in primary_lineage_ids
+            for role in roles
+        }
         if (
             requirement.role in eligible_runtime_roles
+            or requirement.role in eligible_typed_roles
             or _plan_outputs_match_requirement(candidate_outputs, requirement)
         ):
             covered.add(requirement.role)

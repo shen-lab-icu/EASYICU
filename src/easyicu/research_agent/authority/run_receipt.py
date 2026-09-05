@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from easyicu.state_paths import state_root
 
+from ..canonical_json import sha256_file as _sha256_file
 from .filesystem import (
     AnchoredDirectory,
     AuthorityFilesystemError,
@@ -75,14 +76,6 @@ def _safe_relative_artifact_path(value: Any) -> Optional[str]:
     ):
         return None
     return candidate.as_posix()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _read_json(path: Path, *, missing_code: str) -> Any:

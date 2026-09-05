@@ -214,8 +214,8 @@
       "shim_bypass_violations": []
     },
     "agents/runtime_suffix_replanner.py": {
-      "loc": 273,
-      "sha256": "5c7c01a4a02cc4ab033d164f31acbe6e16de06b3140e71e5e1bbe658671e4db8",
+      "loc": 270,
+      "sha256": "567cf1019e6502f586e14f40c0ac4c8987499c9d29271cbaf5c877b5b60cc8c7",
       "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
@@ -244,8 +244,8 @@
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3277,
-      "sha256": "19504cd710883a9d81f00fed772cba4b7c1e75d4f0ef88f22b70c6016d019e4b",
+      "loc": 3036,
+      "sha256": "9c137e22700684cbb4482d224d3dc1c65e791365a10403cfa3d976e1dd0c8714",
       "intra_package_import_edges": 19,
       "shim_bypass_violations": []
     },
@@ -316,9 +316,9 @@
       "shim_bypass_violations": []
     },
     "agents/progressive_planner.py": {
-      "loc": 4160,
-      "sha256": "13ed85385a807b6bf648d1bbc6dad70a1d4551726e509bbc83ff8810a3e02464",
-      "intra_package_import_edges": 34,
+      "loc": 4119,
+      "sha256": "7305a0d3066aaaa4aad6a3ffb553c5aaf57fb7fe9f9dc83f24b242e3b33758ad",
+      "intra_package_import_edges": 37,
       "shim_bypass_violations": []
     }
   },
@@ -406,7 +406,7 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Tighten only execution/phase.py and reporting/readiness.py after the three reviewed module-depth changes at a7b0ded38dd8ac4c276311fbc1f1ef259b9d4dd4. No LOC growth accepted; unrelated measured files and function ceilings retained. Evidence: docs/architecture/module_depth_20260905.md.",
+  "baseline_reason": "Consolidate planned model requirements into contracts/model_terms.py, progressive transport parsers into agents/progressive_payload.py, and suffix wire decoding into agents/plan_payload.py. Keep explicit requested endpoints distinct from physical availability. Lower schema/planner/suffix LOC ceilings; no scientific contract or failure rule is weakened.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -923,6 +923,27 @@
           "loc_now": 3009
         }
       }
+    },
+    {
+      "reason": "Consolidate planned model requirements into contracts/model_terms.py, progressive transport parsers into agents/progressive_payload.py, and suffix wire decoding into agents/plan_payload.py. Keep explicit requested endpoints distinct from physical availability. Lower schema/planner/suffix LOC ceilings; no scientific contract or failure rule is weakened.",
+      "changes": [
+        {
+          "file": "schema.py",
+          "before_loc": 3277,
+          "after_loc": 3036
+        },
+        {
+          "file": "agents/progressive_planner.py",
+          "before_loc": 4160,
+          "after_loc": 4119
+        },
+        {
+          "file": "agents/runtime_suffix_replanner.py",
+          "before_loc": 273,
+          "after_loc": 270
+        }
+      ],
+      "evidence": "docs/architecture/canonical9_owner_closeout_20260905.md"
     }
   ]
 }
