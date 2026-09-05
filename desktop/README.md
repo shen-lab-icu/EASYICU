@@ -77,6 +77,8 @@ tools are maintainer dependencies; they are not required on an end user's Mac.
 ## Distribution
 
 Local builds receive an ad-hoc signature and are suitable for internal testing.
+The signing step clears extended attributes from the generated app bundle,
+including Finder metadata that macOS refuses to sign; source files are untouched.
 Public distribution requires an Apple Developer ID, hardened-runtime signing,
 and notarization; set `APPLE_SIGNING_IDENTITY` and use the standard Tauri/Apple
 release credentials when producing a public release.

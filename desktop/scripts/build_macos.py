@@ -189,6 +189,9 @@ def _build_tauri() -> None:
     if not app.is_dir():
         raise RuntimeError(f"Tauri did not create {app}")
 
+    # Finder metadata copied into this generated bundle prevents codesigning.
+    # Act on symlinks themselves so cleanup stays within the build artifact.
+    _run(["xattr", "-crs", str(app)])
     identity = str(os.environ.get("APPLE_SIGNING_IDENTITY") or "-").strip() or "-"
     _run(["codesign", "--force", "--deep", "--sign", identity, str(app)])
     _run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)])
