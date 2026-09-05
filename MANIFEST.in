@@ -15,11 +15,10 @@ include start_easyicu.sh
 include scripts/launch_easyicu.py
 include .github/workflows/*.yml
 
-# Include reviewer-facing examples, images, and contract tests in the sdist.
-recursive-include docs/images *.jpg
-recursive-include examples *.py
-recursive-include benchmarks *.py *.json *.jsonl *.md
-recursive-include tests *.py
+# setuptools-scm's file finder includes the Git-tracked source tree in sdists,
+# including test fixtures, maintenance tools, public docs, and desktop sources.
+# Do not add broad recursive rules here: they also include ignored local files.
+# The explicit runtime assets below support rebuilding a wheel from an sdist.
 include src/easyicu/research_agent/README.md
 recursive-include src/easyicu/research_agent/runner_image *
 
@@ -53,3 +52,13 @@ prune test_data_50patients
 prune test_data_minimal
 prune .pytest_cache
 prune .git
+prune .codegraph
+prune .streamlit
+prune docs/_internal
+prune baselines/_checkouts
+prune output
+prune task_logs
+prune desktop/.build
+prune desktop/node_modules
+prune desktop/src-tauri/target
+global-exclude .env .env.*
