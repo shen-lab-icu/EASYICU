@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple
 
 from easyicu.ai_optin import AIOptInError
 from easyicu.webserver import provider_adapter
@@ -41,6 +42,7 @@ __all__ = [
     "extract_study_intent",
     "deterministic_intent",
     "explicit_outcome_concepts",
+    "explicit_exposure_aggregation",
     "SLOTS",
 ]
 
@@ -362,6 +364,74 @@ def _slot(value: Any, provenance: str, evidence: Optional[str] = None) -> Dict[s
 
 def _empty_slot() -> Dict[str, Any]:
     return {"value": None, "provenance": "unread", "evidence": None}
+
+
+@dataclass(frozen=True)
+class ExplicitExposureAggregation:
+    """An operation attached to one named concept in the actual question.
+
+    This is proposal input, not an execution or plan-approval receipt. Table
+    summary defaults never supply this coordinate.
+    """
+
+    concept_id: str
+    aggregation: Literal["max", "min", "mean", "median", "first", "last", "sum"]
+    evidence: str
+
+
+_MEASUREMENT_OPERATIONS = (
+    ("max", r"\b(?:maximum|highest|peak)\b|最高(?:值)?|最大(?:值)?|峰值"),
+    ("min", r"\b(?:minimum|lowest|nadir)\b|最低(?:值)?|最小(?:值)?"),
+    ("mean", r"\b(?:mean|average)\b|平均(?:值)?"),
+    ("median", r"\bmedian\b|中位数"),
+    ("first", r"\b(?:first|initial)\b|首次|初次"),
+    ("last", r"\b(?:last|final)\b|末次|最后一次"),
+    ("sum", r"\b(?:cumulative|total|sum)\b|累计|累积|总量"),
+)
+
+
+def explicit_exposure_aggregation(
+    question: str, *, concept_id: str,
+) -> Optional[ExplicitExposureAggregation]:
+    """Read only an adjacent, unambiguous measurement operation.
+
+    Match the concept phrase as a whole before looking outside it: the word
+    "mean" in "mean arterial pressure" does not request temporal averaging.
+    A remote table-summary instruction or another variable's operation cannot
+    bind this exposure. Negated and conflicting operations remain unread for
+    complete-plan resolution, never an internal-field questionnaire.
+    """
+
+    text = _clean_question(question)
+    lowered = text.lower()
+    matches: Dict[str, str] = {}
+    for pattern, concept in _PHRASE_TO_CONCEPT:
+        if concept != concept_id:
+            continue
+        for named in re.finditer(pattern, text, re.IGNORECASE):
+            for operation, expression in _MEASUREMENT_OPERATIONS:
+                before = re.search(
+                    rf"(?:{expression})\s*(?:(?:serum|blood|plasma)\s+|血清|血浆)?$",
+                    text[:named.start()], re.IGNORECASE,
+                )
+                after = re.match(
+                    rf"\s*(?:(?:levels?|values?)\s+|的|值|水平)?(?:{expression})",
+                    text[named.end():], re.IGNORECASE,
+                )
+                if before is not None:
+                    start, end = before.start(), named.end()
+                elif after is not None:
+                    start, end = named.start(), named.end() + after.end()
+                else:
+                    continue
+                if not _negated(lowered, start):
+                    matches[operation] = text[start:end]
+    if len(matches) != 1:
+        return None
+    operation, evidence = next(iter(matches.items()))
+    return ExplicitExposureAggregation(
+        concept_id=concept_id, aggregation=operation, evidence=evidence,
+    )
 
 
 # --------------------------------------------------------------------------

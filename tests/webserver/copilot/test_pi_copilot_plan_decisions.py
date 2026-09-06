@@ -312,6 +312,60 @@ def test_agent_plan_runtime_projection_fails_closed_without_patient_grouping() -
     assert raised.value.code == "agent_plan_patient_grouping_unavailable"
 
 
+@pytest.mark.parametrize(
+    ("source", "question", "aggregation"),
+    [
+        ("lact", "研究成人 ICU 患者前24小时最高乳酸与院内死亡", "max"),
+        ("crea", "研究成人 ICU 患者前24小时最低肌酐与院内死亡", "min"),
+        ("hr", "研究成人 ICU 患者前24小时平均心率与院内死亡", "mean"),
+    ],
+)
+def test_agent_plan_compiles_named_operation_not_descriptive_default(
+    source: str, question: str, aggregation: str,
+) -> None:
+    plan = _aki_landmark_plan()
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement.update({
+        "exposure_source": source,
+        "covariate_rationales": {name: "Baseline variable precedes exposure." for name in ["age", "sex"]},
+        "covariate_temporal_roles": {name: "baseline_static" for name in ["age", "sex"]},
+    })
+    study = _aki_study()
+    study["question"] = question
+    study["execution_concepts"] = {"primary_exposure": source}
+    result = compile_agent_plan_configuration(
+        study=study, agent_plan=plan,
+        runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+        patient_cluster_available=True,
+    )
+    assert result.patch["execution_concepts"]["primary_exposure"] == source
+    assert result.patch["execution_concepts"]["primary_exposure_aggregation"] == aggregation
+    assert "primary_exposure_aggregation" not in study["execution_concepts"]
+
+
+@pytest.mark.parametrize("bound_operation", ["min", "mean"])
+def test_agent_plan_rejects_operation_conflicting_with_named_question(
+    bound_operation: str,
+) -> None:
+    plan = _aki_landmark_plan()
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement.update({
+        "exposure_source": f"lact_{bound_operation}",
+        "covariate_rationales": {name: "Baseline variable precedes exposure." for name in ["age", "sex"]},
+        "covariate_temporal_roles": {name: "baseline_static" for name in ["age", "sex"]},
+    })
+    study = _aki_study()
+    study["question"] = "研究最高乳酸与院内死亡"
+    study["execution_concepts"] = {}
+    with pytest.raises(PlanDecisionError) as error:
+        compile_agent_plan_configuration(
+            study=study, agent_plan=plan,
+            runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+            patient_cluster_available=True,
+        )
+    assert error.value.code == "agent_plan_exposure_aggregation_conflict"
+
+
 def test_agent_plan_runtime_projection_rejects_unowned_runtime_findings() -> None:
     with pytest.raises(PlanDecisionError) as raised:
         compile_agent_plan_configuration(

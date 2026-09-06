@@ -3604,6 +3604,7 @@ class _CandidatePlanMaterializationAuthority:
     target_outcome: str
     outcome_concepts: tuple[str, ...]
     contract: str
+    primary_exposure_aggregation: Optional[str] = None
 
 
 def _candidate_plan_contract(
@@ -3805,6 +3806,8 @@ def _load_candidate_plan_materialization_authority(
         _clean_text(_primary_exposure(study), 160) or proposed_primary_exposure
     )
     aggregation = _clean_text(_primary_exposure_aggregation(study), 16)
+    if not aggregation and configured_primary_exposure == proposed_primary_exposure:
+        aggregation = _clean_text(proposed.get("primary_exposure_aggregation"), 16)
     expected_primary_exposure = configured_primary_exposure
     if configured_primary_exposure and aggregation:
         expected_primary_exposure = f"{configured_primary_exposure}_{aggregation}"
@@ -3875,6 +3878,7 @@ def _load_candidate_plan_materialization_authority(
         target_outcome=target_outcome,
         outcome_concepts=requested_outcomes,
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
+        primary_exposure_aggregation=aggregation or None,
     )
 
 
@@ -4433,6 +4437,7 @@ def make_research_pipeline_run_runner(
             else ""
         )
         candidate_outcome_concepts = explicit_outcome_concepts(question)
+        candidate_exposure_aggregation: Optional[str] = None
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if source_run_id:
             candidate_authority = _load_candidate_plan_materialization_authority(
@@ -4451,6 +4456,7 @@ def make_research_pipeline_run_runner(
                 target = candidate_authority.target_outcome
                 primary_exposure = candidate_authority.primary_exposure
                 candidate_outcome_concepts = candidate_authority.outcome_concepts
+                candidate_exposure_aggregation = candidate_authority.primary_exposure_aggregation
                 foundation_profile = _data_foundation_profile(
                     export_path=export_path,
                     study=candidate_planning_study,
@@ -4663,13 +4669,19 @@ def make_research_pipeline_run_runner(
                 resolved_primary_exposure = execution_resume_inputs.scientific_identity.get(
                     "primary_exposure"
                 )
-            elif configured_primary_exposure and not metadata_only_planning:
+            elif (
+                not metadata_only_planning
+                and (configured_primary_exposure or candidate_exposure_aggregation)
+            ):
                 resolved_primary_exposure = _resolve_materialized_primary_exposure(
-                    configured=configured_primary_exposure,
+                    configured=configured_primary_exposure or primary_exposure,
                     source_concept=foundation_profile.get(
                         "primary_exposure_source_concept"
                     ),
-                    aggregation=_primary_exposure_aggregation(study),
+                    aggregation=(
+                        _primary_exposure_aggregation(study)
+                        or candidate_exposure_aggregation
+                    ),
                     acquisition=acquisition,
                 )
                 if not resolved_primary_exposure:
@@ -4739,7 +4751,9 @@ def make_research_pipeline_run_runner(
                     or metadata_planning_coordinates.get("primary_exposure")
                     or None
                 )
-                aggregation = _primary_exposure_aggregation(study)
+                aggregation = metadata_planning_coordinates.get(
+                    "primary_exposure_aggregation"
+                )
                 if resolved_primary_exposure and aggregation:
                     resolved_primary_exposure = (
                         f"{resolved_primary_exposure}_{aggregation}"

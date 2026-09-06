@@ -243,6 +243,19 @@ def _prepare_scientific_launch(
         or None
     )
     planning_exposure_aggregation = _primary_exposure_aggregation(study)
+    if (
+        planning_exposure_aggregation is None
+        and planning_exposure_source == planning_coordinates.get("primary_exposure")
+    ):
+        # A question can name an exact operation without pre-populating an
+        # execution field. Carry it into the reviewable zero-row candidate,
+        # not into the persisted StudyContext or an unapproved execution.
+        planning_exposure_aggregation = planning_coordinates.get(
+            "primary_exposure_aggregation"
+        )
+    metadata_planning_coordinates["primary_exposure_aggregation"] = (
+        planning_exposure_aggregation
+    )
     metadata_operationalized_columns = (
         _metadata_planning_operationalized_columns(
             primary_exposure_source=planning_exposure_source,
