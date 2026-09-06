@@ -212,7 +212,14 @@ def render_bibtex(bundle: Optional[LiteratureBundle]) -> str:
         else:
             title_field = None
 
-        author_field = _author_from_record(rec)
+        # Source display names are not BibTeX's "family, given" syntax.
+        # Protect each name as a literal, including collective authors with
+        # the word "and". Stable citation keys carry no author authority.
+        author_field = " and ".join(
+            "{" + _escape_bibtex_field(name.strip()) + "}"
+            for name in rec.authors
+            if name.strip()
+        )
 
         venue_field_name = "journal" if entry_type == "@article" else "howpublished"
         venue_field = rec.venue if rec.venue else None
@@ -227,7 +234,7 @@ def render_bibtex(bundle: Optional[LiteratureBundle]) -> str:
 
         fields: List[Optional[str]] = [
             _emit_field("title", title_field, pre_escaped=True),
-            _emit_field("author", author_field),
+            _emit_field("author", author_field, pre_escaped=True),
             _emit_field("year", rec.year if rec.year and rec.year != "n/a" else None),
             _emit_field(venue_field_name, venue_field),
             _emit_field("doi", rec.doi),
@@ -245,25 +252,6 @@ def render_bibtex(bundle: Optional[LiteratureBundle]) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
-def _author_from_record(rec: CitationRecord) -> Optional[str]:
-    """Best-effort author derivation from the (deliberately thin) schema.
-
-    The :class:`CitationRecord` schema does not carry a structured
-    author list — we take the surname-prefix of the citation key
-    (which the PubMed parser already constructed as
-    ``surname_titleslug_year``) and capitalise it. This is good enough
-    for a working ``.bib`` that compiles; the human author can refine
-    later with full names from the original references.
-    """
-    key = rec.key or ""
-    if not key:
-        return None
-    head = key.split("_", 1)[0]
-    if not head or any(c.isdigit() for c in head):
-        return None
-    return head.capitalize() + ", et al."
-
-
 def render_thebibliography_block(bundle: Optional[LiteratureBundle]) -> str:
     """Render a fallback inline ``thebibliography`` block.
 
@@ -278,6 +266,8 @@ def render_thebibliography_block(bundle: Optional[LiteratureBundle]) -> str:
     for rec in records:
         key = sanitise_bibtex_key(rec.key)
         body_parts: List[str] = []
+        if rec.authors:
+            body_parts.append("; ".join(name.strip() for name in rec.authors if name.strip()))
         if rec.title:
             body_parts.append(rec.title.rstrip(" ."))
         if rec.venue:
@@ -289,7 +279,7 @@ def render_thebibliography_block(bundle: Optional[LiteratureBundle]) -> str:
         elif rec.pmid:
             body_parts.append(f"PMID:{rec.pmid}")
         body = ". ".join(body_parts) + "."
-        lines.append(f"\\bibitem{{{key}}} {body}")
+        lines.append(f"\\bibitem{{{key}}} {_escape_bibtex_field(body)}")
     lines.append(r"\end{thebibliography}")
     return "\n".join(lines) + "\n"
 
