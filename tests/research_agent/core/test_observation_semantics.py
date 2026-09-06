@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.research_context.observation_semantics import (
@@ -195,3 +196,102 @@ def test_builder_wires_positive_only_event_semantics_into_context() -> None:
     assert descriptor.observation_semantics.kind == "positive_only_event"
     assert descriptor.missingness is not None
     assert descriptor.missingness.n_missing == 0
+
+
+@pytest.mark.parametrize("transform", ["window_first_time", "window_last_time"])
+def test_typed_observation_time_uses_verified_measurement_opportunity(transform) -> None:
+    # Deliberately arbitrary physical names: the materialized transform and
+    # source, not a suffix or a coincidentally binary clinical value, own this.
+    frame = pd.DataFrame({
+        "count": [0, 1, 2, 0], "available": [0, 1, 1, 0],
+        "assay_value": [0, 0, 1, 0], "observed_at": [np.nan, 2.0, np.nan, np.nan],
+    })
+    descriptors = [
+        _descriptor("count", source_concept="assay", unit_normalization="window_nonnull_count"),
+        _descriptor("available", source_concept="assay", unit_normalization="window_measurement_status", is_binary=True),
+        _descriptor("assay_value", source_concept="assay", is_binary=True),
+        _descriptor("observed_at", source_concept="assay", unit_normalization=transform, n_missing=3),
+    ]
+
+    result = compile_observation_semantics(frame=frame, descriptors=descriptors)[-1]
+
+    assert result.observation_semantics.event_status_column == "available"
+    assert result.missingness.raw_n_missing == 3
+    assert result.missingness.not_applicable_n == 2
+    assert result.missingness.eligible_n == 2
+    assert result.missingness.n_missing == 1
+    assert result.missingness.fraction_missing == 0.5
+    assert result.missingness.missingness_test_p_value is None
+    assert "observation" in result.missingness.notes
+
+
+@pytest.mark.parametrize("mutation", ["discordant_count", "missing_flag", "wrong_source", "ambiguous_flag"])
+def test_observation_time_does_not_guess_applicability_without_one_valid_pair(mutation) -> None:
+    frame = pd.DataFrame({
+        "count": [0, 1, 2, 0], "available": [0, 1, 1, 0],
+        "observed_at": [np.nan, 2.0, 3.0, np.nan],
+    })
+    descriptors = [
+        _descriptor("count", source_concept="assay", unit_normalization="window_nonnull_count"),
+        _descriptor("available", source_concept="assay", unit_normalization="window_measurement_status", is_binary=True),
+        _descriptor("observed_at", source_concept="assay", unit_normalization="window_last_time", n_missing=2),
+    ]
+    if mutation == "discordant_count":
+        frame.loc[0, "count"] = 1
+    elif mutation == "missing_flag":
+        frame.loc[0, "available"] = np.nan
+    elif mutation == "wrong_source":
+        descriptors[1] = descriptors[1].model_copy(update={"source_concept": "other"})
+    else:
+        frame["other_flag"] = frame["available"]
+        descriptors.insert(1, descriptors[1].model_copy(update={"name": "other_flag"}))
+
+    result = compile_observation_semantics(frame=frame, descriptors=descriptors)[-1]
+
+    assert result.observation_semantics is None
+    assert result.missingness.n_missing == 2
+
+
+def test_builder_excludes_structural_absence_before_global_mcar_screen(monkeypatch) -> None:
+    from easyicu.research_agent.research_context import builder
+
+    seen = []
+    def screen(frame):
+        seen.append(set(frame.columns))
+        return {"name": "little_mcar_em", "p_value": 0.31, "note": "test panel", "columns": ["lab_x", "lab_y"]}
+    monkeypatch.setattr(builder, "_compute_missingness_test_metadata", screen)
+    frame = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4], "death": [0, 1, 0, 0],
+        "susp_inf_n": [0, 1, 2, 0], "susp_inf_measured": [0, 1, 1, 0],
+        "susp_inf_first": [0, 1, 1, 0],
+        "susp_inf_first_time": [np.nan, 2, 3, np.nan],
+        "lab_x": [1.0, np.nan, 3.0, 4.0], "lab_y": [1.0, 2.0, np.nan, 4.0],
+        "lab_not_in_panel": [np.nan, 2.0, 3.0, 4.0],
+    })
+
+    context = builder.build_research_context(
+        research_question="Describe suspected infection and mortality.", cohort=frame,
+        cohort_name="test", database="miiv", target_outcome="death",
+    )
+
+    assert len(seen) == 1
+    assert "susp_inf_first" not in seen[0]
+    assert "susp_inf_first_time" not in seen[0]
+    assert "susp_inf_n" not in seen[0]
+    assert context.variable("lab_x").missingness.missingness_test_p_value == 0.31
+    assert context.variable("lab_not_in_panel").missingness.missingness_test_p_value is None
+
+
+@pytest.mark.parametrize("flag", [0, 1])
+def test_verified_constant_measurement_flag_does_not_need_two_observed_levels(flag):
+    frame = pd.DataFrame({"n": [flag] * 4, "flag": [flag] * 4, "time": [np.nan] * 4})
+    descriptors = [
+        _descriptor("n", source_concept="assay", unit_normalization="window_nonnull_count"),
+        _descriptor("flag", source_concept="assay", unit_normalization="window_measurement_status"),
+        _descriptor("time", source_concept="assay", unit_normalization="window_last_time", n_missing=4),
+    ]
+    result = compile_observation_semantics(frame=frame, descriptors=descriptors)[-1]
+    assert result.observation_semantics.event_status_column == "flag"
+    assert result.missingness.eligible_n == 4 * flag
+    assert result.missingness.not_applicable_n == 4 * (1 - flag)
+    assert result.missingness.n_missing == 4 * flag

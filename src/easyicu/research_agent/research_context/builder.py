@@ -363,6 +363,7 @@ def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
         "name": "little_mcar_em",
         "p_value": p_value,
         "note": f"panel={panel.shape[1]}vars/{len(panel)}rows complete_cases={len(complete)}",
+        "columns": list(panel.columns),
     }
 
 
@@ -775,7 +776,6 @@ def build_research_context(
     # --- per-column descriptors
     descriptors: List[ConceptDescriptor] = []
     user_descriptions = dict(concept_descriptions or {})
-    missingness_test_meta = _compute_missingness_test_metadata(df)
     for col in df.columns:
         descriptors.append(
             _describe_column(
@@ -785,7 +785,6 @@ def build_research_context(
                 id_columns=episode.id_columns,
                 time_columns=episode.time_columns,
                 outcome_columns=episode.outcome_columns,
-                missingness_test_meta=missingness_test_meta,
             )
         )
     _enrich_target_outcome_descriptor(
@@ -808,6 +807,28 @@ def build_research_context(
         frame=df,
         descriptors=descriptors,
     )
+    # Resolve structural absence before choosing a common-population MCAR
+    # panel. A conditional event/observation time has another applicable
+    # denominator and must not change the screen for ordinary measurements.
+    screen_columns = [
+        descriptor.name for descriptor in descriptors
+        if descriptor.observation_semantics is None
+        and descriptor.role not in {VariableRole.ID, VariableRole.META, VariableRole.TIME}
+    ]
+    missingness_test_meta = _compute_missingness_test_metadata(df[screen_columns])
+    tested_columns = set(missingness_test_meta.get("columns", ()))
+    descriptors = [
+        descriptor.model_copy(update={
+            "missingness": descriptor.missingness.model_copy(update={
+                "missingness_test": missingness_test_meta["name"],
+                "missingness_test_p_value": missingness_test_meta.get("p_value"),
+                "notes": missingness_test_meta.get("note"),
+            })
+        })
+        if descriptor.name in tested_columns and descriptor.missingness is not None
+        else descriptor
+        for descriptor in descriptors
+    ]
 
     prefs_obj = (
         user_preferences
@@ -877,7 +898,6 @@ def _describe_column(
     id_columns: Sequence[str],
     time_columns: Sequence[str],
     outcome_columns: Sequence[str],
-    missingness_test_meta: Dict[str, Any],
 ) -> ConceptDescriptor:
     series = df[col]
     sample = series.dropna().head(50).tolist() if len(series) else []
@@ -971,12 +991,6 @@ def _describe_column(
 
     allowed = _allowed_aggregations(role, hint.kind)
     miss = _profile_missingness(series)
-    if miss.fraction_missing > 0 and missingness_test_meta.get("name") != "not_run":
-        miss.missingness_test = str(missingness_test_meta.get("name"))
-        miss.missingness_test_p_value = missingness_test_meta.get("p_value")
-        note = missingness_test_meta.get("note")
-        if note:
-            miss.notes = str(note)
     fixed_window_trajectory = infer_fixed_window_trajectory_metadata(
         column_name=col,
         values=series,
