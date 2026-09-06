@@ -3926,12 +3926,14 @@ def test_outline_rejects_an_adjusted_model_that_omits_a_host_bound_covariate() -
     assert finding["missing_from_selected_design"] == []
 
 
-def test_outline_prompt_projects_scientific_to_physical_adjustment_authority() -> None:
+@pytest.mark.parametrize("origin", ["user", "agent_plan", None])
+def test_outline_prompt_projects_scientific_to_physical_adjustment_authority(origin: str | None) -> None:
     context = _context().model_copy(
         update={
             "user_preferences": UserPreferences(
                 covariates=["AGE", "SEX"],
                 covariate_selection="exact",
+                covariate_authority=origin,
                 covariate_rationales={
                     "AGE": "Prespecified baseline demographic confounder.",
                     "SEX": "Prespecified baseline demographic confounder.",
@@ -3950,7 +3952,11 @@ def test_outline_prompt_projects_scientific_to_physical_adjustment_authority() -
 
     prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
 
-    assert "User-owned adjustment-set authority" in prompt
+    assert "User-owned adjustment-set authority" not in prompt
+    assert "Adjustment-set authority" in prompt
+    assert '"authority":"' + (origin or "unrecorded") + '"' in prompt
+    if origin == "agent_plan":
+        assert "not user-specified" in prompt
     assert '"scientific_covariates":["AGE","SEX"]' in prompt
     assert '"operational_covariates":["age_years","sex_code"]' in prompt
     assert "not modeling roles" in prompt

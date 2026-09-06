@@ -13,6 +13,7 @@ from ..authority.table_one_binding import (
     table_one_private_code_label_map,
 )
 from ..schema import AnalysisStep, ResearchContext
+from ..planning.adjustment_authority import AdjustmentSetAuthority
 from .prompt_variables import (
     compact_fixed_window_trajectory_prompt,
     project_observed_domain,
@@ -235,7 +236,7 @@ def outbound_safe_context_payload(
             )
         )
     preferences = context.user_preferences
-    explicit_user_choices = (
+    study_preferences = (
         preferences.model_dump(
             mode="json",
             exclude_none=True,
@@ -245,17 +246,17 @@ def outbound_safe_context_payload(
         else None
     )
     if (
-        isinstance(explicit_user_choices, dict)
+        isinstance(study_preferences, dict)
         and preferences is not None
         and preferences.covariate_selection == "planner_selectable"
     ):
         # Preserve the historic prompt shape when the new authority is not in
         # use. The default is host semantics, not extra Provider prose.
-        explicit_user_choices.pop("covariate_selection", None)
+        study_preferences.pop("covariate_selection", None)
 
     payload = _compact(
         {
-            "schema": "easyicu.outbound_safe_context/1",
+            "schema": "easyicu.outbound_safe_context/2",
             "research_question": context.research_question,
             "cohort": {
                 "cohort_name": context.cohort.cohort_name,
@@ -293,21 +294,28 @@ def outbound_safe_context_payload(
                 for constraint in context.temporal_constraints
             ],
             "cross_database_validation": context.cross_database_validation,
-            "explicit_user_choices": explicit_user_choices,
+            # Persisted preferences can contain Agent proposals. Calling the
+            # entire object explicit user choices fabricates their authorship.
+            "study_preferences": study_preferences,
+            "adjustment_authority": (
+                AdjustmentSetAuthority.from_context(context).prompt_projection()
+                if preferences is not None and preferences.covariate_selection == "exact"
+                else None
+            ),
             "variables": variables,
         }
     )
     # ``_compact`` normally removes empty arrays.  Under exact adjustment
-    # authority, however, [] is the user's positive decision to run an
+    # authority, however, [] is the bound positive decision to run an
     # unadjusted model, not missing information.  Preserve it in the outbound
     # Planner projection so the model sees the same typed distinction enforced
     # by the host validator.
     if (
         preferences is not None
         and preferences.covariate_selection == "exact"
-        and isinstance(payload.get("explicit_user_choices"), dict)
+        and isinstance(payload.get("study_preferences"), dict)
     ):
-        payload["explicit_user_choices"]["covariates"] = list(
+        payload["study_preferences"]["covariates"] = list(
             preferences.covariates
         )
     return payload

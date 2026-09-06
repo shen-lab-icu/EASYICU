@@ -1474,18 +1474,9 @@ class ProgressivePlannerAgent:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            "User-owned adjustment-set authority (host compiled; do not revise):\n"
+            "Adjustment-set authority (host compiled; preserve exact roster):\n"
             + json.dumps(
-                {
-                    "selection": adjustment_authority.selection,
-                    "scientific_covariates": list(adjustment_authority.covariates),
-                    "operational_covariates": list(
-                        adjustment_authority.operational_covariates
-                    ),
-                    "operationalizations": dict(
-                        adjustment_authority.operationalizations
-                    ),
-                },
+                adjustment_authority.prompt_projection(),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
