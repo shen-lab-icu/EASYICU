@@ -52,6 +52,10 @@ from .dependence_authority import (
     dependence_matches_context,
     repeat_units_possible,
 )
+from .distribution_authority import (
+    DISTRIBUTION_MISSINGNESS_GUIDANCE,
+    distribution_policy_issues,
+)
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from .publication_readiness import build_publication_readiness_facts
@@ -1259,6 +1263,7 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
     """Render case-neutral, context-derived guardrails before Planner generation."""
 
     lines = ["PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS (host-derived):"]
+    lines.append("- " + DISTRIBUTION_MISSINGNESS_GUIDANCE)
     alignment = primary_exposure_time_anchor_alignment(context)
     if alignment.status in {"mismatch", "declared_only"}:
         lines.append(
@@ -1436,6 +1441,25 @@ def build_plan_scientific_review(
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
+    variables = {variable.name: variable for variable in context.variables}
+    for step in plan.steps:
+        if step.exposure_outcome_distribution_spec is None:
+            continue
+        for issue in distribution_policy_issues(
+            step.exposure_outcome_distribution_spec, variables=variables,
+        ):
+            findings.append(PlanScientificFinding(
+                code="DISTRIBUTION_MISSINGNESS_AUTHORITY_INVALID",
+                severity="blocker",
+                dimension="statistical_design",
+                message=f"Step {step.step_id!r}: {issue.message}",
+                evidence_refs=[
+                    f"analysis_plan.json.steps.{step.step_id}.exposure_outcome_distribution_spec.{issue.field}",
+                    "research_context.json.variables",
+                ],
+                remediation=DISTRIBUTION_MISSINGNESS_GUIDANCE,
+                remediation_route="agent_plan_revision",
+            ))
     literature_facts = _literature_facts(literature, context)
     method_facts = method_source_facts(plan, context)
     design_bindings = _literature_design_bindings(plan, literature)
