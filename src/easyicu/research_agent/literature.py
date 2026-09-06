@@ -540,7 +540,7 @@ _CURATED: List[CitationRecord] = [
         title="The SOFA (Sepsis-related Organ Failure Assessment) score to describe organ dysfunction/failure.",
         year="1996",
         venue="Intensive Care Medicine",
-        relevance="Defines SOFA components (0-4 ordinal); foundational for any SOFA-based analysis.",
+        relevance="Defines the original SOFA components (0-4 ordinal); historical background, not the SOFA-2 definition.",
         doi="10.1007/BF01709751",
         url="https://pubmed.ncbi.nlm.nih.gov/8844239/",
         pmid="8844239",
@@ -604,6 +604,16 @@ _CURATED: List[CitationRecord] = [
         venue="Nature Medicine",
         relevance="Source paper for HiRID and circEWS-style circulatory-failure definitions.",
     ),
+    CitationRecord(
+        key="ranzani_sofa2_2025",
+        title="Development and Validation of the Sequential Organ Failure Assessment (SOFA)-2 Score.",
+        year="2025",
+        venue="JAMA",
+        relevance="Defines and validates the updated SOFA-2 score; use this version-specific source for SOFA-2 components, not the original 1996 definition.",
+        doi="10.1001/jama.2025.20516",
+        url="https://pubmed.ncbi.nlm.nih.gov/41159833/",
+        pmid="41159833",
+    ),
 ]
 
 
@@ -611,12 +621,16 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
     """Filter the curated list by which concepts appear in the context.
 
     Matching is *prefix-aware* — ``kdigo_stage`` triggers the KDIGO
-    citation, ``sofa2_resp`` triggers the Vincent SOFA citation, and
-    so on. This sidesteps the previous fragility where renaming a
-    column from ``kdigo`` to ``kdigo_stage`` silently dropped the
-    canonical reference.
+    citation, and ``sofa2_resp`` retains its version-specific definition.
+    Both physical column names and their declared source concepts participate,
+    so a renamed representation does not drop the canonical reference.
     """
-    names = {v.name.lower() for v in ctx.variables}
+    names = {
+        str(value).lower()
+        for variable in ctx.variables
+        for value in (variable.name, variable.source_concept)
+        if value
+    }
     out: List[CitationRecord] = []
 
     def _add(c: CitationRecord) -> None:
@@ -630,6 +644,8 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
 
     if _matches_prefix(("sofa", "sofa2")):
         _add(_CURATED[0])  # Vincent 1996
+    if _matches_prefix(("sofa2",)):
+        _add(_CURATED[7])  # Ranzani 2025: SOFA-2, not the original score
     # Lactate is a general ICU biomarker, not a Sepsis-3 definition trigger.
     # Keeping ``lact`` here made every lactate study inherit the Sepsis-3
     # consensus paper even when the cohort/question never mentioned sepsis.
@@ -1269,9 +1285,7 @@ def _screen_source_backed_design_analogue(
         for token in (" intensive care ", " critical care ", " icu ")
     )
     adult_required = _adult_population_required(context)
-    adult_match = (not adult_required) or any(
-        token in padded_blob for token in (" adult ", " adults ")
-    )
+    adult_match = (not adult_required) or _adult_study_population_matches(record)
     population_match = icu_match and adult_match
     design_excerpt = source_excerpt.startswith(
         ("Study-design excerpt:", "Source excerpt:")
@@ -1347,10 +1361,7 @@ def screen_source_backed_direct_comparator(
     )
     outcome_match = _clinical_axis_matches(outcome, blob, axis="outcome")
     icu_match = _icu_population_matches(record.title, source_excerpt)
-    padded_blob = f" {blob} "
-    adult_match = (not adult_required) or any(
-        token in padded_blob for token in (" adult ", " adults ")
-    )
+    adult_match = (not adult_required) or _adult_study_population_matches(record)
     population_match = icu_match and adult_match
     design_excerpt = str(record.relevance or "").startswith(
         ("Study-design excerpt:", "Source excerpt:")
@@ -1495,7 +1506,12 @@ def _normalise_clinical_text(value: str) -> str:
 
 
 def _adult_population_required(context: ResearchContext) -> bool:
-    """Return whether the owner-issued cohort explicitly restricts to adults."""
+    """Recognize declared adult scope or a fully age-observed adult cohort.
+
+    Observed ages constrain comparison to this bound cohort, not eligibility
+    for a future cohort. A sample, empty catalog, partial age coverage, or the
+    dictionary's physiological range cannot establish that population.
+    """
 
     cohort = context.cohort
     provenance = cohort.provenance if isinstance(cohort.provenance, dict) else {}
@@ -1504,8 +1520,9 @@ def _adult_population_required(context: ResearchContext) -> bool:
         *cohort.inclusion_criteria,
         *[str(value) for value in list(provenance.get("inclusion_criteria") or [])],
     ]
-    text = _normalise_clinical_text(" ".join(values))
-    return any(
+    raw_text = " ".join(values)
+    text = _normalise_clinical_text(raw_text)
+    if any(marker in raw_text for marker in ("成人", "成年")) or any(
         marker in f" {text} "
         for marker in (
             " adult ",
@@ -1514,7 +1531,32 @@ def _adult_population_required(context: ResearchContext) -> bool:
             " age 18 years ",
             " age 18 or older ",
         )
-    )
+    ):
+        return True
+    for variable in context.variables:
+        if (
+            (variable.source_concept or variable.name) != "age"
+            or variable.unit != "years"
+            or not cohort.n_stays
+            or variable.missingness is None
+            or variable.missingness.n_total != cohort.n_stays
+            or variable.missingness.n_missing != 0
+        ):
+            continue
+        minimum = (variable.observed_domain or {}).get("min")
+        if isinstance(minimum, (int, float)) and minimum >= 18:
+            return True
+    return False
+
+
+def _adult_study_population_matches(record: CitationRecord) -> bool:
+    """Adult background text cannot promote an explicitly pediatric study."""
+
+    title = _normalise_clinical_text(record.title)
+    if re.search(r"\b(?:paediatric|pediatric|children|neonatal|neonates|infants)\b", title):
+        return False
+    blob = _normalise_clinical_text(" ".join((record.title, record.relevance or "")))
+    return any(token in f" {blob} " for token in (" adult ", " adults "))
 
 
 _EXPOSURE_ROLE_MARKERS = (
