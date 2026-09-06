@@ -136,6 +136,92 @@ def test_plan_bound_preview_uses_exact_cohort_metadata_without_results(tmp_path)
     assert str(tmp_path) not in json.dumps(payload)
 
 
+def _plan_bound_semantic_fixture(tmp_path):
+    from easyicu.research_agent.schema import ResearchContext
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": [1, 2, 3], "event_time": [None, 2.0, None],
+        "age": [60, 70, 80], "copied_flag": [False, False, False],
+    }).to_parquet(cohort, index=False)
+    plan = tmp_path / "analysis_plan.json"
+    plan.write_text(json.dumps({
+        "steps": [{"inputs": ["stay_id", "event_time", "age", "table:summary"]}],
+    }))
+    context = ResearchContext(
+        research_question="Describe the registered cohort",
+        cohort={"cohort_name": "test", "database": "miiv", "n_stays": 3},
+        cohort_parquet=str(cohort),
+        variables=[
+            {"name": "event_time", "dtype": "float64", "role": "time",
+             "missingness": {"fraction_missing": 0.0, "n_missing": 0, "n_total": 3,
+                             "raw_n_missing": 2, "eligible_n": 1, "not_applicable_n": 2}},
+            {"name": "age", "dtype": "int64"},
+            {"name": "copied_flag", "dtype": "bool", "source_concept": "icu_readmission"},
+        ],
+    )
+    context_file = tmp_path / "research_context.json"
+    context_file.write_text(context.model_dump_json())
+    return cohort, plan, context_file
+
+
+def test_plan_preview_preserves_semantics_and_withholds_conditional_event_counts(tmp_path):
+    cohort, plan, context = _plan_bound_semantic_fixture(tmp_path)
+    payload = review_owner.build_plan_bound_data_package_review(
+        _study("unused"), cohort_file=cohort, plan_file=plan, context_file=context,
+    )
+    rows = {row["concept_id"]: row for row in payload["concepts"]}
+
+    assert rows["age"]["study_role"] == "plan_input"
+    assert rows["copied_flag"]["study_role"] == "other_materialized_column"
+    assert rows["copied_flag"]["availability_status"] == "structurally_unavailable"
+    assert rows["copied_flag"]["evaluable_count"] is None
+    event = rows["event_time"]
+    assert event["reason_code"] == "plan_bound_conditional_scope_complete"
+    assert event["availability_status"] == "ready"
+    assert event["evaluable_count"] is None
+    assert event["denominator_count"] is None
+    assert event["missing_count"] is None
+    assert "not_applicable_n" not in event
+    assert payload["plan_input_count"] == 3
+    assert payload["status"] == "ready_for_analysis"
+    review_owner.verify_path_free_snapshot(payload)
+
+
+@pytest.mark.parametrize("drift", ["path", "database", "rows", "nulls"])
+def test_plan_preview_rejects_semantics_from_a_different_cohort(tmp_path, drift):
+    cohort, plan, context = _plan_bound_semantic_fixture(tmp_path)
+    data = json.loads(context.read_text())
+    if drift == "path":
+        data["cohort_parquet"] = str(tmp_path / "other.parquet")
+    elif drift == "database":
+        data["cohort"]["database"] = "eicu"
+    elif drift == "rows":
+        data["cohort"]["n_stays"] = 4
+    else:
+        data["variables"][0]["missingness"]["raw_n_missing"] = 1
+    context.write_text(json.dumps(data))
+
+    with pytest.raises(review_owner.DataPackageReviewError) as error:
+        review_owner.build_plan_bound_data_package_review(
+            _study("unused"), cohort_file=cohort, plan_file=plan, context_file=context,
+        )
+
+    assert error.value.code == "plan_bound_data_preview_context_mismatch"
+
+
+def test_plan_preview_blocks_a_required_unsupported_source_even_when_nonnull(tmp_path):
+    cohort, plan, context = _plan_bound_semantic_fixture(tmp_path)
+    plan.write_text(json.dumps({"steps": [{"inputs": ["copied_flag"]}]}))
+
+    payload = review_owner.build_plan_bound_data_package_review(
+        _study("unused"), cohort_file=cohort, plan_file=plan, context_file=context,
+    )
+
+    assert payload["status"] == "blocked"
+    assert "plan_required_source_unavailable:copied_flag" in payload["blocking_findings"]
+
+
 def test_legacy_event_absence_is_not_misreported_as_missing(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

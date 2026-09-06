@@ -6826,9 +6826,16 @@ def test_project_data_package_preview_is_revision_and_digest_bound(
     assert drift.value.code == "pi_data_package_review_digest_mismatch"
 
 
+@pytest.mark.parametrize("failure_code", [
+    None, "plan_bound_data_preview_context_mismatch",
+    "plan_bound_data_preview_context_unreadable",
+    "plan_bound_data_preview_files_unavailable",
+    "pi_research_run_not_found",
+])
 def test_project_data_package_preview_uses_plan_bound_analysis_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_code: str | None,
 ) -> None:
     service = PiCopilotService(
         store_path=tmp_path / "sessions.json",
@@ -6871,17 +6878,32 @@ def test_project_data_package_preview_uses_plan_bound_analysis_plan(
     ).hexdigest()
     payload["review_sha256"] = digest
 
-    def _build(_study: dict, *, cohort_file: Path, plan_file: Path) -> dict:
+    def _build(_study: dict, *, cohort_file: Path, plan_file: Path, context_file: Path) -> dict:
         captured["cohort_file"] = cohort_file
         captured["plan_file"] = plan_file
+        captured["context_file"] = context_file
+        if failure_code == "pi_research_run_not_found":
+            raise PiCopilotError(failure_code, "Project binding failure", status_code=404)
+        if failure_code:
+            raise review_owner.DataPackageReviewError(failure_code, "Exact-source failure")
+        return dict(payload)
+
+    def _registered(_study):
+        assert failure_code == "plan_bound_data_preview_files_unavailable"
         return dict(payload)
 
     monkeypatch.setattr(review_owner, "build_plan_bound_data_package_review", _build)
     monkeypatch.setattr(
         review_owner,
         "build_registered_data_package_review",
-        lambda _study: pytest.fail("must not fall back from a valid Plan-bound preview"),
+        _registered,
     )
+
+    if failure_code and failure_code != "plan_bound_data_preview_files_unavailable":
+        with pytest.raises(PiCopilotError) as error:
+            service.prepare_data_package_review(project_id="project-a")
+        assert error.value.code == failure_code
+        return
 
     prepared = service.prepare_data_package_review(project_id="project-a")
 
@@ -6889,6 +6911,7 @@ def test_project_data_package_preview_uses_plan_bound_analysis_plan(
     assert captured == {
         "cohort_file": wrapper / "pipeline" / "run-plan" / "cohort.parquet",
         "plan_file": wrapper / "pipeline" / "run-plan" / "analysis_plan.json",
+        "context_file": wrapper / "pipeline" / "run-plan" / "research_context.json",
     }
 
 
