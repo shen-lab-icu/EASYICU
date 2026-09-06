@@ -292,7 +292,11 @@ def step_materialization_shape_contract(
         '{"producer_step_id":"<preceding step id>","product_id":"<kind:product>"}; outputs items are exactly '
         '{"product_id":"<kind:product>","semantic_role":"<allowed role>"}; table_one_variables items are exactly '
         '{"name":"<sealed variable>","summary":"<mean_sd|median_iqr|both|count_percent>"}; model_terms items are exactly '
-        '{"name":"<sealed variable>","role":"<exposure|covariate>","coding":"<continuous|binary|categorical|ordinal_linear>","reference_level_index":null}; literature_bindings items are exactly '
+        '{"name":"<sealed variable>","role":"<exposure|covariate>","coding":"<continuous|binary|categorical|ordinal_linear>","reference_level_index":null,"clinical_rationale":null}; '
+        "clinical_rationale must be 16-500 characters explaining the clinical "
+        "confounding rationale for a covariate, and null for the exposure. "
+        "reference_level_index must be a sealed level index for binary/categorical "
+        "terms and null for continuous/ordinal_linear terms. literature_bindings items are exactly "
         '{"citation_key":"<sealed key>","design_elements":["<allowed element>"],"application":"<8-1200 characters>","divergence":null}.'
     )
 

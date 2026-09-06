@@ -849,11 +849,12 @@ def candidate_analysis_types(
         if score:
             scored.append((score, -position, spec.key))
     scored.sort(reverse=True)
-    candidates = [key for _score, _position, key in scored]
     inferred = infer_analysis_type(context).key
-    if context.primary_exposure and context.target_outcome:
-        candidates.insert(0, "association_study")
-    candidates.extend([inferred, "descriptive_epidemiology"])
+    # The question-aware owner ranks the headline family. A pair of columns
+    # does not make association a better candidate than description,
+    # prediction, or causal inference.
+    candidates = [inferred, *(key for _score, _position, key in scored)]
+    candidates.append("descriptive_epidemiology")
     authorized: list[str] = []
     for key in candidates:
         if key in authorized:
@@ -1228,6 +1229,10 @@ class ProgressivePlannerAgent:
                     "derived_from_concepts",
                 },
             )
+            for field in ("analysis_window", "analysis_window_role"):
+                value = getattr(variable, field)
+                if value is not None:
+                    card[field] = value
             observed_levels = observed_levels_for(
                 name=variable.name,
                 variables=variable_map,
@@ -1421,7 +1426,13 @@ class ProgressivePlannerAgent:
                 "user-confirmed, and state what data checks could trigger revision."
             ),
             "Candidate-specific host article role contracts:\n"
-            + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":")),
+            + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":"))
+            + "\nThese requirements apply only after selecting a family that "
+            "answers the original question. They do not expand its scope. "
+            "Grouped prevalence, counts, or outcome rates do not by themselves "
+            "request adjusted association, prediction, or causal effects. Do not "
+            "reject a sufficient descriptive design for lacking another family's "
+            "model or robustness roles.",
             "Executable module ownership for required article result roles:\n"
             + json.dumps(
                 {
@@ -1491,7 +1502,13 @@ class ProgressivePlannerAgent:
                 ProgressivePlannerAgent._retrieved_data_cards(context, variables),
                 ensure_ascii=False,
                 separators=(",", ":"),
-            ),
+            )
+            + "\nanalysis_window is the exact physical observation coordinate. "
+            "An outer_observation_window is not the phenotype definition or "
+            "outcome follow-up. Bind descriptive denominators and captions to "
+            "that window; never relabel it whole-stay prevalence. A post-zero "
+            "association additionally needs an executable temporal design; "
+            "mentioning landmark in prose does not implement one.",
             (
                 "Closed-domain module rule:\nInclude a table_one outline step "
                 "only when the grouping variable represents the study's primary "
