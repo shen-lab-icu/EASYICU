@@ -1,0 +1,131 @@
+{
+  "source_commit": "731922f916cbc90521659759349d04e7b9144d8f",
+  "synthetic": true,
+  "summary": {
+    "interpretation_class": "exposure_outcome_distribution",
+    "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+    "analysis_role": "primary",
+    "analysis_set": "bound_typed_cohort",
+    "cohort_n": 200,
+    "exposure": "synthetic_exposure",
+    "outcome": "synthetic_outcome",
+    "descriptive_estimates": {
+      "schema_version": "easyicu.exposure_outcome_descriptive_estimates/1",
+      "analysis_role": "primary",
+      "analysis_set": "bound_typed_cohort",
+      "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+      "dependence": {
+        "schema_version": "easyicu.planned_dependence/1",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+        "group_source": "patient_stay_id",
+        "group_derivation": "prefix_before_delimiter",
+        "delimiter": ":s"
+      },
+      "exposure_prevalence": [],
+      "outcome_absolute_risks": [
+        {
+          "level_index": 0,
+          "level": 0,
+          "events": 10,
+          "denominator": 100,
+          "estimate_pct": 10.0,
+          "standard_error_pct": 2.0,
+          "ci_low_pct": 6.710292746097057,
+          "ci_high_pct": 13.289707253902943,
+          "confidence_level": 0.9,
+          "interval_method": "patient_cluster_robust_wald",
+          "covariance": "cluster_robust",
+          "cluster_count": 80
+        },
+        {
+          "level_index": 1,
+          "level": 1,
+          "events": 30,
+          "denominator": 100,
+          "estimate_pct": 30.0,
+          "standard_error_pct": 2.0,
+          "ci_low_pct": 26.710292746097057,
+          "ci_high_pct": 33.28970725390295,
+          "confidence_level": 0.9,
+          "interval_method": "patient_cluster_robust_wald",
+          "covariance": "cluster_robust",
+          "cluster_count": 80
+        }
+      ],
+      "risk_difference": {
+        "reference_level_index": 0,
+        "reference_level": 0,
+        "comparison_level_index": 1,
+        "comparison_level": 1,
+        "direction": "comparison_minus_reference",
+        "n": 200,
+        "interpretation_ceiling": "descriptive_unadjusted_not_causal",
+        "estimate_pct": 20.0,
+        "standard_error_pct": 5.0,
+        "ci_low_pct": 11.775731865242642,
+        "ci_high_pct": 28.22426813475736,
+        "confidence_level": 0.9,
+        "interval_method": "linear_probability_wald",
+        "covariance": "cluster_robust",
+        "cluster_count": 80
+      }
+    }
+  },
+  "claims": [
+    {
+      "schema_version": "easyicu.scientific_claim/2",
+      "claim_id": "observed_absolute_risk_level_0",
+      "claim_type": "descriptive_absolute_risk",
+      "exposure": "synthetic_exposure=0",
+      "outcome": "synthetic_outcome",
+      "direction": "descriptive_only",
+      "estimand": "observed absolute risk was 10 percent (90% CI, 6.710293 to 13.289707; interval: patient_cluster_robust_wald; covariance: cluster_robust; patient clusters: 80)",
+      "population": "the bound typed cohort",
+      "analysis_role": "primary",
+      "status": "supported",
+      "adjusted_for": [],
+      "point_estimate": null,
+      "interval_lower": null,
+      "interval_upper": null,
+      "step_id": "02_describe",
+      "evidence_id": "synthetic_summary"
+    },
+    {
+      "schema_version": "easyicu.scientific_claim/2",
+      "claim_id": "observed_absolute_risk_level_1",
+      "claim_type": "descriptive_absolute_risk",
+      "exposure": "synthetic_exposure=1",
+      "outcome": "synthetic_outcome",
+      "direction": "descriptive_only",
+      "estimand": "observed absolute risk was 30 percent (90% CI, 26.710293 to 33.289707; interval: patient_cluster_robust_wald; covariance: cluster_robust; patient clusters: 80)",
+      "population": "the bound typed cohort",
+      "analysis_role": "primary",
+      "status": "supported",
+      "adjusted_for": [],
+      "point_estimate": null,
+      "interval_lower": null,
+      "interval_upper": null,
+      "step_id": "02_describe",
+      "evidence_id": "synthetic_summary"
+    },
+    {
+      "schema_version": "easyicu.scientific_claim/2",
+      "claim_id": "prespecified_unadjusted_risk_difference",
+      "claim_type": "descriptive_risk_difference",
+      "exposure": "synthetic_exposure=1 versus synthetic_exposure=0",
+      "outcome": "synthetic_outcome",
+      "direction": "descriptive_only",
+      "estimand": "prespecified unadjusted risk difference (comparison minus reference) was 20 percentage points (90% CI, 11.775732 to 28.224268; interval: linear_probability_wald; covariance: cluster_robust; patient clusters: 80)",
+      "population": "the bound typed cohort",
+      "analysis_role": "primary",
+      "status": "supported",
+      "adjusted_for": [],
+      "point_estimate": null,
+      "interval_lower": null,
+      "interval_upper": null,
+      "step_id": "02_describe",
+      "evidence_id": "synthetic_summary"
+    }
+  ]
+}

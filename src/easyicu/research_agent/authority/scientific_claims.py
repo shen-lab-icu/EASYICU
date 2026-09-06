@@ -12,7 +12,6 @@ author the scientific sentence.
 from __future__ import annotations
 
 import math
-import re
 from typing import Literal
 
 from pydantic import (
@@ -21,6 +20,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -31,7 +31,8 @@ class ScientificClaimDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[
-        "easyicu.scientific_claim/1", "easyicu.scientific_claim/2"
+        "easyicu.scientific_claim/1", "easyicu.scientific_claim/2",
+        "easyicu.scientific_claim/3",
     ] = "easyicu.scientific_claim/1"
     claim_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     claim_type: Literal[
@@ -57,6 +58,21 @@ class ScientificClaimDraft(BaseModel):
     point_estimate: float | None = None
     interval_lower: float | None = None
     interval_upper: float | None = None
+    confidence_level: float | None = Field(default=None, gt=0.5, lt=1.0)
+    interval_method: Literal[
+        "wilson", "patient_cluster_robust_wald", "linear_probability_wald"
+    ] | None = None
+    effect_scale: Literal["percent", "percentage_points"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _preserve_legacy_payload(self, handler):
+        payload = handler(self)
+        if self.schema_version != "easyicu.scientific_claim/3":
+            # Old evidence seals include the exact /1 or /2 payload. New
+            # optional fields must not change those persisted bytes on replay.
+            for field in ("confidence_level", "interval_method", "effect_scale"):
+                payload.pop(field, None)
+        return payload
 
     @field_validator("exposure", "outcome", "estimand", "population")
     @classmethod
@@ -80,6 +96,16 @@ class ScientificClaimDraft(BaseModel):
 
     @model_validator(mode="after")
     def _claim_kind_matches_its_ceiling(self) -> "ScientificClaimDraft":
+        interval_metadata = (
+            self.confidence_level, self.interval_method, self.effect_scale
+        )
+        if self.schema_version == "easyicu.scientific_claim/3":
+            if any(value is None for value in interval_metadata):
+                raise ValueError("scientific_claim/3 requires complete interval semantics")
+            if self.point_estimate is None:
+                raise ValueError("scientific_claim/3 requires a numeric interval")
+        elif any(value is not None for value in interval_metadata):
+            raise ValueError("structured interval semantics require scientific_claim/3")
         numeric_values = (
             self.point_estimate,
             self.interval_lower,
@@ -105,12 +131,25 @@ class ScientificClaimDraft(BaseModel):
             if self.analysis_role == "auxiliary":
                 raise ValueError("association claims cannot use the auxiliary role")
             return self
-        if self.schema_version != "easyicu.scientific_claim/2":
-            raise ValueError("descriptive claims require scientific_claim/2")
+        if self.schema_version not in {
+            "easyicu.scientific_claim/2", "easyicu.scientific_claim/3"
+        }:
+            raise ValueError("descriptive claims require scientific_claim/2 or /3")
         if self.direction != "descriptive_only" or self.adjusted_for:
             raise ValueError(
                 "descriptive claims must be descriptive_only and cannot claim adjustment"
             )
+        if self.schema_version == "easyicu.scientific_claim/3":
+            absolute = self.claim_type == "descriptive_absolute_risk"
+            expected_scale = "percent" if absolute else "percentage_points"
+            allowed_methods = (
+                {"wilson", "patient_cluster_robust_wald"}
+                if absolute else {"linear_probability_wald"}
+            )
+            if self.effect_scale != expected_scale or self.interval_method not in allowed_methods:
+                raise ValueError("scientific claim interval method or effect scale contradicts its kind")
+            if absolute and not 0 <= self.interval_lower <= self.interval_upper <= 100:
+                raise ValueError("absolute risk interval must remain within 0 to 100 percent")
         return self
 
 
@@ -180,59 +219,33 @@ class ScientificClaim(ScientificClaimDraft):
         def display_number(value: float) -> str:
             return f"{value:.3f}".rstrip("0").rstrip(".")
 
-        def estimand_interval() -> tuple[float, float, float] | None:
-            match = re.search(
-                r"\bwas\s+([-+]?\d+(?:\.\d+)?)\s+"
-                r"(?:percent|percentage points)\s+\("
-                r"[^)]*?\bCI,\s+([-+]?\d+(?:\.\d+)?)\s+to\s+"
-                r"([-+]?\d+(?:\.\d+)?)",
-                self.estimand,
-                flags=re.I,
-            )
-            if match is None:
-                return None
-            point, lower, upper = (float(value) for value in match.groups())
-            return point, lower, upper
-
         if self.claim_type == "descriptive_absolute_risk":
-            values = (
-                (self.point_estimate, self.interval_lower, self.interval_upper)
-                if self.point_estimate is not None
-                else estimand_interval()
-            )
-            if values is None:
+            if (
+                self.point_estimate is None
+                and "counts only, no confidence interval" in self.estimand
+            ):
                 return (
                     f"In the prespecified group, the {self.estimand}; this was "
                     "a descriptive, unadjusted, noncausal estimate."
                 )
-            point, lower, upper = values
+            point, lower, upper, confidence = self._reader_interval()
             assert lower is not None
             assert upper is not None
             return (
                 "The observed absolute risk in the prespecified group was "
-                f"{display_number(point)}% (95% CI, "
+                f"{display_number(point)}% ({confidence:g}% CI, "
                 f"{display_number(lower)}% to "
                 f"{display_number(upper)}%); this was a "
                 "descriptive, unadjusted, noncausal estimate."
             )
         if self.claim_type == "descriptive_risk_difference":
-            values = (
-                (self.point_estimate, self.interval_lower, self.interval_upper)
-                if self.point_estimate is not None
-                else estimand_interval()
-            )
-            if values is None:
-                return (
-                    f"The {self.estimand}; this was a descriptive, unadjusted, "
-                    "noncausal contrast."
-                )
-            point, lower, upper = values
+            point, lower, upper, confidence = self._reader_interval()
             assert lower is not None
             assert upper is not None
             return (
                 "The prespecified unadjusted risk difference between groups "
                 f"was {display_number(point)} percentage points "
-                f"(95% CI, {display_number(lower)} to "
+                f"({confidence:g}% CI, {display_number(lower)} to "
                 f"{display_number(upper)}); this was a "
                 "descriptive, unadjusted, noncausal contrast."
             )
@@ -260,6 +273,21 @@ class ScientificClaim(ScientificClaimDraft):
             f"outcome in the prespecified analysis cohort ({estimate_text})."
         )
 
+    def _reader_interval(self) -> tuple[float, float, float, float]:
+        if self.schema_version != "easyicu.scientific_claim/3":
+            raise ValueError(
+                "descriptive interval projection requires structured confidence "
+                "authority; reload the claim from its registered summary"
+            )
+        assert self.point_estimate is not None
+        assert self.interval_lower is not None
+        assert self.interval_upper is not None
+        assert self.confidence_level is not None
+        return (
+            self.point_estimate, self.interval_lower, self.interval_upper,
+            100.0 * self.confidence_level,
+        )
+
 
 def scientific_claim_compilation_requested(summary: object) -> bool:
     """Return whether a summary belongs to a supported host compiler."""
@@ -285,7 +313,9 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
     )
 
 
-def derive_scientific_claim_drafts(summary: object) -> list[ScientificClaimDraft]:
+def derive_scientific_claim_drafts(
+    summary: object, *, legacy_descriptive: bool = False
+) -> list[ScientificClaimDraft]:
     """Derive claims from one reviewed deterministic result-summary schema.
 
     This compiler intentionally recognizes only the host-owned adjusted-
@@ -306,7 +336,9 @@ def derive_scientific_claim_drafts(summary: object) -> list[ScientificClaimDraft
 
         return [
             ScientificClaimDraft.model_validate(payload)
-            for payload in derive_descriptive_claim_payloads(summary)
+            for payload in derive_descriptive_claim_payloads(
+                summary, legacy=legacy_descriptive
+            )
         ]
 
     def _required_adjusted_text(field: str) -> str:
