@@ -299,7 +299,7 @@ def _allow_current_scientific_review(monkeypatch: pytest.MonkeyPatch) -> None:
         agent_pipeline_runs,
         "_load_pending_scientific_review",
         lambda *_args, **_kwargs: {
-            "schema_version": "easyicu.plan_scientific_review/7",
+            "schema_version": "easyicu.plan_scientific_review/8",
             "approval_allowed": True,
         },
     )

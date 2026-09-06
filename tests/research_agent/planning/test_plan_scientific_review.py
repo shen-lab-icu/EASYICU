@@ -260,6 +260,7 @@ def test_compiler_bound_functional_form_step_is_a_distinct_typed_axis() -> None:
         inputs=["table:adjusted_association_estimates", "age"],
         expected_outputs=["table:functional_form_sensitivity"],
         sensitivity_spec_ids=["candidate_age_functional_form"],
+        functional_form_spec={"target_column": "age", "knot_quantiles": [0.1, 0.5, 0.9]},
         scientific_capability=ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     )
     plan = _plan().model_copy(update={"steps": [*_plan().steps, functional_form]})

@@ -4848,6 +4848,7 @@ def test_functional_form_sensitivity_requires_an_exact_executable_method() -> No
     supported_step = supported["steps"][5]
     supported_step["step_id"] = "06_functional_form_sensitivity"
     supported_step["custom_method"] = "restricted_cubic_spline_sensitivity"
+    supported_step["functional_form_spec"] = {"target_column": "age_years", "knot_quantiles": [0.1, 0.5, 0.9]}
     supported_step["sensitivity_spec_ids"] = [
         "age_restricted_cubic_spline_vs_linear"
     ]
@@ -6413,6 +6414,7 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
     functional_form_step = payload["steps"][5]
     functional_form_step["step_id"] = "06_functional_form_sensitivity"
     functional_form_step["custom_method"] = "restricted_cubic_spline_sensitivity"
+    functional_form_step["functional_form_spec"] = {"target_column": "age_years", "knot_quantiles": [0.1, 0.5, 0.9]}
     functional_form_step["sensitivity_spec_ids"] = [
         "age_restricted_cubic_spline_vs_linear"
     ]

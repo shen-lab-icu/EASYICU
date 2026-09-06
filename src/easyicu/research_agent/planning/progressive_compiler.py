@@ -28,6 +28,7 @@ from ..contracts.association_execution import (
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import ModelTermSpec, level_spelling
+from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
 from ..contracts.model_tokens import (
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
@@ -810,6 +811,7 @@ def _validate_scientific_action_runtime_contract(
 def _compile_binary_association_sensitivity_capability(
     *,
     action: ScientificAction | None,
+    context: ResearchContext,
     skeleton: ProgressivePlanSkeleton,
     step: ProgressiveSkeletonStep,
     step_index: int,
@@ -822,6 +824,12 @@ def _compile_binary_association_sensitivity_capability(
     # in particular, do not make a survival sensitivity inherit an odds-ratio
     # parent or grant it the binary association capability.
     if action is not None and action.analysis_family != "association":
+        if step.functional_form_spec is not None:
+            raise _fail(
+                "progressive_functional_form_family_mismatch",
+                "RCS-versus-linear model-term sensitivity belongs to the association owner",
+                step=step, step_index=step_index, path="functional_form_spec",
+            )
         return None
 
     scientific_outputs = [
@@ -905,6 +913,36 @@ def _compile_binary_association_sensitivity_capability(
             step_index=step_index,
             path="product_inputs",
         )
+    method = str(step.custom_method or "").strip().casefold()
+    form = step.functional_form_spec
+    if method in RCS_LINEAR_SENSITIVITY_METHODS or form is not None:
+        if form is None or method not in RCS_LINEAR_SENSITIVITY_METHODS or len(step.sensitivity_spec_ids) != 1:
+            raise _fail(
+                "progressive_functional_form_target_missing",
+                "RCS-versus-linear sensitivity requires one exact functional_form_spec and sensitivity id",
+                step=step, step_index=step_index, path="functional_form_spec",
+            )
+        targets = [term for term in parent.model_terms if term.name == form.target_column]
+        if len(targets) != 1 or targets[0].coding != "continuous":
+            raise _fail(
+                "progressive_functional_form_target_invalid",
+                "functional-form target must be one continuous term of the inherited primary model",
+                step=step, step_index=step_index, path="functional_form_spec.target_column",
+            )
+        prescribed = [spec for spec in (context.user_preferences.sensitivity_specs if context.user_preferences else ())
+                      if spec.spec_id in step.sensitivity_spec_ids]
+        operationalizations = dict(AdjustmentSetAuthority.from_context(context).operationalizations)
+        if prescribed and any(
+            spec.axis != "functional_form" or tuple(
+                operationalizations.get(name, name) for name in spec.execution_variables
+            ) != (form.target_column,)
+            for spec in prescribed
+        ):
+            raise _fail(
+                "progressive_functional_form_authority_mismatch",
+                "functional-form target must match the exact prespecified sensitivity authority",
+                step=step, step_index=step_index, path="functional_form_spec.target_column",
+            )
     return ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
 
 
@@ -2038,6 +2076,7 @@ def _compile_one_step(
     association_sensitivity_capability = (
         _compile_binary_association_sensitivity_capability(
             action=action,
+            context=context,
             skeleton=skeleton,
             step=step,
             step_index=step_index,
@@ -2108,6 +2147,7 @@ def _compile_one_step(
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],
         "sensitivity_spec_ids": sensitivity_spec_ids,
+        "functional_form_spec": step.functional_form_spec,
         "literature_citation_keys": citation_keys,
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,

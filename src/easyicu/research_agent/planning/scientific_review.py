@@ -98,8 +98,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/7"] = (
-        "easyicu.plan_scientific_review/7"
+    schema_version: Literal["easyicu.plan_scientific_review/8"] = (
+        "easyicu.plan_scientific_review/8"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -390,6 +390,7 @@ def _step_requires_temporal_inference(step: AnalysisStep) -> bool:
         or step.model_requirements
         or step.family_primary_result_requirement is not None
         or step.scientific_capability is not None
+        or step.functional_form_spec is not None
     ):
         return True
     return _method_head(step) in (
@@ -440,6 +441,20 @@ def _signed_temporal_result_projection(
         # eligibility; their own method/execution contracts remain subject to
         # the separate sensitivity-capability gates.
         return True
+    if step.functional_form_spec is not None and step.scientific_capability is None:
+        # The signed spline owner refits a covariate on its own exact landmark
+        # rows, or projects an exact exposure comparison. This recognizes only
+        # temporal closure; runtime authority still validates method and target.
+        parents = [primary for primary in plan.steps
+                   if primary.planned_analysis_role == "primary"
+                   and _method_head(primary) == "signed_landmark_restricted_cubic_spline"
+                   and any(str(ref).startswith("scientific_runtime_contract:")
+                           for ref in set(primary.icu_rule_refs) & set(step.icu_rule_refs))
+                   and set(step.inputs) <= set(primary.inputs) | set(primary.expected_outputs)
+                   and set(step.inputs) & set(primary.expected_outputs)
+                   and step.functional_form_spec.target_column in primary.inputs]
+        if len(parents) == 1:
+            return True
     if step.scientific_capability is not None:
         return False
     candidates = [
@@ -891,6 +906,7 @@ def _sensitivity_facts(
 ) -> dict[str, Any]:
     requested = _requested_sensitivity_axes(context)
     typed_specs = {spec.spec_id: spec for spec in _sensitivity_specs(context)}
+    operationalizations = dict(AdjustmentSetAuthority.from_context(context).operationalizations)
     unsupported_spec_ids = {
         spec_id
         for spec_id, spec in typed_specs.items()
@@ -941,9 +957,12 @@ def _sensitivity_facts(
             if (
                 step.planned_analysis_role == "sensitivity"
                 and method in FUNCTIONAL_FORM_EXECUTABLE_METHODS
-                and step.scientific_capability
-                == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and (
+                    step.scientific_capability == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                    or _signed_temporal_result_projection(step, plan)
+                )
                 and step.sensitivity_spec_ids
+                and step.functional_form_spec is not None
                 and len(step.expected_outputs) == 1
                 and str(step.expected_outputs[0]).startswith("table:")
             ):
@@ -958,6 +977,13 @@ def _sensitivity_facts(
                 if (
                     spec is not None
                     and method in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
+                    and (
+                        spec.axis != "functional_form" or (
+                            step.functional_form_spec is not None
+                            and tuple(operationalizations.get(name, name) for name in spec.execution_variables)
+                            == (step.functional_form_spec.target_column,)
+                        )
+                    )
                 ):
                     executed_spec_ids.add(spec_id)
             # A signed runtime method is the host-bound implementation of the
@@ -972,6 +998,8 @@ def _sensitivity_facts(
                 step_inputs = set(step.inputs)
                 for spec_id, spec in typed_specs.items():
                     if method not in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]:
+                        continue
+                    if spec.axis == "functional_form" and spec.execution_variables != (context.primary_exposure,):
                         continue
                     required_inputs = set(spec.execution_variables)
                     if spec.strategy == "landmark":
@@ -1114,30 +1142,20 @@ def _continuous_linearity_facts(plan: AnalysisPlan) -> dict[str, Any]:
             for term in requirement.model_terms or ():
                 if term.role == "covariate" and term.coding == "continuous" and str(term.transform or "").casefold() in {"", "identity"}:
                     identity_terms.append(term.name)
-    has_functional_form_sensitivity = any(
-        executable_scientific_step(step)
-        and (
-            _method_head(step) in FUNCTIONAL_FORM_EXECUTABLE_METHODS
-            or any(
-                token
-                in " ".join(
-                    [step.step_id, step.intent, step.method or "", *step.expected_outputs]
-                ).casefold()
-                for token in (
-                    "spline",
-                    "nonlinear",
-                    "non-linear",
-                    "functional form",
-                    "functional_form",
-                    "fractional polynomial",
-                )
-            )
-        )
+    checked_targets = {
+        step.functional_form_spec.target_column
         for step in scientific_steps(plan)
-    )
+        if step.functional_form_spec is not None
+        and step.planned_analysis_role == "sensitivity"
+        and executable_scientific_step(step)
+        and _method_head(step) in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+    }
+    unchecked = set(identity_terms) - checked_targets
     return {
         "linear_identity_terms": sorted(set(identity_terms)),
-        "functional_form_sensitivity_executable": has_functional_form_sensitivity,
+        "checked_functional_form_targets": sorted(checked_targets),
+        "unchecked_linear_identity_terms": sorted(unchecked),
+        "functional_form_sensitivity_executable": bool(checked_targets) and not unchecked,
     }
 
 
@@ -2175,7 +2193,7 @@ def build_plan_scientific_review(
                 code="CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
                 severity="major",
                 dimension="statistical_design",
-                message="Continuous covariates enter linearly without an executable functional-form check: " + ", ".join(linearity["linear_identity_terms"]),
+                message="Continuous covariates enter linearly without an executable functional-form check: " + ", ".join(linearity["unchecked_linear_identity_terms"]),
                 evidence_refs=["analysis_plan.json.model_requirements"],
                 remediation="Add a prespecified spline/nonlinearity sensitivity with source binding, without changing the headline estimand after results are seen.",
             )

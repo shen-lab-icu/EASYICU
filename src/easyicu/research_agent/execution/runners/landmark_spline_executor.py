@@ -14,11 +14,16 @@ from ...authority.current_case_scientific_runtime import (
 )
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.capability_ids import LANDMARK_SPLINE_ANALYSIS_KIND
-from ...contracts.dependence import resolve_patient_groups
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
+from .landmark_spline_fit import (
+    adjustment_design as _adjustment_design,
+    fit_binomial_model as _fit_binomial_model,
+    prepare_landmark_model_population,
+    restricted_cubic_spline_basis,
+)
 
 
 def _product_path(out_dir: Path, product: str) -> Path:
@@ -137,52 +142,6 @@ def _finite(value: Any) -> float:
     return number
 
 
-def _adjustment_design(frame, authority: LandmarkSplineRuntimeAuthority):
-    import pandas as pd
-
-    pieces = []
-    for column in authority.required_adjustment_columns:
-        source = frame[column]
-        if column in authority.categorical_adjustment_columns:
-            encoded = pd.get_dummies(
-                source.astype("string"), prefix=column, drop_first=True, dtype=float
-            )
-            encoded.loc[source.isna(), :] = float("nan")
-            if encoded.empty:
-                raise ValueError(
-                    f"categorical adjustment {column!r} has fewer than two levels"
-                )
-            pieces.append(encoded)
-        else:
-            pieces.append(
-                pd.DataFrame(
-                    {column: pd.to_numeric(source, errors="coerce")},
-                    index=frame.index,
-                )
-            )
-    return pd.concat(pieces, axis=1) if pieces else pd.DataFrame(index=frame.index)
-
-
-def _fit_binomial_model(*, sm, outcome, design, source_frame, authority):
-    """Fit one authority-bound model with the declared covariance estimator."""
-
-    model = sm.GLM(outcome.astype(float), design, family=sm.families.Binomial())
-    dependence = authority.dependence
-    if dependence is None:
-        return model.fit(maxiter=200, disp=0), None
-    group_values = source_frame.loc[design.index, dependence.group_source]
-    if bool(group_values.isna().any()):
-        raise ValueError("signed landmark cluster group contains missing values")
-    resolved = resolve_patient_groups(group_values.tolist(), requirement=dependence)
-    fit = model.fit(
-        maxiter=200,
-        disp=0,
-        cov_type="cluster",
-        cov_kwds={"groups": list(resolved.groups)},
-    )
-    return fit, resolved.cluster_count
-
-
 def run_landmark_spline_association(
     *,
     frame: Any,
@@ -210,48 +169,11 @@ def run_landmark_spline_association(
         )
     if len(str(runtime_projection_sha256)) != 64:
         raise ValueError("runtime projection digest is required")
-    missing = sorted(set(sealed.required_columns) - set(frame.columns))
-    if missing:
-        raise ValueError("signed landmark input lacks columns: " + ", ".join(missing))
-
-    working = frame[list(sealed.required_columns)].copy()
-    for column in (
-        sealed.exposure_column,
-        sealed.outcome_column,
-        sealed.outcome_time_column,
-        sealed.observation_duration_column,
-    ):
-        working[column] = pd.to_numeric(working[column], errors="coerce")
-    outcome_values = set(working[sealed.outcome_column].dropna().unique().tolist())
-    if not outcome_values.issubset({0, 1}):
-        raise ValueError("signed landmark outcome is not binary")
-    event_without_time = working[sealed.outcome_column].eq(1) & working[
-        sealed.outcome_time_column
-    ].isna()
-    if bool(event_without_time.any()):
-        raise ValueError(
-            "signed landmark population cannot verify event timing for every death"
-        )
-
+    population = prepare_landmark_model_population(frame, sealed)
+    working, model_frame = population.working, population.model_frame
+    alive_at_landmark, under_observation = population.alive_at_landmark, population.under_observation
+    valid_exposure, primary_mask = population.valid_exposure, population.primary_mask
     observation_threshold = sealed.observation_threshold
-    alive_at_landmark = working[sealed.outcome_column].eq(0) | working[
-        sealed.outcome_time_column
-    ].gt(sealed.landmark_hours)
-    under_observation = working[sealed.observation_duration_column].ge(
-        observation_threshold
-    )
-    valid_exposure = working[sealed.exposure_column].notna()
-    primary_mask = alive_at_landmark & under_observation & valid_exposure
-    primary = working.loc[primary_mask].copy()
-    adjustment = _adjustment_design(primary, sealed)
-    outcome = primary[sealed.outcome_column]
-    exposure = primary[sealed.exposure_column]
-    model_frame = pd.concat(
-        [exposure.rename("__exposure"), outcome.rename("__outcome"), adjustment],
-        axis=1,
-    ).dropna()
-    if len(model_frame) < 30 or model_frame["__outcome"].nunique() != 2:
-        raise ValueError("signed landmark primary population is not estimable")
 
     quantiles = model_frame["__exposure"].quantile(
         list(sealed.spline_knot_quantiles)
@@ -259,21 +181,9 @@ def run_landmark_spline_association(
     if not np.all(np.isfinite(quantiles)) or not np.all(np.diff(quantiles) > 0):
         raise ValueError("signed landmark spline knots are not distinct")
     lower, reference, upper = [float(value) for value in quantiles]
-    spline = patsy.dmatrix(
-        (
-            "cr(x, knots=(middle,), lower_bound=lower, upper_bound=upper, "
-            "constraints='center') - 1"
-        ),
-        {
-            "x": model_frame["__exposure"].to_numpy(dtype=float),
-            "middle": reference,
-            "lower": lower,
-            "upper": upper,
-        },
-        return_type="dataframe",
+    spline = restricted_cubic_spline_basis(
+        model_frame["__exposure"], knots=(lower, reference, upper), prefix="exposure",
     )
-    spline.columns = [f"exposure_rcs_{index + 1}" for index in range(spline.shape[1])]
-    spline.index = model_frame.index
     design = pd.concat(
         [spline, model_frame.drop(columns=["__exposure", "__outcome"])], axis=1
     ).astype(float)

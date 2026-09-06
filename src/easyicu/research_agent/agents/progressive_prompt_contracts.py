@@ -314,7 +314,7 @@ def step_materialization_shape_contract(
         "comparison_exposure_level_index": None,
         "primary_contrast_level_index": None, "denominator_policy": None,
         "missing_exposure_policy": None, "missing_outcome_policy": None,
-        "confidence_level": None, "sensitivity_spec_ids": [],
+        "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
         "literature_bindings": [],
     }
     template = {
@@ -335,7 +335,10 @@ def step_materialization_shape_contract(
         "clinical_rationale must be 16-500 characters explaining the clinical "
         "confounding rationale for a covariate, and null for the exposure. "
         "reference_level_index must be a sealed level index for binary/categorical "
-        "terms and null for continuous/ordinal_linear terms. literature_bindings items are exactly "
+        "terms and null for continuous/ordinal_linear terms. An RCS-versus-linear sensitivity must set functional_form_spec to "
+        '{"target_column":"<exact continuous primary model term>","knot_quantiles":[0.1,0.5,0.9]}; '
+        "choose and declare the three ordered quantiles before execution. This contract is null for other analyses, including timing checks. "
+        "literature_bindings items are exactly "
         '{"citation_key":"<sealed key>","design_elements":["<allowed element>"],"application":"<8-1200 characters>","divergence":null}.'
     )
 

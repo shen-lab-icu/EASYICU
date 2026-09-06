@@ -343,13 +343,18 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
     assert not landmark_spline_runtime_receipt_valid(altered)
 
     from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.contracts.functional_form import FunctionalFormSpec
     from easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor import (
         run_landmark_spline_functional_form,
     )
     child = AnalysisStep(
         step_id="form_check", planned_analysis_role="sensitivity",
         intent="Expose the bound primary nonlinearity test.",
-        method="prespecified_functional_form_check", inputs=[],
+        method="restricted_cubic_spline_sensitivity", inputs=[],
+        sensitivity_spec_ids=["exposure_functional_form"],
+        functional_form_spec=FunctionalFormSpec(
+            target_column="lact_max", knot_quantiles=authority.spline_knot_quantiles,
+        ),
         expected_outputs=["table:form_check"],
     )
     run_landmark_spline_functional_form(

@@ -87,6 +87,7 @@ from .planning.robustness_contract import (
     validate_robustness_specs,
 )
 from .planning.sensitivity_authority import PrespecifiedSensitivitySpec
+from .contracts.functional_form import FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS
 from .research_context.clinical_definition import ClinicalDefinitionReference
 
 # Compatibility exports: these contracts have dependency-neutral owners, while
@@ -1704,6 +1705,11 @@ class AnalysisStep(BaseModel):
             "preferences; descriptive prose is not a binding."
         ),
     )
+    functional_form_spec: Optional[FunctionalFormSpec] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Exact target variable and basis for an RCS-versus-linear sensitivity; never inferred from prose or a sensitivity id.",
+    )
     literature_citation_keys: List[str] = Field(
         default_factory=list,
         description=(
@@ -1879,6 +1885,12 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        if self.functional_form_spec is not None and (
+            self.planned_analysis_role != "sensitivity"
+            or self.method not in RCS_LINEAR_SENSITIVITY_METHODS
+            or len(self.sensitivity_spec_ids) != 1
+        ):
+            raise ValueError("functional_form_spec requires one exact RCS-versus-linear sensitivity")
         binding_keys = [item.citation_key for item in self.literature_design_bindings]
         if len(binding_keys) != len(set(binding_keys)):
             raise ValueError(
