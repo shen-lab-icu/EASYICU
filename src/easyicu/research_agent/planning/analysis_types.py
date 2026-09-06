@@ -897,10 +897,13 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
     )
     chinese_discovery_disclaimer = (
         re.search(
-            r"(?:不|无需|避免)(?:进行|作|做|开展|采用|使用)?"
+            # Negate an action, not every word beginning with 不. In particular,
+            # 不同 (different) and 不稳定 (unstable) describe discovery targets.
+            r"(?:不(?:再|重新|继续)?(?:进行|作|做|开展|采用|使用|识别|发现|构建|"
+            r"拟合|学习|划分)|不要|无需|不必|避免)"
             r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
             r"[^，。；;]{0,8}(?:聚类|分群|识别|发现)?"
-            r"|(?:不|无需|避免)(?:进行|作|做|开展)?"
+            r"|(?:不(?:再|重新|继续)?(?:进行|作|做|开展|采用|使用)|不要|无需|不必|避免)"
             r"[^，。；;]{0,8}(?:聚类|分群)"
             r"[^，。；;]{0,8}(?:患者)?(?:表型|亚型|轨迹|患者群)",
             normalised,
@@ -1143,6 +1146,30 @@ def _treatment_response_framing(text: str) -> bool:
     return has_response and has_treatment
 
 
+def _association_framing_text(text: str) -> str:
+    """Mask declined association tasks without cancelling other clauses."""
+
+    masked = re.sub(
+        r"(?:不(?:再)?(?:研究|分析|估计|评估|检验|探讨)|无需|不要|不必)"
+        r"[^，。；;!?？]{0,48}(?:关系|关联|相关性)"
+        r"|(?:关系|关联|相关性)(?:研究|分析)?[^，。；;!?？]{0,24}"
+        r"(?:与本次任务无关|不属于本次(?:研究|任务)|不在本次(?:研究|任务)范围)",
+        lambda match: " " * len(match.group(0)),
+        text,
+    )
+    return masked
+
+
+def _ordinary_relationship_question(text: str) -> bool:
+    """Recognize a paired relationship question, not a required audit note."""
+
+    return re.search(
+        r"[^，。；;!?？]{1,64}(?:与|和|同)[^，。；;!?？]{1,64}"
+        r"(?:关系|是否相关|是否有关)",
+        _association_framing_text(text),
+    ) is not None
+
+
 def infer_analysis_type(
     context: ResearchContext,
     *,
@@ -1154,6 +1181,8 @@ def infer_analysis_type(
         return _REGISTRY[preferred]
     text = _question_text(context)
     primary_question_text = (context.research_question or "").lower().strip()
+    association_text = _association_framing_text(text)
+    relationship_question = _ordinary_relationship_question(primary_question_text)
     primary_predictor = primary_predictor or context.primary_exposure
     target_outcome = target_outcome or context.target_outcome
     # Free-text preferences are supplementary design constraints, not a second
@@ -1275,7 +1304,10 @@ def infer_analysis_type(
 
     def _has_any(key: str, extras: Iterable[str] = ()) -> bool:
         terms = list(_REGISTRY[key].trigger_terms) + list(extras)
-        return any(_keyword_present(text, term) for term in terms)
+        selected_text = association_text if key == "association_study" else text
+        return (
+            key == "association_study" and relationship_question
+        ) or any(_keyword_present(selected_text, term) for term in terms)
 
     # Strong, explicit task-family cues should win before softer scoring.
     if _has_any("reinforcement_learning"):
@@ -1338,9 +1370,12 @@ def infer_analysis_type(
 
     scores: Dict[str, int] = {key: 0 for key in _REGISTRY}
     for key, spec in _REGISTRY.items():
+        selected_text = association_text if key == "association_study" else text
         for term in spec.trigger_terms:
-            if _keyword_present(text, term):
+            if _keyword_present(selected_text, term):
                 scores[key] += 1
+    if relationship_question:
+        scores["association_study"] += 1
     if not cohort_sensitivity_framed:
         scores["cohort_definition_sensitivity"] = 0
     if not treatment_response_framed:
