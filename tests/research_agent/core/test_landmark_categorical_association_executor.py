@@ -221,6 +221,45 @@ def _draft_plan() -> AnalysisPlan:
     )
 
 
+def test_generic_host_cohort_adoption_defers_to_signed_runtime_owner(tmp_path) -> None:
+    from easyicu.research_agent.authority.run_input import (
+        _declares_host_cohort_products,
+    )
+    from easyicu.research_agent.execution.cohort_adoption import (
+        record_planned_host_cohort_checkpoint,
+    )
+
+    _, _, authority = _projection(tmp_path)
+    draft = _draft_plan()
+    assert _declares_host_cohort_products(draft.steps[0])
+    plan = authority.bind_plan(draft)
+    cohort_step = authority.governed_cohort_step(plan)
+
+    # Identical logical output names do not transfer ownership of the signed
+    # landmark filter to the generic locked-cohort materializer.
+    assert not _declares_host_cohort_products(cohort_step)
+    records = []
+    preexecuted = set()
+    findings = []
+    record_planned_host_cohort_checkpoint(
+        plan=plan,
+        result={},
+        cohort_path=tmp_path / "not-materialized.parquet",
+        evidence=None,
+        prompt_pack_version="test",
+        llm_signature="test",
+        run_dir=tmp_path,
+        reason="test",
+        gate_stamp={},
+        per_step_records=records,
+        preexecuted_step_ids=preexecuted,
+        findings=findings,
+    )
+    assert records == []
+    assert preexecuted == set()
+    assert findings == []
+
+
 def test_signed_landmark_categorical_owner_filters_then_fits(tmp_path) -> None:
     universe, projection, authority = _projection(tmp_path)
     bound, findings = ScientificRuntimeAuthorities(

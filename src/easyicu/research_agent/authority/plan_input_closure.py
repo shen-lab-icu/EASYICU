@@ -9,7 +9,6 @@ or naming closure evidence independently.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -17,6 +16,7 @@ from typing import Dict, List, Optional
 from ..contracts.ordered_stratified import (
     has_fixed_ordered_stratified_input_roster,
 )
+from ..contracts.scientific_runtime_ownership import has_scientific_runtime_owner
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from .evidence_store import EvidenceStore, sha256_of_bytes, sha256_of_file
 from .plan_scope import (
@@ -43,19 +43,6 @@ _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
     "_min",
     "_sum",
 )
-
-_SCIENTIFIC_RUNTIME_CONTRACT_REF = re.compile(
-    r"^scientific_runtime_contract:[0-9a-f]{64}$"
-)
-
-
-def _has_fixed_scientific_runtime_input_roster(step: AnalysisStep) -> bool:
-    """Return whether a signed runtime owns the step's exact public inputs."""
-
-    return any(
-        _SCIENTIFIC_RUNTIME_CONTRACT_REF.fullmatch(str(ref or ""))
-        for ref in (step.icu_rule_refs or ())
-    )
 
 @dataclass(frozen=True)
 class RegisteredPlanInputClosure:
@@ -126,7 +113,7 @@ def close_measurement_companion_inputs(
         # that its executor neither selected nor consumes.
         if has_fixed_ordered_stratified_input_roster(
             step
-        ) or _has_fixed_scientific_runtime_input_roster(step):
+        ) or has_scientific_runtime_owner(step):
             revised_steps.append(step)
             continue
         seen = set(inputs)

@@ -30,6 +30,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_json_bytes
+from ..contracts.scientific_runtime_ownership import has_scientific_runtime_owner
 from ..intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -1529,6 +1530,10 @@ def _publish_immutable_host_step_output(
 def _declares_host_cohort_products(step: Any) -> bool:
     """Whether one step declares exactly the host-owned cohort product set."""
 
+    # Product names are shared by dedicated scientific runtimes. A generic
+    # materialization cannot attest that their eligibility rules were executed.
+    if has_scientific_runtime_owner(step):
+        return False
     declared = {
         str(value or "").strip().casefold()
         for value in (step.expected_outputs or [])
