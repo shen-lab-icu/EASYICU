@@ -239,6 +239,35 @@ def test_web_cancellation_is_a_typed_progress_control_signal() -> None:
     assert raised.value.code == "research_pipeline_cancelled"
 
 
+@pytest.mark.parametrize("cancel_before_call", [True, False])
+def test_web_cancellation_crosses_the_structured_retry_boundary(cancel_before_call):
+    from easyicu.research_agent.orchestration.progress import (
+        ResumableProgressChannel,
+        planner_retry_progress_callback,
+    )
+    from easyicu.research_agent.providers.llm import LLMMessage
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.providers.structured_retry import call_llm_with_structured_retry
+
+    job = SimpleNamespace(cancel_requested=cancel_before_call, emit=lambda _event: None)
+    channel = ResumableProgressChannel(lambda event: agent_pipeline_runs._pipeline_progress(job, event))
+    client = ScriptedMockLLMClient(["not-json", "not-json"])
+
+    def parser(_raw):
+        job.cancel_requested = True
+        raise ValueError("invalid response")
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+        call_llm_with_structured_retry(
+            client, [LLMMessage(role="user", content="give json")],
+            parser=parser, max_retries=1,
+            progress_callback=planner_retry_progress_callback(channel.emit, run_id="cancel-check"),
+        )
+
+    assert raised.value.code == "research_pipeline_cancelled"
+    assert len(client.calls) == (0 if cancel_before_call else 1)
+
+
 def _nonapprovable_review_payload(*, finding_code: str) -> dict[str, Any]:
     return PlanScientificReview(
         status="changes_required",

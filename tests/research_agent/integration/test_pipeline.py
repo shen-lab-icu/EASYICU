@@ -460,6 +460,36 @@ def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
     assert Path(result.manifest_path).exists()
 
 
+def test_host_cancellation_never_enters_deterministic_planner_fallback(
+    ra, synthetic_cohort, tmp_path: Path, monkeypatch,
+):
+    import easyicu.research_agent.pipeline as pipeline_module
+    from easyicu.research_agent.contracts.control_signals import ProgressControlSignal
+
+    signal = ProgressControlSignal("host requested cancellation")
+    calls = []
+
+    def cancel_planner(*_args, **_kwargs):
+        calls.append("planner")
+        raise signal
+
+    monkeypatch.setattr(pipeline_module.PlannerAgent, "run", cancel_planner)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path, llm=ra.MockLLMClient(),
+        enable_literature=False, enable_deterministic_planner_fallback=True,
+    )
+
+    with pytest.raises(ProgressControlSignal) as raised:
+        pipeline.run(
+            question="Is admission SOFA-2 associated with ICU mortality?",
+            cohort=synthetic_cohort, cohort_name="cancelled_planner",
+            database="synthetic", target_outcome="death",
+        )
+
+    assert raised.value is signal
+    assert calls == ["planner"]
+
+
 def test_pipeline_falls_back_when_planner_returns_empty(
     ra, synthetic_cohort, tmp_path: Path
 ):
