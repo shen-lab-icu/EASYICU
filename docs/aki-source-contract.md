@@ -66,6 +66,18 @@ remain available for appropriately timed case-level compatibility analyses.
 - SICdb event offsets are anchored to ICU admission; urine and CRRT use the
   pinned native identifiers.
 
+HiRID's rate-source flag and extraction-bin width must reach **both** the
+public-reference phenotype and the quality receipts. The rate is integrated
+over its preceding observed chart interval before normalization by weight and
+covered clock time; it is not a volume event to divide again by the charting
+gap. Both paths use the existing full 6/12/24-hour rate-window support. A
+constant 80 mL/h in an 80-kg patient must remain urine stage 0 whether recorded
+hourly or every four hours. The renal bundle infers this source type from the
+database when its flag is omitted; direct reference-profile calls must supply
+`urine_source_is_rate=True` for rate inputs. Other databases and frozen native
+MIMIC profiles retain volume-event semantics. Stage-0 combination, missing
+components, creatinine and RRT policies are unchanged.
+
 `kdigo_creatinine_input` carries a phenotype-specific 168-hour pre-ICU
 lookback. Generic creatinine and the published chemistry module retain their
 standard 24-hour pre-ICU boundary.

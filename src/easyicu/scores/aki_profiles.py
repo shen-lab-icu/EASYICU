@@ -206,7 +206,7 @@ def build_renal_aki_bundle(
     crea_col: str = "crea",
     urine_col: str = "urine",
     weight_col: str = "weight",
-    urine_source_is_rate: bool = False,
+    urine_source_is_rate: Optional[bool] = None,
     time_unit: Optional[str] = None,
     interval: Optional[pd.Timedelta] = None,
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
@@ -221,6 +221,12 @@ def build_renal_aki_bundle(
     """
 
     normalized_database = _normalize_database(database)
+    # The normalized HiRID urine concept is rate × extraction-bin width,
+    # whereas the other sources contain volume events. Preserve this semantic
+    # distinction in the reference layer as well as the quality receipts.
+    # An explicit flag remains available for deliberate historical replay.
+    if urine_source_is_rate is None:
+        urine_source_is_rate = normalized_database == "hirid"
     common_kwargs = {
         "crea_df": crea_df,
         "urine_df": urine_df,
@@ -233,7 +239,11 @@ def build_renal_aki_bundle(
         "weight_col": weight_col,
         "time_unit": time_unit,
     }
-    reference = apply_reference_aki(**common_kwargs)
+    reference = apply_reference_aki(
+        **common_kwargs,
+        urine_source_is_rate=urine_source_is_rate,
+        interval=interval,
+    )
     resolved_id, resolved_time = _component_keys(
         (crea_df, urine_df, rrt_df), id_col, time_col
     )
@@ -501,7 +511,11 @@ def apply_aki_profile(
     }
 
     if profile_id == _REFERENCE_PROFILE_ID:
-        result = _mimic_iv_profile(**kwargs).rename(
+        result = _mimic_iv_profile(
+            **kwargs,
+            urine_source_is_rate=urine_source_is_rate,
+            interval=interval,
+        ).rename(
             columns={
                 "aki_stage_creat": "aki_stage_creat_reference",
                 "aki_stage_uo": "aki_stage_uo_reference",
@@ -785,6 +799,8 @@ def _mimic_iv_profile(
     urine_col: str,
     weight_col: str,
     time_unit: Optional[str],
+    urine_source_is_rate: bool = False,
+    interval: Optional[pd.Timedelta] = None,
 ) -> pd.DataFrame:
     resolved_id, resolved_time = _component_keys(
         (crea_df, urine_df, rrt_df), id_col, time_col
@@ -820,6 +836,8 @@ def _mimic_iv_profile(
             urine_col=urine_col,
             weight_col=weight_col,
             time_unit=time_unit,
+            source_is_rate=urine_source_is_rate,
+            interval=interval,
         )
         result = result.merge(
             uo[[resolved_id, resolved_time, "aki_stage_uo"]],
