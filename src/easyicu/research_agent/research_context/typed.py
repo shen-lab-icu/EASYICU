@@ -1053,7 +1053,7 @@ _CONCEPT_LEVELS_CACHE: Dict[str, Optional[List[Any]]] = {}
 
 
 def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[Any]]:
-    """Return the concept dictionary's own closed factor levels, if it has one."""
+    """Return the concept owner's closed factor or logical value domain."""
 
     if not source_concept:
         return None
@@ -1062,11 +1062,14 @@ def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[
     levels: Optional[List[Any]] = None
     try:  # local import to avoid import-time cost / cycles, as icu_rules does
         from ...concept.loader import load_dictionary
+        from ...concept.export_metadata import concept_declares_event_status
 
         definition = load_dictionary().get(source_concept)
         raw = getattr(definition, "levels", None)
         if isinstance(raw, (list, tuple)) and raw:
             levels = list(raw)
+        elif concept_declares_event_status(source_concept, definition):
+            levels = [0, 1]
     except Exception:
         levels = None
     _CONCEPT_LEVELS_CACHE[source_concept] = levels
@@ -1134,6 +1137,11 @@ def declared_domain_for_variable(
                     list(range(lower_int, upper_int + 1)),
                     "declared_ordinal_integer_range",
                 )
+    transform = getattr(variable, "unit_normalization", None)
+    if transform and not _transform_preserves_concept_values(transform):
+        # A source event's status domain is not the domain of its timestamp,
+        # measurement count, or another derived quantity.
+        return None, None
     levels = _dictionary_declared_levels(getattr(variable, "source_concept", None))
     if levels:
         return levels, "declared_concept_dictionary_levels"
