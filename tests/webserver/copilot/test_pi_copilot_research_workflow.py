@@ -2794,6 +2794,59 @@ def test_plan_review_separates_system_proposals_from_user_authorization() -> Non
 
 
 @pytest.mark.parametrize(
+    ("code", "route", "requires_authorization", "old_decision_resolved"),
+    [
+        ("ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "runtime_capability", False, False),
+        ("OUTCOME_DEFINITION_UNRESOLVED", "study_authority_change", True, False),
+        ("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", "runtime_capability", False, True),
+    ],
+)
+def test_explicit_scientific_owner_is_not_reassigned_by_legacy_projection(
+    code, route, requires_authorization, old_decision_resolved, monkeypatch
+) -> None:
+    study = _complete_study()
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.plan_decisions.decision_is_resolved",
+        lambda study, decision_code: old_decision_resolved,
+    )
+    review = {
+        "status": "changes_required",
+        "findings": [{
+            "code": code, "remediation_route": route,
+            "requires_user_authorization": requires_authorization,
+            "authorization_question": "Review the changed endpoint scope?" if requires_authorization else None,
+        }],
+        "facts": {"remediation_buckets": {
+            # An old projection's duplicate must not override the typed owner.
+            "agent_plan_revision": [code], route: [code],
+        }},
+    }
+    if old_decision_resolved:
+        review["facts"]["remediation_buckets"]["study_authority_change"] = [code]
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run={
+            "run_type": "full", "run_id": "run-explicit-owner",
+            "budget_mode": "full_reviewed", "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked", "run_status": "human_review_pending",
+            "pending_review_reason_codes": ["plan_scientific_changes_required"],
+            "artifact_names": ["agent_plan.json", "scientific_plan_review.json"],
+        },
+        plan_review_authority={
+            "run_id": "run-explicit-owner", "resumable_here": True,
+            "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(study),
+            "scientific_plan_review": review,
+        },
+    )
+
+    summary = snapshot.plan_review_summary
+    assert summary is not None
+    assert summary["remediation_buckets"]["agent_plan_revision"] == []
+    assert summary["remediation_buckets"][route] == [code]
+    assert len(summary["authorization_questions"]) == int(requires_authorization)
+
+
+@pytest.mark.parametrize(
     ("plan_review_authority", "stored_digest", "expected_reason"),
     [
         (None, "", "plan_review_not_resumable"),

@@ -379,6 +379,26 @@ def build_research_workflow_snapshot(
     raw_remediation_buckets = (
         raw_remediation_buckets if isinstance(raw_remediation_buckets, Mapping) else {}
     )
+    remediation_routes = (
+        "agent_plan_revision", "runtime_capability", "study_authority_change",
+        "external_evidence", "independent_review",
+    )
+    explicit_routes = {
+        str(item.get("code") or "")[:120]: str(item.get("remediation_route"))
+        for item in review_findings[:40]
+        if isinstance(item, Mapping)
+        and str(item.get("code") or "").strip()
+        and str(item.get("remediation_route") or "") in remediation_routes
+    }
+    # Legacy proposal migration must not override a route already assigned by
+    # the scientific owner, or make one finding belong to two repair lanes.
+    legacy_proposal_codes = [
+        str(item.get("code") or "")[:120]
+        for item in review_findings[:40]
+        if isinstance(item, Mapping)
+        and str(item.get("code") or "") in _PLANNER_PROPOSAL_FINDING_CODES
+        and str(item.get("code") or "")[:120] not in explicit_routes
+    ]
     raw_revision_blockers = raw_facts.get("automatic_revision_blockers")
     raw_revision_blockers = raw_revision_blockers if isinstance(raw_revision_blockers, list) else []
     raw_study_authority_codes = raw_remediation_buckets.get(
@@ -392,6 +412,8 @@ def build_research_workflow_snapshot(
             else []
         )
         if str(code).strip()
+        and explicit_routes.get(str(code)[:120], "study_authority_change")
+        == "study_authority_change"
         and plan_decisions.decision_is_resolved(study_row, str(code))
     }
 
@@ -401,24 +423,22 @@ def build_research_workflow_snapshot(
             str(code)[:120]
             for code in (values if isinstance(values, list) else [])[:40]
             if str(code).strip()
+            and explicit_routes.get(str(code)[:120], route) == route
         ]
+        rows = list(dict.fromkeys([
+            *rows, *(code for code, owner in explicit_routes.items() if owner == route),
+        ]))[:40]
         if route == "study_authority_change":
             return [
                 code
                 for code in rows
-                if code not in _PLANNER_PROPOSAL_FINDING_CODES
+                if code not in legacy_proposal_codes
                 and code not in resolved_study_authority_codes
             ]
         if route == "agent_plan_revision":
-            proposal_codes = [
-                str(item.get("code") or "")[:120]
-                for item in review_findings[:40]
-                if isinstance(item, Mapping)
-                and str(item.get("code") or "") in _PLANNER_PROPOSAL_FINDING_CODES
-            ]
             return list(
                 dict.fromkeys(
-                    [*rows, *proposal_codes, *sorted(resolved_study_authority_codes)]
+                    [*rows, *legacy_proposal_codes, *sorted(resolved_study_authority_codes)]
                 )
             )[:40]
         return rows
@@ -478,20 +498,14 @@ def build_research_workflow_snapshot(
                 for item in review_findings[:40]
                 if isinstance(item, Mapping)
                 and bool(item.get("requires_user_authorization"))
-                and str(item.get("code") or "") not in _PLANNER_PROPOSAL_FINDING_CODES
+                and str(item.get("code") or "") not in legacy_proposal_codes
                 and str(item.get("code") or "")
                 not in resolved_study_authority_codes
                 and str(item.get("authorization_question") or "").strip()
             ],
             "remediation_buckets": {
                 route: projected_remediation_codes(route)
-                for route in (
-                    "agent_plan_revision",
-                    "runtime_capability",
-                    "study_authority_change",
-                    "external_evidence",
-                    "independent_review",
-                )
+                for route in remediation_routes
             },
         }
         if raw_scientific_review
