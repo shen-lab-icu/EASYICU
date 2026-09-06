@@ -47,6 +47,7 @@ from ..schema import (
     TableOneVariableSpec,
 )
 from ..research_context.typed import declared_domain_for_variable
+from ..contracts.table_one_semantics import validate_table_one_column_roles
 from .analysis_types import (
     canonical_analysis_family,
     get_analysis_type,
@@ -980,6 +981,18 @@ def _compile_table_one(
         step_index=step_index,
         path="table_one_variables",
     )
+    try:
+        validate_table_one_column_roles(
+            (group_by, *(item.name for item in row_intents)), context
+        )
+    except ValueError as exc:
+        raise _fail(
+            "progressive_table_one_semantic_role_ineligible",
+            str(exc),
+            step=step,
+            step_index=step_index,
+            path="table_one_variables",
+        ) from exc
     group_levels = closed_planning_levels_for(name=group_by, variables=dict(variables))
     if len(group_levels) < 2:
         raise _fail(

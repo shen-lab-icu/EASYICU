@@ -115,7 +115,11 @@ from ..reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
 )
-from ..research_context.outbound import format_outbound_safe_context
+from ..research_context.outbound import (
+    format_outbound_safe_context,
+    outbound_safe_context_payload,
+)
+from ..contracts.table_one_semantics import table_one_measurement_columns
 from ..schema import AnalysisPlan, ResearchContext
 from .progressive_payload import (
     parse_progressive_model as _parse_model,
@@ -1270,24 +1274,35 @@ class ProgressivePlannerAgent:
     ) -> list[dict[str, Any]]:
         selected = set(variables)
         variable_map = {variable.name: variable for variable in context.variables}
+        safe_cards = {
+            card["name"]: card
+            for card in outbound_safe_context_payload(
+                context, variable_names=variables
+            )["variables"]
+        }
+        measurement_columns = table_one_measurement_columns(context)
         cards = []
         for variable in context.variables:
             if variable.name not in selected:
                 continue
-            card = variable.model_dump(
-                mode="json",
-                include={
+            card = {
+                key: value
+                for key, value in safe_cards[variable.name].items()
+                if key in {
                     "name",
                     "role",
                     "dtype",
                     "source_concept",
                     "derived_from_concepts",
-                },
-            )
-            for field in ("analysis_window", "analysis_window_role"):
-                value = getattr(variable, field)
-                if value is not None:
-                    card[field] = value
+                    "materialized_representation",
+                    "analysis_window",
+                    "analysis_window_role",
+                }
+            }
+            if variable.name in measurement_columns:
+                card["table_one_restriction"] = (
+                    "measurement_audit_only_unless_question_anchor"
+                )
             observed_levels = observed_levels_for(
                 name=variable.name,
                 variables=variable_map,
@@ -1556,7 +1571,12 @@ class ProgressivePlannerAgent:
             "association additionally needs an executable temporal design; "
             "mentioning landmark in prose does not implement one. "
             "Identity/index fields are lineage coordinates, not clinical "
-            "Table 1 rows or strata. A baseline-context step should select "
+            "Table 1 rows or strata. Fields with table_one_restriction belong "
+            "in measurement_audit, not Table 1: observation counts and "
+            "availability flags are not their source clinical value. An "
+            "explicitly bound measurement-process question anchor is the "
+            "only exception, not an optional baseline choice. A "
+            "baseline-context step should select "
             "available clinically interpretable descriptors; exposure/outcome "
             "columns alone do not describe baseline population composition.",
             (
@@ -2234,6 +2254,22 @@ class ProgressivePlannerAgent:
                     step_index=index,
                     path="variable_names",
                 )
+            if step.module_id == "table_one" and article_context is not None:
+                measurement = sorted(
+                    set(step.variable_names)
+                    & table_one_measurement_columns(article_context)
+                )
+                if measurement:
+                    raise ProgressivePlanCompileError(
+                        "progressive_table_one_measurement_metadata_ineligible",
+                        "Table 1 cannot select auxiliary measurement metadata "
+                        f"{measurement!r} as clinical baseline descriptors; "
+                        "keep these fields in measurement_audit and select "
+                        "clinical-value representations from the retrieved roster",
+                        step_id=step.step_id,
+                        step_index=index,
+                        path="variable_names",
+                    )
             if step.module_id == "exposure_outcome_distribution" and (
                 closed_domains is not None
                 and (
