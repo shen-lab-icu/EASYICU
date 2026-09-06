@@ -217,7 +217,7 @@ _FAMILY_PATTERNS: Tuple[Tuple[str, str], ...] = (
 # "I am NOT studying death, my outcome is AKI" must not read `death`. Without
 # this, a user's correction becomes the very thing they corrected.
 _NEGATION = re.compile(
-    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|并非|而非|非|无关|别)"
+    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|不(?:研究|分析|考虑|比较)|并非|而非|非|无关|别)"
     r"[\s\S]{0,16}$",
     re.IGNORECASE,
 )
@@ -236,6 +236,10 @@ def _negated(text: str, start: int) -> bool:
     for sep in (". ", "; ", "。", "；", "?", "？"):
         if sep in window:
             window = window.rsplit(sep, 1)[1]
+    # "非 X 患者的死亡" names a negative-exposure population, not a negated
+    # outcome. Close that noun phrase's scope while retaining any subsequent
+    # explicit negation such as "非 X 患者中，不研究死亡".
+    window = re.sub(r"非[^，,。；;?？]{1,20}?(?:患者|人群|病人)", "", window)
     return bool(_NEGATION.search(window))
 
 
