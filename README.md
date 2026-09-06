@@ -212,7 +212,7 @@ The **Time Series** sub-tab supports Clinical Lanes (multi-feature dashboard wit
 
 ### Cohort Statistics
 
-The **Cohort Statistics** tab produces subgroup contrast tables (with p-values and SMD), coverage & eligibility audit, a one-page cohort snapshot, and SOFA-1 vs SOFA-2 sensitivity analysis — all powered by the prepared demo or real-data state. The Baseline Characteristics table below shows per-module values for the contrasted groups with significance flags (balanced / mild / large).
+The native **Cohort Statistics** view provides descriptive aggregates, coverage and eligibility review, a cohort snapshot, and SOFA-1 versus SOFA-2 reclassification when the required registered source modules are available. Generic group-comparison p-values, standardized mean differences (SMD), confidence intervals, and matched analyses are currently withheld by the native Cohort Review backend. The audited Kaplan–Meier module supports log-rank testing only when suitable timed outcomes are present. Demo displays and the illustration below do not establish that a statistic is available or reportable for a real project; check the source-specific capability status shown by the application.
 
 ![Cohort Statistics](docs/images/04_cohort_statistics.jpg)
 
@@ -228,7 +228,7 @@ EasyICU's main interface is organized as 5 top-level tabs:
 
 - **Tutorial** — data-preparation workflow guide (data source → cohort → concepts → export) shown on the leftmost tab so first-time users can find it without leaving the main pane; also reachable via the sidebar "📚 Workflow Help" button.
 - **Patient Review** — data tables, time-series review with clinical thresholds, per-patient overview, and data-quality audit (missingness / out-of-physio / temporal integrity).
-- **Cohort Statistics** — subgroup contrast tables (with p-values and SMD), coverage & eligibility audit, cohort one-page snapshot, and SOFA-1 vs SOFA-2 sensitivity analysis.
+- **Cohort Statistics** — registered-source descriptive aggregates, coverage and eligibility review, a cohort snapshot, and SOFA-1 versus SOFA-2 reclassification when both modules are available. Generic group p-values, SMD, intervals, and matched analyses remain unsupported in this view.
 - **Cross-DB Benchmark** — harmonized feature-distribution comparison across multiple ICU databases (kept separate because it needs raw schema for ≥ 2 databases).
 - **Research Agent** — optional analysis-and-manuscript scaffolding driven by a research question; includes a built-in deterministic replication runner for paper reproduction.
 

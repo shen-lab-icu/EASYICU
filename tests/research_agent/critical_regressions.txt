@@ -1,0 +1,9 @@
+tests/research_agent/core/test_run_heartbeat.py
+tests/research_agent/authority/test_scientific_claim_authority.py
+tests/research_agent/authority/test_scientific_claim_intervals.py
+tests/research_agent/core/test_scientific_claim_registry.py
+tests/research_agent/reporting/test_manuscript_claim_policy.py
+tests/research_agent/reporting/test_findings_prose_admission.py
+tests/research_agent/figures/test_distribution_confidence_projection.py
+tests/research_agent/figures/test_typed_distribution_panels.py
+tests/governance/test_research_agent_critical_ci.py
