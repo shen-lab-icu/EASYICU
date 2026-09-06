@@ -76,6 +76,7 @@ _QUALITATIVE_SCIENTIFIC_ASSERTION_RE = re.compile(
     r"\b(?:independently\s+)?associated\s+with\b|"
     r"\b(?:no\s+(?:clear\s+)?)?association\s+with\b|"
     r"\bcorrelat(?:ed|es|ing)\s+with\b|"
+    r"\b(?:caus(?:e|ed|es|ing)|prevent(?:ed|s|ing)?)\b|"
     r"\bpredict(?:ed|s|ing)\b|"
     r"\b(?:higher|lower|greater|less|elevated|unchanged|similar)\b|"
     r"\b(?:increas(?:e|ed|es|ing)|decreas(?:e|ed|es|ing)|"
@@ -102,6 +103,7 @@ _MANUSCRIPT_METADATA_PREFIX_RE = re.compile(
 _KEYWORD_ASSERTION_VERB_RE = re.compile(
     r"\b(?:associated\s+with|correlat(?:ed|es|ing)\s+with|predict(?:ed|s|ing)|"
     r"conferred|fared|experienced|adversely\s+affect(?:ed|s|ing)|"
+    r"caus(?:e|ed|es|ing)|prevent(?:ed|s|ing)?|"
     r"was|were|had|showed|demonstrated)\b",
     re.I,
 )
@@ -136,6 +138,115 @@ _HEADING_RESULT_VERB_RE = re.compile(
 )
 _RESULTS_HEADING_RE = re.compile(r"^##\s+results\s*$", re.I | re.MULTILINE)
 _NEXT_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
+
+# Findings have a closed admission grammar. The qualitative word list remains
+# a diagnostic defence for other prose; it is not the authority for deciding
+# that an arbitrary sentence in Results is safe just because no word matched.
+_FINDINGS_HEADINGS = frozenset({
+    "results", "findings", "results and discussion", "mortality results", "abstract", "conclusion",
+    "conclusions", "figure legends", "figure captions", "table legends",
+    "table captions", "结果", "研究结果", "摘要", "结论", "图注", "表注",
+})
+_CONTEXT_HEADINGS = frozenset({
+    "introduction", "background", "methods", "materials and methods",
+    "methods and analysis", "discussion", "limitations", "references",
+    "data availability", "data and code availability", "code availability",
+    "funding", "conflicts of interest", "acknowledgments", "ethics approval",
+    "背景", "引言", "方法", "讨论", "局限性", "参考文献",
+})
+_RESULT_STRUCTURE_HEADINGS = _FINDINGS_HEADINGS | frozenset({
+    "cohort", "cohort construction", "cohort characteristics", "primary outcome",
+    "primary association", "primary model", "model performance", "missingness",
+    "sensitivity analyses", "subgroup analyses", "sensitivity and subgroup analyses",
+    "robustness", "icu-specific quality control", "calibration", "discrimination",
+})
+RESULT_ORGANIZATION_SENTENCES = (
+    "This study describes baseline characteristics.",
+    "This section explains the prespecified study design.",
+    "Context for the analysis is described here.",
+    "The prespecified analysis was performed.",
+    "Independent validation is required.",
+)
+SCIENTIFIC_CLAIM_WRITER_RULES = (
+    "SCIENTIFIC CLAIM RULE:\n"
+    "- The machine digest may contain a `host-authorized scientific claims` "
+    "block. For any current-study direction, comparison, or qualitative "
+    "interpretation covered by that block, output the exact "
+    "`{claim:<step>.<claim>}` token as the complete standalone sentence.\n"
+    "- Do not paraphrase a host claim and do not replace `{claim:...}` with "
+    "`{evidence:...}`. Evidence citations authorize numeric facts; they do not "
+    "authorize independently worded scientific conclusions.\n"
+    "- A claim token cannot be attached to a heading, label, or other prose. "
+    "If no exact host claim applies, omit the qualitative assertion.\n"
+    "- Results, Abstract results, Conclusion and figure/table captions admit "
+    "complete claim tokens, cited neutral numeric facts, and registered display "
+    "callouts such as `See Table 1 {evidence:table_one}.` Use the requested "
+    "structural subsection headings. Do not add free-form finding sentences or "
+    "claim-bearing headings, even with an evidence or literature citation. "
+    "Preserve the supplied confidence level; never assume 95%. For neutral "
+    "organization, these sentences are allowed: "
+    + " ".join(RESULT_ORGANIZATION_SENTENCES)
+    + "\n\n"
+)
+_ABSTRACT_LABEL_RE = re.compile(
+    r"^\s*(?:\*\*)?(?P<label>background|methods|results|findings|conclusions?)"
+    r"\s*:(?:\*\*)?\s*(?P<body>.*)$", re.I,
+)
+_CAPTION_LABEL_RE = re.compile(
+    r"^\s*(?:\*\*)?(?:figure|table)\s+S?\d+[a-z]?[.:]?(?:\*\*)?\s*", re.I,
+)
+_RESULT_NUMBER_RE = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+# Only noninterpretive statistical vocabulary is admitted around numbers.
+# Novel scientific descriptions use a registered claim or remain in the
+# evidence table; a valid numeric citation cannot authorize arbitrary verbs.
+_RESULT_FACT_WORDS = frozenset("""
+    the a an of in at for and with from to versus was were is are
+    cohort analysis model included comprised contained patients participants
+    admissions stays observations rows total n sample size events deaths
+    observed overall hospital icu in-hospital mortality incidence prevalence
+    absolute risk event rate percentage percent points mean median age years
+    days hours minutes sd iqr range standard deviation error ci confidence
+    interval adjusted unadjusted odds ratio hazard coefficient or hr rr auc
+    auroc auprc brier score sensitivity specificity accuracy precision recall
+    calibration discrimination intercept slope p value estimate estimates
+    male males female females sex count counts missing missingness
+    restricted survival time rmst horizon exposed comparator reference comparison
+    difference differences signed interval-specific baseline follow-up group groups
+    level levels stratum strata trend test log-rank wald adjusted unadjusted
+    length stay los medians iqrs continuous binary ordinal outcome outcomes
+    cluster clusters clustering rand index ari silhouette entropy bic aic
+    akaike bayesian information criterion criteria standardized e-value
+""".split())
+
+
+def _normalized_heading(value: str) -> str:
+    value = re.sub(r"\s+#+\s*$", "", value.strip()).strip("*_` :：")
+    return re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", value).casefold()
+
+
+def _neutral_findings_text(sentence: str) -> bool:
+    plain = _VALID_EVIDENCE_TOKEN_RE.sub(
+        "", _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
+    ).strip()
+    label = _ABSTRACT_LABEL_RE.match(plain)
+    if label is not None:
+        plain = label.group("body").strip()
+        if not plain:
+            return True
+    plain = _CAPTION_LABEL_RE.sub("", plain).strip()
+    plain = re.sub(r"\s+([.,;:!?])", r"\1", plain)
+    if not plain or plain in RESULT_ORGANIZATION_SENTENCES:
+        return True
+    if re.fullmatch(
+        r"(?:See|Reported in|As shown in) (?:Table|Figure) S?\d+[a-z]?"
+        r"(?: and (?:Table|Figure) S?\d+[a-z]?)?[.!]?", plain, re.I,
+    ):
+        return True
+    if _RESULT_NUMBER_RE.search(plain) is None:
+        return False
+    residue = _RESULT_NUMBER_RE.sub(" ", plain)
+    words = re.findall(r"[^\W\d_]+(?:-[^\W\d_]+)*", residue.casefold())
+    return bool(words) and all(word in _RESULT_FACT_WORDS for word in words)
 
 
 def _looks_manuscript_metadata_sentence(sentence: str) -> bool:
@@ -431,6 +542,9 @@ def filter_evidence_bound_scaffold(
     unsupported_scientific_claims: list[str] = []
     filtered_claims: list[str] = []
     filtered_lines: list[str] = []
+    findings_depth: int | None = None
+    in_abstract = False
+    abstract_findings = True
     for raw_line in scaffold.splitlines():
         line = raw_line.rstrip()
         stripped = line.strip()
@@ -441,12 +555,45 @@ def filter_evidence_bound_scaffold(
         heading_prefix, heading_content = _split_markdown_heading_prefix(content)
         heading_requires_claim = False
         if heading_prefix:
-            if not _heading_requires_evidence(heading_content):
+            name = _normalized_heading(heading_content)
+            depth = heading_prefix.count("#")
+            if (
+                in_abstract and findings_depth is not None and depth > findings_depth
+                and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
+            ):
+                abstract_findings = name not in {"background", "methods"}
+            elif name in _FINDINGS_HEADINGS:
+                findings_depth = depth
+                in_abstract = name in {"abstract", "摘要"}
+                abstract_findings = True
+            elif (
+                findings_depth is not None and depth <= findings_depth
+                and name in _CONTEXT_HEADINGS
+            ):
+                findings_depth = None
+                in_abstract = False
+            restricted_heading = (
+                findings_depth is not None and name not in _RESULT_STRUCTURE_HEADINGS
+                and not (in_abstract and name in _CONTEXT_HEADINGS)
+                and _CAPTION_LABEL_RE.fullmatch(heading_content) is None
+            )
+            if not restricted_heading and not _heading_requires_evidence(heading_content):
                 filtered_lines.append(line)
                 continue
             heading_requires_claim = True
             structure_prefix += heading_prefix
             content = heading_content
+        abstract_label = _ABSTRACT_LABEL_RE.match(content)
+        if in_abstract and abstract_label is not None:
+            abstract_findings = abstract_label.group("label").casefold() not in {
+                "background", "methods"
+            }
+        restricted_line = bool(
+            (findings_depth is not None and (not in_abstract or abstract_findings))
+            or (abstract_label is not None and abstract_label.group("label").casefold()
+                in {"results", "findings", "conclusion", "conclusions"})
+            or _CAPTION_LABEL_RE.match(content)
+        )
         if not content.strip():
             filtered_lines.append(line)
             continue
@@ -473,11 +620,22 @@ def filter_evidence_bound_scaffold(
             and not _looks_qualitative_scientific_assertion(sentences[0])
             and not _contains_malformed_authority_placeholder(sentences[0])
             and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentences[0]) is None
+            and (not restricted_line or _neutral_findings_text(sentences[0]))
         ):
             filtered_lines.append(line)
             continue
         kept: list[str] = []
         for sentence in sentences:
+            literature_background = bool(
+                not restricted_line
+                and _has_nonnumeric_literature_context(sentence)
+                and re.match(
+                    r"^(?:Prior|Previous|Published) (?:studies|research|work)\b",
+                    sentence, re.I,
+                )
+                and re.search(r"\b(?:our|we|this study|present study)\b", sentence, re.I)
+                is None
+            )
             canonical_claim = _canonical_duplicate_claim_token(
                 sentence,
                 resolve_claim=resolve_claim,
@@ -505,7 +663,12 @@ def filter_evidence_bound_scaffold(
                 continue
             if _SCIENTIFIC_CLAIM_TOKEN_RE.search(
                 sentence
-            ) or _looks_qualitative_scientific_assertion(sentence):
+            ) or (
+                _looks_qualitative_scientific_assertion(sentence)
+                and not literature_background
+            ) or (
+                restricted_line and not _neutral_findings_text(sentence)
+            ):
                 rejected = sentence.strip()
                 unsupported_scientific_claims.append(rejected)
                 filtered_claims.append(rejected)
@@ -584,6 +747,7 @@ def expand_scientific_claim_tokens(
 
 
 __all__ = [
+    "SCIENTIFIC_CLAIM_WRITER_RULES",
     "ScaffoldPolicyResult",
     "ScientificClaimExpansion",
     "ScientificClaimPlacement",
