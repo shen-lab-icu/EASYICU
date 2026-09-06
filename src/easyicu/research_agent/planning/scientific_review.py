@@ -34,6 +34,7 @@ from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
+from ..contracts.scientific_runtime_ownership import has_scientific_runtime_owner
 from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
@@ -162,6 +163,9 @@ def planned_model_outcomes(
     Count those context-declared outcome inputs as coverage rather than forcing
     the Planner to invent a duplicate conventional model solely to satisfy the
     review projection.
+    Native signed spline and longitudinal owners bind the context's primary
+    endpoint without conventional model requirements. Their owner marker is
+    a routing coordinate, not signature verification or execution authority.
     """
 
     if plan is None:
@@ -179,6 +183,22 @@ def planned_model_outcomes(
                     continue
                 if descriptor.name not in values:
                     values.append(descriptor.name)
+        if (
+            context is not None
+            and _method_head(step) in {
+                "signed_landmark_restricted_cubic_spline",
+                "time_varying_exposure_model",
+            }
+            and has_scientific_runtime_owner(step)
+            and context.target_outcome in step.inputs
+        ):
+            descriptor = context.variable(str(context.target_outcome or ""))
+            if (
+                descriptor is not None
+                and descriptor.role.value == "outcome"
+                and descriptor.name not in values
+            ):
+                values.append(descriptor.name)
     return tuple(values)
 
 
