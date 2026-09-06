@@ -618,7 +618,10 @@ def _metadata_only_planning_coordinates(
         build_database_capability_catalog,
     )
     from easyicu.research_agent.contracts.endpoint import EndpointSpec
-    from easyicu.webserver.study_intent import deterministic_intent
+    from easyicu.webserver.study_intent import (
+        deterministic_intent,
+        explicit_exposure_aggregation,
+    )
 
     intent = deterministic_intent(question)
     raw_slots = intent.get("slots")
@@ -636,6 +639,10 @@ def _metadata_only_planning_coordinates(
 
     target_outcome = named_concept("outcome")
     primary_exposure = named_concept("exposure")
+    exposure_operation = (
+        explicit_exposure_aggregation(question, concept_id=primary_exposure)
+        if primary_exposure else None
+    )
     endpoint = None
     outcome_type = slots.get("outcome_type")
     outcome_type = outcome_type if isinstance(outcome_type, Mapping) else {}
@@ -656,6 +663,9 @@ def _metadata_only_planning_coordinates(
     return {
         "target_outcome": target_outcome,
         "primary_exposure": primary_exposure,
+        "primary_exposure_aggregation": (
+            exposure_operation.aggregation if exposure_operation is not None else None
+        ),
         "endpoint": endpoint,
         "source": "explicit_user_text_plus_database_capability",
         "execution_authorized": False,

@@ -206,6 +206,22 @@ def test_candidate_plan_projects_preconfirmed_patient_grouping_metadata(
     assert scientific.patient_grouping is grouping
 
 
+def test_candidate_plan_binds_question_operation_without_mutating_study() -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    study = {
+        "id": "study-1",
+        "question": "研究成人 ICU 患者前24小时最高乳酸与院内死亡",
+        "data_source": {"database": "miiv"},
+    }
+    request = replace(_request(), study_context=study)
+    result = preparation._prepare_scientific_launch(request)
+    assert result.metadata_only_planning is True
+    assert result.metadata_planning_coordinates["primary_exposure_aggregation"] == "max"
+    assert "lact_max" in result.metadata_operationalized_columns
+    assert "execution_concepts" not in study
+
+
 def test_preparation_compiles_three_frozen_states_in_authority_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

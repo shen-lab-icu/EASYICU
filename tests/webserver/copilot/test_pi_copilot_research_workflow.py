@@ -581,9 +581,11 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     assert "primary_model" in authority.contract
 
 
+@pytest.mark.parametrize("configured_operation", [True, False])
 def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    configured_operation: bool,
 ) -> None:
     study = _complete_study()
     study.update(
@@ -600,6 +602,8 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
         }
     )
     source_run_id = "run-derived-candidate"
+    if not configured_operation:
+        study["execution_concepts"].pop("primary_exposure_aggregation")
     project_dir = tmp_path / "candidate-wrapper"
     inner_run = project_dir / "pipeline" / source_run_id
     inner_run.mkdir(parents=True)
@@ -689,6 +693,7 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
         "_metadata_only_planning_coordinates",
         lambda **_kwargs: {
             "primary_exposure": "lact",
+            "primary_exposure_aggregation": "max",
             "target_outcome": "death",
         },
     )
@@ -703,6 +708,7 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
 
     assert authority is not None
     assert authority.primary_exposure == "lact_max"
+    assert authority.primary_exposure_aggregation == "max"
     assert authority.target_outcome == "death"
     assert authority.outcome_concepts == ("los_icu", "death")
 
@@ -1821,11 +1827,13 @@ def test_metadata_only_planning_ignores_unmapped_display_labels(
 
 @pytest.mark.parametrize("multiple_outcomes", [False, True])
 @pytest.mark.parametrize("requested_changes", [False, True])
+@pytest.mark.parametrize("named_operation", [False, True])
 def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     multiple_outcomes: bool,
     requested_changes: bool,
+    named_operation: bool,
 ) -> None:
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -1933,6 +1941,10 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     }
     if multiple_outcomes:
         study["question"] += " Also assess ICU length of stay."
+    if named_operation:
+        study["question"] = "Is the first 24-hour peak lactate associated with hospital death?" + (
+            " Also assess ICU length of stay." if multiple_outcomes else ""
+        )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(prepared),
         study_context=study,
@@ -1965,6 +1977,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "cohort_columns": [
             "stay_id",
             "patient_stay_id",
+            *(["lact_max"] if named_operation else []),
             "lact",
             "sep3",
             "death",
@@ -1996,7 +2009,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "cohort_authority_path": None,
         "id_columns": ["patient_stay_id"],
         "target_outcome": "death",
-        "primary_exposure": "sep3",
+        "primary_exposure": "lact_max" if named_operation else "sep3",
         "outcome_columns": ("death", "los_icu") if multiple_outcomes else ("death",),
         "endpoint": {
             "name": "death",

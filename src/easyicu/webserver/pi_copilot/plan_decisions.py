@@ -92,20 +92,47 @@ def _source_coordinate(materialized: Any, *, field: str) -> tuple[str, str | Non
 
 
 def _agent_primary_source_coordinate(
-    materialized: Any, *, fixed_window: bool
+    materialized: Any, *, fixed_window: bool, study: Mapping[str, Any],
 ) -> tuple[str, str | None]:
     """Resolve one Agent-selected exposure through case-neutral ICU policy.
 
-    A structured Plan may name the row-level concept while selecting a fixed
-    observation window.  When the concept owner declares ``max_or_last`` as
-    its default family, the existing acquisition policy prefers ``max``.  The
-    compiler makes that same deterministic choice explicit in StudyContext.
-    Other ambiguous families remain unset and fail closed at materialization.
+    A structured Plan may still name a row-level concept. Preserve an exact
+    operation from the plan coordinate, existing configuration, or a directly
+    named measurement in the research question; disagreement fails closed.
+    Only an otherwise unbound fixed-window ordinal proposal uses the existing
+    ``max_or_last`` owner default. A table-summary default such as median/IQR
+    must never substitute for a requested maximum measurement.
     """
+
+    from easyicu.webserver.study_intent import explicit_exposure_aggregation
 
     concept, aggregation = _source_coordinate(
         materialized, field="primary exposure"
     )
+    configuration = ScientificConfiguration.inspect(study)
+    existing = (
+        configuration.primary_exposure_aggregation()
+        if configuration.executable_primary_exposure() == concept else None
+    )
+    question = str(study.get("question") or "").strip()
+    requested = (
+        explicit_exposure_aggregation(question, concept_id=concept)
+        if question else None
+    )
+    operations = {
+        value for value in (
+            aggregation, existing,
+            requested.aggregation if requested is not None else None,
+        ) if value
+    }
+    if len(operations) > 1:
+        raise PlanDecisionError(
+            "agent_plan_exposure_aggregation_conflict",
+            "The plan's exposure operation conflicts with its bound question or configuration.",
+            details={"concept": concept, "operations": sorted(operations)},
+        )
+    if operations:
+        return concept, next(iter(operations))
     if aggregation is not None or not fixed_window:
         return concept, aggregation
     hint = classify_variable(concept, "float64")
@@ -375,7 +402,7 @@ def compile_agent_plan_configuration(
         and _fixed_24h_landmark_candidate(agent_plan, study)
     )
     exposure, aggregation = _agent_primary_source_coordinate(
-        coordinates["exposure_materialized"], fixed_window=fixed_window
+        coordinates["exposure_materialized"], fixed_window=fixed_window, study=study,
     )
     outcome, _outcome_aggregation = _source_coordinate(
         coordinates["outcome_materialized"], field="outcome"
