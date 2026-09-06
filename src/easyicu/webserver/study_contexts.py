@@ -985,13 +985,8 @@ def normalize_execution_concepts(value: Any) -> Dict[str, Any]:
     return result
 
 
-def normalize_analysis_design(value: Any) -> Dict[str, str]:
-    """Normalize user-approved sampling and variance commitments.
-
-    StudyContext owns this scientific intent.  A data-source adapter may later
-    bind ``cluster_unit`` to a private physical coordinate, but neither the
-    browser nor Pi is allowed to guess that coordinate from prose.
-    """
+def _normalize_analysis_design_shape(value: Any) -> Dict[str, str]:
+    """Read structural coordinates without granting scientific compatibility."""
 
     if value is None:
         return {}
@@ -1095,21 +1090,29 @@ def normalize_analysis_design(value: Any) -> Dict[str, str]:
                 "field": "analysis_design.cluster_unit",
             }
         )
-    from easyicu.research_agent.contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
-
-    try:
-        validate_analysis_family_ceiling(analysis_family=analysis_family, variance_estimator=variance_estimator)
-    except AnalysisDesignConflict as exc:
-        raise StudyContextError({
-            "error": exc.code, "field": "analysis_design",
-            "remediation_route": "agent_plan_revision", "requires_user_authorization": False,
-        }) from exc
     return {
         **({"analysis_family": analysis_family} if analysis_family else {}),
         "analysis_unit": analysis_unit,
         "variance_estimator": variance_estimator,
         **({"cluster_unit": cluster_unit} if cluster_unit else {}),
     }
+
+
+def normalize_analysis_design(value: Any) -> Dict[str, str]:
+    """Validate new configuration; reading an old project grants no authority."""
+    from easyicu.research_agent.contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
+
+    design = _normalize_analysis_design_shape(value)
+    try:
+        validate_analysis_family_ceiling(
+            analysis_family=design.get("analysis_family"), variance_estimator=design.get("variance_estimator", "")
+        )
+    except AnalysisDesignConflict as exc:
+        raise StudyContextError({
+            "error": exc.code, "field": "analysis_design",
+            "remediation_route": "agent_plan_revision", "requires_user_authorization": False,
+        }) from exc
+    return design
 
 
 def normalize_sensitivity_specs(value: Any) -> List[Dict[str, Any]]:
@@ -1517,10 +1520,15 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         _enforce_context_budget(row)
         _reject_row_level_metadata(row)
         patch = _sanitize_patch(
-            {field: row[field] for field in _CONTEXT_FIELDS if field in row},
+            {field: row[field] for field in _CONTEXT_FIELDS if field in row and field != "analysis_design"},
             allow_literature_authority=True,
             allow_cohort_eligibility_authority=True,
         )
+        if "analysis_design" in row:
+            # Historical contradictions must stay inspectable, not break the
+            # project list or disappear through a fallback. New writes and
+            # execution independently enforce the current semantic contract.
+            patch["analysis_design"] = _normalize_analysis_design_shape(row["analysis_design"])
         context_id = patch.pop("id")
         created_at = (
             _text(row.get("created_at"), field="created_at", max_length=64) or _now()

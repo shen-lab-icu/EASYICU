@@ -63,6 +63,21 @@ def test_descriptive_counts_and_prediction_model_design_remain_distinct_valid_ch
         assert normalize_analysis_design(design) == design
 
 
+def test_historical_conflict_remains_readable_without_becoming_valid():
+    from copy import deepcopy
+    from easyicu.webserver.study_contexts import _contexts_from_raw
+
+    design = {"analysis_family": "prediction_model", "analysis_unit": "icu_stay", "variance_estimator": "none_counts_only"}
+    raw = {"contexts": [{"id": "study_historical", "analysis_design": design}, {"id": "study_valid"}]}
+    before = deepcopy(raw)
+    contexts = _contexts_from_raw(raw)
+    assert len(contexts) == 2
+    assert contexts[0]["analysis_design"] == design
+    assert raw == before
+    with pytest.raises(StudyContextError):
+        normalize_analysis_design(contexts[0]["analysis_design"])
+
+
 def test_safe_failure_projection_keeps_lower_owner_without_private_text():
     from easyicu.webserver.agent_pipeline_runs import (
         _pipeline_failure_code,
