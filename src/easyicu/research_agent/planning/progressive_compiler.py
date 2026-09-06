@@ -1143,69 +1143,68 @@ def _compile_distribution(
         # Study authority or the shared source-bound ceiling forbids uncertainty
         # and effect contrasts. Compile only the observed denominators, counts, and
         # proportions; model-supplied contrast indexes carry no authority.
-        return ExposureOutcomeDistributionSpec(
-            schema_version="easyicu.exposure_outcome_distribution/3",
-            exposure=exposure,
-            exposure_levels=list(exposure_levels),
-            outcome=outcome,
-            outcome_levels=list(outcome_levels),
-            outcome_positive_value=event,
-            level_match_policy="exact_typed",
-            denominator_policy=step.denominator_policy,
-            missing_exposure_policy=missing_exposure_policy,
-            missing_outcome_policy=step.missing_outcome_policy,
-            undeclared_outcome_policy="fail_closed",
-            interval_method="none_counts_only",
-            repeated_unit_interval_method=None,
-            risk_difference_contrast=None,
-            dependence=None,
-            confidence_level=None,
-        )
-    reference = _level_at(
-        exposure_levels,
-        step.reference_exposure_level_index,
-        label="reference_exposure_level_index",
-        step=step,
-        step_index=step_index,
-    )
-    comparison = _level_at(
-        exposure_levels,
-        step.comparison_exposure_level_index,
-        label="comparison_exposure_level_index",
-        step=step,
-        step_index=step_index,
-    )
-    if step.reference_exposure_level_index == step.comparison_exposure_level_index:
-        raise _fail(
-            "progressive_distribution_contrast_not_distinct",
-            "risk-difference comparison and reference levels must differ",
+        inference_options: dict[str, Any] = {
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "risk_difference_contrast": None,
+            "dependence": None,
+            "confidence_level": None,
+        }
+    else:
+        reference = _level_at(
+            exposure_levels,
+            step.reference_exposure_level_index,
+            label="reference_exposure_level_index",
             step=step,
             step_index=step_index,
-            path="comparison_exposure_level_index",
         )
-    try:
-        return ExposureOutcomeDistributionSpec(
-            schema_version="easyicu.exposure_outcome_distribution/2",
-            exposure=exposure,
-            exposure_levels=list(exposure_levels),
-            outcome=outcome,
-            outcome_levels=list(outcome_levels),
-            outcome_positive_value=event,
-            level_match_policy="exact_typed",
-            denominator_policy=step.denominator_policy,
-            missing_exposure_policy=missing_exposure_policy,
-            missing_outcome_policy=step.missing_outcome_policy,
-            undeclared_outcome_policy="fail_closed",
-            interval_method="wilson",
-            repeated_unit_interval_method="patient_cluster_robust_wald",
-            risk_difference_contrast=ExposureOutcomeRiskDifferenceContrast(
+        comparison = _level_at(
+            exposure_levels,
+            step.comparison_exposure_level_index,
+            label="comparison_exposure_level_index",
+            step=step,
+            step_index=step_index,
+        )
+        if step.reference_exposure_level_index == step.comparison_exposure_level_index:
+            raise _fail(
+                "progressive_distribution_contrast_not_distinct",
+                "risk-difference comparison and reference levels must differ",
+                step=step,
+                step_index=step_index,
+                path="comparison_exposure_level_index",
+            )
+        inference_options = {
+            "schema_version": "easyicu.exposure_outcome_distribution/2",
+            "interval_method": "wilson",
+            "repeated_unit_interval_method": "patient_cluster_robust_wald",
+            "risk_difference_contrast": ExposureOutcomeRiskDifferenceContrast(
                 reference_exposure_level=reference,
                 comparison_exposure_level=comparison,
             ),
-            confidence_level=step.confidence_level,
+            "confidence_level": step.confidence_level,
+        }
+    # Both ceilings share the same typed denominator/missingness owner and
+    # targeted repair lane. A counts-only plan must not bypass that lane by
+    # leaking a raw schema exception or silently changing its chosen denominator.
+    try:
+        return ExposureOutcomeDistributionSpec(
+            exposure=exposure,
+            exposure_levels=list(exposure_levels),
+            outcome=outcome,
+            outcome_levels=list(outcome_levels),
+            outcome_positive_value=event,
+            level_match_policy="exact_typed",
+            denominator_policy=step.denominator_policy,
+            missing_exposure_policy=missing_exposure_policy,
+            missing_outcome_policy=step.missing_outcome_policy,
+            undeclared_outcome_policy="fail_closed",
+            **inference_options,
         )
     except ValidationError as exc:
-        finding = exc.errors(include_input=False)[0]
+        finding = exc.errors(
+            include_input=False, include_context=False, include_url=False
+        )[0]
         field = ".".join(str(value) for value in finding["loc"])
         raise _fail(
             "progressive_distribution_spec_invalid",
