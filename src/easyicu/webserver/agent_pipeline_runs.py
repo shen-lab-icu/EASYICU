@@ -80,6 +80,7 @@ from easyicu.webserver.research_launch_resume import (
     _slug,
 )
 from easyicu.webserver.research_launch_runtime import _submission_profile_ref
+from easyicu.webserver.study_intent import explicit_outcome_concepts
 from easyicu.webserver.research_launch_scientific import (
     _analysis_requires_longitudinal_trajectory,
     _cohort_window,
@@ -1479,6 +1480,22 @@ def _resolve_materialized_outcome_columns(
             },
         )
     return tuple(resolved)
+
+
+def _resolve_planning_outcome_columns(
+    *, source_concepts: Sequence[str], acquisition: Any
+) -> tuple[str, ...]:
+    """Bind intent to a zero-row catalog, not to patient-data availability."""
+
+    selected = set(acquisition.selection.selected_concepts)
+    requested = tuple(dict.fromkeys(source_concepts))
+    if not set(requested).issubset(selected):
+        raise ResearchPipelineRunError(
+            "research_pipeline_plan_outcome_catalog_unavailable",
+            "An explicitly requested outcome is absent from the planning catalog.",
+            details={"missing_source_concepts": sorted(set(requested) - selected)},
+        )
+    return requested
 
 
 def _elide_constraint_lists(
@@ -3780,6 +3797,9 @@ def _load_candidate_plan_materialization_authority(
         or primary_exposure != expected_primary_exposure
         or target_outcome != proposed.get("target_outcome")
         or target_outcome not in requested_outcomes
+        or not set(explicit_outcome_concepts(str(study.get("question") or ""))).issubset(
+            requested_outcomes
+        )
         or candidate_covariates != tuple(covariates)
         or not all(source_required_concepts)
         or not set(source_required_concepts).issubset(selected_concepts)
@@ -4349,7 +4369,7 @@ def make_research_pipeline_run_runner(
         )
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         bound_plan_revision_contract = ""
-        candidate_outcome_concepts: tuple[str, ...] = ()
+        candidate_outcome_concepts = explicit_outcome_concepts(question)
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if source_run_id:
             candidate_authority = _load_candidate_plan_materialization_authority(
@@ -4488,6 +4508,7 @@ def make_research_pipeline_run_runner(
                         primary_exposure,
                         metadata_planning_coordinates.get("target_outcome"),
                         metadata_planning_coordinates.get("primary_exposure"),
+                        *candidate_outcome_concepts,
                         *covariates,
                         *(
                             variable
@@ -4619,16 +4640,6 @@ def make_research_pipeline_run_runner(
                             ),
                         },
                     )
-            if candidate_outcome_concepts and not metadata_only_planning:
-                pipeline_outcome_columns = _resolve_materialized_outcome_columns(
-                    source_concepts=candidate_outcome_concepts,
-                    acquisition=acquisition,
-                )
-                if pipeline_target not in pipeline_outcome_columns:
-                    raise ResearchPipelineRunError(
-                        "research_pipeline_plan_primary_outcome_missing",
-                        "The materialized candidate outcome roster lost its primary endpoint.",
-                    )
             if metadata_only_planning:
                 execution_concepts = study.get("execution_concepts")
                 execution_concepts = (
@@ -4653,6 +4664,25 @@ def make_research_pipeline_run_runner(
                 if resolved_primary_exposure and aggregation:
                     resolved_primary_exposure = (
                         f"{resolved_primary_exposure}_{aggregation}"
+                    )
+            if candidate_outcome_concepts:
+                resolve_outcomes = (
+                    _resolve_planning_outcome_columns
+                    if metadata_only_planning
+                    else _resolve_materialized_outcome_columns
+                )
+                source_target = pipeline_target if metadata_only_planning else target
+                pipeline_outcome_columns = resolve_outcomes(
+                    source_concepts=tuple(dict.fromkeys((
+                        *candidate_outcome_concepts,
+                        *([str(source_target)] if source_target else []),
+                    ))),
+                    acquisition=acquisition,
+                )
+                if pipeline_target and pipeline_target not in pipeline_outcome_columns:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_plan_primary_outcome_missing",
+                        "The requested outcome roster lost its primary endpoint.",
                     )
             try:
                 bound_preplan_literature = idea_mining.load_bound_prior_art_literature(

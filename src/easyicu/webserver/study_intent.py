@@ -40,6 +40,7 @@ __all__ = [
     "StudyIntentError",
     "extract_study_intent",
     "deterministic_intent",
+    "explicit_outcome_concepts",
     "SLOTS",
 ]
 
@@ -281,6 +282,34 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
             found.append((concept, match.group(0)))
             break
     return found
+
+
+def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
+    """Read all explicit endpoint phrases without changing the primary slot.
+
+    Clinical events can also name a population or exposure, so this roster
+    only adds the closed, high-specificity endpoint vocabulary. A configured
+    event outcome remains the caller's authority. Specific phrases reserve
+    their text span: ``28-day mortality`` must not add generic ``death`` too.
+    This is intent, not evidence that the source can supply these endpoints.
+    """
+
+    text = str(question or "")
+    values: list[str] = []
+    covered: list[tuple[int, int]] = []
+    for pattern, concept in _PHRASE_TO_CONCEPT:
+        if concept not in _OUTCOME_CONCEPTS_PRIMARY:
+            continue
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            if _negated(text, match.start()) or any(
+                match.start() < end and start < match.end()
+                for start, end in covered
+            ):
+                continue
+            covered.append(match.span())
+            if concept not in values:
+                values.append(concept)
+    return tuple(values)
 
 
 def _exposure_candidates_in_text_order(

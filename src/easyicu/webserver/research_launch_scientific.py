@@ -11,6 +11,7 @@ from easyicu.research_agent.icu_rules import VariableKind, classify_variable
 from easyicu.webserver import dataio, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.study_intent import explicit_outcome_concepts
 from easyicu.webserver.study_scientific_configuration import (
     ScientificConfiguration,
     ScientificConfigurationError,
@@ -744,7 +745,11 @@ def _data_foundation_profile(
     requested_outcomes = tuple(
         dict.fromkeys(
             value
-            for value in (target, *additional_outcomes)
+            for value in (
+                target,
+                *additional_outcomes,
+                *explicit_outcome_concepts(str(study.get("question") or "")),
+            )
             if isinstance(value, str) and value.strip()
         )
     )

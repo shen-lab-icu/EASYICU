@@ -394,14 +394,18 @@ def test_plan_revision_stops_when_agent_owned_defects_do_not_shrink() -> None:
     assert improved == pending
 
 
+@pytest.mark.parametrize("omit_requested_los", [False, True])
 def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    omit_requested_los: bool,
 ) -> None:
     study = _complete_study()
     study.update(
         {
-            "question": "Is lact associated with death?",
+            "question": "Is lact associated with death?" + (
+                " Also assess ICU length of stay." if omit_requested_los else ""
+            ),
             "covariates": ["age"],
             "covariate_selection": "exact",
             "execution_concepts": {"covariates": ["age"]},
@@ -502,6 +506,18 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
             "target_outcome": "death",
         },
     )
+
+    if omit_requested_los:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            agent_pipeline_runs._load_candidate_plan_materialization_authority(
+                study=study,
+                project_root=str(tmp_path),
+                source_run_id=source_run_id,
+                database="miiv",
+                covariates=("age",),
+            )
+        assert raised.value.code == "candidate_plan_materialization_authority_invalid"
+        return
 
     authority = agent_pipeline_runs._load_candidate_plan_materialization_authority(
         study=study,
@@ -1756,9 +1772,11 @@ def test_metadata_only_planning_ignores_unmapped_display_labels(
     ]
 
 
+@pytest.mark.parametrize("multiple_outcomes", [False, True])
 def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    multiple_outcomes: bool,
 ) -> None:
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -1800,6 +1818,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             captured["cohort_authority_path"] = kwargs["cohort_authority_path"]
             captured["id_columns"] = kwargs["id_columns"]
             captured["target_outcome"] = kwargs["target_outcome"]
+            captured["outcome_columns"] = kwargs["outcome_columns"]
             captured["primary_exposure"] = kwargs["primary_exposure"]
             captured["endpoint"] = (
                 kwargs["endpoint"].model_dump(mode="json")
@@ -1851,6 +1870,8 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             "cluster_unit": "patient",
         },
     }
+    if multiple_outcomes:
+        study["question"] += " Also assess ICU length of stay."
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(prepared),
         study_context=study,
@@ -1879,6 +1900,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             "lact",
             "sep3",
             "death",
+            *(["los_icu"] if multiple_outcomes else []),
         ],
         "planning_authority": {
             "kind": "metadata_only_planning_catalog",
@@ -1907,6 +1929,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "id_columns": ["patient_stay_id"],
         "target_outcome": "death",
         "primary_exposure": "sep3",
+        "outcome_columns": ("death", "los_icu") if multiple_outcomes else ("death",),
         "endpoint": {
             "name": "death",
             "kind": "binary",

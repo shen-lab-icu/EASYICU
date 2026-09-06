@@ -76,8 +76,10 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
     }
 
 
+@pytest.mark.parametrize("question_owned", [False, True])
 def test_web_data_foundation_profile_keeps_all_candidate_plan_outcomes(
     monkeypatch: pytest.MonkeyPatch,
+    question_owned: bool,
 ) -> None:
     from easyicu.research_agent.acquisition import catalog as catalog_module
 
@@ -111,9 +113,11 @@ def test_web_data_foundation_profile_keeps_all_candidate_plan_outcomes(
 
     profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
-        study={"modules": ["demographics", "outcome"]},
+        study={"modules": ["demographics", "outcome"], "question": (
+            "研究死亡及 ICU 住院时长" if question_owned else ""
+        )},
         target="death",
-        additional_outcomes=("los_icu", "death"),
+        additional_outcomes=() if question_owned else ("los_icu", "death"),
     )
 
     assert profile["static_concepts"] == ("age", "los_icu")
