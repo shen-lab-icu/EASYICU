@@ -23,6 +23,21 @@ def _values(result):
 
 
 # ---------------------------------------------------------------- reading ---
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("KDIGO AKI 分级与 ICU 住院时长及院内死亡的关系", ("death", "los_icu")),
+        ("28-day mortality", ("mort_28d",)),
+        ("28天死亡和院内死亡", ("death", "mort_28d")),
+        ("不是研究死亡；研究 ICU 住院时长", ("los_icu",)),
+        ("脓毒症和非脓毒症患者的院内死亡", ("death",)),
+        ("乳酸和急性肾损伤的关系", ()),
+    ],
+)
+def test_explicit_outcome_roster_preserves_question_specificity(question, expected):
+    assert study_intent.explicit_outcome_concepts(question) == expected
+
+
 def test_aki_question_is_not_turned_into_a_mortality_question():
     result = study_intent.deterministic_intent(
         "在 ICU 患者中,早期液体正平衡与急性肾损伤(AKI)的发生风险是否相关?"
