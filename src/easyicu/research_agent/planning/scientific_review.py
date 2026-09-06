@@ -36,6 +36,7 @@ from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
 from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
@@ -98,8 +99,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/8"] = (
-        "easyicu.plan_scientific_review/8"
+    schema_version: Literal["easyicu.plan_scientific_review/9"] = (
+        "easyicu.plan_scientific_review/9"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -1461,6 +1462,22 @@ def build_plan_scientific_review(
 
     findings: list[PlanScientificFinding] = []
     variables = {variable.name: variable for variable in context.variables}
+    for step in plan.steps:
+        if step.scientific_action_id != PHENOTYPING_PRIMARY_ACTION:
+            continue
+        try:
+            require_phenotyping_features(
+                step.phenotyping_feature_columns, inputs=step.inputs, descriptors=context.variables,
+                outcome_columns=(*context.cohort.outcome_columns, *([context.target_outcome] if context.target_outcome else [])),
+            )
+        except ValueError as exc:
+            findings.append(PlanScientificFinding(
+                code="PHENOTYPING_FIT_ROSTER_INVALID", severity="blocker", dimension="statistical_design",
+                message=f"Step {step.step_id!r}: {exc}",
+                evidence_refs=[f"analysis_plan.json.steps.{step.step_id}.phenotyping_feature_columns"],
+                remediation="Declare the exact non-outcome fitting roster separately from readable profile inputs, then review a fresh plan.",
+                remediation_route="agent_plan_revision",
+            ))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,

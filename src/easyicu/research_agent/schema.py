@@ -88,6 +88,7 @@ from .planning.robustness_contract import (
 )
 from .planning.sensitivity_authority import PrespecifiedSensitivitySpec
 from .contracts.functional_form import FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS
+from .contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .research_context.clinical_definition import ClinicalDefinitionReference
 
 # Compatibility exports: these contracts have dependency-neutral owners, while
@@ -1710,6 +1711,10 @@ class AnalysisStep(BaseModel):
         exclude_if=lambda value: value is None,
         description="Exact target variable and basis for an RCS-versus-linear sensitivity; never inferred from prose or a sensitivity id.",
     )
+    phenotyping_feature_columns: Optional[List[str]] = Field(
+        default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None,
+        description="Exact clustering fit columns; readable profile, identity and outcome inputs are not fit features.",
+    )
     literature_citation_keys: List[str] = Field(
         default_factory=list,
         description=(
@@ -1885,6 +1890,10 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        if self.phenotyping_feature_columns is not None:
+            if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
+                raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
+            require_phenotyping_features(self.phenotyping_feature_columns, inputs=self.inputs)
         if self.functional_form_spec is not None and (
             self.planned_analysis_role != "sensitivity"
             or self.method not in RCS_LINEAR_SENSITIVITY_METHODS

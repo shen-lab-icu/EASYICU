@@ -1,7 +1,7 @@
 """Deterministic analysis-only adapter for cross-sectional phenotyping.
 
-The Planner owns the feature roster.  This owner excludes typed outcomes,
-identifiers and time coordinates, then fixes only median imputation,
+The Planner owns an explicit feature roster, separate from readable inputs.
+This owner rejects forbidden or unusable features, then fixes only median imputation,
 standardisation, candidate-k scoring, clustering and resampling mechanics.
 The assignment product retains the exact standardised matrix so downstream
 selection and stability steps never reopen raw cohort bytes.
@@ -30,6 +30,7 @@ from ...contracts.phenotyping_validation import (
     PhenotypingCompleteCaseReceipt,
     PhenotypingRuntimeReceipt,
 )
+from ...contracts.phenotyping_features import require_phenotyping_features
 from ...research_context.typed import parse_research_context_json
 from ...robustness.panel import load_locked_robustness_specs
 from ...schema import AnalysisStep
@@ -70,7 +71,7 @@ def cross_sectional_phenotyping_executor_owns_step(step: AnalysisStep) -> bool:
     if action == _PRIMARY_ACTION:
         if (
             step.planned_analysis_role != "primary"
-            or sole_typed_cohort_input(step) is None
+            or not sole_typed_cohort_input(step)
             or len(_raw_columns(step)) < 2
         ):
             return False
@@ -104,6 +105,7 @@ def cross_sectional_phenotyping_executor_code(step: AnalysisStep) -> str:
     action = str(step.scientific_action_id)
     if action == _PRIMARY_ACTION:
         cohort = sole_typed_cohort_input(step)
+        features = require_phenotyping_features(step.phenotyping_feature_columns, inputs=_raw_columns(step))
         return textwrap.dedent(
             f"""
             import json
@@ -116,6 +118,7 @@ def cross_sectional_phenotyping_executor_code(step: AnalysisStep) -> str:
             summary = run_primary_phenotyping(
                 frame=frame,
                 declared_columns={_raw_columns(step)!r},
+                feature_columns={features!r},
                 typed_cohort_input={cohort!r},
                 source_cohort=cohort_path,
                 out_dir=Path(os.environ["STEP_OUT_DIR"]),
@@ -337,30 +340,19 @@ def _fit_locked_complete_case_sensitivities(
     return receipts, rows
 
 
-def _feature_roster(run_dir: Path, declared: tuple[str, ...], frame: pd.DataFrame) -> tuple[str, ...]:
+def _feature_roster(run_dir: Path, declared: tuple[str, ...], frame: pd.DataFrame, feature_columns: tuple[str, ...]) -> tuple[str, ...]:
     context = parse_research_context_json((Path(run_dir) / "research_context.json").read_text("utf-8"))
-    descriptors = {item.name: item for item in context.variables}
-    allowed_roles = {
-        "demographic",
-        "vital",
-        "lab",
-        "intervention",
-        "ordinal_score",
-        "composite_score",
-        "other",
-    }
-    features = tuple(
-        name
-        for name in declared
-        if name in frame.columns
-        and name in descriptors
-        and str(descriptors[name].role.value) in allowed_roles
-        and pd.api.types.is_numeric_dtype(frame[name])
-        and frame[name].notna().sum() >= _POLICY.minimum_rows
-        and frame[name].nunique(dropna=True) >= 2
+    features = require_phenotyping_features(
+        feature_columns, inputs=declared, descriptors=context.variables,
+        outcome_columns=(*context.cohort.outcome_columns, *([context.target_outcome] if context.target_outcome else [])),
     )
-    if len(features) < 2:
-        raise RuntimeError("phenotyping requires at least two eligible numeric features")
+    invalid = [name for name in features if (
+        name not in frame or not pd.api.types.is_numeric_dtype(frame[name])
+        or frame[name].notna().sum() < _POLICY.minimum_rows
+        or frame[name].nunique(dropna=True) < 2
+    )]
+    if invalid:
+        raise RuntimeError("phenotyping_declared_feature_unusable: do not silently drop " + ", ".join(invalid))
     return features
 
 
@@ -368,13 +360,14 @@ def run_primary_phenotyping(
     *,
     frame: pd.DataFrame,
     declared_columns: tuple[str, ...],
+    feature_columns: tuple[str, ...],
     typed_cohort_input: str,
     source_cohort: Path,
     out_dir: Path,
     run_dir: Path,
     step_id: str,
 ) -> dict[str, Any]:
-    features = _feature_roster(Path(run_dir), declared_columns, frame)
+    features = _feature_roster(Path(run_dir), declared_columns, frame, feature_columns)
     imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(frame.loc[:, features])
     matrix = StandardScaler().fit_transform(imputed)
     scores, selected_k = _candidate_scores(matrix)
@@ -384,8 +377,8 @@ def run_primary_phenotyping(
     )
     labels = model.fit_predict(matrix)
     identity = str(parse_research_context_json((Path(run_dir) / "research_context.json").read_text("utf-8")).cohort.id_columns[0])
-    if identity not in frame or frame[identity].isna().any():
-        raise RuntimeError("phenotyping requires a complete typed row identity")
+    if identity not in frame or frame[identity].isna().any() or frame[identity].astype(str).duplicated().any():
+        raise RuntimeError("phenotyping requires a complete unique typed row identity")
     assignments = pd.DataFrame({"unit_id": frame[identity].astype(str), "cluster": labels.astype(int)})
     for index, feature in enumerate(features):
         assignments[f"{_FEATURE_PREFIX}{feature}"] = matrix[:, index]
