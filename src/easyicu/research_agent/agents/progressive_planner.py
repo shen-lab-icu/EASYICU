@@ -24,6 +24,10 @@ from ..planning.analysis_types import (
     list_analysis_types,
     validate_host_authorized_analysis_family,
 )
+from ..concept_availability import (
+    ConceptSourceUnavailableError,
+    require_supported_variable_source,
+)
 from ..planning.design_selection import (
     ResearchDesignSelectionError,
     validate_research_design_selection,
@@ -1297,6 +1301,7 @@ class ProgressivePlannerAgent:
                     "dtype",
                     "source_concept",
                     "derived_from_concepts",
+                    "source_unavailability",
                     "materialized_representation",
                     "analysis_window",
                     "analysis_window_role",
@@ -1857,6 +1862,24 @@ class ProgressivePlannerAgent:
                 f"outline selected unavailable analysis type {outline.analysis_type!r}",
                 path="analysis_type",
             )
+        if article_context is not None:
+            descriptors = {variable.name: variable for variable in article_context.variables}
+            for step_index, step in enumerate(outline.steps):
+                for name in step.variable_names:
+                    descriptor = descriptors.get(name)
+                    if descriptor is None:
+                        continue  # Existing name-authority validation owns absent columns.
+                    try:
+                        require_supported_variable_source(
+                            descriptor, article_context.cohort.database,
+                        )
+                    except ConceptSourceUnavailableError as exc:
+                        raise ProgressivePlanCompileError(
+                            "progressive_outline_input_structurally_unavailable",
+                            str(exc), step_id=step.step_id, step_index=step_index,
+                            path="variable_names",
+                            findings=({"column": name, "source_concepts": [r.concept_id for r in exc.receipts]},),
+                        ) from exc
         try:
             validate_research_design_selection(
                 outline.design_selection,

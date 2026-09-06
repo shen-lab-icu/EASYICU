@@ -13,6 +13,11 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
+from ..concept_availability import (
+    ConceptSourceUnavailableError,
+    require_supported_variable_source,
+)
+
 from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
 from ..canonical_json import canonical_sha256
 from ..cohort.schema import materialized_input_column_authority
@@ -1678,6 +1683,15 @@ def _compile_inputs(
         step_index=step_index,
         path="raw_inputs",
     )
+    for name in raw:
+        try:
+            require_supported_variable_source(variables[name], context.cohort.database)
+        except ConceptSourceUnavailableError as exc:
+            raise _fail(
+                "progressive_raw_input_structurally_unavailable",
+                str(exc), step=step, step_index=step_index, path="raw_inputs",
+                detail={"column": name, "source_concepts": [r.concept_id for r in exc.receipts]},
+            ) from exc
     inputs = list(raw)
     if (
         step.module_id not in {"cohort_definition", "visualization"}

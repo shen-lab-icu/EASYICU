@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
 from ..concept_availability import normalize_database_name
+from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
 from ..contracts.cohort_product_keys import (
     is_closed_cohort_product_key,
     sole_typed_cohort_input,
@@ -97,8 +98,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/6"] = (
-        "easyicu.plan_scientific_review/6"
+    schema_version: Literal["easyicu.plan_scientific_review/7"] = (
+        "easyicu.plan_scientific_review/7"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -1442,6 +1443,38 @@ def build_plan_scientific_review(
 
     findings: list[PlanScientificFinding] = []
     variables = {variable.name: variable for variable in context.variables}
+    required_source_columns = {
+        context.primary_exposure, context.target_outcome,
+        *context.cohort.outcome_columns,
+        *AdjustmentSetAuthority.from_context(context).operational_covariates,
+    }
+    for issue in declared_raw_input_plan_findings(plan=plan, context=context):
+        if issue.detail.get("reason") != "declared_raw_input_structurally_unavailable":
+            continue
+        required_source = bool(
+            required_source_columns.intersection(issue.detail["unavailable_inputs"])
+        )
+        findings.append(PlanScientificFinding(
+            code="PLAN_INPUT_STRUCTURALLY_UNAVAILABLE",
+            severity="blocker", dimension="statistical_design",
+            message=issue.message,
+            evidence_refs=[
+                f"analysis_plan.json.steps.{issue.detail['step_id']}.inputs",
+                "research_context.json.variables.source_concept",
+                "easyicu.outcome_availability.OUTCOME_CONCEPT_SUPPORTED_DATABASES",
+            ],
+            remediation=(
+                "Establish source-owner support for the required scientific "
+                "variable; preserve the reviewed question and do not substitute "
+                "an endpoint, exposure, or required adjustment."
+                if required_source else
+                "Omit optional structurally unavailable inputs from a fresh "
+                "plan, retaining the source limitation and original data. "
+                "If the variable is needed to answer the question, report the "
+                "source-owner capability gap rather than substituting a result."
+            ),
+            remediation_route="runtime_capability" if required_source else "agent_plan_revision",
+        ))
     for step in plan.steps:
         if step.exposure_outcome_distribution_spec is None:
             continue
