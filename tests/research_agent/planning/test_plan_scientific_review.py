@@ -33,6 +33,7 @@ from easyicu.research_agent.planning.scientific_review import (
     _sensitivity_facts,
     build_plan_scientific_review,
     method_source_facts,
+    planned_model_outcomes,
     post_baseline_exposure,
     remediation_route_for_finding,
     repeat_units_possible,
@@ -880,6 +881,58 @@ def test_only_requested_outcomes_require_model_contracts(requested) -> None:
     assert finding.requires_user_authorization is False
     assert "los_icu" in finding.message
     assert review.facts["requested_outcomes"] == ["death", "los_icu"]
+    assert review.facts["model_covered_outcomes"] == ["death"]
+    assert review.facts["missing_model_outcomes"] == ["los_icu"]
+
+
+@pytest.mark.parametrize(
+    ("method", "contract", "inputs", "expected"),
+    [
+        ("signed_landmark_restricted_cubic_spline", "a" * 64, ["exposure", "death"], ("death",)),
+        ("time_varying_exposure_model", "b" * 64, ["exposure", "death"], ("death",)),
+        ("signed_landmark_restricted_cubic_spline", "invalid", ["death"], ()),
+        ("signed_landmark_restricted_cubic_spline", "a" * 64, ["exposure"], ()),
+        ("unowned_model", "a" * 64, ["death"], ()),
+    ],
+)
+def test_native_runtime_outcome_coverage_requires_known_owner_and_input(
+    method, contract, inputs, expected
+) -> None:
+    context = _context()
+    step = AnalysisStep(
+        step_id="native_primary",
+        planned_analysis_role="primary",
+        intent="Run the governed native model.",
+        inputs=inputs,
+        expected_outputs=["table:estimate"],
+        method=method,
+        icu_rule_refs=["scientific_runtime_contract:" + contract],
+    )
+    plan = _plan().model_copy(update={"steps": [step]})
+    assert planned_model_outcomes(plan, context) == expected
+
+
+def test_native_runtime_does_not_cover_auxiliary_outcomes() -> None:
+    base = _context()
+    context = base.model_copy(update={
+        "variables": [*base.variables, ConceptDescriptor(
+            name="los_icu", role=VariableRole.OUTCOME, dtype="float64"
+        )],
+        "cohort": base.cohort.model_copy(update={
+            "requested_outcome_columns": ["death", "los_icu"]
+        }),
+    })
+    step = AnalysisStep(
+        step_id="native_primary", planned_analysis_role="primary",
+        intent="Run the governed native model.",
+        inputs=["exposure", "death", "los_icu"],
+        expected_outputs=["table:estimate"],
+        method="signed_landmark_restricted_cubic_spline",
+        icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+    )
+    review = build_plan_scientific_review(
+        context=context, plan=_plan().model_copy(update={"steps": [step]})
+    )
     assert review.facts["model_covered_outcomes"] == ["death"]
     assert review.facts["missing_model_outcomes"] == ["los_icu"]
 
