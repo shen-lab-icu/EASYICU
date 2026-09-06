@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..canonical_json import canonical_sha256
 from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .design_selection import ResearchDesignSelection
 
 
@@ -554,6 +555,7 @@ class ProgressiveSkeletonStep(BaseModel):
     confidence_level: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
     sensitivity_spec_ids: list[str] = Field(default_factory=list)
     functional_form_spec: Optional[FunctionalFormSpec] = Field(default=None, exclude_if=lambda value: value is None)
+    phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
     literature_bindings: list[ProgressiveLiteratureBinding] = Field(
         default_factory=list
     )
@@ -621,6 +623,10 @@ class ProgressiveSkeletonStep(BaseModel):
             self.module_id != "custom_analysis" or self.planned_analysis_role != "sensitivity"
         ):
             raise ValueError("functional_form_spec belongs only to a custom sensitivity")
+        if self.phenotyping_feature_columns is not None:
+            if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
+                raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
+            require_phenotyping_features(self.phenotyping_feature_columns, inputs=self.raw_inputs)
         if self.module_id == "visualization" and not (
             self.product_inputs or self.depends_on
         ):

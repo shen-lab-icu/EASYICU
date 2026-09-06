@@ -127,6 +127,7 @@ def _primary_step() -> AnalysisStep:
         expected_outputs=[PHENOTYPE_PROFILES_PRODUCT, PHENOTYPE_ASSIGNMENTS_PRODUCT],
         method="cross-sectional phenotyping",
         scientific_action_id="phenotyping.cluster_solution",
+        phenotyping_feature_columns=["marker_a", "marker_b"],
     )
 
 
@@ -274,6 +275,7 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
     summary = run_primary_phenotyping(
         frame=frame,
         declared_columns=("stay_id", "marker_a", "marker_b", "death"),
+        feature_columns=("marker_a", "marker_b"),
         typed_cohort_input="artifact:analysis_cohort",
         source_cohort=cohort_path,
         out_dir=primary_dir,
@@ -428,6 +430,7 @@ def test_phenotyping_owner_executes_locked_complete_case_sensitivity(
     summary = run_primary_phenotyping(
         frame=frame,
         declared_columns=("stay_id", "marker_a", "marker_b", "death"),
+        feature_columns=("marker_a", "marker_b"),
         typed_cohort_input="artifact:analysis_cohort",
         source_cohort=cohort_path,
         out_dir=tmp_path / "primary",
@@ -511,6 +514,7 @@ def test_phenotyping_complete_case_spec_cannot_widen_the_feature_roster(
         run_primary_phenotyping(
             frame=frame,
             declared_columns=("stay_id", "marker_a", "marker_b", "death"),
+            feature_columns=("marker_a", "marker_b"),
             typed_cohort_input="artifact:analysis_cohort",
             source_cohort=cohort_path,
             out_dir=tmp_path / "primary",

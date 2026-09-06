@@ -315,6 +315,7 @@ def step_materialization_shape_contract(
         "primary_contrast_level_index": None, "denominator_policy": None,
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
+        "phenotyping_feature_columns": None,
         "literature_bindings": [],
     }
     template = {
@@ -338,6 +339,8 @@ def step_materialization_shape_contract(
         "terms and null for continuous/ordinal_linear terms. An RCS-versus-linear sensitivity must set functional_form_spec to "
         '{"target_column":"<exact continuous primary model term>","knot_quantiles":[0.1,0.5,0.9]}; '
         "choose and declare the three ordered quantiles before execution. This contract is null for other analyses, including timing checks. "
+        "For phenotyping.cluster_solution set phenotyping_feature_columns to the exact fit roster from raw_inputs; "
+        "profile-only variables, identifiers and outcomes must not enter that roster. Other actions use null. "
         "literature_bindings items are exactly "
         '{"citation_key":"<sealed key>","design_elements":["<allowed element>"],"application":"<8-1200 characters>","divergence":null}.'
     )

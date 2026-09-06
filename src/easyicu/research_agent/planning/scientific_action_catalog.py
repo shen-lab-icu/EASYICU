@@ -30,6 +30,7 @@ from typing import Literal, Tuple
 from ..contracts.method_kernels import CURATED_METHOD_KERNELS
 from ..contracts.method_packages import BASELINE_PACKAGES, CURATED_METHOD_PACKAGES
 from ..contracts.cross_sectional_phenotyping_policy import CROSS_SECTIONAL_PHENOTYPING_POLICY
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .analysis_method_suite import AnalysisMethod, get_suite
 from .method_adapter_catalog import (
     MethodAdapterContract,
@@ -688,6 +689,8 @@ def validate_plan_scientific_action_selections(
             analysis_type=analysis_type,
             action_id=action_id,
         )
+        if action_id == PHENOTYPING_PRIMARY_ACTION:
+            require_phenotyping_features(getattr(step, "phenotyping_feature_columns", None), inputs=step.inputs)
         method_key = str(getattr(step, "method", "") or "").strip()
         exact_method_actions = tuple(
             action.action_id

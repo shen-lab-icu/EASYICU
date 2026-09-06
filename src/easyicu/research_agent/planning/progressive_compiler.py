@@ -29,6 +29,7 @@ from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import ModelTermSpec, level_spelling
 from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.model_tokens import (
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
@@ -2067,6 +2068,18 @@ def _compile_one_step(
         output_pairs=output_pairs,
     )
     _validate_outputs(output_pairs, step=step, step_index=step_index)
+    if step.scientific_action_id == PHENOTYPING_PRIMARY_ACTION:
+        try:
+            require_phenotyping_features(
+                step.phenotyping_feature_columns, inputs=step.raw_inputs,
+                descriptors=context.variables,
+                outcome_columns=(*context.cohort.outcome_columns, *([context.target_outcome] if context.target_outcome else [])),
+            )
+        except ValueError as exc:
+            raise _fail(
+                "progressive_" + str(exc).partition(":")[0], str(exc),
+                step=step, step_index=step_index, path="phenotyping_feature_columns",
+            ) from exc
     _validate_scientific_action_runtime_contract(
         action=action,
         step=step,
@@ -2148,6 +2161,7 @@ def _compile_one_step(
         "icu_rule_refs": [],
         "sensitivity_spec_ids": sensitivity_spec_ids,
         "functional_form_spec": step.functional_form_spec,
+        "phenotyping_feature_columns": step.phenotyping_feature_columns,
         "literature_citation_keys": citation_keys,
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,

@@ -52,7 +52,7 @@ def _review(
     )
 
 
-@pytest.mark.parametrize("legacy_version", [1, 5, 6, 7])
+@pytest.mark.parametrize("legacy_version", [1, 5, 6, 7, 8])
 def test_current_scientific_review_contract_rejects_legacy_policy_artifacts(legacy_version) -> None:
     legacy_payload = _review(
         status="analysis_only", approval_allowed=True

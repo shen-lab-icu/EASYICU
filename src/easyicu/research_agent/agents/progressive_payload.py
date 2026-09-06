@@ -457,7 +457,11 @@ def _bind_step_module_shape(
         else _string_enum(standard_ids)
     )
     standard["properties"]["custom_method"] = {"type": "null"}
-    standard["properties"]["functional_form_spec"] = {"type": "null"}
+    # These contracts belong only to custom actions. Omit the irrelevant
+    # fields entirely; the host fills their identical None defaults.
+    for custom_field in ("functional_form_spec", "phenotyping_feature_columns"):
+        standard["properties"].pop(custom_field, None)
+        standard["required"] = [name for name in standard["required"] if name != custom_field]
 
     custom_fields = (
         "step_id",
@@ -470,6 +474,7 @@ def _bind_step_module_shape(
         "scientific_action_id",
         "sensitivity_spec_ids",
         "functional_form_spec",
+        "phenotyping_feature_columns",
         "literature_bindings",
     )
     custom_properties = {
@@ -875,6 +880,12 @@ def _bind_step_rosters(
     else:
         action_schema = {"type": "null"}
     step_properties["scientific_action_id"] = action_schema
+    if "phenotyping.cluster_solution" not in scientific_action_ids:
+        step_properties["phenotyping_feature_columns"] = {"type": "null"}
+    else:
+        feature_array = _non_null(step_properties["phenotyping_feature_columns"], field="phenotyping_feature_columns")
+        feature_array["items"] = copy.deepcopy(executable_variable)
+        step_properties["phenotyping_feature_columns"] = _nullable(feature_array)
 
     bindings = step_properties["literature_bindings"]
     if not allowed_citation_keys:

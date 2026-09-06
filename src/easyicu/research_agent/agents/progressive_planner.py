@@ -3066,7 +3066,7 @@ class ProgressivePlannerAgent:
                 "array, or prose paragraph in custom_method. The step object "
                 "must contain only step_id, planned_analysis_role, module_id, "
                 "objective, depends_on, raw_inputs, product_inputs, outputs, "
-                "scientific_action_id, custom_method, sensitivity_spec_ids, functional_form_spec, "
+                "scientific_action_id, custom_method, sensitivity_spec_ids, functional_form_spec, phenotyping_feature_columns, "
                 "and literature_bindings. Do not emit Table 1, association, "
                 "contrast, denominator, missingness-policy, or confidence "
                 "fields, even as null or empty values."
