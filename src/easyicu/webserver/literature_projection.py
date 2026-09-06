@@ -92,6 +92,8 @@ def _citation_projection(
     screening: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     screening = screening if isinstance(screening, Mapping) else {}
+    notices = row.get("bibliographic_notices")
+    notices = notices if isinstance(notices, list) else []
     return {
         "key": _text(row.get("key") or row.get("citation_key"), 120),
         "title": _text(row.get("title"), 500),
@@ -110,6 +112,10 @@ def _citation_projection(
             _text(value, 120)
             for value in list(row.get("publication_types") or [])[:20]
             if _text(value, 120)
+        ],
+        "bibliographic_notices": [
+            _text(value, 600) for value in notices[:20]
+            if isinstance(value, str) and _text(value, 600)
         ],
         "source_url": _source_url(row),
         "screening": (

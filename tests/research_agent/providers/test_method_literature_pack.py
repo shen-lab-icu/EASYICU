@@ -64,6 +64,16 @@ def test_a_curated_only_bundle_reports_no_search_instead_of_a_prisma_flow() -> N
     assert "no search was performed" in provenance.note
 
 
+def test_strobe_citation_venue_matches_its_exact_doi_and_pmid():
+    cards = [card for card in METHOD_CARDS if card.source_key == "strobe_2007"]
+    assert cards
+    assert {card.source_venue for card in cards} == {"Annals of Internal Medicine"}
+    source = next(row for row in method_literature_citations() if row["key"] == "strobe_2007")
+    assert source["doi"] == "10.7326/0003-4819-147-8-200710160-00010"
+    assert source["pmid"] == "17938396"
+    assert source["bibliographic_notices"]
+
+
 def test_lactate_question_does_not_inherit_the_sepsis3_definition_paper() -> None:
     bundle = build_preplan_literature_bundle(
         _context(

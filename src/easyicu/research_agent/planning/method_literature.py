@@ -116,7 +116,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "observational studies."
         ),
         source_year="2007",
-        source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_venue="Annals of Internal Medicine",
         source_pmid="17938396",
         source_doi="10.7326/0003-4819-147-8-200710160-00010",
         source_url="https://pubmed.ncbi.nlm.nih.gov/17938396/",
@@ -263,7 +263,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "observational studies."
         ),
         source_year="2007",
-        source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_venue="Annals of Internal Medicine",
         design_elements=("dependence",),
     ),
     MethodCard(
@@ -330,7 +330,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "observational studies."
         ),
         source_year="2007",
-        source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_venue="Annals of Internal Medicine",
         design_elements=("outcome", "estimand"),
     ),
 )
