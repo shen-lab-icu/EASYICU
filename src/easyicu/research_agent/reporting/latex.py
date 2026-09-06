@@ -33,6 +33,7 @@ from ..literature import (
     LiteratureBundle,
     manuscript_citable_keys,
 )
+from .manuscript_tables import ManuscriptTable
 
 
 # Map common Markdown constructs → LaTeX. Intentionally small; this is
@@ -288,6 +289,7 @@ def scaffold_to_latex(
     venue_template: str = "article",
     figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
     supplementary_figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
+    tables: Sequence[ManuscriptTable] = (),
     draft_watermark: bool = False,
     claim_base_url: Optional[str] = None,
 ) -> str:
@@ -433,6 +435,29 @@ def scaffold_to_latex(
             parts.append(r"\bibliographystyle{" + bibliography_style + "}")
             parts.append(r"\bibliography{" + bibliography_basename + "}")
             parts.append("")
+
+    if tables:
+        parts.extend([r"\clearpage", r"\section*{Tables}", ""])
+        for table in tables:
+            if not table.columns or any(len(row) != len(table.columns) for row in table.rows):
+                raise ValueError("reader table rows must match the declared columns")
+            count = len(table.columns)
+            layout = r"@{}*{" + str(count) + r"}{p{\dimexpr\linewidth/" + str(count) + r"-2\tabcolsep\relax}}@{}"
+            header = " & ".join(_escape_latex(cell) for cell in table.columns) + r" \\"
+            parts.extend([
+                r"\begingroup\footnotesize", r"\begin{longtable}{" + layout + "}",
+                r"\caption{" + _escape_latex(table.caption) + r"}\\",
+                r"\toprule", header, r"\midrule\endfirsthead",
+                r"\toprule", header, r"\midrule\endhead",
+            ])
+            for row in table.rows:
+                parts.append(" & ".join(
+                    _escape_latex(cell).replace(r"\_", r"\_\allowbreak{}") for cell in row
+                ) + r" \\")
+            parts.extend([r"\bottomrule", r"\end{longtable}"])
+            for note in table.notes:
+                parts.append(r"\par\noindent " + _escape_latex(note))
+            parts.extend([r"\endgroup", ""])
 
     # Keep main and supplementary displays visibly separate. This prevents a
     # routine quality-control plot from being mistaken for a main result and
