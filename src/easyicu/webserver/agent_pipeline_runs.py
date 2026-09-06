@@ -64,6 +64,7 @@ from easyicu.webserver import (
     run_artifact_disclosure,
 )
 from easyicu.webserver import study_contexts as study_context_owner
+from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.literature_projection import (
     load_current_plan_authority,
@@ -4332,6 +4333,7 @@ def make_research_pipeline_run_runner(
     development_resume_source_job_id: str = "",
     budget_mode: str = "planner_canary",
     runner_image: Optional[str] = None,
+    plan_change_request: Optional[PlanChangeRequest] = None,
 ) -> Any:
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
@@ -4349,6 +4351,7 @@ def make_research_pipeline_run_runner(
             development_resume_source_job_id=development_resume_source_job_id,
             budget_mode=budget_mode,
             runner_image=runner_image,
+            plan_change_request=plan_change_request,
         )
     )
 
@@ -4424,7 +4427,11 @@ def make_research_pipeline_run_runner(
             else RunDirectory.create(root, study.get("id"), job.id).path
         )
         wrapper_dir.mkdir(parents=True, exist_ok=True)
-        bound_plan_revision_contract = ""
+        bound_plan_revision_contract = (
+            execution.plan_change_request.planner_context()
+            if execution.plan_change_request is not None
+            else ""
+        )
         candidate_outcome_concepts = explicit_outcome_concepts(question)
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if source_run_id:

@@ -39,6 +39,7 @@ from easyicu.webserver.copilot_data_workbench import (
     build_snapshot as build_data_workbench_snapshot,
     project_patient_snapshot_payload,
 )
+from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.ideas import handoff as idea_handoff
 
@@ -53,6 +54,7 @@ from .contracts import (
 from . import cohort_eligibility
 from . import extraction_handoff
 from .literature_tool_projection import compile_literature_tool_projection
+from .message_input import prepare_user_message
 from .projections import (
     bounded_json_projection,
     ensure_safe_projection,
@@ -69,6 +71,7 @@ from .run_authority import (
     research_pipeline_project_root,
 )
 from .study_context_update import update_study_context
+from .turn_authority import infer_explicit_turn_actions
 from .tool_catalog import (
     ALLOWED_TOOLS,
     CONTROL_TOOLS,
@@ -3706,6 +3709,7 @@ def _run(
     plan_revision_source_run_id: str = "",
     planner_start_mode: str = "auto",
     run_intent: research_run_submission.RunIntent | None = None,
+    plan_change_request: PlanChangeRequest | None = None,
 ) -> Dict[str, Any]:
     planner_start_mode = str(planner_start_mode or "auto").strip().lower()
     if planner_start_mode not in {"auto", "fresh", "resume_checkpoint"}:
@@ -3857,6 +3861,7 @@ def _run(
             planner_start_mode=planner_start_mode,
             plan_revision_source_run_id=str(plan_revision_source_run_id),
             literature_search_authorized=literature_search_authorized,
+            plan_change_request=plan_change_request,
         )
         try:
             receipt = research_run_submission.submit_research_run(
@@ -4175,7 +4180,27 @@ def _request_replan(
             == "full_reviewed"
         )
     )
-    fresh_run_required = bool(same_study_plan and not current_review_is_resumable)
+    plan_change_request = None
+    if (
+        same_study_plan
+        and strategy == "fresh"
+        and "provider_run" in infer_explicit_turn_actions(context.user_message)
+    ):
+        # The model's `reason` can summarize or omit the actual review. Forward
+        # the host-held current user text instead, with local paths removed by
+        # the same exact-registry boundary used for the conversation itself.
+        prepared_message = prepare_user_message(
+            context.user_message,
+            registered_sources=sources.load_registry().get("sources") or [],
+        )
+        plan_change_request = PlanChangeRequest(
+            source_run_id=str(latest["run_id"]),
+            user_message=prepared_message.provider_message,
+        )
+    fresh_run_required = bool(
+        same_study_plan
+        and (not current_review_is_resumable or plan_change_request is not None)
+    )
     preflight_only_history = bool(
         isinstance(study, Mapping)
         and study.get("id")
@@ -4201,6 +4226,7 @@ def _request_replan(
             {"run_type": "full"},
             planner_start_mode=strategy,
             run_intent="candidate_plan",
+            plan_change_request=plan_change_request,
         )
     return _result(
         context,
