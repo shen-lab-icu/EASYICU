@@ -54,6 +54,7 @@ from ..figures.contracts import (
 )
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
+from .manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
 from .manuscript_literature import (
     audit_manuscript_literature,
     remove_sentences_with_unknown_literature_keys,
@@ -118,7 +119,7 @@ from .reporting_checklist import (
     choose_checklist,
 )
 from .reviewer import run_reviewer_round
-from ..schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
+from ..schema import AnalysisPlan, CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
 from ..robustness.panel import load_robustness_panel
 from ..gates.figure_egress import (
@@ -2408,6 +2409,7 @@ def _publish_and_audit_manuscript(
     bound: str,
     bound_path: Path,
     context: Any,
+    plan: AnalysisPlan,
     current_verified_evidence_records: Sequence[Any],
     evidence: Any,
     findings: List[ValidationFinding],
@@ -2465,6 +2467,9 @@ def _publish_and_audit_manuscript(
                 bibliography_basename=bib_basename,
                 venue_template=pipeline._latex_venue_template,
                 figure_paths=fig_paths_for_latex or None,
+                tables=build_manuscript_tables(
+                    plan=plan, evidence_records=current_verified_evidence_records, run_dir=run_dir,
+                ),
                 draft_watermark=pipeline._latex_draft_watermark,
             )
             tex_path = run_dir / "manuscript_scaffold.tex"
@@ -2555,6 +2560,10 @@ def _publish_and_audit_manuscript(
                             ),
                         )
                     )
+        except ManuscriptTableProjectionError as exc:
+            findings.append(ValidationFinding(
+                validator="manuscript_table_projection", severity="error", message=str(exc),
+            ))
         except Exception as exc:
             findings.append(
                 ValidationFinding(
@@ -3335,6 +3344,7 @@ def run_write_phase(
         bound=binding.bound,
         bound_path=bound_path,
         context=context,
+        plan=execute_result.plan,
         current_verified_evidence_records=current_verified_evidence_records,
         evidence=evidence,
         findings=findings,
