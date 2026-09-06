@@ -109,6 +109,54 @@ def test_pipeline_stages_legacy_materialization_window_for_context(
     )
 
 
+@pytest.mark.parametrize("suffix", ["first_time", "last_time"])
+def test_verified_legacy_companion_time_has_time_not_score_semantics(suffix) -> None:
+    from easyicu.research_agent.research_context.builder import (
+        _apply_legacy_materialization_window,
+    )
+    from easyicu.research_agent.research_context.representation_semantics import (
+        compile_wide_representation_semantics,
+    )
+    from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
+
+    descriptor = ConceptDescriptor(
+        name=f"organ_score_{suffix}",
+        dtype="float64",
+        role=VariableRole.ORDINAL_SCORE,
+        is_ordinal=True,
+        ordinal_levels=[0, 1, 2, 3, 4],
+        valid_range=(0, 4),
+    )
+    projected = _apply_legacy_materialization_window(
+        descriptors=[descriptor],
+        provenance={"cohort_window_hours": [0, 24], "feature_concepts": ["organ_score"]},
+    )
+    compiled = compile_wide_representation_semantics(projected)[0]
+
+    assert compiled.role == VariableRole.TIME
+    assert compiled.unit == "h"
+    assert compiled.valid_range is None
+    assert compiled.is_ordinal is False
+    assert compiled.ordinal_levels is None
+    assert compiled.analysis_window == "icu_admission[0,24]h"
+    assert compiled.source_concept == "organ_score"
+    assert compiled.unit_normalization == f"window_{suffix}"
+
+
+def test_legacy_companion_name_alone_does_not_grant_representation_authority() -> None:
+    from easyicu.research_agent.research_context.builder import (
+        _apply_legacy_materialization_window,
+    )
+    from easyicu.research_agent.schema import ConceptDescriptor
+
+    descriptor = ConceptDescriptor(name="unbound_first_time", dtype="float64")
+    projected = _apply_legacy_materialization_window(
+        descriptors=[descriptor],
+        provenance={"cohort_window_hours": [0, 24], "feature_concepts": ["different"]},
+    )
+    assert projected == [descriptor]
+
+
 def test_legacy_materialization_window_fails_closed_on_cohort_tamper(
     ra, tmp_path: Path
 ) -> None:
