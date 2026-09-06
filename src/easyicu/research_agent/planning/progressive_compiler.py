@@ -13,7 +13,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
-from ..authority.declared_levels import observed_levels_for
+from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
 from ..canonical_json import canonical_sha256
 from ..cohort.schema import materialized_input_column_authority
 from ..contracts.association_execution import (
@@ -226,7 +226,7 @@ def required_binary_display_label_scopes(
         domain = descriptor.observed_domain if descriptor is not None else None
         if not scope or not isinstance(domain, Mapping) or not domain.get("is_binary"):
             continue
-        levels = observed_levels_for(name=scope, variables=variables)
+        levels = closed_planning_levels_for(name=scope, variables=variables)
         if {_binary_level_index(level) for level in levels} != {0, 1}:
             continue
         if scope not in required:
@@ -945,8 +945,10 @@ def _table_one_variable_kind(variable: Any, levels: Sequence[Any]) -> str:
     if variable.is_ordinal:
         return "ordinal"
     dtype = str(variable.dtype or "").lower()
+    declared, _basis = declared_domain_for_variable(variable)
     if levels and (
-        len(levels) == 2
+        bool(declared)
+        or len(levels) == 2
         or dtype.startswith(("object", "str", "string", "category", "bool"))
     ):
         return "categorical"
@@ -977,7 +979,7 @@ def _compile_table_one(
         step_index=step_index,
         path="table_one_variables",
     )
-    group_levels = observed_levels_for(name=group_by, variables=dict(variables))
+    group_levels = closed_planning_levels_for(name=group_by, variables=dict(variables))
     if len(group_levels) < 2:
         raise _fail(
             "progressive_table_one_group_levels_unavailable",
@@ -989,7 +991,7 @@ def _compile_table_one(
     rows: list[TableOneVariableSpec] = []
     for index, item in enumerate(row_intents):
         variable = variables[item.name]
-        levels = observed_levels_for(name=item.name, variables=dict(variables))
+        levels = closed_planning_levels_for(name=item.name, variables=dict(variables))
         kind = _table_one_variable_kind(variable, levels)
         if kind == "continuous" and item.summary == "count_percent":
             raise _fail(
@@ -1108,8 +1110,8 @@ def _compile_distribution(
         step_index=step_index,
         path="distribution_variables",
     )
-    exposure_levels = observed_levels_for(name=exposure, variables=dict(variables))
-    outcome_levels = observed_levels_for(name=outcome, variables=dict(variables))
+    exposure_levels = closed_planning_levels_for(name=exposure, variables=dict(variables))
+    outcome_levels = closed_planning_levels_for(name=outcome, variables=dict(variables))
     if len(exposure_levels) < 2 or len(outcome_levels) < 2:
         raise _fail(
             "progressive_distribution_levels_unavailable",
