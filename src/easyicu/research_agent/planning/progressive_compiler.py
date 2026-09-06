@@ -809,12 +809,20 @@ def _validate_scientific_action_runtime_contract(
 
 def _compile_binary_association_sensitivity_capability(
     *,
+    action: ScientificAction | None,
     skeleton: ProgressivePlanSkeleton,
     step: ProgressiveSkeletonStep,
     step_index: int,
     outputs: Sequence[tuple[str, str]],
 ) -> str | None:
     """Compile effect authority only for the closed binary sensitivity shape."""
+
+    # ``scientific_sensitivity`` is an article role, not an analysis family.
+    # A validated non-association action retains its own execution boundary;
+    # in particular, do not make a survival sensitivity inherit an odds-ratio
+    # parent or grant it the binary association capability.
+    if action is not None and action.analysis_family != "association":
+        return None
 
     scientific_outputs = [
         product_id
@@ -2029,6 +2037,7 @@ def _compile_one_step(
     )
     association_sensitivity_capability = (
         _compile_binary_association_sensitivity_capability(
+            action=action,
             skeleton=skeleton,
             step=step,
             step_index=step_index,
