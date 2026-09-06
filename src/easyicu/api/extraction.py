@@ -214,6 +214,13 @@ _STREAM_CALIBRATED_REFERENCE = {
 # currently available is enough for a full MIMIC-IV one-shot.
 _MEASURED_ONESHOT_HEADROOM = 1.10
 _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "hirid": {
+        # Corrected rate-aware reference AKI at 273d20df, native-v2 renal,
+        # all 33,905 stays, deterministic 8-GiB envelope. External tree peak
+        # (3,483.5 MiB) exceeds the internal sampler (3,231.3 MiB).
+        # This receipt admits renal only, not the other HiRID modules.
+        "renal": {"cohort_stays": 33_905, "peak_rss_mb": 3_483.5, "seconds": 243.3},
+    },
     "aumc": {
         # Full-cohort module measurements from the sealed 23,106-stay AUMC
         # extraction. These owners are outside the later IMV/SOFA semantic
