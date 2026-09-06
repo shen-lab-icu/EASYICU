@@ -5448,12 +5448,12 @@ def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
     assert "typed proposal" in workbench
     assert "effect estimates" in workbench
     assert "数据源已准备" in workbench
-    assert "它不是最终分析队列" in workbench
+    assert "非空覆盖不等于临床定义已验证" in workbench
     assert "计划变量" in workbench
     assert "批准后才会执行" in workbench
-    assert "计划变量覆盖情况" in workbench
+    assert "计划直接输入的非空覆盖" in workbench
     assert "全部分析记录均有值" in workbench
-    assert "部分分析记录缺少数值" in workbench
+    assert "存在物理空值；不等同临床缺失" in workbench
     assert ".gpi-wb" in css
     assert ".gpi-wb-pending" in css
     assert ".gpi-wb-coverage-chart" in css

@@ -3370,8 +3370,14 @@ class PiCopilotService:
                             study,
                             cohort_file=plan_run / "cohort.parquet",
                             plan_file=plan_run / "analysis_plan.json",
+                            context_file=plan_run / "research_context.json",
                         )
-                except (PiCopilotError, DataPackageReviewError):
+                except DataPackageReviewError as exc:
+                    if exc.code != "plan_bound_data_preview_files_unavailable":
+                        raise
+                    # Before a materialized cohort exists, the registered
+                    # export remains the preview. Never hide binding drift or
+                    # unreadable semantic evidence behind a different source.
                     payload = None
             if payload is None:
                 payload = build_registered_data_package_review(study)
