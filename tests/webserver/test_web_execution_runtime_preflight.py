@@ -161,6 +161,46 @@ def test_the_run_reads_the_profile_mapping_from_one_place() -> None:
     assert "CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF" not in after_factory
 
 
+@pytest.mark.parametrize("budget_mode", ["planner_canary", "full_reviewed"])
+def test_current_web_profiles_match_the_packaged_clinical_dictionaries(budget_mode):
+    research_launch_runtime._require_profile_dictionaries(budget_mode=budget_mode)
+
+
+@pytest.mark.parametrize("stale_live_pubmed", [False, True])
+@pytest.mark.parametrize("budget_mode", ["planner_canary", "full_reviewed"])
+def test_dictionary_preflight_refuses_either_stale_variant_without_mutating_it(
+    monkeypatch, stale_live_pubmed, budget_mode,
+):
+    from dataclasses import replace
+
+    from easyicu.research_agent.orchestration import profiles
+
+    get_profile = profiles.get_submission_profile
+    stale_ref = research_launch_runtime._submission_profile_ref(
+        budget_mode=budget_mode, live_pubmed=stale_live_pubmed,
+    )
+    stale = replace(get_profile(stale_ref), expected_concept_dict_sha="0" * 64)
+    monkeypatch.setattr(
+        profiles, "get_submission_profile",
+        lambda ref: stale if ref == stale_ref else get_profile(ref),
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        research_launch_runtime._require_profile_dictionaries(budget_mode=budget_mode)
+
+    assert exc.value.code == "research_pipeline_profile_dictionary_mismatch"
+    assert exc.value.details["profile_ref"] == stale_ref
+    assert exc.value.details["reason_code"] == "concept_dictionary_profile_mismatch"
+    assert stale.expected_concept_dict_sha == "0" * 64
+
+
+def test_launch_preparation_checks_dictionary_before_execution_runtime():
+    source = Path("src/easyicu/webserver/research_pipeline_run_preparation.py").read_text()
+    assert source.index("_require_profile_dictionaries(budget_mode=") < source.index(
+        "_require_execution_runtime("
+    )
+
+
 def test_a_runtime_that_dies_mid_run_is_attributable_not_anonymous() -> None:
     """The late failure still happens on a host that stops Docker mid-run.
 
