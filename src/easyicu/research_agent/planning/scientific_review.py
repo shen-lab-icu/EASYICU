@@ -48,7 +48,9 @@ from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority
 from .dependence_authority import (
     context_patient_group_authority,
+    descriptive_counts_only_required,
     dependence_matches_context,
+    repeat_units_possible,
 )
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
@@ -91,8 +93,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/5"] = (
-        "easyicu.plan_scientific_review/5"
+    schema_version: Literal["easyicu.plan_scientific_review/6"] = (
+        "easyicu.plan_scientific_review/6"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -281,67 +283,6 @@ def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str
     # This label deliberately names the physical coordinate, rather than
     # implying a phenotype definition or a follow-up horizon.
     return True, f"outer_materialization:icu_admission[0,{hours:g}]h"
-
-
-def repeat_units_possible(context: ResearchContext) -> bool:
-    provenance = context.cohort.provenance or {}
-    preferences = context.user_preferences
-    if hasattr(preferences, "model_dump"):
-        preferences = preferences.model_dump(mode="json")
-    preferences = preferences if isinstance(preferences, Mapping) else {}
-    n_patients = context.cohort.n_patients
-    n_stays = context.cohort.n_stays
-    if n_patients is not None and n_stays is not None and n_stays > n_patients:
-        return True
-    # Both counts being known and equal is itself owner-issued proof that every
-    # stay belongs to a different person, so dependence is already ruled out.
-    counts_establish_one_stay_per_patient = (
-        n_patients is not None and n_stays is not None and n_stays <= n_patients
-    )
-    # Otherwise a stay-level cohort without patient identity cannot establish
-    # that every row belongs to a different person. Treat dependence as
-    # possible rather than silently upgrading "unknown" to "independent". The
-    # review below can then offer the governed remedies: materialize patient
-    # grouping or use an owner-issued one-stay/readmission restriction.
-    analysis_unit = str(provenance.get("analysis_unit") or "").strip().casefold()
-    if (
-        provenance.get("evidence_stage") == "metadata_only_planning"
-        and analysis_unit == "icu_stay"
-        and context_patient_group_authority(context) is None
-    ):
-        return True
-    if (
-        n_stays is not None
-        and n_stays > 1
-        and analysis_unit == "icu_stay"
-        and not counts_establish_one_stay_per_patient
-        and context_patient_group_authority(context) is None
-    ):
-        return True
-    text = " ".join(
-        [
-            *[str(value) for value in context.cohort.inclusion_criteria],
-            *[str(value) for value in context.cohort.exclusion_criteria],
-            *[str(value) for value in provenance.get("inclusion_criteria") or ()],
-            *[str(value) for value in provenance.get("exclusion_criteria") or ()],
-            str(preferences.get("data_constraints") or ""),
-            str(preferences.get("extra_notes") or ""),
-        ]
-    ).casefold()
-    return any(
-        token in text
-        for token in (
-            "repeat",
-            "readmission",
-            "re-admission",
-            "repeated stay",
-            "multiple icu",
-            "retain icu readmissions",
-            "重复",
-            "再次 icu",
-            "再次icu",
-        )
-    )
 
 
 def patient_identity_available(context: ResearchContext) -> bool:
@@ -1960,6 +1901,31 @@ def build_plan_scientific_review(
                     ),
                 )
             )
+    if descriptive_counts_only_required(context, analysis_type=plan.analysis_type):
+        unresolved_intervals = [
+            step.step_id for step in plan.steps
+            if step.exposure_outcome_distribution_spec is not None
+            and step.exposure_outcome_distribution_spec.schema_version
+            != "easyicu.exposure_outcome_distribution/3"
+        ]
+        if unresolved_intervals:
+            findings.append(PlanScientificFinding(
+                code="DESCRIPTIVE_INTERVAL_DEPENDENCE_UNRESOLVED",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "Descriptive intervals lack independent-unit or patient-grouping "
+                    "authority: " + ", ".join(unresolved_intervals)
+                ),
+                evidence_refs=["research_context.json.cohort.provenance", "analysis_plan.json"],
+                remediation=(
+                    "Regenerate the descriptive plan through the shared source-bound "
+                    "counts-only compiler. Retain all stays and report counts and "
+                    "proportions; do not promise intervals or inferential contrasts. "
+                    "Patient-level inference requires verified grouping authority."
+                ),
+                remediation_route="agent_plan_revision",
+            ))
     if repeats and not patient_identity and not repeated_unit_design_closed(context, plan):
         findings.append(
             PlanScientificFinding(

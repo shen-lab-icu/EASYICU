@@ -1149,6 +1149,28 @@ def test_equal_patient_and_stay_counts_do_not_raise_dependence_blocker() -> None
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
 
 
+def test_descriptive_intervals_without_patient_identity_cannot_be_approved() -> None:
+    context = _context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_epidemiology",
+        steps=[_absolute_risk_distribution_step()],
+    )
+    original_plan = plan.model_dump(mode="json")
+    review = build_plan_scientific_review(
+        context=context, plan=plan, literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    assert review.approval_allowed is False
+    finding = next(item for item in review.findings
+                   if item.code == "DESCRIPTIVE_INTERVAL_DEPENDENCE_UNRESOLVED")
+    assert finding.severity == "blocker"
+    assert finding.remediation_route == "agent_plan_revision"
+    assert review.dimension_scores["statistical_design"] < 100
+    assert plan.model_dump(mode="json") == original_plan
+
+
 def test_planner_selected_adjustment_roster_is_agent_owned() -> None:
     context = _context().model_copy(
         update={

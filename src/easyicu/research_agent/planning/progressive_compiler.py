@@ -61,7 +61,7 @@ from .cohort_contract import (
     cohort_concept_id_scope,
     validate_cohort_definition,
 )
-from .dependence_authority import context_counts_only_authority
+from .dependence_authority import descriptive_counts_only_required
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
 from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
@@ -1140,8 +1140,8 @@ def _compile_distribution(
         # denominator explicit in the typed distribution table.
         missing_exposure_policy = "exclude_from_denominator"
     if counts_only:
-        # The typed StudyContext has already forbidden uncertainty and effect
-        # contrasts. Compile only the observed denominators, counts, and
+        # Study authority or the shared source-bound ceiling forbids uncertainty
+        # and effect contrasts. Compile only the observed denominators, counts, and
         # proportions; model-supplied contrast indexes carry no authority.
         return ExposureOutcomeDistributionSpec(
             schema_version="easyicu.exposure_outcome_distribution/3",
@@ -2097,7 +2097,9 @@ def _compile_one_step(
             variables=variables,
             step=step,
             step_index=step_index,
-            counts_only=context_counts_only_authority(context),
+            counts_only=descriptive_counts_only_required(
+                context, analysis_type=skeleton.analysis_type,
+            ),
         )
         kwargs["exposure_outcome_distribution_spec"] = spec
         kwargs["scientific_capability"] = "descriptive_exposure_outcome_distribution_v1"

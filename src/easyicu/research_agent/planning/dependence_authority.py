@@ -22,6 +22,7 @@ from ..contracts.descriptive_execution import (
 )
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..schema import AnalysisPlan, ResearchContext
+from .analysis_types import canonical_analysis_family
 
 
 DEPENDENCE_DIAGNOSTIC_OWNER = "easyicu.planning.dependence_authority_v1"
@@ -248,6 +249,73 @@ def context_patient_group_authority(
     return None
 
 
+def repeat_units_possible(context: ResearchContext) -> bool:
+    """Assess repeated-unit risk once for planning, compilation, and review."""
+
+    provenance = context.cohort.provenance or {}
+    preferences = context.user_preferences
+    if hasattr(preferences, "model_dump"):
+        preferences = preferences.model_dump(mode="json")
+    preferences = preferences if isinstance(preferences, Mapping) else {}
+    n_patients = context.cohort.n_patients
+    n_stays = context.cohort.n_stays
+    if n_patients is not None and n_stays is not None and n_stays > n_patients:
+        return True
+    counts_establish_one_stay_per_patient = (
+        n_patients is not None and n_stays is not None and n_stays <= n_patients
+    )
+    analysis_unit = str(provenance.get("analysis_unit") or "").strip().casefold()
+    if (
+        provenance.get("evidence_stage") == "metadata_only_planning"
+        and analysis_unit == "icu_stay"
+        and context_patient_group_authority(context) is None
+    ):
+        return True
+    if (
+        n_stays is not None
+        and n_stays > 1
+        and analysis_unit == "icu_stay"
+        and not counts_establish_one_stay_per_patient
+        and context_patient_group_authority(context) is None
+    ):
+        return True
+    text = " ".join(
+        [
+            *[str(value) for value in context.cohort.inclusion_criteria],
+            *[str(value) for value in context.cohort.exclusion_criteria],
+            *[str(value) for value in provenance.get("inclusion_criteria") or ()],
+            *[str(value) for value in provenance.get("exclusion_criteria") or ()],
+            str(preferences.get("data_constraints") or ""),
+            str(preferences.get("extra_notes") or ""),
+        ]
+    ).casefold()
+    return any(
+        token in text
+        for token in (
+            "repeat", "readmission", "re-admission", "repeated stay",
+            "multiple icu", "retain icu readmissions", "重复", "再次 icu", "再次icu",
+        )
+    )
+
+
+def descriptive_counts_only_required(
+    context: ResearchContext, *, analysis_type: str
+) -> bool:
+    """Restrict descriptive uncertainty without inventing a user decision.
+
+    The existing typed ceiling still governs every family. The source-derived
+    ceiling applies only to a declared descriptive family: absence of patient
+    grouping is not permission to compile independent-row intervals. It does
+    not change the question, filter stays, or downgrade another study family.
+    """
+
+    return context_counts_only_authority(context) or (
+        canonical_analysis_family(analysis_type) == "descriptive_epidemiology"
+        and repeat_units_possible(context)
+        and context_patient_group_authority(context) is None
+    )
+
+
 def context_dependence_authority(
     context: ResearchContext,
 ) -> PlannedDependenceRequirement | None:
@@ -403,5 +471,7 @@ __all__ = [
     "context_counts_only_authority",
     "context_dependence_authority",
     "context_patient_group_authority",
+    "descriptive_counts_only_required",
     "dependence_matches_context",
+    "repeat_units_possible",
 ]
