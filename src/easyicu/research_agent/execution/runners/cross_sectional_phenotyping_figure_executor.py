@@ -10,7 +10,12 @@ from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import PCA
 
+from ...contracts.figure_plan import (
+    CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS,
+    CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS,
+)
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
@@ -27,11 +32,7 @@ from .cross_sectional_phenotyping_executor import (
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
 
-PHENOTYPING_FIGURE_INPUTS = (
-    PHENOTYPE_PROFILES_PRODUCT,
-    PHENOTYPE_ASSIGNMENTS_PRODUCT,
-    CLUSTER_STABILITY_PRODUCT,
-)
+PHENOTYPING_FIGURE_INPUTS = CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS
 PHENOTYPING_FIGURE_ANALYSIS_KIND = "cross_sectional_phenotyping_figure"
 _CAPABILITY = TypedInputCapability(required=frozenset(PHENOTYPING_FIGURE_INPUTS))
 _REQUIRED_COLUMNS = {
@@ -134,6 +135,40 @@ def _load_inputs(
     }
 
 
+def _project_assignments(assignments: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """A reproducible display transform of all sealed rows, never a cluster fit."""
+
+    columns = [column for column in assignments if column.startswith("feature__")]
+    if len(columns) < 2 or len(assignments) < 2:
+        raise RuntimeError("phenotype projection requires the sealed feature matrix")
+    matrix = assignments[columns].to_numpy(dtype=float)
+    if not np.isfinite(matrix).all():
+        raise RuntimeError("phenotype projection feature matrix is not finite")
+    if assignments[["unit_id", "cluster"]].isna().any().any() or assignments["unit_id"].duplicated().any():
+        raise RuntimeError("phenotype assignments lack unique units or complete cluster labels")
+    projection = PCA(n_components=2, svd_solver="full", whiten=False).fit(matrix)
+    if not np.isfinite(projection.explained_variance_ratio_).all():
+        raise RuntimeError("phenotype projection has no finite explained variance")
+    coordinates = projection.transform(matrix)
+    frame = pd.DataFrame({
+        "source_row_index": np.arange(len(assignments)),
+        "cluster": assignments["cluster"].to_numpy(),
+        "pc1": coordinates[:, 0], "pc2": coordinates[:, 1],
+    })
+    return frame, {
+        "schema_version": "easyicu.phenotype_display_projection/1",
+        "method": "PCA", "svd_solver": "full", "whiten": False,
+        "n_components": 2, "feature_columns": columns,
+        "mean": projection.mean_.tolist(), "components": projection.components_.tolist(),
+        "explained_variance": projection.explained_variance_.tolist(),
+        "explained_variance_ratio": projection.explained_variance_ratio_.tolist(),
+        "n_rows": len(assignments), "row_policy": "all_rows",
+        "input_representation": "sealed_standardized_primary_matrix",
+        "refit_clustering": False, "outcome_used": False,
+        "interpretation": "display_only_not_evidence_of_valid_subtypes",
+    }
+
+
 def run_cross_sectional_phenotyping_figure(
     *,
     out_dir: Path,
@@ -162,24 +197,36 @@ def run_cross_sectional_phenotyping_figure(
     profiles["standardised_centroid"] = pd.to_numeric(
         profiles["standardised_centroid"], errors="coerce"
     )
-    wide = profiles.pivot_table(
+    wide = profiles.pivot(
         index="cluster",
         columns="variable",
         values="standardised_centroid",
-        aggfunc="mean",
     ).sort_index()
     if wide.shape[0] < 2 or wide.shape[1] < 2 or not np.isfinite(wide.to_numpy()).all():
         raise RuntimeError("phenotyping profile table is not a finite cluster matrix")
     sizes = assignments.groupby("cluster", sort=True).size()
+    projection, transform = _project_assignments(assignments)
+    features = [column.removeprefix("feature__") for column in transform["feature_columns"]]
+    if set(sizes.index) != set(wide.index) or set(wide.columns) != set(features):
+        raise RuntimeError("phenotype profiles disagree with sealed cluster or feature labels")
+    counts = pd.to_numeric(profiles["n"], errors="coerce")
+    if not np.array_equal(counts.to_numpy(), profiles["cluster"].map(sizes).to_numpy()):
+        raise RuntimeError("phenotype profile counts disagree with sealed assignments")
+    sealed_means = assignments.groupby("cluster")[transform["feature_columns"]].mean()
+    sealed_means.columns = features
+    if not np.allclose(wide, sealed_means.loc[wide.index, wide.columns], rtol=1e-10, atol=1e-12):
+        raise RuntimeError("phenotype centroids disagree with the sealed feature matrix")
     stability_values = pd.to_numeric(stability["adjusted_rand_index"], errors="coerce")
-    if stability_values.isna().any() or not np.isfinite(stability_values).all():
-        raise RuntimeError("phenotyping stability table is not finite")
+    if not stability_values.between(-1, 1).all() or stability["replicate"].isna().any() or stability["replicate"].duplicated().any():
+        raise RuntimeError("phenotyping stability table has invalid agreement or replicate values")
+    mean_values = pd.to_numeric(stability["mean_adjusted_rand_index"], errors="coerce")
+    if not np.allclose(mean_values, stability_values.mean(), rtol=1e-12, atol=1e-12):
+        raise RuntimeError("phenotyping stability mean disagrees with sealed replicates")
     algorithm_values = pd.to_numeric(
         stability.get("algorithm_agreement_ari"), errors="coerce"
     )
     if (
-        algorithm_values.isna().any()
-        or not np.isfinite(algorithm_values).all()
+        not algorithm_values.between(-1, 1).all()
         or algorithm_values.nunique() != 1
     ):
         raise RuntimeError("phenotyping algorithm-agreement value is not sealed")
@@ -197,46 +244,75 @@ def run_cross_sectional_phenotyping_figure(
         source.insert(0, "source_row_index", range(len(source)))
         source.to_csv(out_dir / filename, index=False)
         source_files.append(filename)
+    projection_filename = "phenotype_projection_source_data.csv"
+    projection.to_csv(out_dir / projection_filename, index=False)
+    source_files.append(projection_filename)
+    transform.update({
+        "source_product": PHENOTYPE_ASSIGNMENTS_PRODUCT,
+        "source_sha256": bound[PHENOTYPE_ASSIGNMENTS_PRODUCT].sha256,
+        "projection_source_data": projection_filename,
+        "projection_sha256": sha256_file(out_dir / projection_filename),
+    })
+    transform_filename = "phenotype_projection_transform.json"
+    (out_dir / transform_filename).write_text(
+        json.dumps(transform, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
 
     palette = apply_publication_style(font_size=7.0)
-    fig = plt.figure(figsize=(183 / 25.4, 118 / 25.4), constrained_layout=True)
+    profile_labels = [textwrap.fill(display_label(str(value)), width=25) for value in wide.columns]
+    profile_text_rows = len(profile_labels) * max(label.count("\n") + 1 for label in profile_labels)
+    height_mm = max(118.0, 30.0 + 3.4 * profile_text_rows)
+    fig = plt.figure(figsize=(183 / 25.4, height_mm / 25.4), constrained_layout=True)
     grid = fig.add_gridspec(
         2,
-        3,
-        width_ratios=(1.0, 1.0, 0.92),
-        height_ratios=(0.72, 1.28),
+        2,
+        width_ratios=(1.15, 1.0),
+        height_ratios=(1.65, 1.0),
     )
-    ax_profiles = fig.add_subplot(grid[:, :2])
-    ax_sizes = fig.add_subplot(grid[0, 2])
-    ax_stability = fig.add_subplot(grid[1, 2])
-    image = ax_profiles.imshow(
-        wide.to_numpy(), aspect="auto", cmap="RdBu_r", vmin=-2.5, vmax=2.5
-    )
-    ax_profiles.set_yticks(range(len(wide.index)), [f"C{x}" for x in wide.index])
-    ax_profiles.set_xticks(
-        range(len(wide.columns)),
-        [
-            display_label(re.sub(r"_(max|min|first|last)$", "", str(value)))
-            for value in wide.columns
-        ],
-        rotation=45,
-        ha="right",
-    )
-    ax_profiles.set_title("Standardised candidate-cluster profiles", loc="left", pad=7)
-    fig.colorbar(image, ax=ax_profiles, fraction=0.046, pad=0.03, label="Standardised centroid")
-    add_panel_label(ax_profiles, "a", x=-0.10, y=1.04, fontsize=8.0)
+    ax_projection = fig.add_subplot(grid[0, 0])
+    ax_profiles = fig.add_subplot(grid[:, 1])
+    ax_stability = fig.add_subplot(grid[1, 0])
+    colours = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9")
+    markers = ("o", "^", "s", "D", "v", "P")
+    for index, cluster in enumerate(sizes.index):
+        points = projection.loc[projection["cluster"] == cluster]
+        ax_projection.scatter(
+            points["pc1"], points["pc2"], s=5, alpha=0.45,
+            color=colours[index % len(colours)], marker=markers[index % len(markers)],
+            linewidths=0, rasterized=True, label=f"C{cluster} (n = {sizes[cluster]:,})",
+        )
+    variance = transform["explained_variance_ratio"]
+    ax_projection.set_xlabel(f"PC1 ({variance[0]:.1%} variance)")
+    ax_projection.set_ylabel(f"PC2 ({variance[1]:.1%} variance)")
+    ax_projection.set_aspect("equal", adjustable="datalim")
+    ax_projection.set_title("Candidate-cluster PCA display", loc="left", pad=7)
+    ax_projection.legend(frameon=False, fontsize=6, markerscale=1.8, loc="best", ncols=2 if len(sizes) > 3 else 1)
+    add_panel_label(ax_projection, "a", x=-0.14, y=1.04, fontsize=8.0)
 
-    ax_sizes.bar(range(len(sizes)), sizes.to_numpy(), color=palette["blue"], width=0.65)
-    ax_sizes.set_xticks(range(len(sizes)), [f"C{x}" for x in sizes.index])
-    ax_sizes.set_ylabel("Stays, n")
-    ax_sizes.set_title("Candidate-cluster size", loc="left", pad=7)
-    add_panel_label(ax_sizes, "b", x=-0.18, y=1.04, fontsize=8.0)
+    centroid_limit = max(1.0, float(np.abs(wide.to_numpy()).max()))
+    image = ax_profiles.imshow(
+        wide.to_numpy().T, aspect="auto", cmap="RdBu_r",
+        vmin=-centroid_limit, vmax=centroid_limit,
+    )
+    ax_profiles.set_xticks(
+        range(len(wide.index)), [f"C{x}" for x in wide.index],
+    )
+    ax_profiles.set_yticks(
+        range(len(wide.columns)), profile_labels,
+    )
+    ax_profiles.set_title("Clinical feature profiles", loc="left", pad=7)
+    fig.colorbar(image, ax=ax_profiles, fraction=0.046, pad=0.03, label="Standardised centroid")
+    add_panel_label(ax_profiles, "b", x=-0.18, y=1.04, fontsize=8.0)
 
     ax_stability.bar(
-        stability["replicate"].astype(str), stability_values, color=palette["orange"]
+        range(len(stability)), stability_values, color=palette["orange"]
     )
+    ax_stability.set_xticks(range(len(stability)), stability["replicate"].astype(str))
+    ax_stability.axhline(0, color="#777777", linewidth=0.5)
     ax_stability.axhline(
-        float(stability_values.mean()), color="#333333", linestyle="--", linewidth=0.9
+        float(stability_values.mean()), color="#333333", linestyle="--", linewidth=0.9,
+        label="Subsample mean",
     )
     ax_stability.axhline(
         algorithm_agreement,
@@ -245,60 +321,56 @@ def run_cross_sectional_phenotyping_figure(
         linewidth=1.1,
         label="GMM agreement",
     )
-    ax_stability.set_ylim(-0.05, 1.0)
-    ax_stability.set_xlabel("Resample")
+    ax_stability.set_ylim(min(0.0, float(stability_values.min()), algorithm_agreement) - 0.08, 1.08)
+    ax_stability.set_xlabel("Subsample (fixed preprocessing and K)")
     ax_stability.set_ylabel("Adjusted Rand index")
-    ax_stability.set_title("Stability and algorithm agreement", loc="left", pad=7)
-    ax_stability.legend(frameon=False, fontsize=6, loc="upper right")
+    ax_stability.set_title("Conditional stability", loc="left", pad=7)
+    ax_stability.legend(frameon=False, fontsize=6, loc="best")
     add_panel_label(ax_stability, "c", x=-0.18, y=1.04, fontsize=8.0)
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
-    panel_specs = (
-        (
-            "a",
-            "Candidate-cluster profiles",
-            "phenotype_structure",
-            (PHENOTYPE_PROFILES_PRODUCT,),
-        ),
-        ("b", "Cluster size", "phenotype_profile", (PHENOTYPE_ASSIGNMENTS_PRODUCT,)),
-        (
-            "c",
-            "Stability and algorithm agreement",
-            "stability",
-            (CLUSTER_STABILITY_PRODUCT,),
-        ),
-    )
+    titles = {
+        "a": "Candidate-cluster PCA display", "b": "Clinical feature profiles",
+        "c": "Conditional stability and algorithm agreement",
+    }
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
             "The analysis-only candidate clustering solution is displayed with "
-            "exact standardised profiles, cluster sizes and resampling agreement; "
+            "all-row PCA projection, exact standardised profiles, cluster sizes "
+            "and conditional subsample agreement; "
             "no phenotype name or biological entity is authorized."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=118.0,
+        height_mm=height_mm,
         panels=[
             {
-                "panel_id": panel_id,
-                "title": title,
-                "role": role,
+                "panel_id": panel.panel_id,
+                "title": titles[panel.panel_id],
+                "role": panel.article_role,
                 "claim": "This panel is descriptive and does not establish a biological ground truth or clinical utility.",
-                "evidence_ids": [evidence[source] for source in sources],
+                "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
-                    "source_products": list(sources),
+                    "chart_type": panel.chart_type,
+                    "source_products": list(panel.source_products),
                     "source_data": [
                         f"{source.partition(':')[2]}_source_data.csv"
-                        for source in sources
+                        for source in panel.source_products
                     ],
+                    **({"display_projection": transform, "projection_transform_file": transform_filename}
+                       if panel.panel_id == "a" else {}),
                 },
             }
-            for panel_id, title, role, sources in panel_specs
+            for panel in CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS
         ],
         source_data=source_files,
         statistics_note=(
-            "Profiles and assignments are produced by the deterministic adapter; "
-            "adjusted Rand indices compare fixed-seed subsample refits, and the "
+            "Full-SVD PCA centers the sealed standardized matrix without additional "
+            "scaling or whitening; all rows and primary cluster labels are retained. "
+            "This display does not refit clustering or validate distinct subtypes. "
+            "Adjusted Rand indices compare fixed-seed subsample refits with primary "
+            "preprocessing and K held fixed; bars are replicates, not confidence intervals. The "
             "dotted line compares the primary MiniBatchKMeans assignments with "
             "a deterministic diagonal-GMM alternative at the same K. Results "
             "remain analysis_only and do not establish external reproducibility."
@@ -328,6 +400,8 @@ def run_cross_sectional_phenotyping_figure(
         "outcome_claim_authorized": False,
         "solution_label": "candidate_clusters_only",
         "rendering_only": True,
+        "display_projection": transform,
+        "display_transform_files": [transform_filename],
         "source_inputs": list(PHENOTYPING_FIGURE_INPUTS),
         "input_bindings": [
             {

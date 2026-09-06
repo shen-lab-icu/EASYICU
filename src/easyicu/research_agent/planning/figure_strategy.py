@@ -354,7 +354,7 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "stability",
                 "Stability evidence protects against arbitrary cluster cuts.",
-                ("stability_grid", "consensus_matrix", "bootstrap_panel"),
+                ("stability_grid", "consensus_matrix", "bootstrap_panel", "subsampling_ari"),
                 search_terms=("stability", "bootstrap", "consensus"),
             ),
             _role(

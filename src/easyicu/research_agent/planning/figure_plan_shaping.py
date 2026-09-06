@@ -20,6 +20,8 @@ from ..contracts.figure_plan import (
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_FLOW_FIGURE_PANELS,
     COHORT_FLOW_INPUT,
+    CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS,
+    CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS,
     DATA_QUALITY_AUDIT_ROLES,
     DATA_QUALITY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
@@ -632,6 +634,61 @@ def ensure_absolute_risk_association_composite_figure_step(
     ]
 
 
+def ensure_cross_sectional_phenotyping_figure_step(
+    *, plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Select the native display only for uniquely owned native result products."""
+
+    sources = CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS
+    owners = {
+        source: [step for step in plan.steps if source in step.expected_outputs]
+        for source in sources
+    }
+    if any(len(steps) != 1 for steps in owners.values()):
+        return plan, []
+    primary = owners[sources[0]][0]
+    stability = owners[sources[2]][0]
+    if (
+        primary.planned_analysis_role != "primary"
+        or primary.scientific_action_id != "phenotyping.cluster_solution"
+        or tuple(primary.expected_outputs) != sources[:2]
+        or owners[sources[1]][0].step_id != primary.step_id
+        or stability.scientific_action_id != "phenotyping.cluster_stability"
+        or tuple(stability.expected_outputs) != (sources[2],)
+        or sources[1] not in stability.inputs
+        or _dedicated_renderer_consumes_exact_sources(
+            [step for step in plan.steps if step.planned_analysis_role == "auxiliary"],
+            sources=sources,
+        )
+    ):
+        return plan, []
+    output = _next_figure_output(plan.steps, "figure:cross_sectional_phenotyping")
+    figure = AnalysisStep(
+        step_id=_next_step_id(plan.steps, "cross_sectional_phenotyping_figure"),
+        planned_analysis_role="auxiliary", method="visualization",
+        intent=(
+            "Display existing candidate clusters using a full-SVD two-component "
+            "PCA of the sealed standardized matrix, clinical profile heatmap, "
+            "and conditional subsample/GMM agreement. Preserve all rows and "
+            "negative agreement; do not refit clusters or infer clinical validity."
+        ),
+        inputs=list(sources), expected_outputs=[output],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source, mode="all_rows")
+            for source in sources
+        ],
+        figure_panels=[panel.bind(figure_output=output) for panel in CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS],
+        icu_rule_refs=["visualization_rule"],
+    )
+    return plan.model_copy(update={"steps": [*plan.steps, figure]}), [ValidationFinding(
+        validator="cross_sectional_phenotyping_figure_contract", severity="warning",
+        message="Bound a source-traceable native candidate-cluster display before generic figure fallback.",
+        detail={"reason_code": "cross_sectional_phenotyping_figure_bound", "step_id": figure.step_id,
+                "inputs": list(sources), "figure_output": output,
+                "producer_step_ids": {key: value[0].step_id for key, value in owners.items()}},
+    )]
+
+
 def select_deterministic_result_renderers(
     *,
     plan: AnalysisPlan,
@@ -651,6 +708,7 @@ def select_deterministic_result_renderers(
         ensure_primary_result_figure_step,
         ensure_absolute_risk_association_composite_figure_step,
         ensure_landmark_association_composite_figure_step,
+        ensure_cross_sectional_phenotyping_figure_step,
     ):
         plan, pass_findings = select(plan=plan)
         findings.extend(pass_findings)
@@ -975,6 +1033,7 @@ def bind_deterministic_figure_panels(
     """
 
     templates_by_inputs = {
+        frozenset(CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS): CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS,
         frozenset({COHORT_FLOW_INPUT}): COHORT_FLOW_FIGURE_PANELS,
         frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}): (
             EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS
@@ -1397,6 +1456,8 @@ def close_empty_deterministic_figure_contracts(
             templates = cohort_balance_association_composite_panels(inputs)
         elif input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):
             templates = absolute_risk_association_composite_panels(inputs)
+        elif input_set == frozenset(CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS):
+            templates = CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS
         if (
             templates is None
             or (eligible is not None and step_id not in eligible)
@@ -1455,6 +1516,7 @@ def close_empty_deterministic_figure_contracts(
 
 
 __all__ = [
+    "ensure_cross_sectional_phenotyping_figure_step",
     "apply_article_figure_strategy_placements",
     "apply_deterministic_figure_panels",
     "apply_runtime_bound_figure_contracts",
