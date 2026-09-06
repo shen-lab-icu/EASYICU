@@ -1641,6 +1641,11 @@ def _text_assigns_studied_exposure(exposure: str, text: str) -> bool:
         rf"\b(?:patients?|participants?|subjects?|cohort)\b.{{0,40}}\b(?:meeting|met|fulfilling|satisfying)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
         rf"\b(?:defined|diagnosed|classified)\b.{{0,30}}\b(?:according\s+to|using|by)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
         rf"\b(?:(?:adult|critically\s+ill|icu|intensive\s+care)\s+)*patients?\s+(?:(?:who|that)\s+(?:were\s+)?)?(?:with|diagnosed\s+with|having)\s+(?:the\s+)?{escaped}\b(?!\s+(?:versus|vs|compared\s+(?:with|to)|and\s+without))",
+        # A disease may modify the population noun ("AKI patients" or
+        # "cohorts of AKI patients") instead of following "patients with".
+        # Model validation within that population does not study the disease
+        # contrast. Retain an explicit comparison immediately after the noun.
+        rf"\b{escaped}\s+(?:patients?|participants?|subjects?|cohorts?|populations?)\b(?!\s+(?:versus|vs|compared\s+(?:with|to)|and\s+without))",
     )
     for pattern in eligibility_patterns:
         analytic_text = re.sub(pattern, " ", analytic_text)
