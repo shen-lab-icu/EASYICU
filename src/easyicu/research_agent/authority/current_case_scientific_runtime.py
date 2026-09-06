@@ -35,6 +35,7 @@ from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import landmark_association_composite_panels
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.model_terms import ModelTermSpec
+from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -1185,6 +1186,9 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 "method": self.plan_method,
                 "intent": self.plan_intent,
                 "scientific_capability": LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+                "runtime_outcome_contract": RuntimeOutcomeContract(
+                    owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                ),
                 "expected_outputs": list(self.plan_outputs),
                 "inputs": [cohort_input, *self.required_columns],
                 "model_requirements": [],
@@ -1473,6 +1477,10 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             issues.append("intent")
         if step.scientific_capability != LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
             issues.append("scientific_capability")
+        if step.runtime_outcome_contract is not None and step.runtime_outcome_contract != RuntimeOutcomeContract(
+            owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+        ):
+            issues.append("runtime_outcome_contract")
         if tuple(step.expected_outputs) != self.plan_outputs:
             issues.append("expected_outputs")
         if not set(self.required_columns).issubset(step.inputs):

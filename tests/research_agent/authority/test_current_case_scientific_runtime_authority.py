@@ -466,6 +466,16 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert set(authority.required_columns).issubset(bound.steps[0].inputs)
     assert bound.steps[1].inputs == [authority.downstream_parent_product]
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
+    contract = bound.steps[0].runtime_outcome_contract
+    assert contract is not None
+    assert contract.outcomes == (authority.outcome_column,)
+    assert contract.owner_ref == authority.plan_rule_ref
+    tampered = bound.model_copy(update={"steps": [
+        bound.steps[0].model_copy(update={"runtime_outcome_contract": contract.model_copy(update={"outcomes": ("another_outcome",)})}),
+        *bound.steps[1:],
+    ]})
+    with pytest.raises(CurrentCaseScientificAuthorityError, match="runtime_outcome_contract"):
+        authority.validate_plan(tampered)
 
 
 def test_e2_runtime_clears_rebound_binary_sensitivity_capability(

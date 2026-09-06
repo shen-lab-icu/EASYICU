@@ -16,3 +16,15 @@ def has_scientific_runtime_owner(step: AnalysisStep) -> bool:
         _RUNTIME_CONTRACT_REF.fullmatch(str(ref or ""))
         for ref in (step.icu_rule_refs or ())
     )
+
+
+def declared_runtime_outcomes(step: AnalysisStep) -> tuple[str, ...]:
+    """Project only explicit, input-bound endpoints; never guess from a method."""
+    contract = step.runtime_outcome_contract
+    if (
+        contract is None
+        or contract.owner_ref not in step.icu_rule_refs
+        or not set(contract.outcomes).issubset(step.inputs)
+    ):
+        return ()
+    return contract.outcomes

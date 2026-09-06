@@ -21,6 +21,7 @@ from ..contracts.time_varying_exposure import (
 )
 from ..planning.literature_contract import LiteratureDesignBinding
 from ..schema import AnalysisPlan, AnalysisStep
+from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 
 
 class TimeVaryingRuntimeAuthority(BaseModel):
@@ -184,6 +185,10 @@ class TimeVaryingRuntimeAuthority(BaseModel):
                         "scientific_capability": TIME_VARYING_EXPOSURE_CAPABILITY,
                         "sensitivity_spec_ids": [self.sensitivity_spec_id],
                         "icu_rule_refs": [self.plan_rule_ref],
+                        "runtime_outcome_contract": {
+                            "owner_ref": self.plan_rule_ref,
+                            "outcomes": [self.outcome_column],
+                        },
                         "literature_citation_keys": list(
                             self.plan_literature_citation_keys
                         ),
@@ -226,6 +231,9 @@ class TimeVaryingRuntimeAuthority(BaseModel):
             != self.plan_literature_design_bindings
             or self.plan_rule_ref not in step.icu_rule_refs
             or step.model_requirements
+            or (step.runtime_outcome_contract is not None and step.runtime_outcome_contract != RuntimeOutcomeContract(
+                owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+            ))
             or step.family_primary_result_requirement is not None
         ):
             raise ValueError("time-varying plan drifted from its bound specification")
