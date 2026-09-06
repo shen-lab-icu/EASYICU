@@ -27,6 +27,45 @@ def test_node_prompt_obeys_owner_order_before_internal_resolution() -> None:
     assert "missing_setup_fields is ordered by the EasyICU owner" in prompt
     assert "Never offer a generic continue/继续对话 action" in prompt
 
+
+def test_plan_change_draft_requests_whole_plan_revision_without_setup_questionnaire() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    script = r"""
+global.window = {};
+require(process.argv[1]);
+let workflow = {next_action_code: 'plan_execution_upgrade_required'};
+const host = {
+  tr: (en, zh) => zh,
+  workflow: () => workflow,
+};
+const owner = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+const candidate = owner.planChangeDraft();
+workflow = {next_action_code: 'operator_plan_approval_required'};
+const executable = owner.planChangeDraft();
+workflow = {
+  next_action_code: 'plan_scientific_changes_required',
+  plan_review_summary: {authorization_questions: [{question: 'Which external review is authorized?'}]},
+};
+const requiredDecision = owner.planChangeDraft();
+process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
+"""
+    completed = subprocess.run(
+        [node, "-e", script,
+         str(STATIC / "js" / "screens-guided-pi-confirmation.js")],
+        check=True, capture_output=True, text=True,
+    )
+    payload = json.loads(completed.stdout)
+    for key in ("candidate", "executable"):
+        assert "修订整份研究计划" in payload[key]
+        assert "不要开始分析" in payload[key]
+        assert "一次只问" not in payload[key]
+    assert payload["requiredDecision"] == "Which external review is authorized?"
+    shell = _read("js/screens-guided-pi.js")
+    edit = shell.split("function editWorkflow()", 1)[1].split("function studySetupReviewPrompt", 1)[0]
+    assert "state.draft = CONFIRMATION.planChangeDraft();" in edit
+
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260902-type-scale2" in index
@@ -72,10 +111,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260904-agent-plan-auto1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20260904-system-plan3" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20260906-plan-change1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260906-candidate-review1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
-    assert "js/screens-guided-pi.js?v=20260904-system-plan1" in index
+    assert "js/screens-guided-pi.js?v=20260906-plan-change1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -2164,10 +2203,11 @@ def test_scientific_review_hides_system_owned_method_questions() -> None:
     assert ".gpi-decision-option" not in shell_css
     assert ".gpi-plan-conversation-summary" not in shell_css
     assert ".gpi-plan-design-disclosure" not in shell_css
-    # ...while composing and sending the one open question stays in the shell,
-    # which is the only place a turn is actually sent.
-    assert "localizedAuthorizationQuestion(questions[0])" in owner
-    assert "请一次只问我一个尚未解决的科学设定问题" in owner
+    # The read-only confirmation owner supplies the complete-plan draft or
+    # exact required decision. Only the shell can send the resulting turn.
+    assert "localizedAuthorizationQuestion(questions[0])" in confirmation
+    assert "state.draft = CONFIRMATION.planChangeDraft();" in owner
+    assert "请一次只问我一个尚未解决的科学设定问题" not in owner
 
 
 def test_whole_plan_review_renders_its_actual_confirmation_choice() -> None:
@@ -6335,7 +6375,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260906-preparation-history1" in index
-    assert "screens-guided-pi.js?v=20260904-system-plan1" in index
+    assert "screens-guided-pi.js?v=20260906-plan-change1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

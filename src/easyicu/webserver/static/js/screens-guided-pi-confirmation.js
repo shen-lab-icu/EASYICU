@@ -773,12 +773,23 @@
     }
 
 
-    // The shell still needs the localizer for the "one open question at a
-    // time" prompt it composes when the user asks to continue the review.
+    function planChangeDraft() {
+      const workflow = host.workflow() || {};
+      const review = workflow.plan_review_summary || {};
+      const questions = Array.isArray(review.authorization_questions)
+        ? review.authorization_questions.filter(item => item && (item.question || item.code))
+        : [];
+      return (questions.length ? localizedAuthorizationQuestion(questions[0]) : '') || tr(
+        'Please revise the complete research plan using the following review comments, preserve the original question and data source, and explain the changes. Do not start analysis: ',
+        '请根据以下审阅意见修订整份研究计划，保留原始问题与数据来源，并说明修改依据。不要开始分析：',
+      );
+    }
+
     return {
       workflowConfirmation,
       workflowConfirmationHtml,
       localizedAuthorizationQuestion,
+      planChangeDraft,
     };
   }
 

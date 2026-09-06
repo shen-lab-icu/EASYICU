@@ -265,7 +265,6 @@
   });
   const workflowConfirmation = CONFIRMATION.workflowConfirmation;
   const workflowConfirmationHtml = CONFIRMATION.workflowConfirmationHtml;
-  const localizedAuthorizationQuestion = CONFIRMATION.localizedAuthorizationQuestion;
   const COHORT_ELIGIBILITY = MODULES.require('cohortEligibility').create({
     tr, esc,
     session: () => state.session,
@@ -1636,15 +1635,7 @@
       });
       return;
     }
-    const review = workflow.plan_review_summary || {};
-    const questions = Array.isArray(review.authorization_questions)
-      ? review.authorization_questions.filter(item => item && (item.question || item.code))
-      : [];
-    const nextQuestion = questions.length ? localizedAuthorizationQuestion(questions[0]) : '';
-    state.draft = nextQuestion || tr(
-      'Please ask me the next unresolved scientific decision and save my answer in the typed study configuration.',
-      '请一次只问我一个尚未解决的科学设定问题，并把我的回答保存到结构化研究配置。',
-    );
+    state.draft = CONFIRMATION.planChangeDraft();
     render();
     requestAnimationFrame(() => {
       const input = state.host && state.host.querySelector('[data-gpi-input]');

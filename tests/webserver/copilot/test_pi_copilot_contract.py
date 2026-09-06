@@ -2930,9 +2930,18 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     assert unrelated_abort.value.code == "pi_message_job_mismatch"
 
 
-def test_current_user_explicit_extraction_confirmation_is_host_granted(
+@pytest.mark.parametrize(
+    ("message", "expected_action"),
+    [
+        ("授权下载并准备官方 MIMIC-IV demo。", "extract"),
+        ("请自行审阅并修订整份研究计划，不要开始分析。", "provider_run"),
+    ],
+)
+def test_current_user_explicit_action_is_host_granted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    expected_action: str,
 ) -> None:
     monkeypatch.setattr(
         settings,
@@ -2949,7 +2958,7 @@ def test_current_user_explicit_extraction_confirmation_is_host_granted(
     submitted = service.send_message(
         session_id,
         project_id="project-explicit-extract",
-        message="授权下载并准备官方 MIMIC-IV demo。",
+        message=message,
     )
     deadline = time.monotonic() + 3
     job = None
@@ -2960,9 +2969,9 @@ def test_current_user_explicit_extraction_confirmation_is_host_granted(
         time.sleep(0.01)
 
     assert job is not None and job.status == "done"
-    assert gateway.tool_contexts[-1].allowed_actions == frozenset({"extract"})
+    assert gateway.tool_contexts[-1].allowed_actions == frozenset({expected_action})
     record = service._get_record(session_id)
-    assert record.last_turn_allowed_actions == ["extract"]
+    assert record.last_turn_allowed_actions == [expected_action]
 
 
 def test_provider_error_marks_message_job_failed_without_raw_network_detail(

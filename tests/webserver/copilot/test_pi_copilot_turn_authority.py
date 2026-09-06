@@ -44,6 +44,12 @@ def test_explicit_extraction_confirmation_grants_one_turn(message: str) -> None:
         "已启用 provider_run 授权，重新生成干净分析计划",
         "在 EasyICU 中重新授予并传递一次性 provider_run 授权",
         "Please regenerate the Research Agent analysis plan and pause for review.",
+        "请自行核查候选计划是否完整回答原问题；发现冲突时修订整份计划并说明依据。不要改变原问题或数据来源。",
+        "请自行核查候选计划是否完整回答原问题，特别是研究人群与比较组的对应关系；发现冲突时修订整份计划并说明依据。不要改变原问题或数据来源。",
+        "请根据以下审阅意见修订整份研究计划，保留原始问题与数据来源，并说明修改依据。不要开始分析：人群与比较组需要对应。",
+        "请根据审阅意见修改当前研究计划，但不要开始正式分析。",
+        "Please revise the complete candidate plan and explain the changes.",
+        "Revise the analysis plan for review before analysis.",
     ],
 )
 def test_explicit_replan_request_grants_one_provider_turn(message: str) -> None:
@@ -61,6 +67,15 @@ def test_explicit_replan_request_grants_one_provider_turn(message: str) -> None:
         "Please extract the data when ready.",
         "选择 MIMIC-IV Clinical Database Demo（v2.2）。",
         "使用本地 MIMIC-IV v3.1。",
+        "请审阅当前计划，只报告问题。",
+        "请解释如何修订整份计划。",
+        "请审阅计划，暂不修改研究计划。",
+        "不要修订整份计划。",
+        "不要重新生成分析计划。",
+        "How should I revise the analysis plan?",
+        "Please explain how to revise the candidate plan.",
+        "Do not revise the complete candidate plan.",
+        "Don't regenerate the analysis plan.",
         "",
     ],
 )
