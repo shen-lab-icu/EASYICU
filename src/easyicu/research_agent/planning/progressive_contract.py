@@ -636,6 +636,16 @@ class ProgressivePlanFoundation(BaseModel):
     robustness_intents: list[ProgressiveRobustnessIntent] = Field(default_factory=list)
     know_how_decisions: list[ProgressiveKnowHowDecision] = Field(default_factory=list)
 
+    @field_validator("display_labels", mode="before")
+    @classmethod
+    def _keyed_label_transport(cls, value):
+        # Run-bound structured transport owns the exact keys. The model only
+        # writes their reader-facing meanings; sealed artifacts keep the same
+        # canonical list representation used by the compiler and replay.
+        if isinstance(value, dict):
+            return [{"key": key, "value": label} for key, label in value.items()]
+        return value
+
     @model_validator(mode="after")
     def _unique_rosters(self) -> "ProgressivePlanFoundation":
         label_keys = [item.key for item in self.display_labels]

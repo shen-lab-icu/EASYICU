@@ -3826,6 +3826,8 @@ class ProgressivePlannerAgent:
                 ),
                 analysis_type=outline.analysis_type,
                 require_robustness_intent=require_robustness_intent,
+                required_reader_display_label_keys=required_label_keys,
+                required_binary_display_label_scopes=required_label_scopes,
             )
         foundation_prompt = self._foundation_prompt(
             context=context,

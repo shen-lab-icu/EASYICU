@@ -2233,6 +2233,27 @@ def test_foundation_schema_compiles_robustness_shape_invariant() -> None:
     ]
 
 
+def test_foundation_transport_owns_required_label_keys_and_canonicalizes_values():
+    from jsonschema import validate, ValidationError
+    from easyicu.research_agent.planning.progressive_contract import ProgressivePlanFoundation
+
+    request = progressive_foundation_structured_output_request(
+        outline_sha256="a" * 64, variable_names=["exposure_flag", "outcome_flag"],
+        required_reader_display_label_keys=["exposure_flag", "outcome_flag"],
+        required_binary_display_label_scopes=["exposure_flag"],
+    )
+    schema = json.loads(request.schema_json)["$defs"]["ProgressivePlanFoundation"]["properties"]["display_labels"]
+    labels = {"exposure_flag": "Observed exposure", "outcome_flag": "Hospital outcome", "exposure_flag=0": "Unexposed", "exposure_flag=1": "Exposed"}
+    validate(labels, schema)
+    with pytest.raises(ValidationError):
+        validate({}, schema)
+    with pytest.raises(ValidationError):
+        validate({key: value for key, value in labels.items() if key != "outcome_flag"}, schema)
+    assert ProgressivePlanFoundation._keyed_label_transport(labels) == [
+        {"key": key, "value": value} for key, value in labels.items()
+    ]
+
+
 def test_descriptive_foundation_schema_forbids_effect_robustness_intents() -> None:
     request = progressive_foundation_structured_output_request(
         outline_sha256="a" * 64,
