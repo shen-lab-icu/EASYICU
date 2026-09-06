@@ -185,7 +185,7 @@ def test_planner_and_replanner_use_unified_outbound_safe_projection(
     planner_prompt = _last_user_prompt(planner_llm)
     assert _MATERIALIZED_HEADING not in planner_prompt
     assert "age" in planner_prompt
-    assert "easyicu.outbound_safe_context/1" in planner_prompt
+    assert "easyicu.outbound_safe_context/2" in planner_prompt
 
     replanner_llm = _CapturingLLM(plan.model_dump_json())
     ReplannerAgent(replanner_llm).run(
@@ -195,7 +195,7 @@ def test_planner_and_replanner_use_unified_outbound_safe_projection(
     replanner_prompt = _last_user_prompt(replanner_llm)
     assert _MATERIALIZED_HEADING not in replanner_prompt
     assert "age" in replanner_prompt
-    assert "easyicu.outbound_safe_context/1" in replanner_prompt
+    assert "easyicu.outbound_safe_context/2" in replanner_prompt
 
 
 def test_analyzer_and_writer_do_not_receive_materialized_block_by_default(
