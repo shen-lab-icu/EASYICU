@@ -18,13 +18,15 @@
       .filter(Boolean).map(esc).join(' · ');
   }
   function displayTitle(row) {
-    const title = String(row.title || row.label || row.key || tr('Untitled source', '未命名文献'));
-    if (window.EU_LANG !== 'zh') return title;
-    if (/\bSTROBE\b/i.test(title)) return '观察性研究报告规范（STROBE）';
-    if (/\bRECORD\b/i.test(title)) return '常规医疗数据研究报告规范（RECORD）';
-    if (/\bSepsis-3\b/i.test(title)) return '脓毒症 Sepsis-3 共识定义';
-    if (/\bSOFA\b/i.test(title)) return 'SOFA 器官功能评分定义';
-    return title;
+    // A topic keyword is not bibliographic identity or an article type.
+    return String(row.title || row.label || row.key || tr('Untitled source', '未命名文献'));
+  }
+  function sourceNotices(row) {
+    const notices = (Array.isArray(row.bibliographic_notices) ? row.bibliographic_notices : [])
+      .slice(0, 20).filter(value => typeof value === 'string' && value.trim())
+      .map(value => value.trim().slice(0, 600));
+    if (!notices.length) return '';
+    return `<section class="gpi-lit-notices" role="note"><strong>${esc(tr('Source corrections and notices', '来源勘误与声明'))}</strong>${notices.map(value => `<p>${esc(value)}</p>`).join('')}</section>`;
   }
   function semanticIntentKey(value) {
     const intent = String(value || '');
@@ -334,6 +336,7 @@
       <div class="gpi-lit-card-head"><span class="gpi-lit-kind">${esc(kindLabel(kind))}</span></div>
       <h4>${esc(title)}</h4>
       ${sourceMeta(row) ? `<div class="gpi-lit-meta">${sourceMeta(row)}</div>` : ''}
+      ${sourceNotices(row)}
       ${useLabels.length ? `<div class="gpi-lit-use"><strong>${esc(tr('Used for: ', '用于计划：'))}</strong>${useLabels.map(label => `<span>${esc(label)}</span>`).join('')}</div>` : ''}
       ${excludedReason ? `<p class="gpi-lit-why"><strong>${esc(tr('Why it was not accepted: ', '未采用原因：'))}</strong>${esc(excludedReason)}</p>` : ''}
       ${relevance ? `<details class="gpi-lit-source-detail"><summary>${esc(tr('View retained source excerpt', '查看系统保留的摘要片段'))}</summary><p>${esc(relevance)}</p></details>` : ''}
@@ -422,6 +425,7 @@
       retrieval_rationale: resource.retrieval_rationale,
       abstract_excerpt: resource.abstract_excerpt,
       publication_types: Array.isArray(resource.publication_types) ? resource.publication_types : [],
+      bibliographic_notices: Array.isArray(resource.bibliographic_notices) ? resource.bibliographic_notices : [],
       article_kind: resource.article_kind,
       full_text: resource.full_text,
       source_review_status: resource.source_review_status,
@@ -440,6 +444,7 @@
         <div class="gpi-lit-card-head"><span class="gpi-lit-kind">${esc(kindLabel(kind))}</span><span class="gpi-lit-type">${esc(typeInfo.label)}</span></div>
         <h4>${esc(displayTitle(row))}</h4>
         ${sourceMeta(row) ? `<div class="gpi-lit-meta">${sourceMeta(row)}</div>` : ''}
+        ${sourceNotices(row)}
         <section class="gpi-lit-interpretation"><h5>${esc(tr('Why this article is shown', '为什么收录这篇文献'))}</h5><p>${esc(whyRetrieved(row))}</p></section>
         <div class="gpi-lit-interpretation-grid">
           <section><h5>${esc(tr('What it can support', '它能支持什么'))}</h5><p>${esc(typeInfo.supports)}</p></section>
