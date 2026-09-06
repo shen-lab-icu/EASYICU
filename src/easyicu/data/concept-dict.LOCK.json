@@ -1,22 +1,54 @@
 {
   "finalized": true,
-  "finalized_note": "定稿 2026-09-01 — 基于干净提交 d34ca8a5 对六库 renal 模块重新读取原始数据，并从已封存的 9913f31c 发布复用其余 18 个模块。公开 AKI 合同采用固定的 MIT-LCP KDIGO 参考移植，同时发布各数据库 source-native 对照或显式不可用回执；公开参考使用广义活动性 RRT，MIMIC-IV native 保留官方 CRRT 模式语义。六库字段、范围、时序、缺失状态与来源提交审计通过，旧 strict/harmonized 疾病字段未进入新 renal 导出。",
-  "locked_for_extraction_run": "full6_native_v3_aki_ref_native_d34ca8a5_20260901",
-  "concept_dict_sha256": "b3b6f9ee52a4d4789c38303556391612ead09a91e913529aecb2e47e599106e9",
-  "sofa2_dict_sha256": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
-  "total_concepts": 255,
-  "own_concepts_not_in_ricu": 131,
-  "new_this_round": [
+  "finalized_note": "2026-09-06：HiRID 参考 AKI 速率修复的正式单模块更新与逐列检查通过后定稿。五项 foundation 资源 SHA 与已封存 v4 完全相同，并与 v4 发布锁 bfa903af 核对；当前分支原仍保留 v3 锁，故补齐版本对应关系。没有改字典内容、KDIGO 阈值、其他数据库或体重策略。EX-A01 仍须逐项验收后才可封存，不等于独立临床认证。",
+  "locked_for_extraction_run": "full6_native_v5_hirid_aki_rate_e0621aa1_20260906",
+  "concept_dict_sha256": "fd122adc01693d78e760e19e61cb415ce8aef849ff2712f747dd79c289d48313",
+  "sofa2_dict_sha256": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
+  "total_concepts": 256,
+  "new_this_round": [],
+  "previous_published_lock": {
+    "git_commit": "bfa903af20147d3d432772177516f34df33a9863",
+    "path": "src/easyicu/data/concept-dict.LOCK.json",
+    "sha256": "5c966a245c138c453e982a490c813e7c2ec95f2be9a65db8d78da40534d24f07",
+    "release": "full6_native_v4_imv_sofa_1a445fad_20260906"
+  },
+  "extraction_contract": {
+    "scope": "Only hirid/renal re-extracted; the other 113 Parquet SHA256 values match sealed v4. Renal keys, row/stay counts, schema and all non-target columns match v4.",
+    "batching": "Measured per-database/per-module policy. HiRID renal: 33905 stays in one shot; no batch override, no adaptive growth, no changes to other module policies.",
+    "execution_limits": "8192 MiB contract; 2 workers, Arrow 2, DuckDB 2 with 2048 MiB buffer, resolver cache 512 MiB. External MemoryMax=8G, no swap, 7447 MiB sampled RSS stop.",
+    "retained_semantics": "Existing weight selection, observation policy, stage-0/NULL rules, creatinine and RRT policies retained. The reference profile now receives the existing HiRID rate flag and extraction interval."
+  },
+  "gates_passed": {
+    "runtime_commit": "e0621aa1",
+    "aki_fix_commit": "273d20df",
+    "formal_runtime_dirty": false,
+    "formal_process_tree_peak_rss_mib": 3394.6,
+    "formal_elapsed_seconds": 811.581,
+    "formal_exit_code": 0,
+    "formal_memory_stop": false,
+    "benchmark_peak_rss_mib": 3483.5,
+    "renal_rows": 1796864,
+    "renal_stays": 33897,
+    "renal_expected_changed_columns": ["aki_reference", "aki_stage_reference", "aki_severe_reference", "aki_stage_uo_reference", "aki_stage_reference_smoothed_6h"],
+    "unexpected_changed_columns": [],
+    "reference_urine_stage_vs_rate_mismatches": 0,
+    "benchmark_and_formal_renal_sha256": "48754bbb2a5e7ac4db8d111676534e3bdba452a0e810e7e81238131c5d563772",
+    "tests": "2185 passed, 52 skipped, 1 deselected: core plus release governance. One earlier stat-cache regression failure passed isolated and full reruns; retained as a separate intermittent observation, not patched here.",
+    "evidence_directory": "00-data-foundation/easyicu_full6_runs/candidates/hirid_rate_fix_273d20df_DRifkq"
+  },
+  "claim_limits": "No global current promotion, no globally optimal runtime claim. Historical checks below are not evidence for the current correction. Downstream risks/models require new sealed-input runs.",
+  "historical_own_concepts_not_in_ricu": 131,
+  "historical_new_this_round": [
     "crrt_mode_input"
   ],
-  "extraction_contract": {
+  "historical_extraction_contract": {
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
     "load_call": "load_concepts(module_concepts, merge=True) once per module inside keep_cache; do NOT hand-write a per-concept merge (time-column mismatch -> Cartesian blow-up -> OOM).",
     "batching": "adaptive and result-invariant: one-shot when memory permits; streamed exports continuously size the first batch from currently available memory after reserving 25% (at least 2 GiB), round down to 5,000 stays, and then resize later batches from measured process-tree working set, capped at 67,000. An 8 GiB-available host therefore starts at 40,000 stays. Sepsis derivation reuses the outer batch rather than imposing a hidden 2,000-stay sub-batch. Explicit batch_size remains authoritative. Both streamed and one-shot launchers use the process-effective memory envelope: Linux honours cgroup-v2 memory.max/current, while macOS and Windows use portable host-memory detection. Below 24 GiB available the profile remains 1 worker/1GB DuckDB/256MB cache; 24/32/64-GiB tiers scale to 2/4/8 workers, 2/4/8GB DuckDB and 2/6/8GB cache.",
     "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp.",
     "row_grain": "demographics is exactly one row per stay using nearest-to-0h non-null static values and recomputed BMI; every other module is unique on null-equal (stay_id, charttime), with boolean any, numeric median, and conflicting-string fail-closed consolidation. Each file manifest binds the primary key audit and exact Parquet SHA-256."
   },
-  "merge_oom_safety": {
+  "historical_merge_oom_safety": {
     "verified": true,
     "method": "load_concepts(merge=True) on the trickiest mixed-time-axis modules (respiratory: vent_start/vent_end intervals + charttime points; medications rate concepts; circulatory) at 150 patients per DB.",
     "result_rows_per_patient": {
@@ -26,7 +58,7 @@
     },
     "conclusion": "19-153 rows/patient = normal ICU time-series density, no Cartesian explosion on any of the 6 databases. Cartesian blow-up is a per-patient property, so this generalises to full cohort scale. merge=True normalises the time axis before joining; the previous OOM came from a hand-written merge on inconsistent time columns (now removed)."
   },
-  "gates_passed": {
+  "historical_gates_passed": {
     "aggregate_arity_violations": 0,
     "json_roundtrip": true,
     "concept_catalog_tests": "Targeted 2026-09-01 AKI reference/source-native, source-contract and release-related suite: 160 passed.",
@@ -34,7 +66,7 @@
     "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
     "full_pipeline_smoke": "Six databases completed raw renal re-extraction and native republishing at clean commit d34ca8a5; the remaining 18 validated modules were byte-reused from the sealed 9913f31c release. The six final renal Parquets passed the reference/native field, stage-range, temporal-use, missingness-status, legacy-column exclusion and provenance audit."
   },
-  "audit_coverage": {
+  "historical_audit_coverage": {
     "own103_vs_official_code": "38 fixes (aggregate arity, plr dimension, 3 units, eICU blood-product wrong-table, HiRID route errors)",
     "recall_sweep": "43 fixes (near-broken SIC mean_airway_pres/calcium_iv/bicarbonate/nitroglycerin; AUMC packed_rbc/ft4/retic; class-vs-molecule enoxaparin/milrinone/warfarin; eICU wrong-table nicardipine/diltiazem/pantoprazole)",
     "cross_db_distribution_scan": "235 concepts scanned; all our-own >=3x outliers resolved or explained (ferritin/myoglobin = true assay-selection difference, ng/mL==ug/L identity)",
