@@ -3585,8 +3585,15 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
     assert submitted[0].planner_start_mode == "fresh"
 
 
-def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
+@pytest.mark.parametrize(("user_message", "user_requested_changes"), [
+    ("", False),
+    ("请审阅当前计划，只报告问题。", False),
+    ("请修订整份计划，使用 /private/export 并保留全部结局。", True),
+])
+def test_current_plan_restarts_only_with_current_user_amendments(
     monkeypatch: pytest.MonkeyPatch,
+    user_message: str,
+    user_requested_changes: bool,
 ) -> None:
     from easyicu.webserver import study_contexts as study_owner
 
@@ -3629,7 +3636,13 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
     monkeypatch.setattr(
         research_run_submission,
         "submit_research_run",
-        lambda request, **kwargs: submitted.append(request),
+        lambda request, **kwargs: _record_pipeline_submission(
+            submitted, request, job_id="job-requested-revision", **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        tool_module.sources, "load_registry",
+        lambda: {"sources": [{"ok": True, "path": "/private/export", "label": "MIIV"}]},
     )
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -3642,6 +3655,7 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
             ),
         ),
         allowed_actions={"provider_run"},
+        user_message=user_message,
     )
 
     result = tool_module.execute_tool(
@@ -3650,8 +3664,22 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
         context,
     )
 
-    assert result["code"] == "scientific_replan_not_supported"
-    assert submitted == []
+    if not user_requested_changes:
+        assert result["code"] == "scientific_replan_not_supported"
+        assert submitted == []
+    else:
+        assert result["code"] == "easyicu_full_run_submitted"
+        assert len(submitted) == 1
+        request = submitted[0]
+        assert request.intent == "candidate_plan"
+        assert request.planner_start_mode == "fresh"
+        assert request.execution_resume_source_run_id == ""
+        assert request.plan_change_request.source_run_id == "run-current-review"
+        assert "保留全部结局" in request.plan_change_request.user_message
+        assert "/private/export" not in request.plan_change_request.user_message
+        assert "host-verified local data source: MIIV" in request.plan_change_request.user_message
+        assert "Start this exact plan again" not in request.plan_change_request.user_message
+        assert study["revision"] == 4
 
 
 def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:

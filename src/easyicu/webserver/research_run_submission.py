@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import agent_runs
@@ -23,6 +23,7 @@ from easyicu.webserver import jobs as job_store
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 from easyicu.webserver.pi_copilot.run_authority import (
@@ -73,6 +74,18 @@ class ResearchRunSubmissionRequest(BaseModel):
     execution_resume_source_run_id: str = ""
     literature_search_authorized: bool = False
     compute_target: Literal["local"] = "local"
+    plan_change_request: Optional[PlanChangeRequest] = None
+
+    @model_validator(mode="after")
+    def _amendments_require_fresh_candidate(self) -> "ResearchRunSubmissionRequest":
+        if self.plan_change_request is not None and (
+            self.intent != "candidate_plan"
+            or self.planner_start_mode != "fresh"
+            or self.plan_revision_source_run_id
+            or self.execution_resume_source_run_id
+        ):
+            raise ValueError("plan_changes_require_fresh_candidate")
+        return self
 
 
 class ResearchRunSubmissionReceipt(BaseModel):
@@ -341,6 +354,8 @@ def submit_research_run(
         }
         if literature_search_authorized:
             runner_kwargs["literature_search_authorized"] = True
+        if request.plan_change_request is not None:
+            runner_kwargs["plan_change_request"] = request.plan_change_request
         planner_start_mode = request.planner_start_mode
         plan_revision_source_run_id = request.plan_revision_source_run_id.strip()
         execution_resume_source_run_id = request.execution_resume_source_run_id.strip()

@@ -30,6 +30,7 @@ from easyicu.webserver import (
     provider_adapter,
 )
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.research_launch_resume import (
     _development_progressive_resume_binding,
     _development_resume_acquisition_profile,
@@ -80,6 +81,7 @@ class ResearchPipelineLaunchRequest:
     development_resume_source_job_id: str
     budget_mode: str
     runner_image: Optional[str]
+    plan_change_request: Optional[PlanChangeRequest] = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,7 @@ class PreparedLaunchExecution:
     plan_revision_source_run_id: str
     execution_resume_source_run_id: str
     runner_image: str
+    plan_change_request: Optional[PlanChangeRequest] = None
 
 
 @dataclass(frozen=True)
@@ -369,6 +372,16 @@ def _prepare_launch_execution(
         or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
         80,
     )
+    if request.plan_change_request is not None and (
+        not scientific.metadata_only_planning
+        or selected_resume_source
+        or request.plan_revision_source_run_id
+        or request.execution_resume_source_run_id
+    ):
+        raise ResearchPipelineRunError(
+            "plan_changes_require_fresh_candidate",
+            "New plan amendments require fresh candidate planning, not analysis or checkpoint reuse.",
+        )
     if selected_resume_source:
         development_resume_binding = _development_progressive_resume_binding(
             project_root=project_root,
@@ -489,6 +502,7 @@ def _prepare_launch_execution(
                 160,
             ),
             runner_image=selected_runner_image,
+            plan_change_request=request.plan_change_request,
         ),
     )
 

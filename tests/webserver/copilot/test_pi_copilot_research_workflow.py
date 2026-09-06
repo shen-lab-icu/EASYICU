@@ -1820,13 +1820,21 @@ def test_metadata_only_planning_ignores_unmapped_display_labels(
 
 
 @pytest.mark.parametrize("multiple_outcomes", [False, True])
+@pytest.mark.parametrize("requested_changes", [False, True])
 def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     multiple_outcomes: bool,
+    requested_changes: bool,
 ) -> None:
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.webserver.plan_change_request import PlanChangeRequest
+
+    change = PlanChangeRequest(
+        source_run_id="run-reviewed-candidate",
+        user_message="Revise the complete plan; retain all requested outcomes and explain the population denominator.",
+    ) if requested_changes else None
 
     actual_run = tmp_path / "actual-planner-run"
     _write_real_pipeline_fixture(
@@ -1874,10 +1882,16 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             )
             return SimpleNamespace(manifest_path=actual_run / "manifest.json")
 
+    configs: list[Any] = []
+
+    def from_config(config: Any, *, services: Any) -> FakePipeline:
+        configs.append(config)
+        return FakePipeline()
+
     monkeypatch.setattr(
         research_agent.ResearchAgentPipeline,
         "from_config",
-        lambda _config, *, services: FakePipeline(),
+        from_config,
     )
     def patient_grouping(_study: Any) -> PatientGroupingBinding:
         return PatientGroupingBinding(
@@ -1927,6 +1941,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         provider_environment={"OPENAI_API_KEY": "test-key"},
         credential_source="pi_verified",
         budget_mode="planner_canary",
+        plan_change_request=change,
     )
 
     class Job:
@@ -1938,6 +1953,12 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             self.events.append(dict(event))
 
     result = runner(Job())
+
+    assert configs[0].require_human_plan_review is True
+    assert configs[0].evidence_enforcement_mode == "strict"
+    assert configs[0].bound_plan_revision_contract == (
+        change.planner_context() if change is not None else None
+    )
 
     assert captured == {
         "cohort_rows": 0,
@@ -6120,6 +6141,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
         plan_revision_source_run_id: str = "",
         planner_start_mode: str = "auto",
         run_intent: research_run_submission.RunIntent | None = None,
+        plan_change_request: Any = None,
     ) -> dict[str, Any]:
         captured.update(
             context=context,
@@ -6127,6 +6149,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
             plan_revision_source_run_id=plan_revision_source_run_id,
             planner_start_mode=planner_start_mode,
             run_intent=run_intent,
+            plan_change_request=plan_change_request,
         )
         return {"status": "ok", "code": "candidate_plan_submitted"}
 
@@ -6153,6 +6176,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
     assert captured["params"] == {"run_type": "full"}
     assert captured["planner_start_mode"] == "fresh"
     assert captured["run_intent"] == "candidate_plan"
+    assert captured["plan_change_request"] is None
 
 
 def test_candidate_plan_approval_starts_package_bound_run_instead_of_resuming_canary(
@@ -9081,17 +9105,20 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
         "planner_start_mode",
         "resume_source_job_id",
         "plan_revision_source_run_id",
+        "requested_changes",
     ),
     [
-        ("fresh", "", ""),
-        ("resume_checkpoint", "prior-canary", ""),
-        ("auto", "prior-canary", "run-reviewed-candidate"),
+        ("fresh", "", "", False),
+        ("fresh", "", "", True),
+        ("resume_checkpoint", "prior-canary", "", False),
+        ("auto", "prior-canary", "run-reviewed-candidate", False),
     ],
 )
 def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     planner_start_mode: str,
     resume_source_job_id: str,
     plan_revision_source_run_id: str,
+    requested_changes: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -9180,10 +9207,24 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         payload["development_resume_source_job_id"] = "client-forged-checkpoint"
     if plan_revision_source_run_id:
         payload["plan_revision_source_run_id"] = plan_revision_source_run_id
-    result = agent_route.jobs_agent_run(
-        payload,
-        request=_request(),
-    )
+    if requested_changes:
+        from easyicu.webserver.plan_change_request import PlanChangeRequest
+
+        change = PlanChangeRequest(
+            source_run_id="run-current-candidate", user_message="Retain all requested outcomes.",
+        )
+        result = research_run_submission.submit_research_run(
+            research_run_submission.ResearchRunSubmissionRequest(
+                study_context_id=study["id"], provider="openai",
+                credential_source="pi_verified", external_llm_opt_in=True,
+                intent="candidate_plan", planner_start_mode="fresh",
+                plan_change_request=change,
+            ),
+        ).model_dump(mode="json")
+        assert captured["plan_change_request"] == change
+    else:
+        result = agent_route.jobs_agent_run(payload, request=_request())
+        assert "plan_change_request" not in captured
 
     assert result["job_id"] == "job-workspace"
     assert Path(captured["project_root"]) == workspace.project_root(study["id"])
