@@ -893,9 +893,10 @@ def test_only_requested_outcomes_require_model_contracts(requested) -> None:
         ("signed_landmark_restricted_cubic_spline", "invalid", ["death"], ()),
         ("signed_landmark_restricted_cubic_spline", "a" * 64, ["exposure"], ()),
         ("unowned_model", "a" * 64, ["death"], ()),
+        ("another_native_owner", "c" * 64, ["death"], ("death",)),
     ],
 )
-def test_native_runtime_outcome_coverage_requires_known_owner_and_input(
+def test_native_runtime_outcome_coverage_requires_explicit_owner_contract_and_input(
     method, contract, inputs, expected
 ) -> None:
     context = _context()
@@ -907,6 +908,10 @@ def test_native_runtime_outcome_coverage_requires_known_owner_and_input(
         expected_outputs=["table:estimate"],
         method=method,
         icu_rule_refs=["scientific_runtime_contract:" + contract],
+        runtime_outcome_contract=(
+            {"owner_ref": "scientific_runtime_contract:" + contract, "outcomes": ["death"]}
+            if len(contract) == 64 and method != "unowned_model" else None
+        ),
     )
     plan = _plan().model_copy(update={"steps": [step]})
     assert planned_model_outcomes(plan, context) == expected
@@ -929,12 +934,26 @@ def test_native_runtime_does_not_cover_auxiliary_outcomes() -> None:
         expected_outputs=["table:estimate"],
         method="signed_landmark_restricted_cubic_spline",
         icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+        runtime_outcome_contract={
+            "owner_ref": "scientific_runtime_contract:" + "a" * 64,
+            "outcomes": ["death"],
+        },
     )
     review = build_plan_scientific_review(
         context=context, plan=_plan().model_copy(update={"steps": [step]})
     )
     assert review.facts["model_covered_outcomes"] == ["death"]
     assert review.facts["missing_model_outcomes"] == ["los_icu"]
+
+
+def test_runtime_coverage_rejects_an_unbound_projection_ref() -> None:
+    step = AnalysisStep(
+        step_id="primary", planned_analysis_role="primary", intent="Estimate the outcome",
+        method="native_execution", inputs=["death"], expected_outputs=["table:estimate"],
+        icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+        runtime_outcome_contract={"owner_ref": "scientific_runtime_contract:" + "b" * 64, "outcomes": ["death"]},
+    )
+    assert planned_model_outcomes(_plan().model_copy(update={"steps": [step]}), _context()) == ()
 
 
 def test_controlled_ordered_analysis_counts_both_typed_outcomes() -> None:

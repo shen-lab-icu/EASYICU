@@ -68,6 +68,7 @@ from .contracts.model_tokens import (
 )
 from .contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
 from .contracts.product_identity import is_canonical_typed_product_token
+from .contracts.runtime_outcomes import RuntimeOutcomeContract
 from .contracts.survival import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     SurvivalAnalysisReceipt,
@@ -1690,6 +1691,10 @@ class AnalysisStep(BaseModel):
         ),
     )
     icu_rule_refs: List[str] = Field(default_factory=list)
+    runtime_outcome_contract: Optional[RuntimeOutcomeContract] = Field(
+        default=None,
+        description="Execution-owner endpoint projection; the host validates it against the exact runtime authority before execution.",
+    )
     sensitivity_spec_ids: List[str] = Field(
         default_factory=list,
         max_length=16,
