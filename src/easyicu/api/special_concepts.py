@@ -82,7 +82,14 @@ def get_concept_info(concept_name: str) -> Dict:
     concept = dict_obj.get(concept_name)
 
     if concept is None:
-        raise ValueError(f"未知概念: {concept_name}")
+        from ..concept.catalog import CONCEPT_DICTIONARY
+        from ..concept.export_metadata import metadata_definition_for_concept
+
+        if concept_name not in CONCEPT_DICTIONARY:
+            raise ValueError(f"未知概念: {concept_name}")
+        # Code-derived public outputs have no raw dictionary entry. Preserve
+        # the export owner's declared metadata without inventing raw sources.
+        concept = metadata_definition_for_concept(concept_name, "", dict_obj)
 
     units = list(getattr(concept, "units", None) or [])
     sources = getattr(concept, "sources", {}) or {}

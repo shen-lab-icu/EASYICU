@@ -26,21 +26,40 @@ class ExportMetadataError(ValueError):
         ValueError.__init__(self, error)
 
 
-def _metadata_definition_for_export(concept_id: str, module: str, dictionary: Any):
-    """Return dictionary metadata or a truthful catalog-only fallback."""
+def metadata_definition_for_concept(concept_id: str, module: str, dictionary: Any):
+    """Share producer metadata between native exports and catalog inspection.
+
+    A catalog-only definition describes a public output, not a raw-source
+    mapping. Callers advertising catalog membership must check that membership
+    separately; exports may also bind explicitly supplied custom output names.
+    """
 
     definition = dictionary.get(concept_id)
     if definition is not None:
         return definition
-    from easyicu.concept.catalog import CONCEPT_DESCRIPTIONS, CONCEPT_DICTIONARY
+    from easyicu.concept.catalog import (
+        CONCEPT_DESCRIPTIONS,
+        CONCEPT_DICTIONARY,
+        CONCEPT_GROUPS_INTERNAL,
+    )
     from easyicu.concept.schema import ConceptDefinition
 
     _name_en, _name_zh, unit = CONCEPT_DICTIONARY.get(
         concept_id, (concept_id, concept_id, "")
     )
     description, _description_zh = CONCEPT_DESCRIPTIONS.get(concept_id, ("", ""))
+    if not module:
+        module = next(
+            (
+                group
+                for group, concepts in CONCEPT_GROUPS_INTERNAL.items()
+                if concept_id in concepts
+            ),
+            "",
+        )
     payload: Dict[str, Any] = {
-        "description": description or None,
+        "description": description
+        or (_name_en if concept_id in CONCEPT_DICTIONARY else None),
         "category": module or None,
         "sources": {},
     }
@@ -354,7 +373,7 @@ def build_export_file_metadata_binding(
 
     for concept in concept_ids:
         if concept in unresolved_columns:
-            definition = _metadata_definition_for_export(concept, module, dictionary)
+            definition = metadata_definition_for_concept(concept, module, dictionary)
             physical_is_bool = pd.api.types.is_bool_dtype(frame[concept])
             concept_is_logical = concept_declares_event_status(concept, definition)
             categorical_boolean = (
@@ -383,7 +402,7 @@ def build_export_file_metadata_binding(
             unresolved_columns.remove(concept)
 
     for concept in concept_ids:
-        definition = _metadata_definition_for_export(concept, module, dictionary)
+        definition = metadata_definition_for_concept(concept, module, dictionary)
         for column in sorted(tuple(unresolved_columns)):
             projected = _companion_projection(
                 concept=concept,
@@ -415,7 +434,7 @@ def build_export_file_metadata_binding(
         transform,
         aggregation,
     ) in binding_specs.items():
-        definition = _metadata_definition_for_export(concept, module, dictionary)
+        definition = metadata_definition_for_concept(concept, module, dictionary)
         _validate_metadata_series_domain(
             column=column, series=frame[column], role=role, file_name=relative_path
         )
