@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..canonical_json import canonical_sha256
-from ..authority.declared_levels import observed_levels_for
+from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
 from ..research_context.typed import declared_domain_for_variable
 from ..cohort.schema import (
     materialized_input_column_authority,
@@ -634,7 +634,7 @@ def _continuous_planning_variable_names(
     excluded_roles = {"id", "time", "index", "meta", "outcome"}
     names: list[str] = []
     for variable in context.variables:
-        if observed_levels_for(name=variable.name, variables=variable_map):
+        if closed_planning_levels_for(name=variable.name, variables=variable_map):
             continue
         domain = variable.observed_domain or {}
         if domain.get("is_binary") is True:
@@ -1233,7 +1233,9 @@ class ProgressivePlannerAgent:
                 variables=variable_map,
             )
             declared_levels, declared_basis = declared_domain_for_variable(variable)
-            closed_levels = observed_levels or list(declared_levels or ())
+            closed_levels = closed_planning_levels_for(
+                name=variable.name, variables=variable_map,
+            )
             level_count = len(closed_levels)
             card["closed_domain_level_count"] = level_count
             card["supports_closed_level_contrast"] = level_count >= 2
@@ -3490,7 +3492,7 @@ class ProgressivePlannerAgent:
             variable.name
             for variable in context.variables
             if len(
-                observed_levels_for(
+                closed_planning_levels_for(
                     name=variable.name,
                     variables=context_variable_map,
                 )
@@ -3502,7 +3504,7 @@ class ProgressivePlannerAgent:
             for variable in context.variables
             if (
                 len(
-                    observed_levels_for(
+                    closed_planning_levels_for(
                         name=variable.name,
                         variables=context_variable_map,
                     )

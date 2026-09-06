@@ -51,6 +51,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ..contracts.model_terms import level_spelling
 from ..research_context.prompt_variables import opaque_level_tokens
+from ..research_context.typed import declared_domain_for_variable
 from ..schema import (
     AnalysisStep,
     ExposureOutcomeDistributionSpec,
@@ -87,6 +88,25 @@ def observed_levels_for(*, name: str, variables: Dict[str, Any]) -> List[Any]:
     if dtype.startswith(("float", "double")):
         return [0.0, 1.0]
     return []
+
+
+def closed_planning_levels_for(*, name: str, variables: Dict[str, Any]) -> List[Any]:
+    """Use observed ordering, or a declared domain for a row-free proposal.
+
+    This does not manufacture observations or establish that any level is
+    present. Runtime evidence and opaque observed-level resolution continue to
+    use ``observed_levels_for``; only planning may use dictionary/score domains
+    before extraction. Never override a non-empty observed domain.
+    """
+
+    observed = observed_levels_for(name=name, variables=variables)
+    if observed:
+        return observed
+    variable = variables.get(name)
+    if variable is None:
+        return []
+    declared, _basis = declared_domain_for_variable(variable)
+    return list(declared or ())
 
 
 def is_opaque_level(value: Any) -> bool:

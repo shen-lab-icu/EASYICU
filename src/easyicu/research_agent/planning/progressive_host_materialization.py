@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-from ..authority.declared_levels import observed_levels_for
+from ..authority.declared_levels import closed_planning_levels_for
 from ..canonical_json import canonical_sha256
 from ..contracts.figure_plan import ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS
 from ..contracts.ordered_stratified import (
@@ -217,7 +217,7 @@ def _exact_profile_refs(
 
 
 def _table_summary(descriptor: object) -> str:
-    levels = observed_levels_for(
+    levels = closed_planning_levels_for(
         name=descriptor.name, variables={descriptor.name: descriptor}
     )
     dtype = str(descriptor.dtype or "").casefold()
@@ -439,8 +439,8 @@ def host_materialize_progressive_step(
         exposure, outcome = context.primary_exposure, context.target_outcome
         if not exposure or not outcome or exposure not in raw or outcome not in raw:
             return None
-        exposure_levels = observed_levels_for(name=exposure, variables=variables)
-        outcome_levels = observed_levels_for(name=outcome, variables=variables)
+        exposure_levels = closed_planning_levels_for(name=exposure, variables=variables)
+        outcome_levels = closed_planning_levels_for(name=outcome, variables=variables)
         if len(exposure_levels) < 2 or len(outcome_levels) != 2:
             return None
         skeleton = _common_step(
