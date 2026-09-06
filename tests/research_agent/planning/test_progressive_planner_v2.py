@@ -3214,9 +3214,11 @@ def test_table_one_compiler_reports_known_missing_group_rows() -> None:
         else variable
         for variable in context.variables
     ]
+    context = context.model_copy(update={"variables": variables})
+    payload = _payload()
+    payload["steps"][2]["missing_exposure_policy"] = "exclude_from_denominator"
     plan, _ = compile_progressive_plan(
-        skeleton=_skeleton(),
-        context=context.model_copy(update={"variables": variables}),
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
     )
 
     table_step = next(step for step in plan.steps if step.step_id == "02_table_one")
@@ -3241,9 +3243,16 @@ def test_distribution_compiler_reports_known_missing_exposure_rows() -> None:
         else variable
         for variable in context.variables
     ]
+    context = context.model_copy(update={"variables": variables})
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=_skeleton(), context=context)
+    assert caught.value.reason_code == "progressive_distribution_missingness_authority_invalid"
+    assert caught.value.path == "missing_exposure_policy"
+
+    payload = _payload()
+    payload["steps"][2]["missing_exposure_policy"] = "exclude_from_denominator"
     plan, _ = compile_progressive_plan(
-        skeleton=_skeleton(),
-        context=context.model_copy(update={"variables": variables}),
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
     )
 
     distribution_step = next(

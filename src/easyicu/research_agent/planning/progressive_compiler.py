@@ -62,6 +62,7 @@ from .cohort_contract import (
     validate_cohort_definition,
 )
 from .dependence_authority import descriptive_counts_only_required
+from .distribution_authority import distribution_policy_issues
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
 from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
@@ -1127,18 +1128,6 @@ def _compile_distribution(
         step=step,
         step_index=step_index,
     )
-    exposure_missingness = variables[exposure].missingness
-    missing_exposure_policy = step.missing_exposure_policy
-    if (
-        missing_exposure_policy == "fail_closed"
-        and exposure_missingness is not None
-        and exposure_missingness.n_missing > 0
-    ):
-        # A fail-closed policy is executable only when the sealed context says
-        # the exposure is complete.  When exact missing counts are already
-        # known, retain the Planner's declared levels while making the omitted
-        # denominator explicit in the typed distribution table.
-        missing_exposure_policy = "exclude_from_denominator"
     if counts_only:
         # Study authority or the shared source-bound ceiling forbids uncertainty
         # and effect contrasts. Compile only the observed denominators, counts, and
@@ -1188,7 +1177,7 @@ def _compile_distribution(
     # targeted repair lane. A counts-only plan must not bypass that lane by
     # leaking a raw schema exception or silently changing its chosen denominator.
     try:
-        return ExposureOutcomeDistributionSpec(
+        spec = ExposureOutcomeDistributionSpec(
             exposure=exposure,
             exposure_levels=list(exposure_levels),
             outcome=outcome,
@@ -1196,7 +1185,7 @@ def _compile_distribution(
             outcome_positive_value=event,
             level_match_policy="exact_typed",
             denominator_policy=step.denominator_policy,
-            missing_exposure_policy=missing_exposure_policy,
+            missing_exposure_policy=step.missing_exposure_policy,
             missing_outcome_policy=step.missing_outcome_policy,
             undeclared_outcome_policy="fail_closed",
             **inference_options,
@@ -1214,6 +1203,16 @@ def _compile_distribution(
             step_index=step_index,
             path=field or "exposure_outcome_distribution",
         ) from exc
+    issues = distribution_policy_issues(spec, variables=variables)
+    if issues:
+        raise _fail(
+            "progressive_distribution_missingness_authority_invalid",
+            issues[0].message,
+            step=step,
+            step_index=step_index,
+            path=issues[0].field,
+        )
+    return spec
 
 
 def _compile_model_terms(

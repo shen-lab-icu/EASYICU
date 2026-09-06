@@ -19,6 +19,7 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressiveSkeletonStep,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.schema import MissingnessProfile, ObservationSemantics
 from tests.research_agent.planning.progressive_planner_fixtures import (
     _context,
     _foundation_payload,
@@ -120,3 +121,50 @@ def test_distribution_policy_repair_reuses_compiled_prefix_and_sealed_outline():
     assert [item.step.step_id for item in attempt.facts.materializations[:2]] == [
         "01_cohort", "02_table_one",
     ]
+
+
+@pytest.mark.parametrize("counts_only", [False, True])
+@pytest.mark.parametrize("source_kind", ["dense", "other_column", "conditional_time", "positive_only"])
+def test_structural_non_event_policy_requires_exact_source_semantics(counts_only, source_kind):
+    variables = {item.name: item for item in _context().variables}
+    semantics = None
+    if source_kind in {"other_column", "positive_only"}:
+        semantics = ObservationSemantics(
+            kind="positive_only_event", event_count_column="outcome_n",
+            measured_column="outcome_measured",
+            representative_column="outcome_flag" if source_kind == "positive_only" else "exposure_flag",
+        )
+    elif source_kind == "conditional_time":
+        semantics = ObservationSemantics(kind="conditional_event_time", event_status_column="event")
+    variables["outcome_flag"] = variables["outcome_flag"].model_copy(update={
+        "observation_semantics": semantics,
+        # Zero missing observations does not authorize an incorrect policy.
+        "missingness": MissingnessProfile(fraction_missing=0, n_missing=0, n_total=120),
+    })
+    payload = copy.deepcopy(_payload()["steps"][2])
+    payload["missing_outcome_policy"] = "structural_absence_is_non_event"
+    step = ProgressiveSkeletonStep.model_validate(payload)
+    kwargs = dict(variables=variables, step=step, step_index=2, counts_only=counts_only)
+    if source_kind == "positive_only":
+        assert _compile_distribution(**kwargs).missing_outcome_policy == "structural_absence_is_non_event"
+        return
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        _compile_distribution(**kwargs)
+    assert caught.value.reason_code == "progressive_distribution_missingness_authority_invalid"
+    assert caught.value.path == "missing_outcome_policy"
+    assert "outcome_flag" in caught.value.details["message"]
+
+
+@pytest.mark.parametrize("role", ["exposure", "outcome"])
+def test_missingness_policy_is_never_silently_replaced_with_complete_case(role):
+    variables = {item.name: item for item in _context().variables}
+    name = f"{role}_flag"
+    variables[name] = variables[name].model_copy(update={
+        "missingness": MissingnessProfile(fraction_missing=0.1, n_missing=12, n_total=120),
+    })
+    step = ProgressiveSkeletonStep.model_validate(_payload()["steps"][2])
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        _compile_distribution(variables=variables, step=step, step_index=2, counts_only=True)
+    assert caught.value.reason_code == "progressive_distribution_missingness_authority_invalid"
+    assert caught.value.path == f"missing_{role}_policy"
+    assert getattr(step, f"missing_{role}_policy") == "fail_closed"
