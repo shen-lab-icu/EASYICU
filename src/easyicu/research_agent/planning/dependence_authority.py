@@ -13,7 +13,9 @@ import json
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from ..contracts.analysis_design import validate_analysis_family_ceiling
 
 from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
@@ -22,8 +24,22 @@ from ..contracts.dependence import PlannedDependenceRequirement
 from ..schema import AnalysisPlan, ResearchContext
 
 
+DEPENDENCE_DIAGNOSTIC_OWNER = "easyicu.planning.dependence_authority_v1"
+DEPENDENCE_REASON_CODES = frozenset({
+    "analysis_dependence_contract_invalid", "counts_only_inference_forbidden",
+    "counts_only_step_untyped", "counts_only_family_incompatible",
+})
+
+
 class DependenceAuthorityError(ValueError):
     """A declared dependence design conflicts with its owner-issued authority."""
+
+    def __init__(self, message: str, *, code: str = "analysis_dependence_contract_invalid"):
+        super().__init__(message)
+        if code not in DEPENDENCE_REASON_CODES:
+            raise ValueError("unknown dependence diagnostic code")
+        self.code = code
+        self.easyicu_safe_diagnostic = {"owner": DEPENDENCE_DIAGNOSTIC_OWNER, "reason_code": code}
 
 
 class _AnalysisDesign(BaseModel):
@@ -48,6 +64,13 @@ class _AnalysisDesign(BaseModel):
         "cluster_robust",
         "none_counts_only",
     ]
+
+    @model_validator(mode="after")
+    def _compatible_family_ceiling(self):
+        validate_analysis_family_ceiling(
+            analysis_family=self.analysis_family, variance_estimator=self.variance_estimator
+        )
+        return self
 
 
 def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | None:
@@ -293,7 +316,8 @@ def bind_context_dependence_authority(
             not in {None, "descriptive_exposure_outcome_distribution_v1"}
         ):
             raise DependenceAuthorityError(
-                "counts-only analysis_design cannot authorize a model or inferential capability"
+                "counts-only analysis_design cannot authorize a model or inferential capability",
+                code="counts_only_inference_forbidden",
             )
         if (
             counts_only
@@ -318,7 +342,8 @@ def bind_context_dependence_authority(
                 "typed exposure/outcome distribution, descriptive/SMD-only "
                 "Table One, measurement audit, rendering, and report steps; "
                 "audit product names cannot claim reserved baseline, distribution, "
-                "outcome, risk, effect, or inference roles"
+                "outcome, risk, effect, or inference roles",
+                code="counts_only_step_untyped",
             )
         requirements = []
         for requirement in step.model_requirements:
