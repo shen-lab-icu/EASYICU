@@ -194,6 +194,7 @@ _SAFE_PIPELINE_EXCEPTION_TYPES = frozenset(
         "PlannerEfficiencyBudgetExhausted",
         "ProgressivePlanCompileError",
         "ResearchPipelineRunError",
+        "RunInputIdentityError",
         "StructuredResponseFailure",
     }
 )
@@ -700,6 +701,7 @@ def _write_pipeline_failure_diagnostic(
     wrapper_dir: Path,
     exc: BaseException,
     code: str,
+    execution_retry_id: Optional[str] = None,
 ) -> Optional[str]:
     """Persist bounded host diagnostics for a failed real pipeline run.
 
@@ -754,6 +756,9 @@ def _write_pipeline_failure_diagnostic(
         "secrets_recorded": False,
     }
     relative = "diagnostics/research_pipeline_failure.json"
+    if execution_retry_id is not None:
+        attempt_digest = hashlib.sha256(execution_retry_id.encode("utf-8")).hexdigest()
+        relative = f"diagnostics/execution_retries/{attempt_digest}.json"
     try:
         target = wrapper_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -863,6 +868,35 @@ def _write_pipeline_failure_projection(
     except OSError:
         return False
     return True
+
+
+def _record_pipeline_failure(
+    *,
+    wrapper_dir: Path,
+    study: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    exc: BaseException,
+    code: str,
+    execution_retry_id: Optional[str],
+) -> Optional[str]:
+    """Record each retry failure without replacing the source run's results."""
+
+    diagnostic = _write_pipeline_failure_diagnostic(
+        wrapper_dir=wrapper_dir,
+        exc=exc,
+        code=code,
+        execution_retry_id=execution_retry_id,
+    )
+    if execution_retry_id is None:
+        _write_pipeline_failure_projection(
+            wrapper_dir=wrapper_dir,
+            study=study,
+            provider=provider,
+            code=code,
+            failure_type=_pipeline_failure_category(exc),
+            diagnostic=diagnostic,
+        )
+    return diagnostic
 
 
 def _write_review_resume_failure_diagnostic(
@@ -3975,6 +4009,7 @@ def _execution_resume_acquisition_projection(
             for value in (
                 identity.get("primary_exposure"),
                 identity.get("target_outcome"),
+                *(identity.get("outcome_columns") or ()),
                 *(preferences.get("covariates") or ()),
             )
             if str(value or "").strip()
@@ -4615,7 +4650,13 @@ def make_research_pipeline_run_runner(
                     plan_revision_source_run_id=source_run_id,
                 )
             resolved_primary_exposure = primary_exposure
-            if configured_primary_exposure and not metadata_only_planning:
+            if execution_resume_inputs is not None:
+                # Exact execution retries reuse the reviewed scientific request;
+                # fresh proposal heuristics may now select another aggregation.
+                resolved_primary_exposure = execution_resume_inputs.scientific_identity.get(
+                    "primary_exposure"
+                )
+            elif configured_primary_exposure and not metadata_only_planning:
                 resolved_primary_exposure = _resolve_materialized_primary_exposure(
                     configured=configured_primary_exposure,
                     source_concept=foundation_profile.get(
@@ -4645,7 +4686,17 @@ def make_research_pipeline_run_runner(
                     )
             pipeline_target = target
             pipeline_outcome_columns: tuple[str, ...] | None = None
-            if target and not metadata_only_planning:
+            if execution_resume_inputs is not None:
+                pipeline_target = execution_resume_inputs.scientific_identity.get(
+                    "target_outcome"
+                )
+                sealed_outcomes = execution_resume_inputs.scientific_identity.get(
+                    "outcome_columns"
+                )
+                pipeline_outcome_columns = (
+                    tuple(sealed_outcomes) if sealed_outcomes is not None else None
+                )
+            elif target and not metadata_only_planning:
                 pipeline_target = _resolve_materialized_target_outcome(
                     source_concept=str(target),
                     acquisition=acquisition,
@@ -4661,7 +4712,7 @@ def make_research_pipeline_run_runner(
                             ),
                         },
                     )
-            if metadata_only_planning:
+            if metadata_only_planning and execution_resume_inputs is None:
                 execution_concepts = study.get("execution_concepts")
                 execution_concepts = (
                     execution_concepts
@@ -4686,7 +4737,7 @@ def make_research_pipeline_run_runner(
                     resolved_primary_exposure = (
                         f"{resolved_primary_exposure}_{aggregation}"
                     )
-            if candidate_outcome_concepts:
+            if candidate_outcome_concepts and execution_resume_inputs is None:
                 resolve_outcomes = (
                     _resolve_planning_outcome_columns
                     if metadata_only_planning
@@ -5151,18 +5202,15 @@ def make_research_pipeline_run_runner(
                 provider_hard_stop,
                 error="research_pipeline_error",
             )
-            diagnostic = _write_pipeline_failure_diagnostic(
-                wrapper_dir=wrapper_dir,
-                exc=exc,
-                code=exc.code,
-            )
-            _write_pipeline_failure_projection(
+            _record_pipeline_failure(
                 wrapper_dir=wrapper_dir,
                 study=study,
                 provider=provider_public,
+                exc=exc,
                 code=exc.code,
-                failure_type=_pipeline_failure_category(exc),
-                diagnostic=diagnostic,
+                execution_retry_id=(
+                    str(job.id) if execution_resume_target is not None else None
+                ),
             )
             raise
         except Exception as exc:
@@ -5171,18 +5219,15 @@ def make_research_pipeline_run_runner(
                 error=_pipeline_failure_category(exc),
             )
             code = _pipeline_failure_code(exc, budget_mode=selected_budget_mode)
-            diagnostic = _write_pipeline_failure_diagnostic(
-                wrapper_dir=wrapper_dir,
-                exc=exc,
-                code=code,
-            )
-            _write_pipeline_failure_projection(
+            diagnostic = _record_pipeline_failure(
                 wrapper_dir=wrapper_dir,
                 study=study,
                 provider=provider_public,
+                exc=exc,
                 code=code,
-                failure_type=_pipeline_failure_category(exc),
-                diagnostic=diagnostic,
+                execution_retry_id=(
+                    str(job.id) if execution_resume_target is not None else None
+                ),
             )
             if code == "research_pipeline_provider_timeout":
                 _progress(
