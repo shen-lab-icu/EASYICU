@@ -16,6 +16,7 @@ from ..contracts.step_families import (
     effect_output_authorized,
 )
 from ..contracts.table_one import table_one_output_findings
+from ..contracts.phenotype_comparison import phenotype_comparison_output_findings
 from ..planning.figure_plan_mutation import _effect_figure_source_authorized
 from ..planning.figure_step_contract import _output_declares_figure
 from ..scalar_utils import _first_numeric_scalar_with_key_fragment, _first_present_scalar, _flatten_scalar_dict
@@ -88,6 +89,10 @@ def _step_contract_findings(
         )
     )
     findings.extend(table_one_output_findings(step=step, out_dir=out_dir))
+    findings.extend(phenotype_comparison_output_findings(
+        step=step, step_summary=step_summary, context=context,
+        resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
+    ))
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.
     # ``04_primary_association_figure`` / ``01_model_training_figure``. Their

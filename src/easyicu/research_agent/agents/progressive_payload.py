@@ -459,7 +459,7 @@ def _bind_step_module_shape(
     standard["properties"]["custom_method"] = {"type": "null"}
     # These contracts belong only to custom actions. Omit the irrelevant
     # fields entirely; the host fills their identical None defaults.
-    for custom_field in ("functional_form_spec", "phenotyping_feature_columns"):
+    for custom_field in ("functional_form_spec", "phenotyping_feature_columns", "phenotyping_comparison_variables"):
         standard["properties"].pop(custom_field, None)
         standard["required"] = [name for name in standard["required"] if name != custom_field]
 
@@ -475,10 +475,12 @@ def _bind_step_module_shape(
         "sensitivity_spec_ids",
         "functional_form_spec",
         "phenotyping_feature_columns",
+        "phenotyping_comparison_variables",
         "literature_bindings",
     )
     custom_properties = {
         field: copy.deepcopy(properties[field]) for field in custom_fields
+        if not (field in {"functional_form_spec", "phenotyping_comparison_variables"} and properties[field].get("type") == "null")
     }
     custom_properties["module_id"] = {
         "type": "string",
@@ -880,12 +882,20 @@ def _bind_step_rosters(
     else:
         action_schema = {"type": "null"}
     step_properties["scientific_action_id"] = action_schema
+    # Phenotyping actions cannot consume an association-model functional-form
+    # contract (the compiler refuses that family mismatch). Do not carry its
+    # schema into an exclusively phenotyping request.
+    if scientific_action_ids and all(action.startswith("phenotyping.") for action in scientific_action_ids):
+        step_properties["functional_form_spec"] = {"type": "null"}
+        definitions.pop("FunctionalFormSpec", None)
     if "phenotyping.cluster_solution" not in scientific_action_ids:
         step_properties["phenotyping_feature_columns"] = {"type": "null"}
     else:
         feature_array = _non_null(step_properties["phenotyping_feature_columns"], field="phenotyping_feature_columns")
         feature_array["items"] = copy.deepcopy(executable_variable)
         step_properties["phenotyping_feature_columns"] = _nullable(feature_array)
+    if "phenotyping.outcome_by_cluster" not in scientific_action_ids:
+        step_properties["phenotyping_comparison_variables"] = {"type": "null"}
 
     bindings = step_properties["literature_bindings"]
     if not allowed_citation_keys:

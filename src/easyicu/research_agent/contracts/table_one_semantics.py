@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable, Sequence
 
+from ..research_context.typed import declared_domain_for_variable
 from ..schema import ResearchContext, TableOneSpec, VariableRole
+
+
+def table_one_variable_kind(variable: Any, levels: Sequence[Any]) -> str:
+    """One descriptor/closed-domain rule for grouped clinical summaries."""
+    if variable.is_ordinal:
+        return "ordinal"
+    dtype = str(variable.dtype or "").lower()
+    declared, _basis = declared_domain_for_variable(variable)
+    if levels and (bool(declared) or len(levels) == 2 or dtype.startswith(("object", "str", "string", "category", "bool"))):
+        return "categorical"
+    return "continuous"
 
 
 def table_one_identity_columns(context: ResearchContext) -> frozenset[str]:
@@ -72,6 +84,8 @@ def validate_table_one_column_roles(
 def validate_table_one_semantic_roles(
     spec: TableOneSpec, context: ResearchContext
 ) -> None:
+    if spec.schema_version == "easyicu.table_one/3":
+        raise ValueError("table_one_derived_groups_require_phenotype_comparison_owner")
     validate_table_one_column_roles(
         (spec.group_by, *(row.name for row in spec.variables)), context
     )

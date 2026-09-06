@@ -49,7 +49,7 @@ _TESTS = {
         "chi_square",
         "fisher_exact",
     },
-    "none_descriptive_smd_only": {"not_reported_repeated_units"},
+    "none_descriptive_smd_only": {"not_reported_repeated_units", "not_reported_data_derived_groups"},
 }
 _NOT_TESTABLE = {"not_testable_empty_group", "not_testable_no_variation"}
 
@@ -383,12 +383,15 @@ def table_one_output_findings(
     *,
     step: AnalysisStep,
     out_dir: Path | None,
+    filename: str = "table_one.csv",
 ) -> list[ValidationFinding]:
     """Verify grouped structure, tests, and missingness denominators."""
 
     spec = table_one_execution_spec(step)
     if spec is None:
         return []
+    if spec.schema_version == "easyicu.table_one/3" and step.scientific_action_id != "phenotyping.outcome_by_cluster":
+        return [_error(step, "table_one_derived_groups_owner_invalid", "Data-derived group summaries require the source-bound phenotype comparison owner.")]
     if out_dir is None:
         return [
             _error(
@@ -397,7 +400,7 @@ def table_one_output_findings(
                 "Table 1 output directory is unavailable.",
             )
         ]
-    path = Path(out_dir) / "table_one.csv"
+    path = Path(out_dir) / filename
     if not path.is_file():
         return [
             _error(
@@ -496,7 +499,10 @@ def table_one_output_findings(
             valid_p_value = (
                 rows["p_value"].isna().all()
                 and not rows["test_name"].isna().any()
-                and test_names == {"not_reported_repeated_units"}
+                and test_names == {
+                    "not_reported_data_derived_groups" if spec.schema_version == "easyicu.table_one/3"
+                    else "not_reported_repeated_units"
+                }
             )
         elif declared_empty_group:
             valid_p_value = len(p_values) == 0 and empty_comparison_group
@@ -515,7 +521,7 @@ def table_one_output_findings(
                     "table_one_p_value_invalid",
                     (
                         f"Table 1 must omit independent-row P values for "
-                        f"{variable.name!r} under its repeated-unit contract."
+                        f"{variable.name!r} under its descriptive-only contract."
                         if not spec.p_values_required
                         else f"Table 1 requires one bounded P value for {variable.name!r}."
                     ),

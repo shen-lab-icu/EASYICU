@@ -62,6 +62,9 @@ from .composite_descriptive_figure_executor import (
     composite_descriptive_figure_executor_code,
     composite_descriptive_figure_executor_owns_step,
 )
+from .phenotype_comparison_executor import (
+    phenotype_comparison_executor_code, phenotype_comparison_executor_owns_step,
+)
 from .cross_sectional_phenotyping_executor import (
     PHENOTYPING_ANALYSIS_KIND,
     cross_sectional_phenotyping_consumed_input_keys,
@@ -557,6 +560,15 @@ def _build_registry() -> StepExecutorRegistry:
             consumed_input_keys=lambda c: (
                 cross_sectional_phenotyping_consumed_input_keys(c.step)
             ),
+        ),
+        StepExecutor(
+            key="phenotype_comparison",
+            owns=lambda c: phenotype_comparison_executor_owns_step(c.step),
+            render=lambda c: phenotype_comparison_executor_code(c.step),
+            analysis_kind="phenotype_comparison",
+            selection_reason="source_bound_phenotype_comparison_contract",
+            progress_message="Describing clinical features and outcomes by frozen cluster",
+            consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
         ),
         StepExecutor(
             key="descriptive_cohort_summary",

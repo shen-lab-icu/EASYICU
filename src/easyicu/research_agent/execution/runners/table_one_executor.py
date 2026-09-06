@@ -27,6 +27,7 @@ def table_one_executor_owns_step(step: AnalysisStep) -> bool:
     typed_cohort_input = _typed_cohort_input(step)
     return bool(
         step.table_one_spec is not None
+        and step.table_one_spec.schema_version != "easyicu.table_one/3"
         and "table:table_one" in outputs
         and not any(value.startswith("figure:") for value in outputs)
         and outputs.issubset(TABLE_ONE_CLOSED_OUTPUTS)

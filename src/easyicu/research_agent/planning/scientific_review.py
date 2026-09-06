@@ -37,6 +37,9 @@ from ..contracts.descriptive_execution import (
 )
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
+from ..contracts.phenotype_comparison import (
+    COMPARISON_ACTION, comparison_cohort_input, validate_comparison_step,
+)
 from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
 from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
@@ -99,8 +102,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/9"] = (
-        "easyicu.plan_scientific_review/9"
+    schema_version: Literal["easyicu.plan_scientific_review/10"] = (
+        "easyicu.plan_scientific_review/10"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -1462,6 +1465,32 @@ def build_plan_scientific_review(
 
     findings: list[PlanScientificFinding] = []
     variables = {variable.name: variable for variable in context.variables}
+    primary_clusters = [step for step in plan.steps if step.scientific_action_id == PHENOTYPING_PRIMARY_ACTION]
+    compared_outcomes: set[str] = set()
+    for step in plan.steps:
+        if step.scientific_action_id != COMPARISON_ACTION:
+            continue
+        try:
+            validate_comparison_step(step, context)
+            if len(primary_clusters) != 1 or comparison_cohort_input(step) != sole_typed_cohort_input(primary_clusters[0]):
+                raise ValueError("phenotype_comparison_primary_source_invalid")
+            compared_outcomes.update(step.phenotype_comparison_spec.outcome_columns)
+        except ValueError as exc:
+            findings.append(PlanScientificFinding(
+                code="PHENOTYPING_COMPARISON_CONTRACT_INVALID", severity="blocker", dimension="statistical_design",
+                message=f"Step {step.step_id!r}: {exc}", evidence_refs=[f"analysis_plan.json.steps.{step.step_id}.phenotype_comparison_spec"],
+                remediation="Bind a separate descriptive comparison to the exact primary cluster cohort, frozen assignments and explicitly selected clinical/outcome summaries.",
+                remediation_route="agent_plan_revision",
+            ))
+    missing_cluster_outcomes = set(requested_outcomes(context)) - compared_outcomes
+    if primary_clusters and missing_cluster_outcomes:
+        findings.append(PlanScientificFinding(
+            code="PHENOTYPING_OUTCOME_COMPARISON_INCOMPLETE", severity="blocker", dimension="statistical_design",
+            message="No executable post-clustering descriptive comparison covers the requested outcomes: " + ", ".join(sorted(missing_cluster_outcomes)),
+            evidence_refs=["research_context.json.cohort.requested_outcome_columns", "analysis_plan.json.steps"],
+            remediation="Add a secondary phenotyping.outcome_by_cluster step with an explicit summary roster for every requested outcome. Readable inputs, feature profiles and figures alone do not execute this comparison.",
+            remediation_route="agent_plan_revision",
+        ))
     for step in plan.steps:
         if step.scientific_action_id != PHENOTYPING_PRIMARY_ACTION:
             continue

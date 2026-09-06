@@ -556,6 +556,7 @@ class ProgressiveSkeletonStep(BaseModel):
     sensitivity_spec_ids: list[str] = Field(default_factory=list)
     functional_form_spec: Optional[FunctionalFormSpec] = Field(default=None, exclude_if=lambda value: value is None)
     phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
+    phenotyping_comparison_variables: Optional[list[ProgressiveTableOneVariable]] = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
     literature_bindings: list[ProgressiveLiteratureBinding] = Field(
         default_factory=list
     )
@@ -627,6 +628,12 @@ class ProgressiveSkeletonStep(BaseModel):
             if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
                 raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
             require_phenotyping_features(self.phenotyping_feature_columns, inputs=self.raw_inputs)
+        if self.phenotyping_comparison_variables is not None:
+            if self.scientific_action_id != "phenotyping.outcome_by_cluster" or self.planned_analysis_role != "secondary":
+                raise ValueError("phenotyping_comparison_variables belongs only to a secondary outcome-by-cluster step")
+            names = [v.name for v in self.phenotyping_comparison_variables]
+            if len(names) != len(set(names)) or not set(names).issubset(self.raw_inputs):
+                raise ValueError("phenotype_comparison_roster_invalid")
         if self.module_id == "visualization" and not (
             self.product_inputs or self.depends_on
         ):
