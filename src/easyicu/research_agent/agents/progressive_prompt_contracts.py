@@ -186,7 +186,10 @@ def foundation_shape_contract(
         "outline_sha256": outline_sha256,
         "foundation": {
             "cohort": cohort,
-            "display_labels": required_labels,
+            "display_labels": (
+                {item["key"]: item["value"] for item in required_labels}
+                if required_labels else []
+            ),
             "robustness_intents": [],
             "know_how_decisions": [],
         },
@@ -202,9 +205,12 @@ def foundation_shape_contract(
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
         + "\nCopy schema_version and outline_sha256 exactly. "
         + cohort_instruction
-        + " display_labels, robustness_intents, and know_how_decisions must always be JSON arrays, including when empty.\n"
-        "If display_labels is nonempty, each item has exactly "
-        '{"key":"<1-256 characters>","value":"<1-256 characters>"}. '
+        + (
+            " display_labels must be the displayed keyed object; write only the reader-facing meanings (1-256 characters), keeping every required key. "
+            if required_labels else
+            ' display_labels must be a JSON array; each nonempty item has exactly {"key":"<1-256 characters>","value":"<1-256 characters>"}. '
+        )
+        + "robustness_intents and know_how_decisions must always be JSON arrays, including when empty.\n"
         "If robustness_intents is nonempty, each item has exactly "
         '{"spec_id":"<lowercase id>","axis":"<cohort|missing|outcome>",'
         '"description":"<8-600 characters>","missing_strategy":"<none|complete_case>",'

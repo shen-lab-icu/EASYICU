@@ -1087,6 +1087,8 @@ def progressive_foundation_structured_output_request(
     required_cohort_name: str | None = None,
     analysis_type: str | None = None,
     require_robustness_intent: bool = False,
+    required_reader_display_label_keys: Sequence[str] = (),
+    required_binary_display_label_scopes: Sequence[str] = (),
 ) -> StructuredOutputRequest:
     """Return the run-bound plan-wide contract without any step fields."""
 
@@ -1143,6 +1145,17 @@ def progressive_foundation_structured_output_request(
         "type": "string",
         "const": str(outline_sha256),
     }
+    label_keys = list(dict.fromkeys([
+        *required_reader_display_label_keys,
+        *(f"{scope}={level}" for scope in required_binary_display_label_scopes for level in (0, 1)),
+    ]))
+    if label_keys:
+        definitions["ProgressivePlanFoundation"]["properties"]["display_labels"] = {
+            "type": "object",
+            "properties": {key: {"type": "string", "minLength": 1} for key in label_keys},
+            "required": label_keys,
+            "additionalProperties": False,
+        }
     _bind_foundation_authorities(
         definitions,
         variable_names=normalized_variables,
