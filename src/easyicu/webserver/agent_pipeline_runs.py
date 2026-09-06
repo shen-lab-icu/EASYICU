@@ -429,6 +429,8 @@ def _pipeline_failure_code(
         return "research_pipeline_progressive_compile_failed"
     if typed_failure.get("owner") == "easyicu.schema_validation_v1":
         return "research_pipeline_schema_validation_failed"
+    if typed_failure.get("owner") == "easyicu.planning.dependence_authority_v1":
+        return "research_pipeline_analysis_design_conflict"
     if typed_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
         # The same code the launch preflight uses, so a runtime that went down
         # mid-run is attributed to the host environment rather than reported as
@@ -547,6 +549,11 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         if not isinstance(raw, Mapping):
             continue
         owner = raw.get("owner")
+        if owner == "easyicu.planning.dependence_authority_v1":
+            from easyicu.research_agent.planning.dependence_authority import DEPENDENCE_REASON_CODES
+
+            if raw.get("reason_code") in DEPENDENCE_REASON_CODES:
+                return {"owner": owner, "reason_code": raw["reason_code"]}
         if owner == "easyicu.planning.progressive_compiler_v1":
             reason_code = raw.get("reason_code")
             if not isinstance(reason_code, str) or not re.fullmatch(
@@ -644,11 +651,17 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                 or re.fullmatch(r"[a-z][a-z0-9_]{0,31}", runner_kind) is None
             ):
                 continue
-            return {
+            projected = {
                 "owner": owner,
                 "reason_code": reason_code,
                 "runner_kind": runner_kind,
             }
+            if raw.get("probe_phase") == "image_inspect":
+                projected["probe_phase"] = "image_inspect"
+            exit_code = raw.get("exit_code")
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool) and -128 <= exit_code <= 255:
+                projected["exit_code"] = exit_code
+            return projected
     return {}
 
 

@@ -2085,6 +2085,8 @@ def test_a_stopped_daemon_raises_a_typed_availability_failure(
         "owner": "easyicu.execution.runtime_v1",
         "reason_code": "docker_daemon_unreachable",
         "runner_kind": "docker",
+        "probe_phase": "image_inspect",
+        "exit_code": 1,
     }
     # Still a RuntimeError, so every existing handler keeps working...
     assert isinstance(exc.value, RuntimeError)
@@ -2124,3 +2126,10 @@ def test_an_absent_image_is_not_reported_as_a_stopped_daemon(
 
     assert exc.value.reason_code == "docker_image_missing"
     assert "Build or pull" in str(exc.value)
+
+
+@pytest.mark.parametrize("message", ["permission denied: /private/host.sock", "context not found", "server returned an invalid response", ""])
+def test_unknown_docker_failures_do_not_claim_that_an_image_is_missing(message):
+    from easyicu.research_agent.execution.runner import _classify_docker_failure
+
+    assert _classify_docker_failure(message, "") == "docker_probe_failed"

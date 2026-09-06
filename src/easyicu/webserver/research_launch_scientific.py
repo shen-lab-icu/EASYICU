@@ -247,6 +247,16 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     analysis_unit = _clean_text(raw.get("analysis_unit"), 80)
     variance_estimator = _clean_text(raw.get("variance_estimator"), 80)
     cluster_unit = _clean_text(raw.get("cluster_unit"), 80)
+    from easyicu.research_agent.contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
+
+    try:
+        validate_analysis_family_ceiling(
+            analysis_family=_clean_text(raw.get("analysis_family"), 80), variance_estimator=variance_estimator
+        )
+    except AnalysisDesignConflict as exc:
+        raise ResearchPipelineRunError(
+            exc.code, str(exc), details={"field": "analysis_design", "remediation_route": "agent_plan_revision", "requires_user_authorization": False}
+        ) from exc
     if not analysis_unit or not variance_estimator:
         raise ResearchPipelineRunError(
             "research_pipeline_analysis_design_incomplete",

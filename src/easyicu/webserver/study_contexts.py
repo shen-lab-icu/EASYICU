@@ -1095,6 +1095,15 @@ def normalize_analysis_design(value: Any) -> Dict[str, str]:
                 "field": "analysis_design.cluster_unit",
             }
         )
+    from easyicu.research_agent.contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
+
+    try:
+        validate_analysis_family_ceiling(analysis_family=analysis_family, variance_estimator=variance_estimator)
+    except AnalysisDesignConflict as exc:
+        raise StudyContextError({
+            "error": exc.code, "field": "analysis_design",
+            "remediation_route": "agent_plan_revision", "requires_user_authorization": False,
+        }) from exc
     return {
         **({"analysis_family": analysis_family} if analysis_family else {}),
         "analysis_unit": analysis_unit,

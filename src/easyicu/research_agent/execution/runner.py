@@ -2367,6 +2367,8 @@ class DockerRunner:
                             str(inspect_proc.stderr or ""),
                             str(inspect_proc.stdout or ""),
                         ),
+                        probe_phase="image_inspect",
+                        exit_code=inspect_proc.returncode,
                     )
                 )
             try:
@@ -3300,7 +3302,8 @@ _RUNNER_UNAVAILABLE_REMEDIATION = {
         "with a live Docker daemon and retry."
     ),
     "docker_probe_failed": (
-        "The Docker probe did not complete within its bounded timeout."
+        "The Docker probe failed or returned an invalid response. Check the "
+        "Docker context, permissions and runtime health; image absence was not established."
     ),
     "host_sandbox_missing": (
         "macOS 'sandbox-exec' was not found, so no filesystem-isolating host "
@@ -3335,7 +3338,9 @@ def _classify_docker_failure(stderr: str, stdout: str) -> str:
     text = f"{stderr}\n{stdout}".strip().lower()
     if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
         return "docker_daemon_unreachable"
-    return "docker_image_missing"
+    if "no such image:" in text or "no such object:" in text:
+        return "docker_image_missing"
+    return "docker_probe_failed"
 
 
 @dataclass(frozen=True)
@@ -3346,6 +3351,8 @@ class RunnerAvailability:
     available: bool
     image: str
     reason_code: str = ""
+    probe_phase: str = ""
+    exit_code: Optional[int] = None
 
 
 class ExecutionRuntimeUnavailableError(SafeRunnerUnavailableError):
@@ -3369,6 +3376,10 @@ class ExecutionRuntimeUnavailableError(SafeRunnerUnavailableError):
             "reason_code": availability.reason_code,
             "runner_kind": availability.kind,
         }
+        if availability.probe_phase == "image_inspect":
+            self.easyicu_safe_diagnostic["probe_phase"] = availability.probe_phase
+        if isinstance(availability.exit_code, int) and not isinstance(availability.exit_code, bool) and -128 <= availability.exit_code <= 255:
+            self.easyicu_safe_diagnostic["exit_code"] = availability.exit_code
 
 
 def probe_runner_availability(
@@ -3443,6 +3454,8 @@ def probe_runner_availability(
         reason_code=_classify_docker_failure(
             str(probe.stderr or ""), str(probe.stdout or "")
         ),
+        probe_phase="image_inspect",
+        exit_code=probe.returncode,
     )
 
 
