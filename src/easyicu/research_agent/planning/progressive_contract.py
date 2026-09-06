@@ -132,6 +132,13 @@ PROGRESSIVE_ARTICLE_ROLES: Mapping[str, frozenset[str]] = {
     "absolute_risk_context": frozenset({"descriptive_result"}),
     "robustness_replay": frozenset({"robustness"}),
 }
+# These modules compile a fixed estimator/product, not the action named by the
+# model. A null action retains that estimator; it is not a custom-method escape.
+PROGRESSIVE_FIXED_MODULE_ACTION_IDS: Mapping[str, tuple[str, ...]] = {
+    "adjusted_association": ("association.adjusted_association",),
+    "absolute_risk_context": (),
+    "robustness_replay": (),
+}
 TableOneMode = Literal["independent_inference", "descriptive_smd_only"]
 OutcomeType = Literal["binary", "continuous"]
 ModelTermCoding = Literal[
@@ -908,6 +915,57 @@ class ProgressivePlanCompileError(ValueError):
         super().__init__(f"{reason_code}:{coordinate} {message}".strip())
 
 
+def validate_progressive_module_action_compatibility(
+    step: ProgressiveOutlineStep | ProgressiveSkeletonStep,
+    *,
+    available_action_ids: Sequence[str],
+    step_index: int,
+    phase: Literal["outline", "compile"],
+) -> None:
+    """Use the same fixed-estimator boundary before and after materialization."""
+
+    compatible = PROGRESSIVE_FIXED_MODULE_ACTION_IDS.get(step.module_id)
+    if compatible is None:
+        return
+    prefix = "progressive_outline" if phase == "outline" else "progressive"
+    action = step.scientific_action_id
+    if action is not None and action not in compatible:
+        raise ProgressivePlanCompileError(
+            f"{prefix}_action_module_mismatch",
+            f"host module {step.module_id!r} cannot execute action {action!r}; "
+            "select that action's executable custom_analysis contract instead "
+            "of relabelling a fixed host estimator or replay",
+            step_id=step.step_id,
+            step_index=step_index,
+            path="scientific_action_id",
+            findings=({
+                "module_id": step.module_id,
+                "scientific_action_id": action,
+                "compatible_action_ids": list(compatible),
+            },),
+        )
+    if (
+        step.planned_analysis_role == "primary"
+        and compatible
+        and not set(compatible).intersection(available_action_ids)
+    ):
+        raise ProgressivePlanCompileError(
+            f"{prefix}_primary_module_family_mismatch",
+            f"host module {step.module_id!r} implements a primary estimator "
+            "outside the selected analysis family; scientific_action_id=null "
+            "does not change that estimator. Bind an available family action "
+            "to its own executable contract",
+            step_id=step.step_id,
+            step_index=step_index,
+            path="module_id",
+            findings=({
+                "module_id": step.module_id,
+                "compatible_action_ids": list(compatible),
+                "available_family_action_ids": list(available_action_ids),
+            },),
+        )
+
+
 __all__ = [
     "ProgressiveCompiledStepReceipt",
     "ProgressiveCohortIntent",
@@ -925,6 +983,7 @@ __all__ = [
     "ProgressivePlannerCheckpoint",
     "ProgressivePlanSkeleton",
     "PROGRESSIVE_ARTICLE_ROLES",
+    "PROGRESSIVE_FIXED_MODULE_ACTION_IDS",
     "PROGRESSIVE_HOST_COMPILED_OUTPUTS",
     "ProgressiveProductRef",
     "ProgressiveRobustnessIntent",
@@ -933,4 +992,5 @@ __all__ = [
     "ProgressiveSuffixRevision",
     "ProgressiveTableOneVariable",
     "progressive_module_ids_for_analysis_types",
+    "validate_progressive_module_action_compatibility",
 ]
