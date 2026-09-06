@@ -201,6 +201,19 @@ Software prose."""
     assert "### Statistical analysis\nEvidence-bound analysis prose." in rendered
 
 
+@pytest.mark.parametrize("section_key", ["abstract", "results"])
+def test_result_instructions_do_not_require_unavailable_inference(section_key: str) -> None:
+    instruction = next(
+        spec.instruction for spec in MANUSCRIPT_SECTION_SPECS if spec.key == section_key
+    )
+
+    assert "counts-only" in instruction
+    assert "only when explicitly supplied" in instruction
+    assert "Do not invent" in instruction
+    assert "size with 95% CI and p, one supporting finding" not in instruction
+    assert "Effect size and 95% CI, cite" not in instruction
+
+
 def test_incomplete_required_subsection_fails_closed_after_retry() -> None:
     seen: list[str] = []
 
