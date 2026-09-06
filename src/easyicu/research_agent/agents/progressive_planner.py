@@ -295,13 +295,65 @@ def _preserve_non_targeted_coordinates_across_literature_repair(
     preventing an unrelated regression from consuming the final repair turn.
     """
 
-    if previous is None or previous.step.step_id != current.step.step_id:
+    if (
+        previous is None
+        or previous.step.step_id != current.step.step_id
+        or previous.outline_step_sha256 != current.outline_step_sha256
+    ):
         return current
     observation_path = str((compiler_observation or {}).get("path") or "").strip()
     if observation_path != "literature_bindings":
         return current
+    bindings = list(current.step.literature_bindings)
+    if (compiler_observation or {}).get("reason_code") in {
+        "progressive_step_required_method_layer_unbound",
+        "progressive_final_method_layer_unbound",
+    }:
+        # A coverage-only finding follows successful source-scope validation.
+        # It authorizes adding a use, not revoking another use of the same
+        # source. Preserve both model-authored explanations; never infer a new
+        # design element or silently truncate an application/divergence.
+        prior = {
+            item.citation_key: item for item in previous.step.literature_bindings
+        }
+        keys = [item.citation_key for item in bindings]
+        if (
+            len(prior) == len(previous.step.literature_bindings)
+            and len(keys) == len(set(keys))
+        ):
+            merged = []
+            for item in bindings:
+                old = prior.get(item.citation_key)
+                if old is None or old == item:
+                    merged.append(item)
+                    continue
+                payload = item.model_dump(mode="python")
+                payload["design_elements"] = list(
+                    dict.fromkeys([*old.design_elements, *item.design_elements])
+                )
+                for field in ("application", "divergence"):
+                    texts = list(
+                        dict.fromkeys(
+                            text
+                            for text in (getattr(old, field), getattr(item, field))
+                            if text
+                        )
+                    )
+                    payload[field] = "\n\n".join(texts) or None
+                try:
+                    merged.append(type(item).model_validate(payload))
+                except ValueError as exc:
+                    raise ProgressivePlanCompileError(
+                        "progressive_literature_repair_scope_conflict",
+                        "coverage-only repair must retain prior design uses and "
+                        "caveats within the bounded binding contract; provide a "
+                        "complete combined binding with concise rationale",
+                        step_id=current.step.step_id,
+                        path="literature_bindings",
+                    ) from exc
+            bindings = merged
     repaired_step = previous.step.model_copy(
-        update={"literature_bindings": list(current.step.literature_bindings)}
+        update={"literature_bindings": bindings}
     )
     return current.model_copy(update={"step": repaired_step})
 
@@ -2586,6 +2638,7 @@ class ProgressivePlannerAgent:
         prefix_summary: Sequence[Mapping[str, Any]],
         available_product_refs: Sequence[tuple[str, str]],
         compiler_observation: Mapping[str, Any] | None = None,
+        prior_literature_bindings: Sequence[Mapping[str, Any]] = (),
     ) -> str:
         sealed_citation_keys = set(allowed_literature_citation_keys)
         method_source_scope = []
@@ -2653,7 +2706,9 @@ class ProgressivePlannerAgent:
             "subset of allowed_design_elements. Never add a plausible-sounding "
             "element outside this exact source authority. Sealed citations not "
             "listed here are topic or direct-comparator sources and remain "
-            "subject to the normal evidence review.\n"
+            "subject to the normal evidence review. Use one binding per "
+            "citation; a source serving several purposes must list all those "
+            "design_elements in that single binding.\n"
             + json.dumps(
                 method_source_scope,
                 ensure_ascii=False,
@@ -2681,6 +2736,20 @@ class ProgressivePlannerAgent:
         if know_how_context:
             blocks.append("Retrieved protocol know-how (binding):\n" + know_how_context)
         if compiler_observation:
+            if (
+                compiler_observation.get("path") == "literature_bindings"
+                and prior_literature_bindings
+            ):
+                blocks.append(
+                    "Previous model-authored literature bindings for this same "
+                    "uncompiled step (repair only the reported defect; a missing "
+                    "coverage layer does not revoke other valid uses or caveats):\n"
+                    + json.dumps(
+                        list(prior_literature_bindings),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
             blocks.append(
                 "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP:\n"
                 + json.dumps(
@@ -3156,6 +3225,11 @@ class ProgressivePlannerAgent:
                     )
                     continue
             for revision in range(_MAX_COMPILE_REVISIONS + 1):
+                prior_materialization = (
+                    self._attempt.compile_failure_attempts[-1].materialization
+                    if self._attempt.compile_failure_attempts
+                    else None
+                )
                 materialization_prompt = self._materialization_prompt(
                     context=context,
                     outline=outline,
@@ -3169,6 +3243,14 @@ class ProgressivePlannerAgent:
                     prefix_summary=prefix_state.prompt_summary,
                     available_product_refs=visible_product_refs,
                     compiler_observation=compiler_observation,
+                    prior_literature_bindings=(
+                        [
+                            item.model_dump(mode="json")
+                            for item in prior_materialization.step.literature_bindings
+                        ]
+                        if prior_materialization is not None
+                        else ()
+                    ),
                 )
                 step_messages = [
                     LLMMessage(role="system", content=_GUIDE),
@@ -3232,24 +3314,17 @@ class ProgressivePlannerAgent:
                     available_product_refs=visible_product_refs,
                 )
                 self.capture_efficiency_metrics()
-                prior_materialization = (
-                    self._attempt.compile_failure_attempts[-1].materialization
-                    if self._attempt.compile_failure_attempts
-                    else None
-                )
-                materialization = (
-                    _preserve_non_targeted_coordinates_across_literature_repair(
+                try:
+                    materialization = _preserve_non_targeted_coordinates_across_literature_repair(
                         current=materialization,
                         previous=prior_materialization,
                         compiler_observation=compiler_observation,
                     )
-                )
-                materialization = _preserve_literature_roster_across_targeted_repair(
-                    current=materialization,
-                    previous=prior_materialization,
-                    outline_step=outline_step,
-                )
-                try:
+                    materialization = _preserve_literature_roster_across_targeted_repair(
+                        current=materialization,
+                        previous=prior_materialization,
+                        outline_step=outline_step,
+                    )
                     _validate_progressive_method_binding_scope(
                         materialization,
                         step_index=step_index,
