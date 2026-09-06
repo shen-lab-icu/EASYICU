@@ -520,6 +520,17 @@ def _apply_legacy_materialization_window(
     concept-catalog or typed-authority windows always take precedence.
     """
 
+    from easyicu.concept.metadata_projection import (
+        ConceptColumnRole,
+        describe_column_representation,
+    )
+
+    companion_representations = {
+        "_n": (ConceptColumnRole.COUNT, "window_nonnull_count"),
+        "_measured": (ConceptColumnRole.MEASUREMENT_STATUS, "window_measurement_status"),
+        "_first_time": (ConceptColumnRole.FIRST_OBSERVATION_TIME, "window_first_time"),
+        "_last_time": (ConceptColumnRole.LAST_OBSERVATION_TIME, "window_last_time"),
+    }
     window = provenance["cohort_window_hours"]
     start, end = float(window[0]), float(window[1])
     window_label = f"icu_admission[{start:g},{end:g}]h"
@@ -540,24 +551,25 @@ def _apply_legacy_materialization_window(
         if base is None or base not in feature_concepts:
             projected.append(descriptor)
             continue
+        representation_updates: Dict[str, Any] = {}
+        if suffix in companion_representations and not descriptor.unit_normalization:
+            physical_role, transform = companion_representations[suffix]
+            representation_updates = {
+                "source_concept": base,
+                "unit_normalization": transform,
+                "description": describe_column_representation(
+                    descriptor.description, source_concept=base, role=physical_role,
+                ),
+            }
         projected.append(
             descriptor.model_copy(
                 update={
                     "analysis_window": window_label,
                     "analysis_window_role": "outer_observation_window",
                     # Only the verified feature roster plus materializer's
-                    # exact representation name grants this time transform.
-                    # The shared representation compiler owns role/range
-                    # semantics; a clinical score's range cannot describe hours.
-                    **(
-                        {
-                            "source_concept": base,
-                            "unit_normalization": f"window{suffix}",
-                        }
-                        if suffix in ("_first_time", "_last_time")
-                        and not descriptor.unit_normalization
-                        else {}
-                    ),
+                    # exact representation name grants this transform. A
+                    # count, flag or timestamp is not the source score/value.
+                    **representation_updates,
                 }
             )
         )

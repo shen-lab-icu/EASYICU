@@ -844,6 +844,25 @@ def _dictionary_bounds(definition: ConceptDefinition) -> Optional[NumericBounds]
     return NumericBounds(definition.minimum, definition.maximum)
 
 
+def describe_column_representation(
+    description: Optional[str], *, source_concept: str, role: ConceptColumnRole,
+) -> Optional[str]:
+    """Name a structural companion without calling it the clinical value.
+
+    This is producer-time metadata only. Parsers preserve archived labels;
+    neither a filename suffix nor observed patient values determine meaning.
+    """
+
+    label = _clean_optional(description)
+    prefix = {
+        ConceptColumnRole.COUNT: "Non-null observation count",
+        ConceptColumnRole.MEASUREMENT_STATUS: "Measurement availability",
+        ConceptColumnRole.FIRST_OBSERVATION_TIME: "First observation time",
+        ConceptColumnRole.LAST_OBSERVATION_TIME: "Last observation time",
+    }.get(role)
+    return f"{prefix}: {label or source_concept}" if prefix else label
+
+
 def project_concept_column_metadata(
     definition: ConceptDefinition,
     *,
@@ -1030,7 +1049,9 @@ def project_concept_column_metadata(
         source_declared_for_database=source_declared_for_database,
         availability_basis=availability_basis,
         source_lineage=lineage,
-        description=_clean_optional(definition.description),
+        description=describe_column_representation(
+            definition.description, source_concept=spec.source_concept, role=spec.role,
+        ),
         category=_clean_optional(definition.category),
         class_name=_clean_optional(definition.class_name),
         derived_from_concepts=derived,
@@ -1105,7 +1126,9 @@ def derive_concept_column_metadata(
         source_declared_for_database=source.source_declared_for_database,
         availability_basis=source.availability_basis,
         source_lineage=source.source_lineage,
-        description=source.description,
+        description=describe_column_representation(
+            source.description, source_concept=source.source_concept, role=spec.role,
+        ),
         category=source.category,
         class_name=source.class_name,
         derived_from_concepts=source.derived_from_concepts,
