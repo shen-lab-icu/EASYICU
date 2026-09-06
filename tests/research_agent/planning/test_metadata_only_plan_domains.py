@@ -8,6 +8,7 @@ from easyicu.research_agent.authority.declared_levels import closed_planning_lev
 from easyicu.research_agent.planning.progressive_compiler import _compile_table_one
 from easyicu.research_agent.planning.progressive_contract import ProgressiveSkeletonStep
 from easyicu.research_agent.planning.progressive_host_materialization import _table_summary
+from easyicu.research_agent.schema import ConceptDescriptor
 from tests.research_agent.planning.progressive_planner_fixtures import _context, _payload
 
 
@@ -70,3 +71,24 @@ def test_unknown_catalog_variable_has_no_invented_levels():
         name=variable.name, variables={variable.name: variable},
     ) == []
     assert closed_planning_levels_for(name="missing", variables={}) == []
+
+
+def test_logical_source_class_declares_binary_planning_domain_without_rows():
+    variable = ConceptDescriptor(
+        name="event_flag", source_concept="death", dtype="float64",
+    )
+    assert closed_planning_levels_for(
+        name=variable.name, variables={variable.name: variable},
+    ) == [0, 1]
+    assert variable.observed_domain is None
+
+
+def test_event_companion_does_not_inherit_status_domain():
+    for transform in ("first_truthy_event_time", "window_first_time", "window_nonnull_count"):
+        variable = ConceptDescriptor(
+            name="event_companion", source_concept="death", dtype="float64",
+            unit_normalization=transform,
+        )
+        assert closed_planning_levels_for(
+            name=variable.name, variables={variable.name: variable},
+        ) == []
