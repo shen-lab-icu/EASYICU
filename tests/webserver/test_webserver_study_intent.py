@@ -57,6 +57,21 @@ def test_definition_dependency_does_not_replace_the_named_exposure():
     assert values["exposure"] == "sep3"
 
 
+@pytest.mark.parametrize("population", ["非脓毒症患者", "非机械通气患者", "非 AKI 人群"])
+def test_negated_population_does_not_negate_its_mortality_outcome(population):
+    values = _values(study_intent.deterministic_intent(
+        f"描述 {population} 的院内死亡情况。"
+    ))
+    assert values["outcome"] == "death"
+
+
+def test_explicit_outcome_negation_survives_a_negated_population():
+    values = _values(study_intent.deterministic_intent(
+        "在非脓毒症患者中，不研究院内死亡；只研究 AKI。"
+    ))
+    assert values["outcome"] == "aki"
+
+
 def test_later_method_acronym_does_not_replace_the_named_exposure():
     values = _values(study_intent.deterministic_intent(
         "评估机械通气与28天死亡的关联，做比例风险检验；PH 不成立时不报告恒定 HR。"
