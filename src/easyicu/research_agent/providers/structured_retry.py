@@ -51,6 +51,7 @@ from typing import (
     TypeVar,
 )
 
+from ..contracts.control_signals import ProgressControlSignal
 from .protocol import LLMMessage
 from .factory import authorized_complete
 from .llm import (
@@ -94,12 +95,14 @@ def _notify_progress(
     callback: Optional[Callable[[StructuredRetryProgress], None]],
     event: StructuredRetryProgress,
 ) -> None:
-    """Treat UI progress as advisory; it must never change model execution."""
+    """Ignore advisory UI failures, but propagate explicit host control."""
 
     if callback is None:
         return
     try:
         callback(event)
+    except ProgressControlSignal:
+        raise
     except Exception:  # noqa: BLE001 - observers cannot own retry authority
         return
 
@@ -755,6 +758,8 @@ def call_llm_with_structured_retry(
         )
         try:
             value = parser(raw)
+        except ProgressControlSignal:
+            raise
         except Exception as exc:  # noqa: BLE001 — parser may raise anything
             # Rendered once, then reused for the record, the feedback message
             # and the carry-forward signature -- three readers of one string,

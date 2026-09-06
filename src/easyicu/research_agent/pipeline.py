@@ -232,6 +232,7 @@ from .orchestration.human_review_restore import (
 )
 from .orchestration.services import PipelineServices
 from .orchestration.progress import (
+    ProgressControlSignal,
     ResumableProgressChannel,
     planner_retry_progress_callback,
 )
@@ -2280,6 +2281,8 @@ class ResearchAgentPipeline:
                     dropped_plan_keys = planner.last_dropped_plan_keys
             except PlannerArticleContractError:
                 raise
+            except ProgressControlSignal:
+                raise
             except Exception as exc:
                 if not self._enable_deterministic_planner_fallback:
                     raise
@@ -2355,6 +2358,8 @@ class ResearchAgentPipeline:
                         article_contract_context=context,
                         planning_contract_context=planning_contract_context,
                     )
+                except ProgressControlSignal:
+                    raise
                 except Exception:
                     retry_plan = None
                 if retry_plan is not None and retry_plan.steps:
