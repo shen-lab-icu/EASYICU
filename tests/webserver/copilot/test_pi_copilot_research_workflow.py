@@ -7625,6 +7625,128 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
     assert review["gate"]["reason"] == "research_pipeline_provider_timeout"
 
 
+@pytest.mark.parametrize("failure_kind", ["typed", "untyped"])
+def test_execution_retry_preserves_sealed_coordinates_and_prior_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    """A resumed writer must neither re-plan its inputs nor erase prior results."""
+
+    _assume_execution_runtime_ready(monkeypatch)
+    wrapper = tmp_path / "projects" / "study-workflow" / "run-original"
+    wrapper.mkdir(parents=True)
+    cohort = wrapper / "cohort.parquet"
+    pd.DataFrame({
+        "heart_rate_max": [90.0], "heart_rate_mean": [80.0],
+        "death": [0], "los_icu": [2.0],
+    }).to_parquet(cohort)
+    inputs = agent_pipeline_runs._ExecutionResumeInputs(
+        cohort_path=cohort,
+        cohort_authority_path=None,
+        cohort_authority_ref=None,
+        trajectory_path=None,
+        trajectory_authority_path=None,
+        trajectory_authority_ref=None,
+        scientific_identity={
+            "primary_exposure": "heart_rate_max",
+            "target_outcome": "death",
+            "outcome_columns": ["death", "los_icu"],
+        },
+    )
+    original = {
+        name: json.dumps({"run_id": "run-analysis", "existing_result": name})
+        for name in (
+            "run_context.json", "quality_gate.json",
+            "source_run_manifest.json", "evidence_ledger.json",
+        )
+    }
+    for name, content in original.items():
+        (wrapper / name).write_text(content, encoding="utf-8")
+    legacy_diagnostic = wrapper / "diagnostics" / "research_pipeline_failure.json"
+    legacy_diagnostic.parent.mkdir()
+    legacy_diagnostic.write_text('{"earlier_failure":true}', encoding="utf-8")
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_resolve_execution_resume_wrapper",
+        lambda **_kwargs: agent_pipeline_runs._ExecutionResumeTarget(
+            wrapper_dir=wrapper, pipeline_run_id="run-analysis",
+            pipeline_config_sha256="a" * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_verified_execution_resume_inputs", lambda _target: inputs,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_validated_execution_retry_config",
+        lambda **kwargs: kwargs["current_config"],
+    )
+    # Fresh inference would pick a different aggregation and omit the secondary
+    # endpoint. The sealed request must win without consulting those heuristics.
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_resolve_materialized_primary_exposure",
+        lambda **_kwargs: "heart_rate_mean",
+    )
+    monkeypatch.setattr(
+        provider_adapter, "build_research_agent_provider_client",
+        lambda *_args, **_kwargs: (object(), {"provider": "openai", "model": "test"}),
+    )
+    monkeypatch.setattr(
+        research_pipeline_run_preparation, "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    import easyicu.research_agent as research_agent
+
+    captured: list[dict[str, Any]] = []
+
+    class FakePipeline:
+        def run(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            if failure_kind == "typed":
+                raise agent_pipeline_runs.ResearchPipelineRunError(
+                    "research_pipeline_cancelled", "private retry detail",
+                )
+            from easyicu.research_agent.authority.run_input import RunInputIdentityError
+
+            raise RunInputIdentityError("private retry detail")
+
+    monkeypatch.setattr(
+        research_agent.ResearchAgentPipeline, "from_config",
+        lambda _config, *, services: FakePipeline(),
+    )
+    export_path = _write_pipeline_export(tmp_path / "export")
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export_path), study_context=_complete_study(),
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT, budget_mode="full_reviewed",
+        execution_resume_source_run_id="run-analysis",
+    )
+    for attempt in range(2):
+        job = SimpleNamespace(
+            id=f"retry-{attempt}", cancel_requested=False, emit=lambda _event: None,
+        )
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError):
+            runner(job)
+    assert len(captured) == 2
+    for request in captured:
+        assert request["primary_exposure"] == "heart_rate_max"
+        assert request["target_outcome"] == "death"
+        assert request["outcome_columns"] == ("death", "los_icu")
+        assert request["cohort"] == cohort
+        assert request["resume_run_id"] == "run-analysis"
+    for name, content in original.items():
+        assert (wrapper / name).read_text(encoding="utf-8") == content
+    assert legacy_diagnostic.read_text(encoding="utf-8") == '{"earlier_failure":true}'
+    diagnostics = sorted((wrapper / "diagnostics" / "execution_retries").glob("*.json"))
+    assert len(diagnostics) == 2
+    for diagnostic in diagnostics:
+        payload = json.loads(diagnostic.read_text(encoding="utf-8"))
+        assert payload["status"] == "failed"
+        assert "private retry detail" not in json.dumps(payload)
+        if failure_kind == "untyped":
+            assert payload["exception_types"] == ["RunInputIdentityError"]
+
+
 def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
     tmp_path: Path,
 ) -> None:

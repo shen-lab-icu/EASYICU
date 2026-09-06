@@ -228,6 +228,34 @@ def test_execution_retry_accepts_missing_seed_only_for_exact_checkpoint_digest(
     assert restored is config
 
 
+def test_execution_retry_projection_checks_secondary_outcome_columns(
+    tmp_path: Path,
+) -> None:
+    import pandas as pd
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"lact_max": [2.0], "death": [0]}).to_parquet(cohort)
+    inputs = agent_pipeline_runs._ExecutionResumeInputs(
+        cohort_path=cohort,
+        cohort_authority_path=None,
+        cohort_authority_ref=None,
+        trajectory_path=None,
+        trajectory_authority_path=None,
+        trajectory_authority_ref=None,
+        scientific_identity={
+            "primary_exposure": "lact_max",
+            "target_outcome": "death",
+            "outcome_columns": ["death", "los_icu"],
+        },
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+        agent_pipeline_runs._execution_resume_acquisition_projection(inputs)
+
+    assert raised.value.code == "research_pipeline_execution_retry_input_invalid"
+    assert raised.value.details == {"missing_column_count": 1}
+
+
 def test_execution_retry_rejects_missing_seed_when_checkpoint_digest_drifted(
     tmp_path: Path,
 ) -> None:
