@@ -4356,7 +4356,7 @@ def test_predicate_filtered_foundation_contract_projects_nested_item_shapes() ->
     assert '"start_offset_hours":"<number>"' in contract
     assert '"value":{"mode":' in contract
     assert "value object must preserve all six displayed keys" in contract
-    assert 'each item has exactly {"key":' in contract
+    assert 'each nonempty item has exactly {"key":' in contract
     assert '"card_sha256":"<authorized 64-char digest>"' in contract
 
 
@@ -4368,11 +4368,11 @@ def test_foundation_contract_projects_required_reader_label_keys() -> None:
     )
 
     assert (
-        '"key":"exposure_flag","value":"<reader-facing clinical variable label>"'
+        '"exposure_flag":"<reader-facing clinical variable label>"'
         in contract
     )
     assert (
-        '"key":"outcome_flag","value":"<reader-facing clinical variable label>"'
+        '"outcome_flag":"<reader-facing clinical variable label>"'
         in contract
     )
 
@@ -5751,8 +5751,8 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
         '"schema_version":"easyicu.progressive_plan_foundation/1"' in foundation_prompt
     )
     assert '"foundation":{"cohort":' in foundation_prompt
-    assert '"key":"exposure_flag=0"' in foundation_prompt
-    assert '"key":"exposure_flag=1"' in foundation_prompt
+    assert '"exposure_flag=0":"<reader-facing label for level 0>"' in foundation_prompt
+    assert '"exposure_flag=1":"<reader-facing label for level 1>"' in foundation_prompt
     assert "Required binary display-label authority" in foundation_prompt
     assert '"robustness_intents":[]' in foundation_prompt
     assert '"know_how_decisions":[]' in foundation_prompt
