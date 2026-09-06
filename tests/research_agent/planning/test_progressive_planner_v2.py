@@ -4267,7 +4267,7 @@ def test_outline_rejects_new_estimand_action_on_robustness_replay_owner() -> Non
         candidate["analysis_type"] = "survival"
     next(
         step for step in payload["steps"] if step["module_id"] == "adjusted_association"
-    )["scientific_action_id"] = None
+    ).update(module_id="custom_analysis", scientific_action_id="time_to_event.cox_hr")
     replay = {
         "step_id": "08_robustness",
         "planned_analysis_role": "sensitivity",

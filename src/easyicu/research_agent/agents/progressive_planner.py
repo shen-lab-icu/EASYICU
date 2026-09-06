@@ -68,6 +68,7 @@ from ..planning.dependence_authority import (
 )
 from ..planning.progressive_contract import (
     PROGRESSIVE_ARTICLE_ROLES,
+    PROGRESSIVE_FIXED_MODULE_ACTION_IDS,
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
@@ -79,6 +80,7 @@ from ..planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
     progressive_module_ids_for_analysis_types,
+    validate_progressive_module_action_compatibility,
 )
 from ..planning.progressive_host_materialization import (
     host_materialize_progressive_step,
@@ -1437,12 +1439,19 @@ class ProgressivePlannerAgent:
             "robustness_replay module must always set scientific_action_id to "
             "null because it replays the sealed sensitivity specifications; a "
             "separate scientific action needs its own custom_analysis step. "
-            "Cohort-definition, measurement_audit, raw-distribution, "
+            "Cohort-definition, measurement_audit, absolute_risk_context, raw-distribution, "
             "visualization, and report support steps must also set "
             "scientific_action_id to null. A table_one step must bind "
             "descriptive.table_one when that exact action appears in the "
             "selected analysis family's scientific_action_ids; otherwise it "
             "must use null.",
+            "Fixed host module action compatibility:\n"
+            + json.dumps(PROGRESSIVE_FIXED_MODULE_ACTION_IDS, separators=(",", ":"))
+            + "\nAn empty action list requires null. A null action does not "
+            "change the module's fixed estimator. A fixed primary estimator's "
+            "compatible action must belong to the selected analysis family, "
+            "even when its scientific_action_id is null. Bind a different "
+            "family action through its own custom_analysis execution contract.",
             "Citation-role separation:\n"
             + json.dumps(
                 {
@@ -2332,30 +2341,12 @@ class ProgressivePlannerAgent:
                     step_index=index,
                     path="scientific_action_id",
                 )
-            if (
-                step.module_id == "adjusted_association"
-                and action is not None
-                and action != "association.adjusted_association"
-            ):
-                raise ProgressivePlanCompileError(
-                    "progressive_outline_action_module_mismatch",
-                    "the host-compiled adjusted_association module cannot "
-                    f"execute scientific action {action!r}; use the action's "
-                    "own executable module or select "
-                    "'association.adjusted_association'",
-                    step_id=step.step_id,
-                    step_index=index,
-                    path="scientific_action_id",
-                    findings=(
-                        {
-                            "module_id": step.module_id,
-                            "scientific_action_id": action,
-                            "compatible_action_ids": [
-                                "association.adjusted_association"
-                            ],
-                        },
-                    ),
-                )
+            validate_progressive_module_action_compatibility(
+                step,
+                available_action_ids=allowed_actions,
+                step_index=index,
+                phase="outline",
+            )
             if (
                 step.module_id == "table_one"
                 and "descriptive.table_one" in allowed
@@ -2375,24 +2366,6 @@ class ProgressivePlannerAgent:
                             "module_id": step.module_id,
                             "scientific_action_id": action,
                             "compatible_action_ids": ["descriptive.table_one"],
-                        },
-                    ),
-                )
-            if step.module_id == "robustness_replay" and action is not None:
-                raise ProgressivePlanCompileError(
-                    "progressive_outline_action_module_mismatch",
-                    "the host-compiled robustness_replay module replays only "
-                    "the sealed robustness specification and cannot substitute "
-                    f"scientific action {action!r}; use a separate executable "
-                    "analysis step for that action",
-                    step_id=step.step_id,
-                    step_index=index,
-                    path="scientific_action_id",
-                    findings=(
-                        {
-                            "module_id": step.module_id,
-                            "scientific_action_id": action,
-                            "compatible_action_ids": [],
                         },
                     ),
                 )

@@ -78,6 +78,7 @@ from .progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveSkeletonStep,
     progressive_module_ids_for_analysis_types,
+    validate_progressive_module_action_compatibility,
 )
 from .robustness_contract import RobustnessSpec
 from .preplan_know_how import verify_know_how_decisions
@@ -85,6 +86,7 @@ from .scientific_action_catalog import (
     ScientificAction,
     ScientificActionGapError,
     scientific_action_for_id,
+    scientific_actions_for_analysis_type,
     validate_plan_scientific_action_selections,
 )
 from .scientific_review import post_baseline_exposure
@@ -1976,6 +1978,16 @@ def _compile_one_step(
                 step_index=step_index,
                 path="scientific_action_id",
             ) from exc
+    validate_progressive_module_action_compatibility(
+        step,
+        available_action_ids=tuple(
+            item.action_id
+            for item in scientific_actions_for_analysis_type(skeleton.analysis_type).actions
+            if item.execution_mode != "not_available"
+        ),
+        step_index=step_index,
+        phase="compile",
+    )
     try:
         output_pairs = _canonical_outputs(step)
     except ValueError as exc:
