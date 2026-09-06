@@ -62,7 +62,10 @@ from ..planning.progressive_compiler import (
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
-from ..planning.dependence_authority import context_counts_only_authority
+from ..planning.dependence_authority import (
+    context_counts_only_authority,
+    descriptive_counts_only_required,
+)
 from ..planning.progressive_contract import (
     PROGRESSIVE_ARTICLE_ROLES,
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
@@ -1556,6 +1559,19 @@ class ProgressivePlannerAgent:
                 "standard errors, or p-values. Put limitations in cannot_prove; "
                 "do not describe a forbidden output and then negate it."
             )
+        elif descriptive_counts_only_required(context, analysis_type="descriptive_epidemiology"):
+            blocks.append(
+                "Source-bound descriptive inference ceiling (binding): repeated "
+                "units cannot be ruled out and patient grouping is unavailable. "
+                "If selecting descriptive epidemiology, promise counts and "
+                "proportions only in estimand, primary_method, figure_role, "
+                "supports and reviewable_plan; put the dependence limitation in "
+                "cannot_prove. No confidence intervals, uncertainty, standard "
+                "errors, p-values or inferential contrasts are executable. "
+                "Do not change the question or claim another family to evade "
+                "this source limitation. No user confirmation or invented "
+                "patient identifier resolves missing grouping authority."
+            )
         if planning_contract_context:
             blocks.append(
                 "Additional run-specific article/task contract (binding; never "
@@ -1784,8 +1800,8 @@ class ProgressivePlannerAgent:
                 str(exc),
                 path=exc.path,
             ) from exc
-        if article_context is not None and context_counts_only_authority(
-            article_context
+        if article_context is not None and descriptive_counts_only_required(
+            article_context, analysis_type=outline.analysis_type,
         ):
             coordinate = _selected_counts_only_inference_coordinate(outline)
             if coordinate is not None:

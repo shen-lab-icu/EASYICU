@@ -52,11 +52,12 @@ def _review(
     )
 
 
-def test_current_scientific_review_contract_rejects_legacy_policy_artifacts() -> None:
+@pytest.mark.parametrize("legacy_version", [1, 5])
+def test_current_scientific_review_contract_rejects_legacy_policy_artifacts(legacy_version) -> None:
     legacy_payload = _review(
         status="analysis_only", approval_allowed=True
     ).model_dump(mode="json")
-    legacy_payload["schema_version"] = "easyicu.plan_scientific_review/1"
+    legacy_payload["schema_version"] = f"easyicu.plan_scientific_review/{legacy_version}"
 
     with pytest.raises(ValueError):
         PlanScientificReview.model_validate(legacy_payload)

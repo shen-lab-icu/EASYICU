@@ -61,6 +61,7 @@ from easyicu.research_agent.planning.progressive_compiler import (
 )
 from easyicu.research_agent.planning.dependence_authority import (
     bind_context_dependence_authority,
+    descriptive_counts_only_required,
 )
 from easyicu.research_agent.planning.cohort_contract import concept_id_exists
 from easyicu.research_agent.planning.progressive_contract import (
@@ -3451,6 +3452,58 @@ def test_counts_only_compiler_emits_descriptive_table_and_distribution() -> None
     assert distribution.interval_method == "none_counts_only"
     assert distribution.confidence_level is None
     assert distribution.risk_difference_contrast is None
+
+
+@pytest.mark.parametrize("metadata_only", [False, True])
+def test_descriptive_source_without_patient_identity_compiles_counts_only(metadata_only) -> None:
+    context = _context()
+    provenance = {"analysis_unit": "icu_stay"}
+    if metadata_only:
+        provenance["evidence_stage"] = "metadata_only_planning"
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={
+            "n_stays": 0 if metadata_only else 120,
+            "n_patients": None,
+            "provenance": provenance,
+        }),
+    })
+    payload = _payload()
+    payload.update(analysis_type="descriptive_epidemiology", robustness_intents=[])
+    payload["steps"] = payload["steps"][:3]
+    original_context = context.model_dump(mode="json")
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
+    )
+    distribution = plan.steps[2].exposure_outcome_distribution_spec
+    assert distribution.schema_version == "easyicu.exposure_outcome_distribution/3"
+    assert distribution.confidence_level is None
+    assert distribution.risk_difference_contrast is None
+    assert context.model_dump(mode="json") == original_context
+    assert "Source-bound descriptive inference ceiling" in "\n".join(
+        message.content for message in ProgressivePlannerAgent.request_messages(context)
+    )
+
+
+@pytest.mark.parametrize("authority", ["equal_owner_counts", "patient_group", "other_family"])
+def test_source_counts_ceiling_preserves_other_design_authority(authority) -> None:
+    context = _context()
+    provenance = {"analysis_unit": "icu_stay"}
+    cohort_updates = {"n_patients": None, "provenance": provenance}
+    if authority == "equal_owner_counts":
+        cohort_updates["n_patients"] = context.cohort.n_stays
+    elif authority == "patient_group":
+        cohort_updates["id_columns"] = ["stay_id", "person_key"]
+        provenance["patient_id_columns"] = ["person_key"]
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update=cohort_updates),
+    })
+
+    assert not descriptive_counts_only_required(
+        context,
+        analysis_type=("association_study" if authority == "other_family"
+                       else "descriptive_epidemiology"),
+    )
 
 
 def test_descriptive_compiler_rejects_effect_robustness_before_plan_assembly() -> None:
