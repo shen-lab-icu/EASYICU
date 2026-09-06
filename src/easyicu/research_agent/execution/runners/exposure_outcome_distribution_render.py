@@ -747,6 +747,40 @@ def _labels(levels: pd.DataFrame, level_labels: tuple[str, str] | None) -> list[
     return [str(value) for value in values]
 
 
+def _wrap_category_label(label: str, *, renderer: Any, font: Any, width: float) -> str:
+    """Fit full labels by rendered width, including unspaced Unicode text."""
+
+    lines: list[str] = []
+    line = ""
+    # Preserve ordinary words and versioned Latin terms inside CJK labels.
+    tokens = re.findall(r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*|[^\S\n]+|\n|.", label)
+    for token in tokens:
+        if token == "\n":
+            lines.append(line.rstrip())
+            line = ""
+            continue
+        candidate = line + token
+        measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
+        if line and measured > width:
+            lines.append(line.rstrip())
+            line = ""
+            token = token.lstrip()
+        elif measured <= width:
+            line = candidate
+            continue
+        # Only a token wider than the entire column may be split internally.
+        for character in token:
+            candidate = line + character
+            measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
+            if line and measured > width:
+                lines.append(line)
+                line = character
+            else:
+                line = candidate
+    lines.append(line.rstrip())
+    return "\n".join(lines)
+
+
 def run_exposure_outcome_distribution_figure(
     *,
     out_dir: Path,
@@ -840,7 +874,14 @@ def run_exposure_outcome_distribution_figure(
     labels = _labels(levels, level_labels)
     positions = list(range(len(levels)))
 
-    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4))
+    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4), sharey=True)
+    fig.subplots_adjust(
+        left=0.30,
+        right=0.98,
+        bottom=0.29 if contrast is not None else 0.20,
+        top=0.84,
+        wspace=0.35,
+    )
 
     prevalence = levels["exposure_pct"].astype(float)
     prevalence_low = (
@@ -859,11 +900,44 @@ def run_exposure_outcome_distribution_figure(
         ),
         color=palette["blue"],
         error_kw={"ecolor": palette["neutral"], "capsize": 2.0, "elinewidth": 1.0},
-        height=0.55,
+        height=0.38,
     )
     ax_a.set_yticks(positions)
-    ax_a.set_yticklabels(labels)
-    ax_a.invert_yaxis()
+    label_font = ax_a.get_yticklabels()[0].get_fontproperties()
+    canvas = fig.canvas.get_renderer()
+    label_width = fig.bbox.width * 0.25
+    wrapped_labels = [
+        _wrap_category_label(label, renderer=canvas, font=label_font, width=label_width)
+        for label in labels
+    ]
+    max_lines = max(label.count("\n") + 1 for label in wrapped_labels)
+    if max_lines > 1:
+        # Find a common compact width without adding lines or splitting Latin
+        # terms. Character-count wrapping can strand a single trailing glyph.
+        low_width, high_width = label_width / max_lines, label_width
+        for _ in range(8):
+            candidate_width = (low_width + high_width) / 2
+            candidates = [
+                _wrap_category_label(label, renderer=canvas, font=label_font, width=candidate_width)
+                for label in labels
+            ]
+            if max(label.count("\n") + 1 for label in candidates) > max_lines:
+                low_width = candidate_width
+            else:
+                high_width, wrapped_labels = candidate_width, candidates
+    ax_a.set_yticklabels(wrapped_labels)
+    rendered_width = max(
+        canvas.get_text_width_height_descent(part, label_font, False)[0]
+        for label in wrapped_labels for part in label.split("\n")
+    )
+    fig.subplots_adjust(left=max(0.16, (rendered_width + fig.dpi * 0.18) / fig.bbox.width))
+    # One aligned category axis serves both panels. Repeating a long clinical
+    # label in the inter-panel gutter can cover the neighbouring data marks.
+    ax_a.set_ylim(len(labels) - 0.3, -0.5)
+    ax_a.set_xlim(
+        min(0.0, float(prevalence_low.min()) * 1.05),
+        max(100.0, float(prevalence_high.max()) * 1.05),
+    )
     ax_a.set_xlabel("Share of the analysed cohort (%)")
     ax_a.set_title("Exposure distribution", loc="left", pad=4)
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
@@ -874,10 +948,12 @@ def run_exposure_outcome_distribution_figure(
         levels["exposure_denominator"],
     ):
         ax_a.text(
-            float(pct) + 1.0,
-            position,
+            0.98,
+            position + 0.26,
             f"{float(pct):.1f}%  {int(n_rows):,}/{int(denominator):,}",
-            va="center",
+            transform=ax_a.get_yaxis_transform(),
+            ha="right",
+            va="top",
             fontsize=6.1,
         )
     add_panel_label(ax_a, "A", x=-0.14, y=1.04)
@@ -899,9 +975,7 @@ def run_exposure_outcome_distribution_figure(
             capsize=2.0,
             markersize=4.2,
         )
-    ax_b.set_yticks(positions)
-    ax_b.set_yticklabels(labels)
-    ax_b.invert_yaxis()
+    ax_b.tick_params(axis="y", left=False, labelleft=False)
     lower = min(0.0, float(low.min()) * 1.15)
     upper = max(5.0, float(high.max()) * 1.35)
     ax_b.set_xlim(lower, upper)
@@ -915,16 +989,14 @@ def run_exposure_outcome_distribution_figure(
         levels["outcome_denominator"],
         levels["outcome_missing_n"],
     ):
-        suffix = f"  ({int(missing):,} unobserved)" if int(missing) else ""
+        suffix = f"\n({int(missing):,} unobserved)" if int(missing) else ""
         ax_b.text(
-            min(
-                float(estimate) + (upper - lower) * 0.025,
-                upper - (upper - lower) * 0.02,
-            ),
-            position,
+            0.98,
+            position + 0.26,
             f"{float(estimate):.1f}%  {int(events):,}/{int(denominator):,}{suffix}",
-            va="center",
-            ha="left" if estimate < lower + (upper - lower) * 0.86 else "right",
+            transform=ax_b.get_yaxis_transform(),
+            va="top",
+            ha="right",
             fontsize=6.1,
         )
     add_panel_label(ax_b, "B", x=-0.14, y=1.04)
@@ -954,14 +1026,6 @@ def run_exposure_outcome_distribution_figure(
             linespacing=1.25,
             color=palette["neutral"],
         )
-    fig.subplots_adjust(
-        left=0.16,
-        right=0.98,
-        bottom=0.29 if contrast is not None else 0.20,
-        top=0.84,
-        wspace=0.48,
-    )
-
     source_data = [full_source.name, prevalence_source.name, outcome_source.name]
     if contrast is not None:
         source_data.append(contrast_source.name)

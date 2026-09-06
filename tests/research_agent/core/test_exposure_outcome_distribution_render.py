@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -226,6 +227,79 @@ def test_counts_only_table_renders_without_error_bars(
         "descriptive_result",
     ]
     assert "no uncertainty is computed" in contract["statistics_note"]
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        (
+            "Patients without the prespecified treatment during the observation window",
+            "Patients receiving the prespecified treatment during the observation window",
+        ),
+        (
+            "观察窗口内未达到预先规定的RISK-X7评分阈值且完成随访的记录",
+            "观察窗口内达到预先规定的RISK-X7评分阈值且完成随访的记录",
+        ),
+    ],
+)
+@pytest.mark.parametrize("counts_only", [False, True])
+def test_long_category_labels_and_annotations_do_not_overlap_panels(
+    tmp_path: Path, monkeypatch, labels, counts_only: bool
+) -> None:
+    from easyicu.research_agent.execution.runners import (
+        exposure_outcome_distribution_render as renderer,
+    )
+
+    updates = (
+        {
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "confidence_level": None,
+        }
+        if counts_only
+        else {}
+    )
+    table = _produced_table(tmp_path, monkeypatch, spec_updates=updates)
+    run_dir, manifest = _bound(tmp_path, table)
+    exporter = renderer.save_publication_figure
+
+    def checked_export(fig, *args, **kwargs):
+        fig.canvas.draw()
+        canvas = fig.canvas.get_renderer()
+        axes = fig.axes
+        rendered_labels = []
+        for axis_index, ax in enumerate(axes):
+            other_ax = axes[1 - axis_index]
+            for label in ax.get_yticklabels():
+                if not label.get_visible():
+                    continue
+                bounds = label.get_window_extent(canvas)
+                assert not bounds.overlaps(other_ax.bbox)
+                assert bounds.x0 >= 0
+                rendered_labels.append("".join(label.get_text().split()))
+                for token in re.findall(r"[A-Za-z]+(?:-[A-Za-z0-9]+)*", labels[len(rendered_labels) - 1]):
+                    assert token in label.get_text()
+            for label in ax.texts:
+                if "%" not in label.get_text():
+                    continue
+                bounds = label.get_window_extent(canvas)
+                assert not bounds.overlaps(other_ax.bbox)
+                assert bounds.x0 >= ax.bbox.x0 - 1
+                assert bounds.x1 <= ax.bbox.x1 + 1
+        assert set(rendered_labels) == {"".join(label.split()) for label in labels}
+        assert axes[0].get_ylim() == axes[1].get_ylim()
+        return exporter(fig, *args, **kwargs)
+
+    monkeypatch.setattr(renderer, "save_publication_figure", checked_export)
+    run_exposure_outcome_distribution_figure(
+        out_dir=tmp_path / "figure",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=STEP_ID,
+        figure_product=PRODUCT,
+        level_labels=labels,
+    )
 
 
 # --------------------------------------------------------------------------
