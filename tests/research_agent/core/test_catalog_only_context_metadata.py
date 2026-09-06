@@ -66,3 +66,31 @@ def test_unknown_concept_is_not_promoted_to_catalog_metadata():
 def test_dictionary_definition_keeps_precedence_over_catalog_label():
     assert get_concept_info("hr")["description"] == "heart rate"
     assert get_concept_info("hr")["units"] == ["bpm", "/min"]
+
+
+def test_executable_output_alias_retains_definition_review_boundaries():
+    public = get_concept_info("sep3_sofa1")
+    source = get_concept_info("sep3")
+    assert public["name"] == "sep3_sofa1"
+    assert public["sources"] == []
+    for field in (
+        "clinical_status", "canonical_definition", "definition_source",
+        "definition_version", "clinical_contract_id",
+    ):
+        assert public[field] == source[field]
+    assert public["clinical_contract_id"] == "sepsis3_2016"
+
+    context = build_research_context(
+        research_question="Describe Sepsis-3 status.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "sep3_sofa1_max": [0, 1]}),
+        cohort_name="synthetic", database="miiv",
+    )
+    reference = context.variable("sep3_sofa1_max").clinical_definition
+    assert reference.contract_id == "sepsis3_2016"
+    assert "independent_clinical_review_pending" in reference.validation_status
+    assert reference.database_conformance["miiv"] == "mapping_only"
+
+
+def test_provenance_only_composite_is_not_a_definition_alias():
+    assert get_concept_info("icu_readmission")["clinical_contract_id"] is None
+    assert get_concept_info("sep3_sofa2")["clinical_contract_id"] != "sepsis3_2016"

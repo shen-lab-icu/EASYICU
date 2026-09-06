@@ -71,6 +71,21 @@ def metadata_definition_for_concept(concept_id: str, module: str, dictionary: An
         # producer-owned logical type instead of falling back to num_cncpt and
         # subsequently rejecting an honest boolean column.
         payload["class_name"] = "lgl_cncpt"
+    from easyicu.concept_output_sources import CONCEPT_OUTPUT_LOAD_SOURCES
+
+    # Only the exact executable-alias owner can carry definition governance
+    # across an output rename. Composite provenance does not prove equivalence.
+    # Keep catalog physical metadata and do not fabricate raw-source mappings.
+    source_id = CONCEPT_OUTPUT_LOAD_SOURCES.get(concept_id)
+    source_definition = dictionary.get(source_id) if source_id else None
+    if source_definition is not None:
+        for field in (
+            "clinical_status", "canonical_definition", "definition_source",
+            "definition_version", "clinical_contract_id",
+        ):
+            value = getattr(source_definition, field, None)
+            if value is not None:
+                payload[field] = value
     return ConceptDefinition.from_name_and_payload(concept_id, payload)
 
 
