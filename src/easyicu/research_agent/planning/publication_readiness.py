@@ -15,12 +15,14 @@ from ..reporting.article_contract import (
     roles_covered_by_plan,
 )
 from ..schema import AnalysisPlan, ResearchContext
+from .analysis_types import canonical_analysis_family
 from .figure_strategy import (
     ArticleFigureStrategy,
     figure_panel_covers_role,
     figure_step_covers_role,
 )
 from .study_design import build_study_design_brief
+from .progressive_contract import progressive_module_ids_for_analysis_types
 
 
 def _context_sensitivity_spec_ids(context: ResearchContext) -> set[str]:
@@ -46,6 +48,14 @@ def _robustness_readiness(
         _context_sensitivity_spec_ids(context)
         | {spec.spec_id for spec in plan.robustness_specs}
     )
+    available_modules = set(
+        progressive_module_ids_for_analysis_types(
+            (canonical_analysis_family(plan.analysis_type),)
+        )
+    )
+    planner_revision_supported = bool(
+        available_modules & {"robustness_replay", "custom_analysis"}
+    )
     if required_axis_count == 0:
         status = "not_applicable"
         reason = "study_family_declares_no_robustness_requirement"
@@ -70,6 +80,7 @@ def _robustness_readiness(
         "executable_axes": executable_axes,
         "declared_authority_ids": declared_authority_ids,
         "effect_style_grid_required": family != "descriptive",
+        "planner_revision_supported": planner_revision_supported,
     }
 
 
