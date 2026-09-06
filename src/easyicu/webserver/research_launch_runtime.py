@@ -69,6 +69,44 @@ def _submission_profile_ref(*, budget_mode: str, live_pubmed: bool) -> str:
     )
 
 
+def _require_profile_dictionaries(*, budget_mode: str) -> None:
+    """Reject a stale development profile before provider or extraction work.
+
+    Both literature variants are runtime-selectable. Validate their immutable
+    coordinates without repairing, clearing or replacing historical hashes.
+    """
+
+    from easyicu.research_agent.concept_dict_audit import (
+        ConceptDictDriftError,
+        assert_dict_matches,
+        compute_concept_dict_fingerprint,
+    )
+    from easyicu.research_agent.orchestration.profiles import get_submission_profile
+
+    fingerprint = compute_concept_dict_fingerprint()
+    for live_pubmed in (False, True):
+        ref = _submission_profile_ref(budget_mode=budget_mode, live_pubmed=live_pubmed)
+        profile = get_submission_profile(ref)
+        try:
+            assert_dict_matches(
+                fingerprint,
+                expected_concept_dict_sha=profile.expected_concept_dict_sha,
+                expected_sofa2_dict_sha=profile.expected_sofa2_dict_sha,
+            )
+        except ConceptDictDriftError as exc:
+            raise ResearchPipelineRunError(
+                "research_pipeline_profile_dictionary_mismatch",
+                "The selected runtime profile does not match the installed clinical "
+                "dictionaries. Install a matching reviewed development profile; "
+                "historical profiles and source data must not be rewritten.",
+                details={
+                    "owner": "easyicu.research_agent.concept_dict_audit",
+                    "reason_code": "concept_dictionary_profile_mismatch",
+                    "profile_ref": ref,
+                },
+            ) from exc
+
+
 def _require_execution_runtime(*, budget_mode: str, runner_image: str) -> None:
     """Refuse a launch whose execution backend is already known to be down.
 

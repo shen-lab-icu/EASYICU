@@ -37,6 +37,7 @@ from easyicu.webserver.research_launch_resume import (
 )
 from easyicu.webserver.research_launch_runtime import (
     _require_execution_runtime,
+    _require_profile_dictionaries,
     _validated_pipeline_credential_source,
 )
 from easyicu.webserver.research_launch_scientific import (
@@ -442,6 +443,7 @@ def _prepare_launch_execution(
             "research_pipeline_runner_image_invalid",
             "The server-owned runner image must be one non-empty reference.",
         )
+    _require_profile_dictionaries(budget_mode=budget_mode)
     _require_execution_runtime(
         budget_mode=budget_mode,
         runner_image=selected_runner_image,
