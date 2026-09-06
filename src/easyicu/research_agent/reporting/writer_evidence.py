@@ -1507,7 +1507,9 @@ def _render_robustness_panel_block(
         None,
     )
     lines: List[str] = []
-    if primary is not None:
+    if primary is not None and _robustness_panel_has_primary_effect(
+        run_dir, evidence=evidence,
+    ):
         lines.append(
             "CANONICAL PRIMARY EFFECT SOURCE: use this robustness-panel "
             "primary row for the manuscript-facing primary effect. Do not "
@@ -1529,6 +1531,23 @@ def _render_robustness_panel_block(
                 evidence=evidence,
             )
         )
+    elif primary is not None and (
+        primary.n > 0 or primary.evidence_id
+        or any(value is not None for value in (
+            primary.point_estimate, primary.ci_low, primary.ci_high, primary.se,
+        ))
+    ):
+        lines.append(
+            "primary record has no reportable effect: "
+            f"n={primary.n}, converged={primary.converged}, notes={primary.notes}. "
+            "Retain this recorded failure or limitation; do not invent an estimate."
+        )
+    else:
+        lines.append(
+            "No primary effect result is available in this panel. An empty "
+            "placeholder is not evidence that a primary model was executed "
+            "or failed to converge."
+        )
     converged_variants = [
         row
         for row in panel.rows
@@ -1542,12 +1561,18 @@ def _render_robustness_panel_block(
             f"in [{_fmt_panel_number(panel.range_low)}, "
             f"{_fmt_panel_number(panel.range_high)}]"
         )
-    else:
+    elif panel.n_variants:
         lines.append(
             "variants: "
             f"n_variants={panel.n_variants}, "
             "no robustness variants converged "
             "(see robustness_panel.json for MVP boundary reasons)"
+        )
+    else:
+        lines.append(
+            "variants: n_variants=0, no sensitivity variant result rows were "
+            "recorded. This is not evidence of nonconvergence; do not claim "
+            "an executed robustness analysis or a robustness range."
         )
     for axis, row in sorted(worst_rows_by_axis(panel).items()):
         lines.append(

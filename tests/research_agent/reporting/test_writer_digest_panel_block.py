@@ -219,6 +219,50 @@ def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
     assert "no robustness variants converged" in digest
 
 
+def test_digest_empty_panel_does_not_claim_a_failed_primary_or_sensitivity(
+    ra, tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.writer_evidence import (
+        _render_writer_evidence_digest,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
+
+    _write_panel(
+        ra, tmp_path,
+        [RobustnessPanelRow("primary", "primary", 0, None, None, None, None, "", False)],
+    )
+
+    digest = _render_writer_evidence_digest([], run_dir=tmp_path)
+
+    assert "CANONICAL PRIMARY EFFECT SOURCE" not in digest
+    assert "primary: spec_id=" not in digest
+    assert "no robustness variants converged" not in digest
+    assert "no sensitivity variant result rows were recorded" in digest
+    assert "not evidence of nonconvergence" in digest
+
+
+def test_digest_failed_primary_is_not_canonical_and_failure_remains_visible(
+    ra, tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.writer_evidence import (
+        _render_writer_evidence_digest,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
+
+    _write_panel(
+        ra, tmp_path,
+        [RobustnessPanelRow("primary", "primary", 100, None, None, None, None,
+                            "failed_model", False, "Model failed to converge.")],
+    )
+
+    digest = _render_writer_evidence_digest([], run_dir=tmp_path)
+
+    assert "CANONICAL PRIMARY EFFECT SOURCE" not in digest
+    assert "Model failed to converge." in digest
+    assert "converged=False" in digest
+    assert "n=100" in digest
+
+
 def test_digest_contains_blocked_outcome_gate_guard(tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
