@@ -203,6 +203,11 @@ def run_landmark_spline_association(
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         raise TypeError("landmark executor received the wrong authority kind")
+    if sealed.schema_version.endswith("/3"):
+        raise ValueError(
+            "landmark clustered execution requires a newly reviewed v4 "
+            "functional-form comparison contract; legacy v3 receipts remain readable"
+        )
     if len(str(runtime_projection_sha256)) != 64:
         raise ValueError("runtime projection digest is required")
     missing = sorted(set(sealed.required_columns) - set(frame.columns))
@@ -435,10 +440,31 @@ def run_landmark_spline_association(
     additional_parameters = int(fit.df_model - linear_fit.df_model)
     if additional_parameters <= 0:
         raise ValueError("signed spline model does not extend the linear model")
-    likelihood_ratio = _finite(max(2.0 * (fit.llf - linear_fit.llf), 0.0))
-    nonlinearity_p_value = _finite(
-        chi2.sf(likelihood_ratio, additional_parameters)
-    )
+    if sealed.schema_version.endswith("/4"):
+        from .nested_model_comparison import cluster_robust_nested_wald
+
+        comparison = cluster_robust_nested_wald(fit=fit, restricted_design=linear_design)
+        if comparison["degrees_of_freedom"] != additional_parameters:
+            raise ValueError("landmark nonlinear restriction and model ranks disagree")
+        comparison["target_column"] = sealed.exposure_column
+        comparison["information_criteria_basis"] = (
+            "working_independence_loglikelihood_descriptive_only"
+        )
+        diagnostics = {
+            "nonlinearity_test": comparison["method"],
+            "nonlinearity_target_column": sealed.exposure_column,
+            "nonlinearity_statistic": comparison["statistic"],
+            "information_criteria_basis": comparison["information_criteria_basis"],
+        }
+    else:
+        likelihood_ratio = _finite(max(2.0 * (fit.llf - linear_fit.llf), 0.0))
+        comparison = {
+            "likelihood_ratio_statistic": likelihood_ratio,
+            "degrees_of_freedom": additional_parameters,
+            "p_value": _finite(chi2.sf(likelihood_ratio, additional_parameters)),
+        }
+        diagnostics = {"likelihood_ratio_statistic": likelihood_ratio}
+    nonlinearity_p_value = comparison["p_value"]
     sample_size = int(len(model_frame))
     spline_bic = _finite(-2.0 * fit.llf + len(fit.params) * math.log(sample_size))
     linear_bic = _finite(
@@ -541,7 +567,7 @@ def run_landmark_spline_association(
                 "spline_aic": _finite(fit.aic),
                 "linear_bic": linear_bic,
                 "spline_bic": spline_bic,
-                "likelihood_ratio_statistic": likelihood_ratio,
+                **diagnostics,
                 "additional_spline_parameters": additional_parameters,
                 "nonlinearity_p_value": nonlinearity_p_value,
             }
@@ -669,8 +695,8 @@ def run_landmark_spline_association(
         )
     receipt = {
         "schema_version": (
-            "easyicu.landmark_spline_runtime_receipt/3"
-            if sealed.schema_version.endswith("/3")
+            "easyicu.landmark_spline_runtime_receipt/4"
+            if sealed.schema_version.endswith("/4")
             else (
                 "easyicu.landmark_spline_runtime_receipt/2"
                 if sealed.schema_version.endswith("/2")
@@ -690,9 +716,7 @@ def run_landmark_spline_association(
         "events": int(model_frame["__outcome"].sum()),
         "functional_form_comparison": {
             "comparison": "restricted_cubic_spline_vs_linear",
-            "likelihood_ratio_statistic": likelihood_ratio,
-            "degrees_of_freedom": additional_parameters,
-            "p_value": nonlinearity_p_value,
+            **comparison,
             "linear_aic": _finite(linear_fit.aic),
             "spline_aic": _finite(fit.aic),
             "linear_bic": linear_bic,
@@ -707,7 +731,7 @@ def run_landmark_spline_association(
             "interval": "delta_method_logit_scale_95_percent_confidence_interval",
             "grid_rows": len(absolute_risk_rows),
         }
-    if sealed.schema_version.endswith("/3"):
+    if sealed.schema_version.endswith("/4"):
         assert sealed.dependence is not None
         receipt["variance_estimator"] = sealed.dependence.variance_estimator
         receipt["cluster_unit"] = sealed.dependence.cluster_unit

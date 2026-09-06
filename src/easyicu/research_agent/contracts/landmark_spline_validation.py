@@ -49,6 +49,26 @@ class LandmarkSplinePopulationFlowRow(BaseModel):
     population_rule: str = Field(min_length=1)
 
 
+class LandmarkSplineRobustFunctionalFormReceipt(BaseModel):
+    """Version-four comparison: preserve target and covariance-test identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    comparison: Literal["restricted_cubic_spline_vs_linear"]
+    method: Literal["cluster_robust_nested_wald_chi2"]
+    target_column: str = Field(min_length=1)
+    information_criteria_basis: Literal[
+        "working_independence_loglikelihood_descriptive_only"
+    ]
+    statistic: float = Field(ge=0, allow_inf_nan=False)
+    degrees_of_freedom: int = Field(ge=1)
+    p_value: float = Field(ge=0, le=1, allow_inf_nan=False)
+    linear_aic: float = Field(allow_inf_nan=False)
+    spline_aic: float = Field(allow_inf_nan=False)
+    linear_bic: float = Field(allow_inf_nan=False)
+    spline_bic: float = Field(allow_inf_nan=False)
+
+
 class LandmarkSplineAbsoluteRiskReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -97,6 +117,7 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
         "easyicu.landmark_spline_runtime_receipt/1",
         "easyicu.landmark_spline_runtime_receipt/2",
         "easyicu.landmark_spline_runtime_receipt/3",
+        "easyicu.landmark_spline_runtime_receipt/4",
     ]
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -109,7 +130,9 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
     primary_population_n: int = Field(ge=30)
     complete_case_n: int = Field(ge=30)
     events: int = Field(ge=1)
-    functional_form_comparison: LandmarkSplineFunctionalFormReceipt
+    functional_form_comparison: (
+        LandmarkSplineFunctionalFormReceipt | LandmarkSplineRobustFunctionalFormReceipt
+    )
     population_flow: tuple[LandmarkSplinePopulationFlowRow, ...] | None = None
     adjusted_absolute_risk: LandmarkSplineAbsoluteRiskReceipt | None = None
     variable_opportunity_sensitivity: (
@@ -127,6 +150,11 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
 
     @model_validator(mode="after")
     def _coherent_population_and_knots(self) -> "LandmarkSplineRuntimeReceipt":
+        robust_comparison = isinstance(
+            self.functional_form_comparison, LandmarkSplineRobustFunctionalFormReceipt
+        )
+        if self.schema_version.endswith("/4") != robust_comparison:
+            raise ValueError("landmark receipt version and functional-form test disagree")
         if self.complete_case_n > self.primary_population_n:
             raise ValueError("complete-case population exceeds landmark population")
         if self.events >= self.complete_case_n:
@@ -173,10 +201,10 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
             self.cluster_group_derivation,
             self.cluster_count,
         )
-        if self.schema_version.endswith("/3"):
+        if self.schema_version.endswith(("/3", "/4")):
             if any(value is None for value in cluster_fields):
                 raise ValueError(
-                    "landmark receipt v3 requires cluster-robust execution evidence"
+                    "landmark receipt v3/v4 requires cluster-robust execution evidence"
                 )
             if (
                 self.cluster_group_derivation == "identity"
@@ -207,6 +235,7 @@ def landmark_spline_runtime_receipt_valid(summary: Any) -> bool:
 
 __all__ = [
     "LandmarkSplineFunctionalFormReceipt",
+    "LandmarkSplineRobustFunctionalFormReceipt",
     "LandmarkSplineRuntimeReceipt",
     "landmark_spline_runtime_receipt_valid",
 ]

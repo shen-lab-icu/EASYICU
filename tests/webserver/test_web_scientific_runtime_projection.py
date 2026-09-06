@@ -310,7 +310,7 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
         projection.authority
     )
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
-    assert authority.schema_version.endswith("/3")
+    assert authority.schema_version.endswith("/4")
     assert "patient_stay_id" in authority.required_columns
     summary = run_landmark_spline_association(
         frame=pd.read_parquet(universe),
@@ -324,4 +324,82 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
     assert summary["scientific_runtime_receipt"]["cluster_group_source"] == (
         "patient_stay_id"
     )
+    comparison = summary["scientific_runtime_receipt"]["functional_form_comparison"]
+    assert comparison["method"] == "cluster_robust_nested_wald_chi2"
+    assert comparison["target_column"] == "lact_max"
+    assert comparison["statistic"] >= 0
+    assert "likelihood_ratio_statistic" not in comparison
+    sensitivity = pd.read_csv(tmp_path / "out" / "landmark_linear_sensitivity.csv")
+    assert sensitivity.loc[0, "nonlinearity_test"] == comparison["method"]
+    assert sensitivity.loc[0, "nonlinearity_statistic"] == pytest.approx(comparison["statistic"])
+    assert sensitivity.loc[0, "nonlinearity_p_value"] == pytest.approx(comparison["p_value"])
+    assert "likelihood_ratio_statistic" not in sensitivity.columns
     assert landmark_spline_runtime_receipt_valid(summary)
+
+    # A receipt cannot relabel a robust statistic as the legacy LR contract.
+    from copy import deepcopy
+    altered = deepcopy(summary)
+    altered["scientific_runtime_receipt"]["schema_version"] = "easyicu.landmark_spline_runtime_receipt/3"
+    assert not landmark_spline_runtime_receipt_valid(altered)
+
+    from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor import (
+        run_landmark_spline_functional_form,
+    )
+    child = AnalysisStep(
+        step_id="form_check", planned_analysis_role="sensitivity",
+        intent="Expose the bound primary nonlinearity test.",
+        method="prespecified_functional_form_check", inputs=[],
+        expected_outputs=["table:form_check"],
+    )
+    run_landmark_spline_functional_form(
+        step=child, authority=authority,
+        runtime_projection_sha256=projection.projection_sha256,
+        linear_sensitivity=sensitivity, linear_evidence_id="source_linear",
+        out_dir=tmp_path / "child",
+    )
+    projected = pd.read_csv(tmp_path / "child" / "form_check.csv")
+    assert projected.loc[0, "method"] == comparison["method"]
+    assert projected.loc[0, "target_column"] == "lact_max"
+    assert projected.loc[0, "information_criteria_basis"] == (
+        "working_independence_loglikelihood_descriptive_only"
+    )
+    assert projected.loc[0, "statistic"] == pytest.approx(comparison["statistic"])
+    assert "likelihood_ratio_statistic" not in projected.columns
+    with pytest.raises(ValueError, match="method or target"):
+        run_landmark_spline_functional_form(
+            step=child, authority=authority,
+            runtime_projection_sha256=projection.projection_sha256,
+            linear_sensitivity=sensitivity.assign(nonlinearity_target_column="age"),
+            linear_evidence_id="wrong_target", out_dir=tmp_path / "wrong",
+        )
+
+
+def test_legacy_cluster_authority_is_readable_but_requires_new_execution_review(tmp_path):
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        build_current_case_scientific_runtime_authority,
+    )
+    universe = _universe(tmp_path)
+    frame = pd.read_parquet(universe).assign(patient=["a", "b"])
+    frame.to_parquet(universe, index=False)
+    projection = compile_landmark_spline_runtime_projection(
+        study={"covariate_selection": "exact"}, sensitivity_specs=_specs(),
+        primary_exposure="lact_max", primary_exposure_source="lact", target_outcome="death",
+        declared_covariates=("age", "sex", "charlson"),
+        covariate_operationalizations={"charlson": "charlson_first"},
+        target_is_event_status=True, universe_path=universe,
+        scientific_configuration_sha256="d" * 64,
+        dependence=PlannedDependenceRequirement(group_source="patient", group_derivation="identity"),
+    )
+    legacy = dict(projection.authority)
+    legacy.pop("execution_contract_sha256")
+    legacy["schema_version"] = "easyicu.landmark_spline_runtime_authority/3"
+    sealed = build_current_case_scientific_runtime_authority(legacy)
+    wire = sealed.model_dump(mode="json")
+    assert load_current_case_scientific_runtime_authority(wire).model_dump(mode="json") == wire
+    with pytest.raises(ValueError, match="newly reviewed v4"):
+        run_landmark_spline_association(
+            frame=frame, authority=sealed, runtime_projection_sha256="e" * 64,
+            out_dir=tmp_path / "legacy",
+        )
+    assert not (tmp_path / "legacy").exists()
