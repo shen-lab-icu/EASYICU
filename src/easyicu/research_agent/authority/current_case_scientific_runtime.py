@@ -952,6 +952,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         "easyicu.landmark_spline_runtime_authority/1",
         "easyicu.landmark_spline_runtime_authority/2",
         "easyicu.landmark_spline_runtime_authority/3",
+        "easyicu.landmark_spline_runtime_authority/4",
     ]
     authority_kind: Literal["landmark_spline_association"]
     plan_method: Literal["signed_landmark_restricted_cubic_spline"]
@@ -1080,7 +1081,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 )
         elif self.dependence is None:
             raise ValueError(
-                "landmark spline v3 authority requires a cluster-robust dependence contract"
+                "landmark spline v3/v4 authority requires a cluster-robust dependence contract"
             )
         self._verify_digest()
         return self

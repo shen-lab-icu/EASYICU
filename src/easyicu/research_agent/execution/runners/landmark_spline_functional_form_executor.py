@@ -32,7 +32,6 @@ _REQUIRED_DIAGNOSTIC_COLUMNS = frozenset(
         "spline_aic",
         "linear_bic",
         "spline_bic",
-        "likelihood_ratio_statistic",
         "additional_spline_parameters",
         "nonlinearity_p_value",
     }
@@ -124,13 +123,47 @@ def run_landmark_spline_functional_form(
         raise ValueError("runtime projection digest is required")
     if len(linear_sensitivity) != 1:
         raise ValueError("signed linear sensitivity must contain exactly one row")
-    missing = sorted(_REQUIRED_DIAGNOSTIC_COLUMNS - set(linear_sensitivity.columns))
+    robust = sealed.schema_version.endswith("/4")
+    comparison_columns = (
+        {"nonlinearity_test", "nonlinearity_target_column", "nonlinearity_statistic", "information_criteria_basis"}
+        if robust else {"likelihood_ratio_statistic"}
+    )
+    missing = sorted(
+        (_REQUIRED_DIAGNOSTIC_COLUMNS | comparison_columns) - set(linear_sensitivity.columns)
+    )
     if missing:
         raise ValueError(
             "signed linear sensitivity lacks functional-form diagnostics: "
             + ", ".join(missing)
         )
     row = linear_sensitivity.iloc[0]
+    if robust:
+        if (
+            row["nonlinearity_test"] != "cluster_robust_nested_wald_chi2"
+            or row["nonlinearity_target_column"] != sealed.exposure_column
+            or "likelihood_ratio_statistic" in linear_sensitivity.columns
+            or row["information_criteria_basis"] != "working_independence_loglikelihood_descriptive_only"
+        ):
+            raise ValueError("signed robust functional-form method or target mismatch")
+        statistic = coerce_finite_float(row["nonlinearity_statistic"], label="Wald statistic")
+        if statistic < 0:
+            raise ValueError("signed robust functional-form statistic is negative")
+        comparison = {
+            "method": "cluster_robust_nested_wald_chi2",
+            "target_column": sealed.exposure_column,
+            "statistic": statistic,
+            "information_criteria_basis": row["information_criteria_basis"],
+        }
+    else:
+        comparison = {
+            "method": "nested_logistic_likelihood_ratio_test",
+            "likelihood_ratio_statistic": coerce_finite_float(
+                row["likelihood_ratio_statistic"], label="likelihood ratio"
+            ),
+        }
+    p_value = coerce_finite_float(row["nonlinearity_p_value"], label="nonlinearity p-value")
+    if not 0 <= p_value <= 1:
+        raise ValueError("signed functional-form p-value is outside [0, 1]")
     n = int(coerce_finite_float(row["n"], label="complete-case n"))
     events = int(coerce_finite_float(row["events"], label="event count"))
     extra_df = int(
@@ -151,20 +184,15 @@ def run_landmark_spline_functional_form(
         [
             {
                 "check": "restricted_cubic_spline_vs_linear",
-                "method": "nested_logistic_likelihood_ratio_test",
+                **comparison,
                 "n_complete_case": n,
                 "event_n": events,
                 "linear_aic": coerce_finite_float(row["linear_aic"], label="linear AIC"),
                 "spline_aic": coerce_finite_float(row["spline_aic"], label="spline AIC"),
                 "linear_bic": coerce_finite_float(row["linear_bic"], label="linear BIC"),
                 "spline_bic": coerce_finite_float(row["spline_bic"], label="spline BIC"),
-                "likelihood_ratio_statistic": coerce_finite_float(
-                    row["likelihood_ratio_statistic"], label="likelihood ratio"
-                ),
                 "additional_spline_parameters": extra_df,
-                "nonlinearity_p_value": coerce_finite_float(
-                    row["nonlinearity_p_value"], label="nonlinearity p-value"
-                ),
+                "nonlinearity_p_value": p_value,
                 "source_evidence_id": linear_evidence_id,
             }
         ]

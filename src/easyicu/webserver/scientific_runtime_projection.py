@@ -505,7 +505,7 @@ def compile_landmark_spline_runtime_projection(
     authority = build_current_case_scientific_runtime_authority(
         {
             "schema_version": (
-                "easyicu.landmark_spline_runtime_authority/3"
+                "easyicu.landmark_spline_runtime_authority/4"
                 if dependence is not None
                 else "easyicu.landmark_spline_runtime_authority/2"
             ),
