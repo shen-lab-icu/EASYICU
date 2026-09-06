@@ -12,6 +12,7 @@ from ..schema import AnalysisPlan, ResearchContext
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
+from ..contracts.table_one_semantics import validate_table_one_semantic_roles
 from .scientific_review import post_baseline_exposure
 
 
@@ -106,6 +107,9 @@ def validate_fresh_planner_typed_product_specs(
             f"{missing_table_one_specs!r}. Use table:cohort_summary for an "
             "ungrouped descriptive table."
         )
+    for step in plan.steps:
+        if step.table_one_spec is not None:
+            validate_table_one_semantic_roles(step.table_one_spec, context)
     missing_claims = missing_post_baseline_descriptive_claims(
         plan=plan,
         context=context,
