@@ -3327,6 +3327,7 @@ class ResearchAgentPipeline:
                 planning_contract_context,
                 scientific_plan_guardrails,
                 self._bound_plan_revision_contract,
+                self._scientific_runtime_authorities.planning_contract_context(),
             )
             if value
         )

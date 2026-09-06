@@ -57,16 +57,22 @@ class ScientificRuntimeAuthorities:
         if self.current_case is not None:
             self.current_case.validate_plan(plan)
 
+    def planning_contract_context(self) -> str:
+        """Let the authority owner disclose otherwise hidden planner choices."""
+
+        if isinstance(self.current_case, LandmarkCategoricalAssociationRuntimeAuthority):
+            return self.current_case.planning_contract_context()
+        return ""
+
     def bind_plan(
         self,
         plan: AnalysisPlan,
     ) -> tuple[AnalysisPlan, list[ValidationFinding]]:
         """Compile host-owned wiring before the final plan is reviewed.
 
-        Only the generic model-grid authority currently needs this operation:
-        its caller owns the variant science, while product names, exact inputs,
-        and the verified-tool route are mechanical consequences.  Other signed
-        authorities continue to require the Planner's exact step unchanged.
+        Each authority owns its scientific coordinates and any mechanical
+        product/input wiring. Binding does not authorize the Planner to change
+        a sealed scientific coordinate.
         """
 
         trajectory_authority = self.trajectory
