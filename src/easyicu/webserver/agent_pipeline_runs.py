@@ -39,6 +39,12 @@ from easyicu.research_agent.providers.structured_retry import (
 from easyicu.research_agent.acquisition.patient_grouping import (
     PatientGroupingBinding,
 )
+from easyicu.research_agent.planning.cohort_contract import (
+    CohortSelectionMode,
+    cohort_concept_id_scope,
+    cohort_definition_has_explicit_selection,
+    coerce_cohort_definition,
+)
 from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
     plan_revision_blocker_codes,
@@ -3604,6 +3610,7 @@ class _CandidatePlanMaterializationAuthority:
     target_outcome: str
     outcome_concepts: tuple[str, ...]
     contract: str
+    primary_cohort_selection_mode: CohortSelectionMode
     primary_exposure_aggregation: Optional[str] = None
 
 
@@ -3873,11 +3880,28 @@ def _load_candidate_plan_materialization_authority(
             "candidate_plan_materialization_authority_invalid",
             "The candidate plan does not match the current question, covariates, or zero-row planning catalog.",
         )
+    try:
+        with cohort_concept_id_scope(catalog_columns):
+            candidate_cohort = coerce_cohort_definition(plan.get("cohort"))
+        if candidate_cohort is None or not cohort_definition_has_explicit_selection(
+            candidate_cohort
+        ):
+            raise ValueError("The candidate has no explicit population selection.")
+        stated_mode = primary_cohort.planning_selection_mode(study.get("cohort"))
+        if stated_mode is not None and candidate_cohort.selection_mode != stated_mode:
+            raise ValueError("The candidate contradicts the stated population mode.")
+    except (TypeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan has no valid population authority matching the stated scope.",
+            details={"field": "cohort", "cause": str(exc)},
+        ) from exc
     return _CandidatePlanMaterializationAuthority(
         primary_exposure=primary_exposure,
         target_outcome=target_outcome,
         outcome_concepts=requested_outcomes,
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
+        primary_cohort_selection_mode=candidate_cohort.selection_mode,
         primary_exposure_aggregation=aggregation or None,
     )
 
@@ -4438,6 +4462,7 @@ def make_research_pipeline_run_runner(
         )
         candidate_outcome_concepts = explicit_outcome_concepts(question)
         candidate_exposure_aggregation: Optional[str] = None
+        candidate_authority: Optional[_CandidatePlanMaterializationAuthority] = None
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if source_run_id:
             candidate_authority = _load_candidate_plan_materialization_authority(
@@ -4942,6 +4967,12 @@ def make_research_pipeline_run_runner(
                         "development_progressive_resume_reuse_bound_literature": True,
                     }
                 )
+            if candidate_authority is not None:
+                required_cohort_mode = candidate_authority.primary_cohort_selection_mode
+            elif metadata_only_planning:
+                required_cohort_mode = primary_cohort.planning_selection_mode(study.get("cohort"))
+            else:
+                required_cohort_mode = _primary_cohort_selection_mode(study)
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_publication_figure_skill=publication_skill_flags[
@@ -4962,9 +4993,7 @@ def make_research_pipeline_run_runner(
                 # their existing reportable-capability requirement.
                 require_reportable_scientific_capability=not analysis_only_execution,
                 development_diagnostic=analysis_only_execution,
-                required_primary_cohort_selection_mode=(
-                    _primary_cohort_selection_mode(study)
-                ),
+                required_primary_cohort_selection_mode=required_cohort_mode,
                 enable_pdf_render=True,
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,

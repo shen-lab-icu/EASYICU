@@ -375,6 +375,23 @@ def normalize_primary_cohort_scope(
     )
 
 
+def planning_selection_mode(cohort: Any) -> Optional[str]:
+    """Return only a stated population constraint for a zero-row proposal.
+
+    Extraction needs a deterministic source-universe default; a candidate
+    planner must not mistake that default for an approved analytic population.
+    Labels, neutral admission axes and sampling alone leave population design
+    open. An explicit preset (including all ICU) or a real predicate remains
+    binding. This does not grant row access or change execution normalization.
+    """
+
+    raw = cohort if isinstance(cohort, Mapping) else {}
+    scope = normalize_primary_cohort_scope(raw)
+    if raw.get("preset") or scope.selection_mode == "predicate_filtered":
+        return scope.selection_mode
+    return None
+
+
 __all__ = [
     "ADMISSION_ELIGIBILITY_FIELDS",
     "CONCEPT_DERIVED_PRESETS",
@@ -389,4 +406,5 @@ __all__ = [
     "normalize_execution_cohort",
     "normalize_preset",
     "normalize_primary_cohort_scope",
+    "planning_selection_mode",
 ]
