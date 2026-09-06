@@ -3185,7 +3185,7 @@
      "table": "admissions",
      "index_var": "deathtime",
      "val_var": "hospital_expire_flag",
-     "callback": "transform_fun(comp_na(`==`, 1L))",
+     "clinical_binding": "mimic_hospital_mortality_status_v1",
      "class_name": "col_itm"
     }
    ],
@@ -3194,7 +3194,7 @@
      "table": "admissions",
      "index_var": "deathtime",
      "val_var": "hospital_expire_flag",
-     "callback": "transform_fun(comp_na(`==`, 1L))",
+     "clinical_binding": "mimic_hospital_mortality_status_v1",
      "class_name": "col_itm"
     }
    ],
@@ -3203,7 +3203,7 @@
      "table": "admissions",
      "index_var": "deathtime",
      "val_var": "hospital_expire_flag",
-     "callback": "transform_fun(comp_na(`==`, 1L))",
+     "clinical_binding": "mimic_hospital_mortality_status_v1",
      "class_name": "col_itm"
     }
    ],

@@ -35,6 +35,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .databases.profiles import normalize_database_key
+from .hospital_mortality import hospital_mortality_status_from_flag
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +52,7 @@ class PatientFilterCriterionError(RuntimeError):
 def _hospital_survival_from_expire_flag(values: pd.Series) -> pd.Series:
     """Map the standard MIMIC hospital-discharge flag without guessing."""
 
-    flag = pd.to_numeric(values, errors='coerce')
-    survived = pd.Series(pd.NA, index=values.index, dtype='boolean')
-    survived.loc[flag.eq(0)] = True
-    survived.loc[flag.eq(1)] = False
-    return survived
+    return ~hospital_mortality_status_from_flag(values)
 
 
 def _calendar_age_years(
