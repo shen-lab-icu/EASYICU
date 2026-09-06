@@ -1633,9 +1633,10 @@ class ProgressivePlannerAgent:
                 "Typed counts-only design ceiling (binding): the selected design "
                 "may promise counts and proportions only. Its estimand, "
                 "primary_method, figure_role, supports, and six reviewable_plan "
-                "items must not mention confidence intervals, uncertainty, "
-                "standard errors, or p-values. Put limitations in cannot_prove; "
-                "do not describe a forbidden output and then negate it."
+                "items must not promise confidence intervals, uncertainty, "
+                "standard errors, or p-values. Put the full limitation in "
+                "cannot_prove. A clear statement that an output will not be "
+                "reported is permitted, but never authorizes that output."
             )
         elif descriptive_counts_only_required(context, analysis_type="descriptive_epidemiology"):
             blocks.append(
@@ -1905,8 +1906,10 @@ class ProgressivePlannerAgent:
                     "progressive_selected_design_counts_only_claim_exceeded",
                     "the typed counts-only design permits counts and proportions "
                     "but no uncertainty or inferential output; rewrite the "
-                    f"selected design field {coordinate!r} without confidence "
-                    "intervals, uncertainty, standard errors, or p-values",
+                    f"selected design field {coordinate!r} so it does not promise "
+                    "confidence intervals, uncertainty, standard errors, or "
+                    "p-values. Explicit output disclaimers are permitted; "
+                    "ambiguous or contradictory wording must be clarified",
                     path=f"design_selection.candidates.selected.{coordinate}",
                 )
         if article_context is not None and outline.design_selection is not None:
