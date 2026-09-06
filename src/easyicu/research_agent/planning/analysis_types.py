@@ -84,6 +84,10 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "prevalence",
             "frequency",
             "burden",
+            "描述",
+            "患病率",
+            "发生率",
+            "分布",
         ),
         candidate_steps=(
             "cohort summary (Table 1)",
@@ -116,6 +120,11 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "hazard ratio",
             "linked",
             "relationship",
+            "关联",
+            "相关性",
+            "剂量反应",
+            "危险因素",
+            "比值比",
         ),
         candidate_steps=(
             "cohort summary when confounding context matters",
@@ -1406,9 +1415,10 @@ def infer_analysis_type(
         # already returned above, so this only prevents the generic descriptive
         # fallback from winning a tie.
         scores["association_study"] += 3
-    if primary_predictor and target_outcome:
-        scores["association_study"] += 2
-    elif target_outcome:
+    # Exposure/outcome columns also define grouped counts and rates. Their
+    # presence must not outrank an explicit descriptive question. Keep the
+    # legacy pair-based fallback below only when no task-family cue exists.
+    if target_outcome and not primary_predictor:
         scores["descriptive_epidemiology"] += 1
 
     best_key = max(scores, key=scores.get)
