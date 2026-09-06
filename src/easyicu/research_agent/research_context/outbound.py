@@ -76,6 +76,10 @@ _SAFE_MATERIALIZED_REPRESENTATIONS = frozenset(
         "window_numeric_max",
         "window_numeric_mean",
         "window_numeric_min",
+        "window_nonnull_count",
+        "window_measurement_status",
+        "window_first_time",
+        "window_last_time",
     }
 )
 
@@ -148,7 +152,10 @@ def outbound_safe_context_payload(
             _compact(
                 {
                     "name": variable.name,
-                    "role": role if role != "meta" else None,
+                    # A count or availability flag is not the underlying
+                    # clinical value. This closed enum is safe transport, not
+                    # patient content, and must not disappear for companions.
+                    "role": role,
                     "dtype": variable.dtype,
                     "unit": variable.unit,
                     "plausibility_range": variable.valid_range,

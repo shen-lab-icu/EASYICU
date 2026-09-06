@@ -27,6 +27,7 @@ _RELATIVE_TIME_TRANSFORMS = frozenset(
     }
 )
 _MEAN_TRANSFORMS = frozenset({"window_numeric_mean"})
+_MEASUREMENT_TRANSFORMS = frozenset({"window_nonnull_count", "window_measurement_status"})
 _PRECOMPUTED_NUMERIC_TRANSFORMS = {
     "window_numeric_first": "first non-null value",
     "window_numeric_max": "maximum value",
@@ -128,6 +129,30 @@ def _mean_representation(descriptor: ConceptDescriptor) -> ConceptDescriptor:
     )
 
 
+def _measurement_representation(descriptor: ConceptDescriptor) -> ConceptDescriptor:
+    caveats = _without_base_score_caveats(descriptor.clinical_caveats)
+    caveat = (
+        "This column describes the measurement process, not the clinical value "
+        f"of {descriptor.source_concept or descriptor.name}."
+    )
+    if caveat not in caveats:
+        caveats.append(caveat)
+    return descriptor.model_copy(update={
+        # Measurement availability can itself be an explicitly planned outcome.
+        "role": descriptor.role if descriptor.role in {
+            VariableRole.ID, VariableRole.INDEX, VariableRole.OUTCOME,
+        } else VariableRole.META,
+        "unit": None,
+        "valid_range": None,
+        "allowed_aggregations": [AggregationRule.NONE],
+        "aggregation_default": AggregationRule.NONE,
+        "is_ordinal": False,
+        "ordinal_levels": None,
+        "pitfalls": [],
+        "clinical_caveats": caveats,
+    })
+
+
 def _precomputed_numeric_representation(
     descriptor: ConceptDescriptor, *, transform: str
 ) -> ConceptDescriptor:
@@ -160,6 +185,8 @@ def compile_wide_representation_semantics(
         transform = str(descriptor.unit_normalization or "").strip().lower()
         if transform in _RELATIVE_TIME_TRANSFORMS:
             compiled.append(_time_representation(descriptor, transform=transform))
+        elif transform in _MEASUREMENT_TRANSFORMS:
+            compiled.append(_measurement_representation(descriptor))
         elif transform in _MEAN_TRANSFORMS:
             mean_descriptor = _mean_representation(descriptor)
             compiled.append(

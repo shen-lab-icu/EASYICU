@@ -97,6 +97,10 @@ def test_pipeline_stages_legacy_materialization_window_for_context(
 
     for column in ("marker_max", "marker_n", "marker_measured"):
         assert context.variable(column).analysis_window == "icu_admission[0,24]h"
+    assert context.variable("marker_n").unit_normalization == "window_nonnull_count"
+    assert "Non-null observation count" in context.variable("marker_n").description
+    assert context.variable("marker_measured").unit_normalization == "window_measurement_status"
+    assert "Measurement availability" in context.variable("marker_measured").description
     assert context.variable("age").analysis_window is None
     assert context.variable("death").analysis_window is None
     assert context.cohort.provenance["materialized_cohort_window_hours"] == [
