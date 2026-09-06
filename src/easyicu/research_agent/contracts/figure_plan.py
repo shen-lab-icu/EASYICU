@@ -104,6 +104,25 @@ class DeterministicFigurePanelTemplate(BaseModel):
 
 
 EXPOSURE_OUTCOME_DISTRIBUTION_INPUT = "table:exposure_outcome_distribution"
+CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS = (
+    "table:phenotype_profiles",
+    "table:phenotype_assignments",
+    "table:cluster_stability",
+)
+CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="a", article_role="phenotype_structure", chart_type="embedding_plot",
+        source_products=("table:phenotype_assignments",),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="b", article_role="phenotype_profile", chart_type="profile_heatmap",
+        source_products=("table:phenotype_profiles",),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="c", article_role="stability", chart_type="subsampling_ari",
+        source_products=("table:cluster_stability",),
+    ),
+)
 GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT = "table:distribution_prevalence"
 MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
 MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
@@ -638,6 +657,8 @@ def robustness_figure_panels(
 
 
 __all__ = [
+    "CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS",
+    "CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS",
     "ASSOCIATION_SUMMARY_COMPOSITE_INPUTS",
     "association_summary_composite_panels",
     "ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS",
