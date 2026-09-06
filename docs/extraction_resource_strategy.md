@@ -142,6 +142,31 @@ partition defect found during this search was repaired at the public concept
 boundary; the fresh 31,000 + 30,532 package has 61,532 outcome rows and matches
 the one-shot output under bidirectional `EXCEPT ALL=0/0`.
 
+## HiRID corrected renal one-shot under the 8 GiB contract
+
+At commit `273d20df` (2026-09-06), the HiRID public-reference AKI rate-source
+repair passed a full 33,905-stay, one-module native-v2 benchmark under the
+existing deterministic 8,192-MiB execution envelope. The process scope enforced
+`MemoryMax=8G`, no swap, and the existing 7,447-MiB external RSS stop. No patient
+batch subdivision was used. External process-tree RSS peaked at 3,483.5 MiB
+(PSS 3,414.5 MiB); internal module RSS was 3,231.3 MiB. Extraction took 243.3 s
+(232.4 s for the module, 244.093 s including the external launcher).
+
+Only `hirid/renal` gains a measured profile, using the larger external peak:
+3,831.85 MiB including 10% headroom. Other database/module policies are unchanged.
+This is minimum batch count (one), not proof of globally optimal runtime.
+The 1,796,864 output rows and 33,897 represented stays match the old renal file;
+only the five expected urine/reference AKI value columns changed. All other
+columns, including creatinine, RRT, urine values and quality rates, match exactly.
+Reference urine stages reconstructed from quality rates have zero mismatches.
+The raw cohort has 33,905 stays; the historical outcome file has 33,904 rows
+and is only the launcher's planning count, not an exclusion from extraction.
+
+Local evidence: `00-data-foundation/easyicu_full6_runs/candidates/`
+`hirid_rate_fix_273d20df_DRifkq/benchmark_memory.json` and
+`benchmark/resource_benchmark_provenance.json`. The benchmark is non-sealable;
+a fresh formal refresh must use this registered profile without a batch override.
+
 ## eICU full-cohort measurements under the 8 GiB contract
 
 Scope: 200,859 ICU stays, one module per isolated process, two DuckDB threads,
