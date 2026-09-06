@@ -140,28 +140,29 @@ def foundation_shape_contract(
 ) -> str:
     """Project the exact foundation envelope without adding case science."""
 
+    predicate_shape = {
+        "concept_id": "<copy an allowed cohort concept id>",
+        "anchor": "<copy an allowed anchor>",
+        "start_offset_hours": "<number>",
+        "end_offset_hours": "<greater number>",
+        "aggregation": "<max|min|mean|median|last|first|any|all|count|sum>",
+        "op": "<==|!=|<|<=|>|>=|in|not_in|missing|not_missing>",
+        "value": {
+            "mode": "<none|string|number|boolean|string_list|number_list>",
+            "string_value": None,
+            "number_value": None,
+            "boolean_value": None,
+            "string_list": [],
+            "number_list": [],
+        },
+    }
     if host_cohort is not None:
         cohort = host_cohort.model_dump(mode="json")
     elif required_cohort_selection_mode == "predicate_filtered":
         cohort = {
             "name": required_cohort_name or "<1-128 characters>",
             "selection_mode": "predicate_filtered",
-            "inclusion": [{
-                "concept_id": "<copy an allowed cohort concept id>",
-                "anchor": "<copy an allowed anchor>",
-                "start_offset_hours": "<number>",
-                "end_offset_hours": "<greater number>",
-                "aggregation": "<max|min|mean|median|last|first|any|all|count|sum>",
-                "op": "<==|!=|<|<=|>|>=|in|not_in|missing|not_missing>",
-                "value": {
-                    "mode": "<none|string|number|boolean|string_list|number_list>",
-                    "string_value": None,
-                    "number_value": None,
-                    "boolean_value": None,
-                    "string_list": [],
-                    "number_list": [],
-                },
-            }],
+            "inclusion": [predicate_shape],
             "exclusion": [],
         }
     else:
@@ -205,6 +206,15 @@ def foundation_shape_contract(
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
         + "\nCopy schema_version and outline_sha256 exactly. "
         + cohort_instruction
+        + (
+            "\nIf the candidate chooses predicate_filtered, every item in "
+            "inclusion or exclusion must have this exact JSON shape:\n"
+            + json.dumps(predicate_shape, ensure_ascii=False, separators=(",", ":"))
+            + "\nThis shape does not require adding a cohort restriction; "
+            "all_input_rows keeps both lists empty."
+            if host_cohort is None and required_cohort_selection_mode is None
+            else ""
+        )
         + (
             " display_labels must be the displayed keyed object; write only the reader-facing meanings (1-256 characters), keeping every required key. "
             if required_labels else
