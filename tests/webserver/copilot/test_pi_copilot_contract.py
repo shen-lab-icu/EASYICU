@@ -4019,6 +4019,55 @@ def test_opening_question_saves_without_inventing_an_analysis_unit(
     assert result["details"]["omitted_unconfirmed_fields"] == ["cohort.preset"]
 
 
+@pytest.mark.parametrize("preset", ["sepsis3", "aki", "respiratory", "vasopressor", "ventilation"])
+@pytest.mark.parametrize("current_preset", [None, "all_icu"])
+@pytest.mark.parametrize("include_question", [True, False])
+def test_opening_question_defers_phenotype_restrictions_to_reviewed_plan(
+    monkeypatch: pytest.MonkeyPatch, preset: str, current_preset: str | None,
+    include_question: bool,
+) -> None:
+    current = {
+        "id": "study-population-authority", "revision": 1, "question": "",
+        "active_job_id": None,
+        "cohort": {"preset": current_preset} if current_preset else {},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts, "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    monkeypatch.setattr(tool_module, "_workflow_snapshot", lambda *_args, **_kwargs: {})
+    session = PiSessionRecord(
+        session_id="pi-population-authority",
+        binding=AuthorityBinding(study_context_id=current["id"], study_revision=1),
+    )
+    question = "Describe disease prevalence and compare mortality with and without the condition."
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            **({"question": question} if include_question else {}),
+            "cohort": {"preset": preset, "label": "Keep both groups"},
+        },
+        ToolExecutionContext(
+            session=session, user_message=question, allowed_actions={"configure"},
+        ),
+    )
+
+    if not include_question:
+        assert result["code"] == "study_cohort_population_requires_plan"
+        assert writes == []
+        assert "without a pre-plan confirmation questionnaire" in result["summary"]
+        return
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["question"] == question
+    assert writes[0].get("cohort", {}) == current["cohort"]
+    assert result["details"]["unconfirmed_omissions"] == [{
+        "field": "cohort.preset", "code": "study_cohort_population_requires_plan",
+    }]
+    assert "candidate plan for review" in result["summary"]
+
+
 def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
