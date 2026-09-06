@@ -166,6 +166,72 @@ def test_phenotyping_actions_publish_one_exact_host_profile() -> None:
     ].runtime_contract.required_product_inputs == (PHENOTYPE_ASSIGNMENTS_PRODUCT,)
 
 
+def test_phenotyping_planner_surface_discloses_the_native_conditional_design() -> None:
+    from easyicu.research_agent.agents.progressive_planner import _action_catalog
+
+    _, rows = _action_catalog(("trajectory_clustering",))
+    by_id = {row["action_id"]: row for row in rows}
+    primary = by_id["phenotyping.cluster_solution"]["runtime_contract"]["execution_parameters"]
+    assert primary["imputation"] == "median"
+    assert primary["standardization"] == "standard_scaler"
+    assert tuple(primary["candidate_k"]) == (2, 3, 4, 5, 6)
+    assert primary["silhouette_sample_limit"] == 10_000
+    assert primary["kmeans_n_init"] == 10
+    assert primary["random_seed"] == 1729
+    assert primary["declared_numeric_inputs"] == "clustering_features_not_profile_only"
+    stability = by_id["phenotyping.cluster_stability"]
+    assert "bootstrap" not in stability["name"].casefold()
+    assert "consensus" not in stability["name"].casefold()
+    parameters = stability["runtime_contract"]["execution_parameters"]
+    assert parameters["resampling_method"] == "subsampling_without_replacement"
+    assert parameters["n_resamples"] == 5
+    assert parameters["sample_fraction"] == 0.8
+    assert parameters["preprocessing_scope"] == "fixed_full_primary_cohort"
+    assert parameters["k_selection_scope"] == "fixed_primary_selected_k"
+    assert parameters["uncertainty_scope"] == "conditional_agreement_not_full_pipeline_bootstrap"
+    assert parameters["gmm_covariance_type"] == "diag"
+
+
+def test_stability_refits_do_not_reselect_k_and_record_the_executed_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.execution.runners import cross_sectional_phenotyping_executor as owner
+    from easyicu.research_agent.agents.progressive_planner import _action_catalog
+
+    frame = _frame()
+    assignments = pd.DataFrame({
+        "unit_id": frame["stay_id"],
+        "cluster": np.repeat(np.arange(3), len(frame) // 3),
+        "feature__marker_a": (frame["marker_a"] - frame["marker_a"].mean()) / frame["marker_a"].std(ddof=0),
+        "feature__marker_b": (frame["marker_b"] - frame["marker_b"].mean()) / frame["marker_b"].std(ddof=0),
+    })
+    primary_dir = tmp_path / "primary"
+    primary_dir.mkdir()
+    path = primary_dir / "phenotype_assignments.csv"
+    assignments.to_csv(path, index=False)
+    binding = _binding(PHENOTYPE_ASSIGNMENTS_PRODUCT, assignments, path, "stability")
+
+    def forbid_reselection(_matrix):
+        raise AssertionError("stability must use the sealed primary K")
+
+    monkeypatch.setattr(owner, "_candidate_scores", forbid_reselection)
+    summary = run_phenotyping_diagnostic(
+        action_id="phenotyping.cluster_stability",
+        out_dir=tmp_path / "stability",
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": "stability", "inputs": {PHENOTYPE_ASSIGNMENTS_PRODUCT: binding}},
+        step_id="stability",
+    )
+    _, rows = _action_catalog(("trajectory_clustering",))
+    expected = next(row for row in rows if row["action_id"] == "phenotyping.cluster_stability")["runtime_contract"]["execution_parameters"]
+    assert summary["execution_parameters"] == expected
+    assert summary["cluster_stability"]["n_resamples"] == expected["n_resamples"]
+    replicates = pd.read_csv(tmp_path / "stability" / "cluster_stability_with_algorithm_agreement.csv")
+    assert replicates["n"].tolist() == [288] * 5
+    for key in ("resampling_method", "preprocessing_scope", "k_selection_scope"):
+        assert set(replicates[key]) == {expected[key]}
+
+
 def test_phenotyping_owner_selects_only_the_exact_action_contract() -> None:
     step = _primary_step()
     assert cross_sectional_phenotyping_executor_owns_step(step)
@@ -216,6 +282,8 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
     )
     assert summary["authority_scope"] == "analysis_only"
     assert summary["feature_roster"] == ["marker_a", "marker_b"]
+    actions = {action.action_id: action for action in scientific_actions_for_analysis_type("trajectory_clustering").actions}
+    assert summary["execution_parameters"] == dict(actions["phenotyping.cluster_solution"].runtime_contract.execution_parameters)
     assignments = pd.read_csv(primary_dir / "phenotype_assignments.csv")
     assert "feature__death" not in assignments
     assignment_binding = _binding(

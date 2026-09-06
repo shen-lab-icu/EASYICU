@@ -23,6 +23,9 @@ from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 from ...contracts.capability_ids import PHENOTYPING_ANALYSIS_KIND
+from ...contracts.cross_sectional_phenotyping_policy import (
+    CROSS_SECTIONAL_PHENOTYPING_POLICY as _POLICY,
+)
 from ...contracts.phenotyping_validation import (
     PhenotypingCompleteCaseReceipt,
     PhenotypingRuntimeReceipt,
@@ -47,8 +50,6 @@ _ACTION_OUTPUTS = {
     "phenotyping.k_selection": (CLUSTER_SELECTION_PRODUCT,),
     "phenotyping.cluster_stability": (CLUSTER_STABILITY_PRODUCT,),
 }
-_SEED = 1729
-_COMPLETE_CASE_BOOTSTRAPS = 200
 _FEATURE_PREFIX = "feature__"
 
 
@@ -144,19 +145,18 @@ def cross_sectional_phenotyping_executor_code(step: AnalysisStep) -> str:
 
 
 def _candidate_scores(matrix: np.ndarray) -> tuple[list[dict[str, Any]], int]:
-    if len(matrix) < 20:
+    if len(matrix) < _POLICY.minimum_rows:
         raise RuntimeError("phenotyping requires at least 20 rows")
-    maximum = min(6, len(matrix) - 1)
-    sample_size = min(10_000, len(matrix))
-    rng = np.random.default_rng(_SEED)
+    sample_size = min(_POLICY.silhouette_sample_limit, len(matrix))
+    rng = np.random.default_rng(_POLICY.random_seed)
     sample = np.sort(rng.choice(len(matrix), size=sample_size, replace=False))
     rows: list[dict[str, Any]] = []
-    for k in range(2, maximum + 1):
+    for k in _POLICY.candidate_k:
+        if k >= len(matrix):
+            continue
         model = MiniBatchKMeans(
             n_clusters=k,
-            random_state=_SEED,
-            n_init=10,
-            batch_size=min(2048, len(matrix)),
+            **_POLICY.kmeans_parameters(len(matrix)),
         )
         labels = model.fit_predict(matrix)
         score = float(silhouette_score(matrix[sample], labels[sample]))
@@ -175,9 +175,9 @@ def _paired_assignment_interval(
     """Return ARI and a deterministic paired-assignment bootstrap interval."""
 
     point = float(adjusted_rand_score(reference, sensitivity))
-    rng = np.random.default_rng(_SEED)
-    bootstrap = np.empty(_COMPLETE_CASE_BOOTSTRAPS, dtype=float)
-    for replicate in range(_COMPLETE_CASE_BOOTSTRAPS):
+    rng = np.random.default_rng(_POLICY.random_seed)
+    bootstrap = np.empty(_POLICY.complete_case_assignment_bootstraps, dtype=float)
+    for replicate in range(_POLICY.complete_case_assignment_bootstraps):
         indices = rng.integers(0, len(reference), size=len(reference))
         bootstrap[replicate] = adjusted_rand_score(
             reference[indices], sensitivity[indices]
@@ -231,21 +231,19 @@ def _fit_locked_complete_case_sensitivities(
             )
         complete_mask = frame.loc[:, variables].notna().all(axis=1).to_numpy()
         complete = frame.loc[complete_mask, features]
-        if len(complete) < 20:
+        if len(complete) < _POLICY.minimum_rows:
             raise RuntimeError(
                 f"phenotyping complete-case spec {spec.spec_id!r} retains fewer than 20 rows"
             )
         # The lock applies complete-case deletion only to its exact variable
         # list. Any remaining primary feature follows the unchanged primary
         # median-imputation policy before scaling.
-        imputed = SimpleImputer(strategy="median").fit_transform(complete)
+        imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(complete)
         matrix = StandardScaler().fit_transform(imputed)
         candidates, selected_k = _candidate_scores(matrix)
         labels = MiniBatchKMeans(
             n_clusters=selected_k,
-            random_state=_SEED,
-            n_init=10,
-            batch_size=min(2048, len(matrix)),
+            **_POLICY.kmeans_parameters(len(matrix)),
         ).fit_predict(matrix)
         point, low, high, standard_error = _paired_assignment_interval(
             np.asarray(primary_labels)[complete_mask], labels
@@ -268,8 +266,8 @@ def _fit_locked_complete_case_sensitivities(
                 "ci_high": high,
                 "standard_error": standard_error,
                 "interval_method": "paired_assignment_bootstrap_percentile_95",
-                "n_bootstrap": _COMPLETE_CASE_BOOTSTRAPS,
-                "random_seed": _SEED,
+                "n_bootstrap": _POLICY.complete_case_assignment_bootstraps,
+                "random_seed": _POLICY.random_seed,
                 "primary_preprocessing": "median_imputation_then_standard_scaling",
                 "sensitivity_preprocessing": "complete_case_then_standard_scaling",
                 "clustering_method": "minibatch_kmeans",
@@ -358,7 +356,7 @@ def _feature_roster(run_dir: Path, declared: tuple[str, ...], frame: pd.DataFram
         and name in descriptors
         and str(descriptors[name].role.value) in allowed_roles
         and pd.api.types.is_numeric_dtype(frame[name])
-        and frame[name].notna().sum() >= 20
+        and frame[name].notna().sum() >= _POLICY.minimum_rows
         and frame[name].nunique(dropna=True) >= 2
     )
     if len(features) < 2:
@@ -377,14 +375,12 @@ def run_primary_phenotyping(
     step_id: str,
 ) -> dict[str, Any]:
     features = _feature_roster(Path(run_dir), declared_columns, frame)
-    imputed = SimpleImputer(strategy="median").fit_transform(frame.loc[:, features])
+    imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(frame.loc[:, features])
     matrix = StandardScaler().fit_transform(imputed)
     scores, selected_k = _candidate_scores(matrix)
     model = MiniBatchKMeans(
         n_clusters=selected_k,
-        random_state=_SEED,
-        n_init=10,
-        batch_size=min(2048, len(matrix)),
+        **_POLICY.kmeans_parameters(len(matrix)),
     )
     labels = model.fit_predict(matrix)
     identity = str(parse_research_context_json((Path(run_dir) / "research_context.json").read_text("utf-8")).cohort.id_columns[0])
@@ -439,7 +435,7 @@ def run_primary_phenotyping(
         feature_roster=list(features),
         preprocessing="median_imputation_then_standard_scaling",
         clustering_method="minibatch_kmeans",
-        random_seed=_SEED,
+        random_seed=_POLICY.random_seed,
         candidates=scores,
         selected_n_clusters=selected_k,
         selected_silhouette_score=selected_silhouette,
@@ -462,6 +458,7 @@ def run_primary_phenotyping(
         "status": "ok",
         "analysis_status": "ok",
         "method": "deterministic_cross_sectional_minibatch_kmeans",
+        "execution_parameters": dict(_POLICY.parameters(_PRIMARY_ACTION)),
         "analysis_family": "phenotyping",
         "deterministic_standard_analysis": PHENOTYPING_ANALYSIS_KIND,
         "authority_scope": "analysis_only",
@@ -507,7 +504,7 @@ def run_phenotyping_diagnostic(
         expected_declared_kind="table",
         expected_evidence_kind="table",
         require_consumption_contract=True,
-        minimum_row_count=20,
+        minimum_row_count=_POLICY.minimum_rows,
     )
     feature_columns = tuple(column for column in bound.frame.columns if column.startswith(_FEATURE_PREFIX))
     if len(feature_columns) < 2 or "cluster" not in bound.frame:
@@ -516,10 +513,10 @@ def run_phenotyping_diagnostic(
     reference = pd.to_numeric(bound.frame["cluster"], errors="coerce").to_numpy()
     if not np.isfinite(matrix).all() or not np.isfinite(reference).all():
         raise RuntimeError("phenotype assignments contain non-finite values")
-    scores, selected_k = _candidate_scores(matrix)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     if action_id == "phenotyping.k_selection":
+        scores, selected_k = _candidate_scores(matrix)
         result = pd.DataFrame(scores)
         filename = "cluster_selection.csv"
         product = CLUSTER_SELECTION_PRODUCT
@@ -537,11 +534,11 @@ def run_phenotyping_diagnostic(
         selected_k = int(pd.Series(reference).nunique())
         alternative = GaussianMixture(
             n_components=selected_k,
-            covariance_type="diag",
-            random_state=_SEED,
-            n_init=5,
-            max_iter=500,
-            reg_covar=1e-6,
+            covariance_type=_POLICY.gmm_covariance_type,
+            random_state=_POLICY.random_seed,
+            n_init=_POLICY.gmm_n_init,
+            max_iter=_POLICY.gmm_max_iter,
+            reg_covar=_POLICY.gmm_reg_covar,
         )
         alternative_labels = alternative.fit_predict(matrix)
         if not alternative.converged_:
@@ -550,10 +547,11 @@ def run_phenotyping_diagnostic(
             adjusted_rand_score(reference, alternative_labels)
         )
         rows = []
-        for replicate in range(5):
-            rng = np.random.default_rng(_SEED + replicate + 1)
-            indices = np.sort(rng.choice(len(matrix), size=max(20, int(0.8 * len(matrix))), replace=False))
-            labels = MiniBatchKMeans(n_clusters=selected_k, random_state=_SEED + replicate + 1, n_init=10, batch_size=min(2048, len(indices))).fit_predict(matrix[indices])
+        parameters = dict(_POLICY.parameters(action_id))
+        for replicate in range(_POLICY.n_resamples):
+            rng = np.random.default_rng(_POLICY.random_seed + replicate + 1)
+            indices = np.sort(rng.choice(len(matrix), size=max(_POLICY.minimum_rows, int(_POLICY.sample_fraction * len(matrix))), replace=False))
+            labels = MiniBatchKMeans(n_clusters=selected_k, **_POLICY.kmeans_parameters(len(indices), seed_offset=replicate + 1)).fit_predict(matrix[indices])
             rows.append(
                 {
                     "replicate": replicate + 1,
@@ -566,7 +564,8 @@ def run_phenotyping_diagnostic(
                     "algorithm_agreement_metric": "adjusted_rand_index",
                     "algorithm_agreement_ari": algorithm_agreement_ari,
                     "alternative_algorithm_converged": True,
-                    "alternative_algorithm_seed": _SEED,
+                    "alternative_algorithm_seed": _POLICY.random_seed,
+                    **{key: parameters[key] for key in ("resampling_method", "preprocessing_scope", "k_selection_scope")},
                 }
             )
         mean_ari = float(np.mean([row["adjusted_rand_index"] for row in rows]))
@@ -592,7 +591,7 @@ def run_phenotyping_diagnostic(
                 "metric": "adjusted_rand_index",
                 "adjusted_rand_index": algorithm_agreement_ari,
                 "alternative_algorithm_converged": True,
-                "random_seed": _SEED,
+                "random_seed": _POLICY.random_seed,
                 "outcome_used_for_fit": False,
                 "authority_scope": "analysis_only",
                 "external_reproducibility_established": False,
@@ -605,6 +604,7 @@ def run_phenotyping_diagnostic(
         "status": "ok",
         "analysis_status": "ok",
         "method": "deterministic_cross_sectional_phenotyping_diagnostic",
+        "execution_parameters": dict(_POLICY.parameters(action_id)),
         "analysis_family": "phenotyping",
         "deterministic_standard_analysis": PHENOTYPING_ANALYSIS_KIND,
         "authority_scope": "analysis_only",
