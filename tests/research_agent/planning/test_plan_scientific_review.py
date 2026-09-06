@@ -1537,6 +1537,7 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
         "executable_axes": [],
         "declared_authority_ids": [],
         "effect_style_grid_required": False,
+        "planner_revision_supported": False,
     }
     assert "ROBUSTNESS_AXES_TOO_NARROW" not in codes
     finding = next(
@@ -1546,7 +1547,9 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
     )
     assert finding.requires_user_authorization is False
     assert finding.authorization_question is None
-    assert finding.remediation_route == "agent_plan_revision"
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.severity == "major"
+    assert "do not prove sensitivity robustness" in finding.remediation
 
 
 def test_absolute_risk_difference_without_typed_ceiling_remains_inferential() -> None:

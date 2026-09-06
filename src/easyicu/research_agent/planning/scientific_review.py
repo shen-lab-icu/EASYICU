@@ -2161,6 +2161,7 @@ def build_plan_scientific_review(
         robustness_readiness["status"] == "blocked"
         and robustness_readiness["reason"] == "no_typed_sensitivity_authority"
     ):
+        planner_can_repair_robustness = robustness_readiness["planner_revision_supported"]
         findings.append(
             PlanScientificFinding(
                 code="ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
@@ -2183,8 +2184,22 @@ def build_plan_scientific_review(
                     "complete plan rather than selecting internal sensitivity "
                     "implementations. Descriptive studies must not invent an "
                     "effect-estimate replay grid."
+                    if planner_can_repair_robustness
+                    else (
+                        "The selected family does not expose a sensitivity replay "
+                        "or custom-analysis owner. Implement a typed family-appropriate "
+                        "sensitivity capability before requesting plan revision. "
+                        "Denominator and measurement audits remain required but do "
+                        "not prove sensitivity robustness. Preserve this limitation "
+                        "and withhold publication readiness; do not widen the question "
+                        "to an adjusted model or retry the same unavailable contract."
+                    )
                 ),
-                remediation_route="agent_plan_revision",
+                remediation_route=(
+                    "agent_plan_revision"
+                    if planner_can_repair_robustness
+                    else "runtime_capability"
+                ),
             )
         )
     elif robustness_readiness["status"] == "too_narrow":
