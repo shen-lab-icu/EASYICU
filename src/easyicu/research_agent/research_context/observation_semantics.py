@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 
+from ..methods.descriptive_inputs import measurement_provenance_receipt
 from ..methods.source_status import (
     reconcile_binary_event_presence,
     reconcile_conditional_event_time,
@@ -145,6 +146,9 @@ def _conditional_event_time_updates(
 ) -> dict[str, ConceptDescriptor]:
     updates: dict[str, ConceptDescriptor] = {}
     for descriptor in descriptors.values():
+        observation_time = descriptor.unit_normalization in {
+            "window_first_time", "window_last_time"
+        }
         # Native typed materialization publishes this transform explicitly.
         # Legacy export materialization predates the column sidecar but uses the
         # same closed ``<event>`` + ``<event>_time`` representation.  Accept the
@@ -165,23 +169,59 @@ def _conditional_event_time_updates(
         )
         if (
             descriptor.name not in frame.columns
-            or not (typed_event_time or legacy_event_time)
+            or not (typed_event_time or legacy_event_time or observation_time)
         ):
             continue
         source_concept = str(descriptor.source_concept or legacy_event_base)
+        # A first/last *observation* time is conditional on observing the
+        # source, not on a clinical value happening to equal one. Both the
+        # count and availability transforms must be published and reconcile.
+        observation_status = None
+        if observation_time:
+            if not descriptor.source_concept:
+                continue
+            companions = {
+                transform: [
+                    candidate.name for candidate in descriptors.values()
+                    if candidate.source_concept == source_concept
+                    and candidate.unit_normalization == transform
+                    and candidate.name in frame.columns
+                ]
+                for transform in ("window_nonnull_count", "window_measurement_status")
+            }
+            if any(len(names) != 1 for names in companions.values()):
+                continue
+            observation_status = companions["window_measurement_status"][0]
+            try:
+                measurement_provenance_receipt(
+                    frame,
+                    measured_column=observation_status,
+                    count_column=companions["window_nonnull_count"][0],
+                )
+            except ValueError:
+                continue
         candidates = [
             candidate
             for candidate in descriptors.values()
             if candidate.name != descriptor.name
             and candidate.name in frame.columns
             and (
-                candidate.source_concept == source_concept
-                or candidate.name == legacy_event_base
+                candidate.name == observation_status
+                if observation_time
+                else (
+                    candidate.source_concept == source_concept
+                    or candidate.name == legacy_event_base
+                )
             )
-            and isinstance(candidate.observed_domain, dict)
-            and candidate.observed_domain.get("is_binary") is True
-            and candidate.missingness is not None
-            and candidate.missingness.n_missing == 0
+            and (
+                observation_time
+                or (
+                    isinstance(candidate.observed_domain, dict)
+                    and candidate.observed_domain.get("is_binary") is True
+                    and candidate.missingness is not None
+                    and candidate.missingness.n_missing == 0
+                )
+            )
         ]
         candidates.sort(
             key=lambda candidate: (
@@ -204,7 +244,12 @@ def _conditional_event_time_updates(
         raw_n_missing = int(frame[descriptor.name].isna().sum())
         note = (
             f"{descriptor.name} is applicable only when "
-            f"{event_status_column}=1; event-negative rows are not missing."
+            f"{event_status_column}=1; "
+            + (
+                "rows without a source observation are not missing observation times."
+                if observation_time
+                else "event-negative rows are not missing."
+            )
         )
         updated = _semantic_profile(
             descriptor,
