@@ -40,6 +40,7 @@ from ..intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
 )
 from ..contracts.cohort_receipt import COHORT_RECEIPT_COLUMN_FIELDS
+from ..concept_availability import require_supported_variable_source
 from ..icu_rules import ICU_RULES
 from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
@@ -1187,6 +1188,7 @@ def resolved_raw_input_contracts(
                 raise ValueError(
                     f"Planner-declared raw input {name!r} lacks a context descriptor"
                 )
+            require_supported_variable_source(variable, context.cohort.database)
             contracts[name] = _legacy_raw_input_contract(variable)
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.resolved_raw_input_contracts/1",
@@ -1213,6 +1215,8 @@ def resolved_raw_input_contracts(
     for name in raw_names:
         binding = cohort.column_bindings.get(name)
         variable = variables.get(name)
+        if variable is not None:
+            require_supported_variable_source(variable, cohort.source_database)
         if binding is None and (
             name != cohort.identity_column
             or name not in cohort.cohort_columns

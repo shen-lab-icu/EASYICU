@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import re
+from dataclasses import asdict
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ..authority.table_one_binding import (
@@ -13,6 +14,7 @@ from ..authority.table_one_binding import (
     table_one_private_code_label_map,
 )
 from ..schema import AnalysisStep, ResearchContext
+from ..concept_availability import variable_source_unavailability
 from ..planning.adjustment_authority import AdjustmentSetAuthority
 from .prompt_variables import (
     compact_fixed_window_trajectory_prompt,
@@ -176,6 +178,12 @@ def outbound_safe_context_payload(
                         if role != "meta"
                         else None
                     ),
+                    "source_unavailability": [
+                        asdict(receipt)
+                        for receipt in variable_source_unavailability(
+                            variable, context.cohort.database,
+                        )
+                    ],
                     "outcome_semantics": (
                         _outcome_semantics(variable) if role == "outcome" else None
                     ),

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any, List, Sequence
 
+from ..concept_availability import ConceptSourceUnavailableError
 from ..research_context.typed import resolved_raw_input_contracts
 from ..schema import ValidationFinding
 
@@ -47,15 +48,15 @@ def _declared_raw_names(inputs: Sequence[Any] | None) -> List[str]:
     return names
 
 
-def _unresolvable_names(context: Any, names: Sequence[str]) -> List[str]:
-    """Ask the consumer, one name at a time, which names it refuses."""
+def _input_errors(context: Any, names: Sequence[str]) -> dict[str, ValueError]:
+    """Keep the consumer's source-prohibition cause distinct from absent names."""
 
-    refused: List[str] = []
+    refused: dict[str, ValueError] = {}
     for name in names:
         try:
             resolved_raw_input_contracts(context, (name,))
-        except ValueError:
-            refused.append(name)
+        except ValueError as error:
+            refused[name] = error
     return refused
 
 
@@ -73,18 +74,40 @@ def declared_raw_input_plan_findings(
             resolved_raw_input_contracts(context, declared or [])
         except ValueError as error:
             names = _declared_raw_names(declared)
-            refused = _unresolvable_names(context, names)
+            errors = _input_errors(context, names)
+            unavailable = {
+                name: cause for name, cause in errors.items()
+                if isinstance(cause, ConceptSourceUnavailableError)
+            }
+            refused = [name for name in errors if name not in unavailable]
             step_id = str(getattr(step, "step_id", "") or "unknown")
+            if unavailable:
+                findings.append(ValidationFinding(
+                    validator=_VALIDATOR, severity="error",
+                    message=f"Step {step_id}: " + " ".join(str(cause) for cause in unavailable.values()),
+                    detail={
+                        "reason": "declared_raw_input_structurally_unavailable",
+                        "step_id": step_id,
+                        "unavailable_inputs": list(unavailable),
+                        "source_concepts": sorted({
+                            receipt.concept_id for cause in unavailable.values()
+                            for receipt in cause.receipts
+                        }),
+                    },
+                ))
+            if not refused and unavailable:
+                continue
             # Cause first: only ``message`` reaches a prompt, and the prompt
             # projection clips it from the tail.
             named = ", ".join(repr(name) for name in refused) or "unknown"
+            unresolved_cause = errors[refused[0]] if refused else error
             findings.append(
                 ValidationFinding(
                     validator=_VALIDATOR,
                     severity="error",
                     message=(
                         f"Step {step_id} declares raw input(s) {named} that the "
-                        f"sealed research context cannot resolve ({error}). "
+                        f"sealed research context cannot resolve ({unresolved_cause}). "
                         "Declare only columns the context carries, or declare "
                         "the typed product whose producer creates them."
                     ),
