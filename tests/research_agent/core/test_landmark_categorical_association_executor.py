@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -258,6 +260,45 @@ def test_generic_host_cohort_adoption_defers_to_signed_runtime_owner(tmp_path) -
     assert records == []
     assert preexecuted == set()
     assert findings == []
+
+
+def test_runtime_planner_constraints_preserve_indices_without_level_literals(tmp_path):
+    _, _, authority = _projection(tmp_path)
+    # Non-default coordinates demonstrate projection, not an answer-key default.
+    authority = authority.model_copy(update={
+        "exposure_levels": ("private_a", "private_b", "private_c", "private_d"),
+        "exposure_reference_level": "private_b",
+        "primary_contrast_level": "private_c",
+    })
+    runtime = ScientificRuntimeAuthorities(trajectory=None, current_case=authority)
+    contract = runtime.planning_contract_context()
+    coordinates = json.loads(contract.split("\n", 1)[1])
+    assert coordinates["exposure_term"]["reference_level_index"] == 1
+    assert coordinates["primary_contrast_level_index"] == 2
+    assert coordinates["exposure_term"]["coding"] == "categorical"
+    assert coordinates["covariates"] == ["age", "sex"]
+    assert "private_" not in contract
+    assert runtime.planning_contract_context() == authority.planning_contract_context()
+    assert ScientificRuntimeAuthorities(
+        trajectory=None, current_case=None,
+    ).planning_contract_context() == ""
+
+
+def test_disclosing_coordinates_does_not_allow_primary_contrast_drift(tmp_path):
+    _, _, authority = _projection(tmp_path)
+    authority.planning_contract_context()
+    plan = _draft_plan()
+    primary = plan.steps[1]
+    changed_requirement = primary.model_requirements[0].model_copy(
+        update={"primary_contrast_level": "1"},
+    )
+    plan = plan.model_copy(update={"steps": [
+        plan.steps[0],
+        primary.model_copy(update={"model_requirements": [changed_requirement]}),
+        *plan.steps[2:],
+    ]})
+    with pytest.raises(ValueError, match="primary_contrast_level"):
+        authority.bind_plan(plan)
 
 
 def test_signed_landmark_categorical_owner_filters_then_fits(tmp_path) -> None:

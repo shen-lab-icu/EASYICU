@@ -696,6 +696,43 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             )
         return primary[0]
 
+    def planning_contract_context(self) -> str:
+        """Publish the same closed coordinates the execution gate enforces.
+
+        Level values stay host-local. The progressive planner selects indices
+        into the published domain, so project reference/contrast coordinates
+        into that vocabulary instead of expecting it to guess a hidden choice.
+        This is planning guidance, not a replacement for ``validate_plan``.
+        """
+
+        coordinates = {
+            "primary_exposure": self.exposure_column,
+            "outcome": self.outcome_column,
+            "outcome_type": "binary",
+            "exposure_term": {
+                "name": self.exposure_column,
+                "role": "exposure",
+                "coding": "binary" if self.exposure_kind == "binary" else "categorical",
+                "reference_level_index": self.exposure_levels.index(
+                    self.exposure_reference_level
+                ),
+            },
+            "primary_contrast_level_index": self.exposure_levels.index(
+                self.primary_contrast_level
+            ),
+            "covariates": list(self.required_adjustment_columns),
+        }
+        return (
+            "CALLER-BOUND LANDMARK ASSOCIATION COORDINATES: the primary "
+            "adjusted-association step must preserve the following exact "
+            "coordinates. Copy exposure_term into model_terms and include the "
+            "declared covariates in their exact order. Level indices refer to "
+            "the host-published domain; do not choose another contrast or "
+            "replace a categorical contrast with a linear trend. The host "
+            "separately binds temporal eligibility and dependence authority.\n"
+            + json.dumps(coordinates, ensure_ascii=False, sort_keys=True)
+        )
+
     def _validated_requirement(self, step: AnalysisStep) -> Any:
         requirement = sole_primary_model_requirement(step)
         verdict = association_execution_verdict(step)
