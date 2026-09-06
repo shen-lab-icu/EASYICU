@@ -1,4 +1,4 @@
-"""Private restart-recovery index for Web Research Agent review pauses."""
+"""Private restart-recovery index and records for Web review pauses."""
 
 from __future__ import annotations
 
@@ -177,8 +177,8 @@ _LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: Dict[str, threading.RLock] = {}
 _INDEX_SCHEMA = "easyicu.web-review-recovery-index/2"
 _SEED_FILENAME = "web_review_recovery_seed.json"
-# One project can legitimately own one pending review, so the root registry
-# must cover the same bounded population as the 128-record recovery index.
+# Startup discovery stays bounded independently of individually stored pauses.
+# Explicit record lookups do not scan the durable record directory.
 _DEFAULT_MAX_ROOTS = 128
 _DEFAULT_MAX_CANDIDATES = 256
 _MAX_RUN_DIRS_PER_CANDIDATE = 16
@@ -669,16 +669,64 @@ def put_record(
     path: Optional[Path] = None,
     max_records: int = 128,
 ) -> None:
+    """Save a pause without making bounded inline capacity a lifetime run limit.
+
+    ``max_records`` bounds the legacy inline index, not durable pending reviews.
+    Additional records are individually addressable private files. No pending
+    record is evicted and an existing index need not be rewritten to spill.
+    """
+
     selected = path or default_store_path()
     with _locked(selected):
         payload = _read(selected)
-        records = dict(payload["records"])
-        if record.run_id not in records and len(records) >= max_records:
-            raise WebReviewRecoveryError(
-                "Web review recovery capacity is full; no pending review was evicted"
-            )
-        records[record.run_id] = record.model_dump(mode="json")
-        _write(selected, {**payload, "records": records})
+        if _put_record_locked(selected, payload, record, max_records=max_records):
+            _write(selected, payload)
+
+
+def _individual_record_path(index: Path, run_id: str) -> Path:
+    directory = index.with_name(index.name + ".records")
+    # Hash the exact key, never interpret a run identifier as a filesystem path.
+    name = canonical_sha256({"run_id": str(run_id)}) + ".json"
+    selected = directory / name
+    if directory.is_symlink() or selected.is_symlink():
+        raise WebReviewRecoveryError("Web review recovery record cannot be a symlink")
+    return selected
+
+
+def _record_payload_locked(
+    index: Path, payload: Mapping[str, Any], run_id: str
+) -> Optional[Mapping[str, Any]]:
+    raw = payload["records"].get(str(run_id))
+    if raw is not None:
+        return raw
+    selected = _individual_record_path(index, run_id)
+    if not selected.exists():
+        return None
+    try:
+        return json.loads(selected.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise WebReviewRecoveryError("Web review recovery record is corrupt") from exc
+
+
+def _put_record_locked(
+    index: Path,
+    payload: Dict[str, Any],
+    record: WebReviewRecoveryRecord,
+    *,
+    max_records: int,
+) -> bool:
+    """Return whether the inline payload changed; caller owns the index lock."""
+
+    records = payload["records"]
+    individual = _individual_record_path(index, record.run_id)
+    raw = record.model_dump(mode="json")
+    if record.run_id not in records and (
+        individual.exists() or len(records) >= max_records
+    ):
+        _write(individual, raw)
+        return False
+    records[record.run_id] = raw
+    return True
 
 
 def register_pipeline_work_root(
@@ -907,7 +955,7 @@ def reconcile_records(
     with _locked(selected):
         payload = _read(selected)
         configured = list(payload["work_roots"])[:max_roots]
-        records = dict(payload["records"])
+        inline_changed = False
         imported = 0
         inspected = 0
         for raw_root in configured:
@@ -922,16 +970,16 @@ def reconcile_records(
             inspected += root_inspected
             for seed_path in seed_paths:
                 for record in _record_from_seed_path(seed_path, root=root):
-                    if record.run_id in records:
+                    if _record_payload_locked(selected, payload, record.run_id) is not None:
                         continue
-                    if len(records) >= max_records:
-                        break
-                    records[record.run_id] = record.model_dump(mode="json")
+                    inline_changed = _put_record_locked(
+                        selected, payload, record, max_records=max_records
+                    ) or inline_changed
                     imported += 1
-            if inspected >= max_candidates or len(records) >= max_records:
+            if inspected >= max_candidates:
                 break
-        if imported:
-            _write(selected, {**payload, "records": records})
+        if inline_changed:
+            _write(selected, payload)
         return imported
 
 
@@ -939,23 +987,31 @@ def get_record(run_id: str, *, path: Optional[Path] = None) -> Optional[WebRevie
     selected = path or default_store_path()
     with _locked(selected):
         payload = _read(selected)
-        raw = payload["records"].get(str(run_id))
+        raw = _record_payload_locked(selected, payload, run_id)
     if raw is None:
         reconcile_records(path=selected)
         with _locked(selected):
-            raw = _read(selected)["records"].get(str(run_id))
+            raw = _record_payload_locked(selected, _read(selected), run_id)
     if raw is None:
         return None
     try:
-        return WebReviewRecoveryRecord.model_validate(raw)
+        record = WebReviewRecoveryRecord.model_validate(raw)
     except Exception as exc:
         raise WebReviewRecoveryError("Web review recovery record is corrupt") from exc
+    if record.run_id != str(run_id):
+        raise WebReviewRecoveryError("Web review recovery record identity changed")
+    return record
 
 
 def remove_record(run_id: str, *, path: Optional[Path] = None) -> None:
     selected = path or default_store_path()
     with _locked(selected):
         payload = _read(selected)
+        individual = _individual_record_path(selected, run_id)
         records = dict(payload["records"])
         if records.pop(str(run_id), None) is not None:
             _write(selected, {**payload, "records": records})
+        try:
+            individual.unlink()
+        except FileNotFoundError:
+            pass
