@@ -379,6 +379,8 @@ def build_research_workflow_snapshot(
     raw_remediation_buckets = (
         raw_remediation_buckets if isinstance(raw_remediation_buckets, Mapping) else {}
     )
+    raw_revision_blockers = raw_facts.get("automatic_revision_blockers")
+    raw_revision_blockers = raw_revision_blockers if isinstance(raw_revision_blockers, list) else []
     raw_study_authority_codes = raw_remediation_buckets.get(
         "study_authority_change"
     )
@@ -464,6 +466,12 @@ def build_research_workflow_snapshot(
                 str(item.get("code") or "")[:120]
                 for item in review_findings[:40]
                 if isinstance(item, Mapping) and str(item.get("code") or "").strip()
+            ],
+            "automatic_revision_blockers": [
+                str(code)[:120]
+                for code in raw_revision_blockers[:40]
+                if isinstance(code, str)
+                and code not in resolved_study_authority_codes
             ],
             "authorization_questions": [
                 projected_authorization_question(item)

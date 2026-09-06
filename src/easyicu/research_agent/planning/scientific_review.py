@@ -15,6 +15,7 @@ plan cannot be approved first and downgraded only after provider work has run.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
@@ -37,6 +38,7 @@ from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
 from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
+    normalise_time_anchor,
     primary_exposure_time_anchor_alignment,
     window_extends_after_anchor,
 )
@@ -258,22 +260,23 @@ def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str
         return False, None
     if not isinstance(constraints, Mapping):
         return False, None
-    confirmations = constraints.get("confirmations")
     materialization = constraints.get("materialization_window")
     if (
-        not isinstance(confirmations, Mapping)
-        or confirmations.get("feature_time_window") is not True
-        or not isinstance(materialization, Mapping)
+        not isinstance(materialization, Mapping)
         or materialization.get("role") != "outer_observation_window"
-        or str(materialization.get("anchor") or "").strip().casefold()
-        != "icu admission"
+        or normalise_time_anchor(str(materialization.get("anchor") or ""))
+        != "icu_admission"
     ):
+        return False, None
+    # This detects a risk in the host-declared physical window; it grants no
+    # execution authority. An absent confirmation cannot hide that risk.
+    if isinstance(materialization.get("hours"), bool):
         return False, None
     try:
         hours = float(materialization["hours"])
     except (KeyError, TypeError, ValueError):
         return False, None
-    if hours <= 0:
+    if not math.isfinite(hours) or hours <= 0:
         return False, None
     # This label deliberately names the physical coordinate, rather than
     # implying a phenotype definition or a follow-up horizon.
@@ -1435,6 +1438,19 @@ def remediation_route_for_finding(
     return "agent_plan_revision"
 
 
+def plan_revision_blocker_codes(findings: list[PlanScientificFinding]) -> tuple[str, ...]:
+    """Block futile plan retries until the responsible non-Planner owner acts.
+
+    Major/minor maturity limitations do not prevent bounded plan repair.
+    Blocking runtime, authority, evidence and independent-review gaps do.
+    """
+    return tuple(sorted({
+        finding.code for finding in findings
+        if finding.severity == "blocker"
+        and remediation_route_for_finding(finding) != "agent_plan_revision"
+    }))
+
+
 def render_agent_plan_revision_contract(review: PlanScientificReview) -> str:
     """Render only plan-fixable findings from an exact prior review.
 
@@ -2385,6 +2401,7 @@ def build_plan_scientific_review(
                 ),
             },
             "remediation_buckets": remediation_buckets,
+            "automatic_revision_blockers": list(plan_revision_blocker_codes(findings)),
             "remediation_boundary": (
                 "Only agent_plan_revision findings may be fed to a fresh Planner "
                 "without changing StudyContext authority. Runtime-capability "
@@ -2417,6 +2434,7 @@ __all__ = [
     "repeated_unit_design_closed",
     "render_plan_scientific_guardrails",
     "render_agent_plan_revision_contract",
+    "plan_revision_blocker_codes",
     "remediation_route_for_finding",
     "required_method_layers_for_context",
     "required_method_layers_for_plan",

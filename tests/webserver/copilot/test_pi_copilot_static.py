@@ -73,7 +73,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-data-consent.js?v=20260904-agent-plan-auto1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260904-system-plan3" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20260904-agent-plan-compiler1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20260906-revision-blockers1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi.js?v=20260904-system-plan1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
@@ -404,9 +404,18 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
           next_action_code: 'plan_scientific_changes_required',
           plan_review_summary: {{
             authorization_questions: [],
+            automatic_revision_blockers: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'],
             remediation_buckets: {{agent_plan_revision: ['FIGURE_ROLE_COVERAGE_INCOMPLETE']}},
           }},
         }};
+        const beforeBlockedRevision = calls.length;
+        if (await actions.continueSystemOwnedPlanProgression()) {{
+          throw new Error('An unresolved non-Planner blocker started a revision');
+        }}
+        if (calls.length !== beforeBlockedRevision) {{
+          throw new Error('Blocked progression mutated workflow state');
+        }}
+        workflow.plan_review_summary.automatic_revision_blockers = [];
         await actions.continueSystemOwnedPlanProgression();
         await actions.continueSystemOwnedPlanProgression();
         await actions.confirmWorkflow({{
