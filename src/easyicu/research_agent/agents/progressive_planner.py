@@ -1111,6 +1111,7 @@ def _action_catalog(
                                 action.runtime_contract.article_roles
                             ),
                             "standard_executor": action.runtime_contract.standard_executor,
+                            "execution_parameters": dict(action.runtime_contract.execution_parameters),
                         }
                         if action.runtime_contract is not None
                         else None
@@ -3022,7 +3023,8 @@ class ProgressivePlannerAgent:
                 blocks.append(
                     "Host-owned scientific-action contract (binding): copy its "
                     "outputs exactly, bind exactly its required_product_inputs "
-                    "from preceding depended-on producers, and do not substitute "
+                    "from preceding depended-on producers, describe the exact "
+                    "execution_parameters and their interpretation limits, and do not substitute "
                     "artifact products or contextual tables:\n"
                     + json.dumps(
                         current_action["runtime_contract"],
