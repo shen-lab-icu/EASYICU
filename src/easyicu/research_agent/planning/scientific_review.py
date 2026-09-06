@@ -715,7 +715,8 @@ def method_source_facts(
     layers_by_step: dict[str, list[str]] = {}
     method_source_gaps: list[str] = []
     unsupported_bindings: list[dict[str, Any]] = []
-    for step in scientific_steps(plan):
+    scientific_step_ids = {str(step.step_id) for step in scientific_steps(plan)}
+    for step in plan.steps:
         layers: set[str] = set()
         for binding in step.literature_design_bindings:
             support = method_binding_support(
@@ -736,7 +737,7 @@ def method_source_facts(
                 )
         sorted_layers = sorted(layers)
         layers_by_step[str(step.step_id)] = sorted_layers
-        if not sorted_layers:
+        if not sorted_layers and str(step.step_id) in scientific_step_ids:
             method_source_gaps.append(str(step.step_id))
     cited_layers = sorted({layer for values in layers_by_step.values() for layer in values})
     required_layers = list(required_method_layers_for_plan(plan, context))

@@ -32,6 +32,7 @@ from easyicu.research_agent.planning.scientific_review import (
     _endpoint_resolved,
     _sensitivity_facts,
     build_plan_scientific_review,
+    method_source_facts,
     post_baseline_exposure,
     remediation_route_for_finding,
     repeat_units_possible,
@@ -467,6 +468,105 @@ def _plan(*, typed_bindings: bool = True) -> AnalysisPlan:
             ),
         ],
     )
+
+
+def test_method_layer_review_credits_typed_auxiliary_audit_binding() -> None:
+    from easyicu.research_agent.planning.literature_bindings import (
+        missing_required_method_layers,
+    )
+
+    plan = _plan()
+    audit = plan.steps[-1].model_copy(
+        update={
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                _binding(
+                    "sterne_missing_data_2009",
+                    "missing_data",
+                    "Audit variable availability and the complete-case assumption.",
+                )
+            ],
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "steps": [*plan.steps[:-1], audit],
+            "robustness_specs": [
+                RobustnessSpec(
+                    spec_id="complete_case_primary",
+                    axis="missing",
+                    description="Prespecified complete-case sensitivity.",
+                    missing_override={
+                        "strategy": "complete_case",
+                        "variables": ["exposure", "death", "age"],
+                    },
+                )
+            ],
+        }
+    )
+
+    facts = method_source_facts(plan, _context())
+    gate_missing = missing_required_method_layers(
+        plan, ["sterne_missing_data_2009"], context=_context()
+    )
+
+    assert "missing_data" in facts["required_method_layers"]
+    assert "missing_data" in facts["method_layers_by_step"][audit.step_id]
+    assert "missing_data" not in facts["missing_method_layers"]
+    assert "missing_data" not in gate_missing
+    assert audit.step_id not in facts["method_source_gaps"]
+
+
+def test_auxiliary_method_citation_does_not_cover_unbound_scientific_step() -> None:
+    plan = _plan(typed_bindings=False)
+    audit = plan.steps[-1].model_copy(
+        update={
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                _binding(
+                    "sterne_missing_data_2009",
+                    "missing_data",
+                    "Audit availability without authorizing the primary model.",
+                )
+            ],
+        }
+    )
+
+    facts = method_source_facts(
+        plan.model_copy(update={"steps": [*plan.steps[:-1], audit]}), _context()
+    )
+
+    assert facts["method_source_gaps"] == ["primary_model"]
+
+
+def test_method_layer_review_rejects_unsupported_auxiliary_binding() -> None:
+    plan = _plan()
+    audit = plan.steps[-1].model_copy(
+        update={
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                _binding(
+                    "sterne_missing_data_2009",
+                    "time_zero",
+                    "This source does not establish the time-zero decision.",
+                )
+            ],
+        }
+    )
+
+    facts = method_source_facts(
+        plan.model_copy(update={"steps": [*plan.steps[:-1], audit]}), _context()
+    )
+
+    assert facts["unsupported_method_bindings"] == [
+        {
+            "step_id": audit.step_id,
+            "citation_key": "sterne_missing_data_2009",
+            "unsupported_design_elements": ["time_zero"],
+            "matched_card_ids": [],
+        }
+    ]
+    assert "missing_data" not in facts["cited_method_layers"]
 
 
 def _legacy_design_selection_without_reviewable_plan() -> ResearchDesignSelection:
