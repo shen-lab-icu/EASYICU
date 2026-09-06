@@ -151,7 +151,10 @@
           failed: tr('The research plan was not completed. Open the execution details before retrying.', '研究计划未生成完成，请查看执行明细后重试。'),
         },
         prepare_analysis_data: {
-          user: tr('Confirm the plan and prepare analysis data', '确认方案并准备分析数据'),
+          // A persisted host job proves preparation, not who approved it.
+          // Older automatic upgrades used this same action code. Preserve
+          // actual transcript messages but never synthesize user consent.
+          user: '',
           running: tr('Preparing the analysis data and executable plan', '正在准备分析数据和可执行计划'),
           done: tr('The analysis dataset and executable plan are ready. Review distributions and missingness in the EasyICU Data Workbench first, then verify the cohort summary and source manifest below. Analysis has not started.', '分析数据与可执行计划已准备完成。请先在 EasyICU 数据工作台审阅分布与缺失情况，再核对下方队列摘要和数据来源清单；分析尚未开始。'),
           failed: tr('The analysis data or executable plan could not be prepared. Review the failed step before retrying.', '分析数据或可执行计划未准备完成，请查看失败步骤后重试。'),

@@ -26,7 +26,6 @@
   ]);
   const AUTOMATIC_PROVIDER_RUN_CODES = new Set([
     'provider_ready_to_generate_plan',
-    'plan_execution_upgrade_required',
     'scientific_plan_review_policy_stale',
     'plan_configuration_superseded',
     'plan_scientific_changes_required',
@@ -126,6 +125,10 @@
     async function startFormalPlanGeneration(reasonCode, options = {}) {
       if (unavailable()) return false;
       const automatic = Boolean(options && options.automatic);
+      // A newly generated candidate is not a reviewed plan. The existing
+      // confirmation action owns this transition; job completion cannot
+      // manufacture approval to prepare its data package.
+      if (automatic && reasonCode === 'plan_execution_upgrade_required') return false;
       if (automatic && reasonCode === 'plan_scientific_changes_required'
         && automaticRevisionBlocked()) return false;
       const request = generationRequest(String(reasonCode || ''));
@@ -306,20 +309,7 @@
         return startFormalPlanGeneration(actionCode, {automatic: true});
       }
       if (actionCode === 'plan_execution_upgrade_required') {
-        const session = host.session() || {};
-        const binding = session.binding || {};
-        const reviewedRunId = String(binding.run_id || '').trim();
-        const studyContextId = String(binding.study_context_id || '').trim();
-        if (
-          startedTransitions.has(transitionKey(actionCode))
-          // A failed or cancelled package-bound attempt is durable session
-          // evidence.  Do not turn a reload/rebind into an unbounded automatic
-          // retry loop; an explicit retry remains available after the runtime
-          // or architecture defect is repaired.
-          || !reviewedRunId
-          || !studyContextId
-        ) return false;
-        return startFormalPlanGeneration(actionCode, {automatic: true});
+        return false;
       }
       if (actionCode === 'scientific_plan_review_policy_stale') {
         if (startedTransitions.has(transitionKey(actionCode))) return false;

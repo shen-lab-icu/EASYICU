@@ -73,7 +73,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-data-consent.js?v=20260904-agent-plan-auto1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260904-system-plan3" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20260906-revision-blockers1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20260906-candidate-review1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi.js?v=20260904-system-plan1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
@@ -517,7 +517,7 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
     assert ["child", "retry-job", "easyicu_full_run_resume_submitted"] in payload["calls"]
 
 
-def test_candidate_plan_upgrade_continues_automatically_once() -> None:
+def test_candidate_plan_upgrade_waits_for_review_then_uses_explicit_confirmation() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -556,20 +556,31 @@ def test_candidate_plan_upgrade_continues_automatically_once() -> None:
         const first = await actions.continueSystemOwnedPlanProgression();
         studyRevision = 5;
         const second = await actions.continueSystemOwnedPlanProgression();
-        process.stdout.write(JSON.stringify({{first, second, calls}}));
+        const directAutomatic = await actions.startFormalPlanGeneration(
+          'plan_execution_upgrade_required', {{automatic: true}},
+        );
+        const beforeConfirmation = calls.slice();
+        await actions.confirmWorkflow({{
+          code: 'plan_execution_upgrade_required', message: 'internal', grants: ['provider_run'],
+        }});
+        process.stdout.write(JSON.stringify({{first, second, directAutomatic, beforeConfirmation, calls}}));
       }})().catch(error => {{ console.error(error); process.exit(1); }});
     """
     completed = subprocess.run(
         [node, "--eval", script], check=True, capture_output=True, text=True
     )
     payload = json.loads(completed.stdout)
-    assert payload["first"] is True
+    assert payload["first"] is False
     assert payload["second"] is False
+    assert payload["directAutomatic"] is False
+    assert payload["beforeConfirmation"] == []
     plan_calls = [call for call in payload["calls"] if call[0] == "plan"]
     assert len(plan_calls) == 1
     assert plan_calls[0][1]["planner_start_mode"] == "auto"
     assert plan_calls[0][1]["plan_revision_source_run_id"] == "candidate-run"
-    assert not any(call[0] == "message" for call in payload["calls"])
+    assert [call for call in payload["calls"] if call[0] == "message"] == [
+        ["message", "确认方案并准备分析数据"]
+    ]
     assert [
         "host-action", "prepare_analysis_data", "upgrade-job", "upgrade-job"
     ] in payload["calls"]
@@ -5132,7 +5143,6 @@ def test_repeated_workflow_attempts_are_coalesced_in_main_conversation() -> None
     payload = json.loads(completed.stdout)
     assert payload["childJobs"] == ["prepare-child-current", "retry-child-current"]
     assert payload["users"] == [
-        "确认方案并准备分析数据",
         "打开 EasyICU 数据审阅与可视化",
         "重试未完成的分析",
     ]
@@ -6324,7 +6334,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20260904-system-plan2" in index
+    assert "screens-guided-pi-transcript.js?v=20260906-preparation-history1" in index
     assert "screens-guided-pi.js?v=20260904-system-plan1" in index
 
 
