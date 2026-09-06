@@ -49,6 +49,28 @@ def test_sepsis3_is_the_cohort_not_the_outcome():
     assert "sep3_sofa2" not in readings
 
 
+def test_definition_dependency_does_not_replace_the_named_exposure():
+    values = _values(study_intent.deterministic_intent(
+        "描述 ICU 患者中 Sepsis-3 患病率及其与院内死亡的关系；"
+        "Sepsis-3 使用 SOFA 和疑似感染定义。"
+    ))
+    assert values["exposure"] == "sep3"
+
+
+def test_later_method_acronym_does_not_replace_the_named_exposure():
+    values = _values(study_intent.deterministic_intent(
+        "评估机械通气与28天死亡的关联，做比例风险检验；PH 不成立时不报告恒定 HR。"
+    ))
+    assert values["exposure"] == "vent_ind"
+
+
+def test_background_population_does_not_win_over_the_studied_marker():
+    values = _values(study_intent.deterministic_intent(
+        "Among Sepsis-3 patients, is early bilirubin associated with hospital mortality?"
+    ))
+    assert values["exposure"] == "bili"
+
+
 def test_sofa2_sepsis_sensitivity_requires_an_explicit_sofa2_phrase():
     result = study_intent.deterministic_intent(
         "In an explicit SOFA-2 sepsis sensitivity analysis, describe mortality."

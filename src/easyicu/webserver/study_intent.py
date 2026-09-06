@@ -260,7 +260,7 @@ def _family_of(concept: Optional[str]) -> Optional[frozenset]:
 
 
 def _match_concept(text: str) -> List[Tuple[str, str]]:
-    """Return (concept_id, matched_phrase) pairs in the order they appear.
+    """Return concept/phrase pairs in dictionary-specificity order.
 
     A phrase the sentence explicitly negates is not a reading — it is skipped,
     which leaves the slot unread rather than wrong.
@@ -277,6 +277,32 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
             found.append((concept, match.group(0)))
             break
     return found
+
+
+def _exposure_candidates_in_text_order(
+    text: str, candidates: List[Tuple[str, str]]
+) -> List[Tuple[str, str]]:
+    """Read the studied marker before later definitions or method acronyms.
+
+    Dictionary order ranks synonyms, not scientific roles. Explicit population
+    phrases are not exposure assignments. Ties retain dictionary specificity
+    (for example, SOFA-2 before the overlapping original SOFA token).
+    """
+
+    positioned = []
+    for rank, (concept, phrase) in enumerate(candidates):
+        for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
+            if _negated(text, match.start()):
+                continue
+            after = text[match.end():]
+            before = text[max(0, match.start() - 35):match.start()]
+            if re.match(r"\s*(?:patients?\b|cohort\b|患者|人群|病人)", after, re.IGNORECASE):
+                continue
+            if re.search(r"\bpatients?\s+with\s*$", before, re.IGNORECASE):
+                continue
+            positioned.append((match.start(), rank, concept, phrase))
+            break
+    return [(concept, phrase) for _, _, concept, phrase in sorted(positioned)]
 
 
 def _clean_question(value: Any) -> str:
@@ -348,6 +374,7 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
         for c, p in concepts
         if c != outcome_concept and not (outcome_family and _family_of(c) == outcome_family)
     ]
+    exposures = _exposure_candidates_in_text_order(text, exposures)
     if exposures:
         concept, phrase = exposures[0]
         slots["exposure"] = _slot(concept, "user_text", phrase)
