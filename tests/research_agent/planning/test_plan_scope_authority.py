@@ -118,6 +118,22 @@ def test_typed_figure_panel_is_part_of_scientific_plan_authority() -> None:
     )
 
 
+def test_runtime_outcome_owner_and_endpoint_are_scientific_plan_authority() -> None:
+    def step(owner: str, outcome: str) -> AnalysisStep:
+        return AnalysisStep(
+            step_id="runtime_analysis", intent="Execute the governed endpoint analysis.",
+            method="custom_analysis", expected_outputs=["table:runtime_result"],
+            runtime_outcome_contract={
+                "owner_ref": "scientific_runtime_contract:" + owner * 64,
+                "outcomes": [outcome],
+            },
+        )
+
+    base = plan_scope._step_scientific_signature(step("a", "death"))
+    assert base != plan_scope._step_scientific_signature(step("b", "death"))
+    assert base != plan_scope._step_scientific_signature(step("a", "icu_los"))
+
+
 def test_scientific_signature_uses_typed_role_not_intent_role_words() -> None:
     step = AnalysisStep(
         step_id="01_model",
