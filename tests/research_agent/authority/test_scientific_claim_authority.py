@@ -456,8 +456,15 @@ def test_host_derives_only_descriptive_absolute_risks_and_risk_difference() -> N
     assert all(word not in rendered for word in ("associated", "independent", "caused"))
 
     reader = " ".join(claim.render_reader_text() for claim in claims).lower()
-    assert "observed absolute risk in the prespecified group was 10%" in reader
-    assert "unadjusted risk difference between groups was 20 percentage points" in reader
+    assert (
+        "observed absolute risk of hospital mortality in the "
+        "early lactate elevation=0 group was 10%" in reader
+    )
+    assert (
+        "unadjusted risk difference for hospital mortality "
+        "(early lactate elevation=1 versus early lactate elevation=0; "
+        "comparison minus reference) was 20 percentage points" in reader
+    )
     assert "analysis role" not in reader
     assert "bound typed cohort" not in reader
 
@@ -493,6 +500,118 @@ def test_host_derives_counts_only_claims_without_inventing_intervals() -> None:
     assert "10/100 (10 percent; counts only, no confidence interval)" in (
         drafts[0].estimand
     )
+
+
+@pytest.mark.parametrize("level", [0, 1, False, True, 2.5, "a_b=2 versus c_d=1"])
+@pytest.mark.parametrize("counts_only", [False, True])
+def test_descriptive_reader_retains_typed_group_and_outcome_without_relabeling(
+    level: object, counts_only: bool,
+) -> None:
+    from easyicu.research_agent.authority.scientific_claims import ScientificClaim
+
+    level_text = json.dumps(level, ensure_ascii=False)
+    claim = ScientificClaim(
+        schema_version="easyicu.scientific_claim/2",
+        claim_id="observed_absolute_risk_level_0",
+        claim_type="descriptive_absolute_risk",
+        exposure=f"exposure_flag={level_text}",
+        outcome="hospital_mortality",
+        direction="descriptive_only",
+        estimand=(
+            "observed absolute risk was 10/100 "
+            "(10 percent; counts only, no confidence interval)"
+            if counts_only else "observed absolute risk"
+        ),
+        population="bound_typed_cohort",
+        analysis_role="primary",
+        status="supported",
+        point_estimate=None if counts_only else 10.0,
+        interval_lower=None if counts_only else 6.0,
+        interval_upper=None if counts_only else 14.0,
+        step_id="describe",
+        evidence_id="summary",
+    )
+    before = claim.model_dump_json()
+
+    reader = claim.render_reader_text()
+
+    assert f"exposure flag={level_text}" in reader
+    assert "hospital mortality" in reader
+    assert "exposure_flag" not in reader
+    assert "hospital_mortality" not in reader
+    assert "prespecified group" not in reader
+    assert "descriptive, unadjusted, noncausal" in reader
+    assert claim.model_dump_json() == before
+    if counts_only:
+        assert "10/100 (10 percent; counts only, no confidence interval)" in reader
+        assert "95% CI" not in reader
+
+
+def test_descriptive_reader_keeps_contrast_order_and_literal_string_levels() -> None:
+    from easyicu.research_agent.authority.scientific_claims import ScientificClaim
+
+    claim = ScientificClaim(
+        schema_version="easyicu.scientific_claim/2",
+        claim_id="prespecified_unadjusted_risk_difference",
+        claim_type="descriptive_risk_difference",
+        exposure='exposure_flag="a_b=2 versus c_d=1" versus exposure_flag="baseline"',
+        outcome="hospital_mortality",
+        direction="descriptive_only",
+        estimand="unadjusted risk difference (comparison minus reference)",
+        population="bound_typed_cohort",
+        analysis_role="primary",
+        status="supported",
+        point_estimate=20.0,
+        interval_lower=10.0,
+        interval_upper=30.0,
+        step_id="describe",
+        evidence_id="summary",
+    )
+
+    reader = claim.render_reader_text()
+
+    assert 'exposure flag="a_b=2 versus c_d=1" versus exposure flag="baseline"' in reader
+    assert "hospital mortality" in reader
+    assert "comparison minus reference" in reader
+
+
+def test_descriptive_reader_coordinates_survive_strict_binding(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.authority.manuscript_claim_policy import (
+        missing_scientific_claims_in_results,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_quality import (
+        repair_reader_structure_from_existing_prose,
+    )
+
+    summary = _descriptive_distribution_summary()
+    store = ra.EvidenceStore(tmp_path, enforcement_mode="strict")
+    source = tmp_path / "step_summary.json"
+    source.write_text(json.dumps(summary), encoding="utf-8")
+    store.register_file(
+        kind="statistic", description="Host-derived descriptive summary",
+        source_path=source, evidence_id="summary", produced_by_step="describe",
+        generation_mode="deterministic_standard",
+    )
+    store.register_step_summary_numerics(
+        step_id="describe", evidence_id="summary", summary=summary,
+    )
+    claims = store.scientific_claims()
+    assert len(claims) == 3
+    bound = store.bind_manuscript(
+        "## Results\n\n" + "\n\n".join(claim.placeholder for claim in claims)
+    )
+    bound, _repairs = repair_reader_structure_from_existing_prose(bound)
+
+    bound, _bindings, untraced = bind_numeric_values(
+        bound, evidence=store, enforcement_mode="strict",
+    )
+
+    assert not untraced
+    assert not missing_scientific_claims_in_results(bound, claims=claims)
+    assert "early lactate elevation=0" in bound
+    assert "early lactate elevation=1" in bound
+    assert "hospital mortality" in bound
 
 
 @pytest.mark.parametrize(

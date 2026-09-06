@@ -11,6 +11,7 @@ author the scientific sentence.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from typing import Literal
@@ -23,6 +24,37 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+def _reader_coordinate(coordinate: str) -> str:
+    """Space variable keys without changing JSON levels or contrast order.
+
+    This is typography, not clinical translation. In particular, a category
+    value can itself contain underscores, equals signs, or ``versus``; only
+    the variable key may be re-spaced. Old non-JSON coordinates are retained
+    verbatim rather than guessing their group identity.
+    """
+
+    if "=" not in coordinate:
+        return coordinate.replace("_", " ")
+    remaining = coordinate
+    parts: list[str] = []
+    while remaining:
+        key, separator, value = remaining.partition("=")
+        if not separator:
+            return coordinate
+        try:
+            _level, end = json.JSONDecoder().raw_decode(value)
+        except ValueError:
+            return coordinate
+        parts.append(f"{key.replace('_', ' ')}={value[:end]}")
+        tail = value[end:]
+        if not tail:
+            return " versus ".join(parts)
+        if not tail.startswith(" versus "):
+            return coordinate
+        remaining = tail[len(" versus "):]
+    return coordinate
 
 
 class ScientificClaimDraft(BaseModel):
@@ -171,8 +203,10 @@ class ScientificClaim(ScientificClaimDraft):
 
         ``render_text`` remains the exact machine-authority representation used
         to validate Writer claim tokens.  This projection deliberately omits
-        runtime roles, analysis-set identifiers, and raw variable names while
-        retaining the claim type, direction, estimate, interval, and causal
+        runtime roles and analysis-set identifiers. Descriptive statements
+        retain the exposure levels, outcome, and contrast order with variable
+        keys re-spaced for readers, without inventing clinical translations.
+        The projection retains the claim type, direction, estimate, interval, and causal
         ceiling.  The immutable claim object and its evidence coordinates are
         unchanged.
         """
@@ -195,6 +229,8 @@ class ScientificClaim(ScientificClaimDraft):
             return point, lower, upper
 
         if self.claim_type == "descriptive_absolute_risk":
+            group = _reader_coordinate(self.exposure)
+            outcome = _reader_coordinate(self.outcome)
             values = (
                 (self.point_estimate, self.interval_lower, self.interval_upper)
                 if self.point_estimate is not None
@@ -202,20 +238,22 @@ class ScientificClaim(ScientificClaimDraft):
             )
             if values is None:
                 return (
-                    f"In the prespecified group, the {self.estimand}; this was "
+                    f"In the {group} group, for {outcome}, the {self.estimand}; this was "
                     "a descriptive, unadjusted, noncausal estimate."
                 )
             point, lower, upper = values
             assert lower is not None
             assert upper is not None
             return (
-                "The observed absolute risk in the prespecified group was "
+                f"The observed absolute risk of {outcome} in the {group} group was "
                 f"{display_number(point)}% (95% CI, "
                 f"{display_number(lower)}% to "
                 f"{display_number(upper)}%); this was a "
                 "descriptive, unadjusted, noncausal estimate."
             )
         if self.claim_type == "descriptive_risk_difference":
+            contrast = _reader_coordinate(self.exposure)
+            outcome = _reader_coordinate(self.outcome)
             values = (
                 (self.point_estimate, self.interval_lower, self.interval_upper)
                 if self.point_estimate is not None
@@ -223,14 +261,16 @@ class ScientificClaim(ScientificClaimDraft):
             )
             if values is None:
                 return (
-                    f"The {self.estimand}; this was a descriptive, unadjusted, "
+                    f"For {outcome} ({contrast}), the {self.estimand}; "
+                    "this was a descriptive, unadjusted, "
                     "noncausal contrast."
                 )
             point, lower, upper = values
             assert lower is not None
             assert upper is not None
             return (
-                "The prespecified unadjusted risk difference between groups "
+                f"The prespecified unadjusted risk difference for {outcome} "
+                f"({contrast}; comparison minus reference) "
                 f"was {display_number(point)} percentage points "
                 f"(95% CI, {display_number(lower)} to "
                 f"{display_number(upper)}); this was a "
