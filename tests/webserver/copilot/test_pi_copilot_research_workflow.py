@@ -442,10 +442,12 @@ def test_plan_revision_stops_when_agent_owned_defects_do_not_shrink() -> None:
 
 
 @pytest.mark.parametrize("omit_requested_los", [False, True])
+@pytest.mark.parametrize("population", ["all_rows", "filtered", "missing", "invalid", "conflict"])
 def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     omit_requested_los: bool,
+    population: str,
 ) -> None:
     study = _complete_study()
     study.update(
@@ -458,6 +460,25 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
             "execution_concepts": {"covariates": ["age"]},
         }
     )
+    candidate_cohort: dict[str, Any] = {"selection_mode": "all_input_rows"}
+    if population in {"filtered", "conflict"}:
+        candidate_cohort = {
+            "selection_mode": "predicate_filtered",
+            "inclusion": [{
+                "concept_id": "age", "aggregation": "first", "op": ">=", "value": 18,
+                "time_window": {
+                    "anchor": "icu_admission", "start_offset_hours": 0,
+                    "end_offset_hours": 24,
+                },
+            }],
+        }
+        if population == "filtered":
+            study["cohort"] = {}
+            study["cohort_eligibility_authority"] = {}
+    elif population == "missing":
+        candidate_cohort = {}
+    elif population == "invalid":
+        candidate_cohort = {"selection_mode": "anything"}
     source_run_id = "run-candidate"
     project_dir = tmp_path / "candidate-wrapper"
     inner_run = project_dir / "pipeline" / source_run_id
@@ -531,7 +552,7 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
                 "scientific_plan_review.json": review,
                 "agent_plan.json": {
                     "analysis_type": "association_study",
-                    "cohort": {"selection_mode": "all_input_rows"},
+                    "cohort": candidate_cohort,
                     "steps": [
                         {
                             "step_id": "primary_model",
@@ -554,7 +575,7 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
         },
     )
 
-    if omit_requested_los:
+    if omit_requested_los or population in {"missing", "invalid", "conflict"}:
         with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
             agent_pipeline_runs._load_candidate_plan_materialization_authority(
                 study=study,
@@ -577,6 +598,7 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     assert authority is not None
     assert authority.primary_exposure == "lact"
     assert authority.target_outcome == "death"
+    assert authority.primary_cohort_selection_mode == candidate_cohort["selection_mode"]
     assert "source_plan_sha256: " + "b" * 64 in authority.contract
     assert "primary_model" in authority.contract
 
@@ -1967,6 +1989,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     result = runner(Job())
 
     assert configs[0].require_human_plan_review is True
+    assert configs[0].required_primary_cohort_selection_mode is None
     assert configs[0].evidence_enforcement_mode == "strict"
     assert configs[0].bound_plan_revision_contract == (
         change.planner_context() if change is not None else None
