@@ -48,6 +48,12 @@
       return String((host.workflow() && host.workflow().next_action_code) || '');
     }
 
+    function automaticRevisionBlocked() {
+      const summary = (host.workflow() || {}).plan_review_summary || {};
+      return Array.isArray(summary.automatic_revision_blockers)
+        && summary.automatic_revision_blockers.length > 0;
+    }
+
     function transitionKey(reasonCode) {
       const session = host.session() || {};
       const binding = session.binding || {};
@@ -120,6 +126,8 @@
     async function startFormalPlanGeneration(reasonCode, options = {}) {
       if (unavailable()) return false;
       const automatic = Boolean(options && options.automatic);
+      if (automatic && reasonCode === 'plan_scientific_changes_required'
+        && automaticRevisionBlocked()) return false;
       const request = generationRequest(String(reasonCode || ''));
       const session = host.session() || {};
       const binding = session.binding || {};
@@ -332,6 +340,7 @@
         : [];
       if (
         actionCode !== 'plan_scientific_changes_required'
+        || automaticRevisionBlocked()
         || questions.length
         || !plannerOwnedFindings.length
         || startedTransitions.has(transitionKey(actionCode))
@@ -356,6 +365,7 @@
       if (
         !BARE_CONTINUATION.test(message)
         || String(workflow.next_action_code || '') !== 'plan_scientific_changes_required'
+        || automaticRevisionBlocked()
         || questions.length
         || !repairs.length
       ) return false;

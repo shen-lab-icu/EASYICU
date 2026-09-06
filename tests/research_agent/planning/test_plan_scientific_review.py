@@ -757,7 +757,11 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     )
 
 
-def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None:
+@pytest.mark.parametrize("anchor", ["ICU admission", "icu_admission", "ICU-admission"])
+@pytest.mark.parametrize("confirmations", [{"feature_time_window": True}, {}, {"extraction_completed": True}])
+def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate(
+    anchor, confirmations
+) -> None:
     """Metadata-only candidate planning must not lose exposure opportunity.
 
     The outer feature window is not a clinical-definition anchor, but it does
@@ -778,10 +782,10 @@ def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None
                 covariates=["age"],
                 data_constraints=json.dumps(
                     {
-                        "confirmations": {"feature_time_window": True},
+                        "confirmations": confirmations,
                         "materialization_window": {
                             "role": "outer_observation_window",
-                            "anchor": "ICU admission",
+                            "anchor": anchor,
                             "hours": 24,
                         },
                     }
@@ -839,6 +843,23 @@ def test_selected_temporal_design_routes_missing_execution_to_runtime_owner() ->
 
     assert finding.remediation_route == "runtime_capability"
     assert finding.requires_user_authorization is False
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in review.facts[
+        "automatic_revision_blockers"
+    ]
+
+
+@pytest.mark.parametrize("hours", [True, False, 0, -1, "NaN", "Infinity", None])
+def test_invalid_outer_feature_window_is_not_a_temporal_coordinate(hours) -> None:
+    context = _context().model_copy(update={
+        "variables": [],
+        "user_preferences": UserPreferences(data_constraints=json.dumps({
+            "materialization_window": {
+                "role": "outer_observation_window", "anchor": "icu_admission",
+                "hours": hours,
+            },
+        })),
+    })
+    assert post_baseline_exposure(context) == (False, None)
 
 
 @pytest.mark.parametrize("requested", [None, ["death"], ["death", "los_icu"]])

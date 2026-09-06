@@ -330,9 +330,11 @@ def test_provider_request_timeouts_preserve_a_separate_hard_stop(
         ),
     ],
 )
+@pytest.mark.parametrize("runtime_blocker", [False, True])
 def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
     finding_code: str,
     expected_fragment: str,
+    runtime_blocker: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = _complete_study()
@@ -352,17 +354,33 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
             ]
         },
     )
+    review_payload = _nonapprovable_review_payload(finding_code=finding_code)
+    if runtime_blocker:
+        review_payload["findings"].append({
+            "code": "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+            "severity": "blocker", "dimension": "icu_clinical_design",
+            "message": "The selected temporal estimator has no bound runtime.",
+            "remediation": "Bind the selected design to its execution owner.",
+            "remediation_route": "runtime_capability",
+        })
     monkeypatch.setattr(
         agent_runs,
         "read_run_record",
         lambda _project_dir: SimpleNamespace(
             artifact_payloads={
-                "scientific_plan_review.json": _nonapprovable_review_payload(
-                    finding_code=finding_code
-                )
+                "scientific_plan_review.json": review_payload
             }
         ),
     )
+
+    if runtime_blocker:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as caught:
+            agent_pipeline_runs._compile_plan_revision_contract(
+                study=study, project_root="/private/projects",
+                source_run_id=source_run_id,
+            )
+        assert caught.value.code == "plan_revision_owner_resolution_required"
+        return
 
     contract = agent_pipeline_runs._compile_plan_revision_contract(
         study=study,
@@ -2601,6 +2619,7 @@ def test_legacy_method_question_is_projected_as_system_owned_plan_work() -> (
         "rendered_outputs_assessed": False,
         "dimension_scores": {"icu_clinical_design": 0, "figures": 70},
         "finding_codes": ["POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"],
+        "automatic_revision_blockers": [],
         "authorization_questions": [],
         "remediation_buckets": {
             "agent_plan_revision": [

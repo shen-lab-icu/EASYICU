@@ -41,6 +41,7 @@ from easyicu.research_agent.acquisition.patient_grouping import (
 )
 from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
+    plan_revision_blocker_codes,
     render_agent_plan_revision_contract,
 )
 from easyicu.research_agent.schema import TimeWindow
@@ -3470,6 +3471,13 @@ def _load_plan_revision_source_review(
         raise ResearchPipelineRunError(
             "plan_revision_source_not_changes_required",
             "Only a non-approvable scientific review may seed a fresh plan revision.",
+        )
+    if plan_revision_blocker_codes(parsed_review.findings):
+        raise ResearchPipelineRunError(
+            "plan_revision_owner_resolution_required",
+            "The prior review contains blocking findings outside Planner ownership. "
+            "Resolve the runtime, source, authority or independent-review gap "
+            "before requesting another plan from the unchanged study.",
         )
     return parsed_review
 
