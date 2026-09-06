@@ -81,6 +81,7 @@ from easyicu.research_agent.planning.capability_registry import (
     assess_scientific_capability,
     resolve_primary_capability,
 )
+from easyicu.research_agent.contracts.functional_form import FunctionalFormSpec
 
 
 def _authority(task_id: str):
@@ -497,12 +498,13 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
         update={
             "step_id": "02_sensitivity",
             "planned_analysis_role": "sensitivity",
-            "method": "prespecified_functional_form_check",
+            "method": "restricted_cubic_spline_sensitivity",
             "intent": "Check the declared functional form.",
             "inputs": ["table:adjusted_association_estimates"],
             "expected_outputs": ["table:functional_form_check"],
             "scientific_capability": "association_freeform_v1",
             "sensitivity_spec_ids": ["functional_form_check"],
+            "functional_form_spec": FunctionalFormSpec(target_column=authority.exposure_column, knot_quantiles=authority.spline_knot_quantiles),
             "icu_rule_refs": [],
         }
     )

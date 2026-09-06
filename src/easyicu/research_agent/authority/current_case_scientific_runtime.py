@@ -35,6 +35,7 @@ from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import landmark_association_composite_panels
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.model_terms import ModelTermSpec
+from ..contracts.functional_form import FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS
 from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import (
     AnalysisPlan,
@@ -1160,6 +1161,35 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
         return products[0] if products else None
 
+    def require_functional_form_spec(self, step: AnalysisStep) -> FunctionalFormSpec:
+        """Validate the target, not the wording of a sensitivity's step id."""
+
+        spec = step.functional_form_spec
+        if (
+            spec is None or step.method not in RCS_LINEAR_SENSITIVITY_METHODS
+            or step.planned_analysis_role != "sensitivity"
+            or len(step.sensitivity_spec_ids) != 1
+            or step.robustness_replay_spec is not None
+            or len(step.expected_outputs) != 1
+            or not step.expected_outputs[0].startswith("table:")
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "landmark functional-form sensitivity requires one exact target contract"
+            )
+        continuous = {self.exposure_column, *self.required_adjustment_columns} - set(self.categorical_adjustment_columns)
+        if spec.target_column not in continuous:
+            raise CurrentCaseScientificAuthorityError("functional-form target is not a continuous governed model term")
+        if spec.target_column == self.exposure_column and spec.knot_quantiles != self.spline_knot_quantiles:
+            raise CurrentCaseScientificAuthorityError("functional-form projection cannot change the primary spline knots")
+        return spec
+
+    def functional_form_inputs(self, step: AnalysisStep, *, cohort_input: str) -> tuple[str, ...]:
+        spec = self.require_functional_form_spec(step)
+        products = (self.downstream_parent_product, self.linear_sensitivity_product)
+        if spec.target_column == self.exposure_column:
+            return products
+        return (cohort_input, *self.required_columns, *products)
+
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the signed deterministic primary into one draft plan.
 
@@ -1397,29 +1427,27 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
                 and generic_parent in step.inputs
             )
+            functional_form = (
+                step.functional_form_spec is not None or step.method in RCS_LINEAR_SENSITIVITY_METHODS
+            )
+            if inherited_binary_sensitivity and not functional_form:
+                raise CurrentCaseScientificAuthorityError(
+                    "landmark spline cannot reuse its nonlinear exposure result for another sensitivity method"
+                )
             signed_robustness_projection = (
                 step.planned_analysis_role == "sensitivity"
                 and step.robustness_replay_spec is not None
             )
-            signed_result_projection = (
-                inherited_binary_sensitivity or signed_robustness_projection
-            )
+            signed_result_projection = functional_form or signed_robustness_projection
             inputs = [
                 replacement if value == generic_parent else value
                 for value in step.inputs
             ]
             if signed_result_projection:
-                # The signed primary already performed the nested spline and
-                # linear fits. These children project its functional-form or
-                # robustness results, so raw cohort columns would falsely
-                # imply a second model fit and trigger unrelated obligations.
-                inputs = [replacement, self.linear_sensitivity_product]
-            if (
-                step.planned_analysis_role == "sensitivity"
-                and replacement in inputs
-                and self.linear_sensitivity_product not in inputs
-            ):
-                inputs.append(self.linear_sensitivity_product)
+                # Only an exact exposure check may project the primary fits.
+                # A covariate-form check retains the same cohort and complete
+                # model inputs so its own estimator must actually refit.
+                inputs = list(self.functional_form_inputs(step, cohort_input=cohort_input)) if functional_form else [replacement, self.linear_sensitivity_product]
             contracts = [
                 (
                     item.model_copy(update={"input_key": replacement})
@@ -1429,22 +1457,16 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 for item in step.input_consumption_contracts
             ]
             if signed_result_projection:
-                contracts = []
-            if step.planned_analysis_role == "sensitivity" and replacement in inputs:
-                contracted = {item.input_key for item in contracts}
-                contracts.extend(
+                contracts = [
                     ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
-                    for input_key in (
-                        replacement,
-                        self.linear_sensitivity_product,
-                    )
-                    if input_key not in contracted
-                )
+                    for input_key in inputs if ":" in input_key
+                ]
             steps.append(
                 step.model_copy(
                     update={
                         "inputs": list(dict.fromkeys(inputs)),
                         "input_consumption_contracts": contracts,
+                        "icu_rule_refs": list(dict.fromkeys([*step.icu_rule_refs, self.plan_rule_ref])) if functional_form else step.icu_rule_refs,
                         # The binary-sensitivity capability is closed over the
                         # generic adjusted-association parent.  Rebinding that
                         # edge to the signed landmark products invalidates the
@@ -1499,7 +1521,23 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         return step
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
-        self.governed_step(plan)
+        primary = self.governed_step(plan)
+        for step in plan.steps:
+            if step.functional_form_spec is None and step.method not in RCS_LINEAR_SENSITIVITY_METHODS:
+                if (
+                    step.planned_analysis_role == "sensitivity" and step.scientific_capability is None
+                    and step.robustness_replay_spec is None
+                    and set(primary.expected_outputs) & set(step.inputs)
+                ):
+                    raise CurrentCaseScientificAuthorityError("signed sensitivity has no target-bound execution owner")
+                continue
+            expected = self.functional_form_inputs(step, cohort_input=sole_typed_cohort_input(primary))
+            contracts = {item.input_key: item.mode for item in step.input_consumption_contracts}
+            if tuple(step.inputs) != expected or step.scientific_capability is not None or any(
+                contracts.get(key) != "all_rows" for key in expected if ":" in key
+            ):
+                raise CurrentCaseScientificAuthorityError("landmark functional-form inputs drifted from their target contract")
+            self._require_rule_ref(step)
 
 
 class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):

@@ -3066,7 +3066,7 @@ class ProgressivePlannerAgent:
                 "array, or prose paragraph in custom_method. The step object "
                 "must contain only step_id, planned_analysis_role, module_id, "
                 "objective, depends_on, raw_inputs, product_inputs, outputs, "
-                "scientific_action_id, custom_method, sensitivity_spec_ids, "
+                "scientific_action_id, custom_method, sensitivity_spec_ids, functional_form_spec, "
                 "and literature_bindings. Do not emit Table 1, association, "
                 "contrast, denominator, missingness-policy, or confidence "
                 "fields, even as null or empty values."
@@ -3081,7 +3081,10 @@ class ProgressivePlannerAgent:
                     "restricted_cubic_spline_sensitivity. This exact typed "
                     "method is required for executable nonlinear-versus-linear "
                     "comparison authority; do not use a generic label such as "
-                    "continuous_functional_form_check."
+                    "continuous_functional_form_check. Set functional_form_spec "
+                    "to the exact continuous model term being checked and the "
+                    "prespecified three knot quantiles. A covariate check is not "
+                    "an exposure check; never derive the target from a step id."
                 )
             blocks.append(
                 "Custom-analysis output contract: a generic custom result uses "

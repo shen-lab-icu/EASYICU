@@ -491,11 +491,8 @@ def _build_registry() -> StepExecutorRegistry:
             ),
             analysis_kind=LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
             selection_reason="signed_landmark_spline_functional_form_preflight",
-            progress_message="Using signed landmark spline functional-form projection",
-            consumed_input_keys=lambda c: (
-                c.current_case_scientific_runtime_authority.downstream_parent_product,
-                c.current_case_scientific_runtime_authority.linear_sensitivity_product,
-            ),
+            progress_message="Using target-bound landmark spline functional-form comparison",
+            consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
         ),
         StepExecutor(
             key=SOURCE_FEASIBILITY_ANALYSIS_KIND,

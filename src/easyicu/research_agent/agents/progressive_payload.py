@@ -350,6 +350,13 @@ def _bind_step_module_shape(
             "progressive skeleton step definition is unavailable"
         )
     properties = step["properties"]
+    form = definitions.get("FunctionalFormSpec")
+    if isinstance(form, dict):
+        # This closed comparison's version and method are host constants, not
+        # model choices. Pydantic fills their identical declared defaults.
+        for field in ("schema_version", "comparison"):
+            form["properties"].pop(field, None)
+        form["required"] = ["target_column", "knot_quantiles"]
     output_intent = definitions.get("ProgressiveOutputIntent")
     if not isinstance(output_intent, dict) or not isinstance(
         output_intent.get("properties"), dict
@@ -450,6 +457,7 @@ def _bind_step_module_shape(
         else _string_enum(standard_ids)
     )
     standard["properties"]["custom_method"] = {"type": "null"}
+    standard["properties"]["functional_form_spec"] = {"type": "null"}
 
     custom_fields = (
         "step_id",
@@ -461,6 +469,7 @@ def _bind_step_module_shape(
         "outputs",
         "scientific_action_id",
         "sensitivity_spec_ids",
+        "functional_form_spec",
         "literature_bindings",
     )
     custom_properties = {
