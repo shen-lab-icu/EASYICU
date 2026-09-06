@@ -367,6 +367,7 @@ def run_primary_phenotyping(
     run_dir: Path,
     step_id: str,
 ) -> dict[str, Any]:
+    source_digest = sha256_file(Path(source_cohort))
     features = _feature_roster(Path(run_dir), declared_columns, frame, feature_columns)
     imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(frame.loc[:, features])
     matrix = StandardScaler().fit_transform(imputed)
@@ -380,6 +381,10 @@ def run_primary_phenotyping(
     if identity not in frame or frame[identity].isna().any() or frame[identity].astype(str).duplicated().any():
         raise RuntimeError("phenotyping requires a complete unique typed row identity")
     assignments = pd.DataFrame({"unit_id": frame[identity].astype(str), "cluster": labels.astype(int)})
+    # Keep the source coordinate inside the digest-bound assignment product.
+    # A downstream raw-data join must prove more than equal row counts.
+    assignments["source_cohort_sha256"] = source_digest
+    assignments["source_identity_column"] = identity
     for index, feature in enumerate(features):
         assignments[f"{_FEATURE_PREFIX}{feature}"] = matrix[:, index]
     profile_rows = []
@@ -400,6 +405,8 @@ def run_primary_phenotyping(
                 }
             )
     profiles = pd.DataFrame(profile_rows)
+    if sha256_file(Path(source_cohort)) != source_digest:
+        raise RuntimeError("phenotyping_source_cohort_changed")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     profiles_path = out_dir / "phenotype_profiles.csv"
@@ -417,6 +424,8 @@ def run_primary_phenotyping(
     selected_silhouette = next(
         row["silhouette"] for row in scores if row["selected"]
     )
+    if sha256_file(Path(source_cohort)) != source_digest:
+        raise RuntimeError("phenotyping_source_cohort_changed")
     receipt = PhenotypingRuntimeReceipt(
         schema_version="easyicu.cross_sectional_phenotyping_runtime_receipt/1",
         analysis_kind=PHENOTYPING_ANALYSIS_KIND,
@@ -436,7 +445,7 @@ def run_primary_phenotyping(
             str(int(cluster)): int(count)
             for cluster, count in assignments["cluster"].value_counts().items()
         },
-        source_cohort_sha256=sha256_file(Path(source_cohort)),
+        source_cohort_sha256=source_digest,
         phenotype_profiles_sha256=sha256_file(profiles_path),
         phenotype_assignments_sha256=sha256_file(assignments_path),
         complete_case_sensitivities=complete_case_receipts,
@@ -469,7 +478,7 @@ def run_primary_phenotyping(
         "robustness_rows": robustness_rows,
         "feature_roster": list(features),
         "source_cohort": str(Path(source_cohort).resolve()),
-        "source_cohort_sha256": sha256_file(Path(source_cohort)),
+        "source_cohort_sha256": source_digest,
         "source_inputs": [typed_cohort_input],
         "input_bindings": [{"input_key": typed_cohort_input, "loaded": True}],
         "output_files": {

@@ -116,8 +116,8 @@ def test_permuting_profile_variables_and_outcomes_cannot_change_clusters(tmp_pat
     second = _run(tmp_path / "second", changed)
     assert first["feature_roster"] == second["feature_roster"] == ["marker_a", "marker_b"]
     pd.testing.assert_frame_equal(
-        pd.read_csv(tmp_path / "first/results/phenotype_assignments.csv"),
-        pd.read_csv(tmp_path / "second/results/phenotype_assignments.csv"),
+        pd.read_csv(tmp_path / "first/results/phenotype_assignments.csv").drop(columns="source_cohort_sha256"),
+        pd.read_csv(tmp_path / "second/results/phenotype_assignments.csv").drop(columns="source_cohort_sha256"),
     )
     assert first["cluster_selection"] == second["cluster_selection"]
     assert first["source_cohort_sha256"] != second["source_cohort_sha256"]
@@ -155,4 +155,22 @@ def test_duplicate_row_identity_cannot_create_ambiguous_assignments(tmp_path):
     frame.loc[1, "stay_id"] = frame.loc[0, "stay_id"]
     with pytest.raises(RuntimeError, match="complete unique typed row identity"):
         _run(tmp_path / "attempt", frame)
+    assert not (tmp_path / "attempt/results/phenotype_assignments.csv").exists()
+
+
+def test_source_change_during_fit_cannot_be_relabelled_as_the_assignment_source(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution.runners import cross_sectional_phenotyping_executor as owner
+
+    candidate_scores = owner._candidate_scores
+
+    def changed_source(matrix):
+        result = candidate_scores(matrix)
+        source = tmp_path / "attempt/cohort.parquet"
+        with source.open("ab") as handle:
+            handle.write(b"changed source")
+        return result
+
+    monkeypatch.setattr(owner, "_candidate_scores", changed_source)
+    with pytest.raises(RuntimeError, match="phenotyping_source_cohort_changed"):
+        _run(tmp_path / "attempt", _frame())
     assert not (tmp_path / "attempt/results/phenotype_assignments.csv").exists()

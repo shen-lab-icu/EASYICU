@@ -52,9 +52,10 @@ from ..schema import (
     RobustnessReplaySpec,
     TableOneSpec,
     TableOneVariableSpec,
+    PhenotypeComparisonSpec,
 )
 from ..research_context.typed import declared_domain_for_variable
-from ..contracts.table_one_semantics import validate_table_one_column_roles
+from ..contracts.table_one_semantics import table_one_variable_kind as _table_one_variable_kind, validate_table_one_column_roles
 from .analysis_types import (
     canonical_analysis_family,
     get_analysis_type,
@@ -997,20 +998,6 @@ def _eligibility_criteria(
     ]
 
 
-def _table_one_variable_kind(variable: Any, levels: Sequence[Any]) -> str:
-    if variable.is_ordinal:
-        return "ordinal"
-    dtype = str(variable.dtype or "").lower()
-    declared, _basis = declared_domain_for_variable(variable)
-    if levels and (
-        bool(declared)
-        or len(levels) == 2
-        or dtype.startswith(("object", "str", "string", "category", "bool"))
-    ):
-        return "categorical"
-    return "continuous"
-
-
 def _compile_table_one(
     *,
     context: ResearchContext,
@@ -1660,6 +1647,8 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    if step.scientific_action_id == "phenotyping.outcome_by_cluster":
+        raw_names.append(_identity_column(context=context, step=step, step_index=step_index))
     if step.module_id == "absolute_risk_context":
         raw_names.extend(
             value for value in (step.primary_exposure, step.outcome) if value
@@ -2010,6 +1999,43 @@ def _compile_literature(
     return keys, compiled
 
 
+def _compile_phenotype_comparison_spec(
+    context: ResearchContext, step: ProgressiveSkeletonStep, step_index: int,
+) -> PhenotypeComparisonSpec | None:
+    if step.scientific_action_id != "phenotyping.outcome_by_cluster":
+        return None
+    try:
+        if not step.phenotyping_comparison_variables:
+            raise ValueError("phenotype_comparison_roster_missing")
+        variables = {v.name: v for v in context.variables}
+        names = [v.name for v in step.phenotyping_comparison_variables]
+        validate_table_one_column_roles(names, context)
+        declared_outcomes = set(context.cohort.outcome_columns) | {context.target_outcome}
+        outcomes = [name for name in names if name in declared_outcomes]
+        if not outcomes:
+            raise ValueError("phenotype_comparison_outcome_missing")
+        rows = []
+        for item in step.phenotyping_comparison_variables:
+            levels = closed_planning_levels_for(name=item.name, variables=variables)
+            kind = _table_one_variable_kind(variables[item.name], levels)
+            if (kind == "categorical" and item.summary != "count_percent") or (kind == "continuous" and item.summary == "count_percent"):
+                raise ValueError("phenotype_comparison_summary_incompatible")
+            rows.append(TableOneVariableSpec(
+                name=item.name, variable_kind=kind, summary=item.summary,
+                test="none_descriptive_smd_only", levels=list(levels) if kind != "continuous" else [],
+            ))
+        return PhenotypeComparisonSpec(
+            identity_column=_identity_column(context=context, step=step, step_index=step_index),
+            variables=rows, outcome_columns=outcomes,
+        )
+    except (ValueError, KeyError) as exc:
+        reason = str(exc).partition(":")[0]
+        if not reason.startswith("phenotype_comparison_"):
+            reason = "phenotype_comparison_spec_invalid"
+        raise _fail("progressive_" + reason, str(exc), step=step, step_index=step_index,
+                    path="phenotyping_comparison_variables") from exc
+
+
 def _compile_one_step(
     *,
     context: ResearchContext,
@@ -2162,6 +2188,7 @@ def _compile_one_step(
         "sensitivity_spec_ids": sensitivity_spec_ids,
         "functional_form_spec": step.functional_form_spec,
         "phenotyping_feature_columns": step.phenotyping_feature_columns,
+        "phenotype_comparison_spec": _compile_phenotype_comparison_spec(context, step, step_index),
         "literature_citation_keys": citation_keys,
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,

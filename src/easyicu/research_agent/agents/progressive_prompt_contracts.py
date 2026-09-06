@@ -153,7 +153,10 @@ def outline_shape_contract(
         "literature_citation_keys must always be JSON arrays. Every primary, "
         "secondary, or sensitivity step must bind at least one sealed method "
         "key; only auxiliary steps may use an empty array. "
-        "scientific_action_id must be a retrieved action id or null."
+        "scientific_action_id must be a retrieved action id or null. "
+        "If a phenotyping.cluster_solution question requests clinical outcome comparisons, plan one separate secondary "
+        "phenotyping.outcome_by_cluster step, directly dependent on the cluster solution. Its variable_names must include "
+        "all requested outcomes and the selected clinical descriptions; inputs to fitting, profiles or figures do not substitute for that analysis."
     )
 
 
@@ -316,6 +319,7 @@ def step_materialization_shape_contract(
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
         "phenotyping_feature_columns": None,
+        "phenotyping_comparison_variables": None,
         "literature_bindings": [],
     }
     template = {
@@ -325,9 +329,9 @@ def step_materialization_shape_contract(
         "step": step,
     }
     return (
-        "Exact ProgressiveStepMaterialization JSON shape (preserve this root wrapper and every step key; add no other keys):\n"
+        "ProgressiveStepMaterialization shape template (preserve this root wrapper; emit only the step keys permitted by the current structured schema):\n"
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
-        + "\nCopy schema_version, outline_step_sha256, foundation=null, and the six outline-owned step coordinates exactly. Replace only the module-specific executable null/empty defaults required by the current method card. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
+        + "\nCopy schema_version, outline_step_sha256, foundation=null, and the six outline-owned step coordinates exactly. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
         "Nested item shapes, when used: product_inputs items are exactly "
         '{"producer_step_id":"<preceding step id>","product_id":"<kind:product>"}; outputs items are exactly '
         '{"product_id":"<kind:product>","semantic_role":"<allowed role>"}; table_one_variables items are exactly '
@@ -341,6 +345,9 @@ def step_materialization_shape_contract(
         "choose and declare the three ordered quantiles before execution. This contract is null for other analyses, including timing checks. "
         "For phenotyping.cluster_solution set phenotyping_feature_columns to the exact fit roster from raw_inputs; "
         "profile-only variables, identifiers and outcomes must not enter that roster. Other actions use null. "
+        "When outcomes are requested after phenotyping.cluster_solution, include a separate secondary phenotyping.outcome_by_cluster step. "
+        "Set phenotyping_comparison_variables using the same name/summary item shape as table_one_variables, including the requested outcomes and selected clinical descriptions. "
+        "This action joins the exact source cohort to frozen assignments, never refits, reports observed-variable denominators and missing counts, and performs no inferential tests. Other actions use null. "
         "literature_bindings items are exactly "
         '{"citation_key":"<sealed key>","design_elements":["<allowed element>"],"application":"<8-1200 characters>","divergence":null}.'
     )

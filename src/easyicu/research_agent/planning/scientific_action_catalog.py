@@ -87,6 +87,16 @@ class ScientificActionRuntimeContract:
 
 
 _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
+    "phenotyping.outcome_by_cluster": ScientificActionRuntimeContract(
+        outputs=(("table:outcome_by_cluster", "custom"),),
+        required_product_inputs=("artifact:analysis_cohort", "table:phenotype_assignments"),
+        article_roles=("phenotype_profile",),
+        standard_executor="phenotype_comparison",
+        display_name="Clinical and outcome descriptions by frozen cluster",
+        purpose="Describe the explicitly selected clinical/outcome roster on exactly the primary clustering cohort, with observed denominators and missing counts; no refit, inferential tests or causal claim.",
+        execution_parameters=(("grouping", "frozen_primary_assignments"), ("join", "exact_unique_source_identity"),
+                              ("missingness", "observed_per_variable_with_missing_counts"), ("inference", "none_data_derived_groups")),
+    ),
     "phenotyping.cluster_solution": ScientificActionRuntimeContract(
         outputs=(
             ("table:phenotype_profiles", "custom"),
@@ -691,6 +701,10 @@ def validate_plan_scientific_action_selections(
         )
         if action_id == PHENOTYPING_PRIMARY_ACTION:
             require_phenotyping_features(getattr(step, "phenotyping_feature_columns", None), inputs=step.inputs)
+        if action_id == "phenotyping.outcome_by_cluster":
+            from ..contracts.phenotype_comparison import validate_comparison_step
+
+            validate_comparison_step(step)
         method_key = str(getattr(step, "method", "") or "").strip()
         exact_method_actions = tuple(
             action.action_id
