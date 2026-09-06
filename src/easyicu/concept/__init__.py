@@ -2060,6 +2060,14 @@ class ConceptResolver:
         sources = definition.for_data_source(config)
         if availability_context is not None:
             availability_context.set_sources(concept_name, sources)
+        from ..hospital_mortality import MIMIC_HOSPITAL_STATUS_BINDING
+
+        if len(sources) == 1 and sources[0].params.get("clinical_binding") == MIMIC_HOSPITAL_STATUS_BINDING:
+            from .hospital_mortality import load_mimic_hospital_mortality
+
+            return load_mimic_hospital_mortality(
+                data_source, concept_name=concept_name, patient_ids=patient_ids, verbose=verbose
+            )
         if not sources:
             # 🔧 FIX: 当数据源未配置时，返回空表而不是报错
             # 这样用户可以继续提取其他概念，并在结果中看到哪些概念没有数据
