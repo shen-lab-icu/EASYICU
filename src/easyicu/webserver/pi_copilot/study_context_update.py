@@ -21,7 +21,7 @@ from typing import (
     Set,
 )
 
-from easyicu.webserver import agent_pipeline_runs, dataio, sources, study_contexts
+from easyicu.webserver import agent_pipeline_runs, dataio, primary_cohort, sources, study_contexts
 
 from .contracts import (
     AuthorityBinding,
@@ -716,14 +716,16 @@ def update_study_context(
         params, current or {}, context.user_message
     )
 
-    def _record_unconfirmed_omission(slot: str, field: str) -> None:
+    def _record_unconfirmed_omission(
+        slot: str, field: str, *, code: Optional[str] = None,
+    ) -> None:
         """Make one silently dropped slot visible in the typed receipt."""
 
         if field in omitted_unconfirmed_fields:
             return
         omitted_unconfirmed_fields.append(field)
         unconfirmed_omissions.append(
-            {"field": field, "code": _GATED_SLOT_OMISSION_CODES[slot]}
+            {"field": field, "code": code or _GATED_SLOT_OMISSION_CODES[slot]}
         )
 
     if current:
@@ -795,6 +797,36 @@ def update_study_context(
         normalized_cohort["preset"] = normalized_preset
         patch["cohort"] = normalized_cohort
         current_preset = str(((current or {}).get("cohort") or {}).get("preset") or "")
+        if (
+            normalized_preset in primary_cohort.CONCEPT_DERIVED_PRESETS
+            and normalized_preset != current_preset
+        ):
+            # A disease/exposure mentioned in a question is not authority to
+            # remove its negative comparison group. Population restrictions
+            # belong to the Planner's reviewed typed cohort, not a conversational
+            # legacy preset. Keep the question and any previously bound cohort.
+            code = "study_cohort_population_requires_plan"
+            if _has_other_confirmed_change(
+                params,
+                slot_machinery={"cohort", "execution_concepts", "modules", "confirmations"},
+                unconfirmed_gated=unconfirmed_gated,
+            ):
+                _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
+                _record_unconfirmed_omission("cohort", "cohort.preset", code=code)
+            else:
+                return _result(
+                    context,
+                    status="blocked",
+                    code=code,
+                    summary=(
+                        "A phenotype-restricted population must be proposed in "
+                        "the complete candidate plan for review. Preserve the "
+                        "research question and current cohort; continue candidate "
+                        "planning without a pre-plan confirmation questionnaire."
+                    ),
+                    owner="easyicu.webserver.study_contexts",
+                    details={"field": "cohort.preset", "proposed": normalized_preset},
+                )
         if (
             normalized_preset == "adult_all"
             and current_preset != "adult_all"
