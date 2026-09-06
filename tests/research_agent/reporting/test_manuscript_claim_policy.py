@@ -52,6 +52,72 @@ def test_policy_accepts_only_a_complete_known_claim_token() -> None:
     assert result.unsupported_scientific_claim_sentences == result.filtered_sentences
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    ["**Results:** ", "**Conclusions:** ", "> - **Results:** ", "**结果：** "],
+)
+def test_structured_abstract_label_preserves_known_claim_authority(prefix) -> None:
+    claim = _claim()
+    scaffold = prefix + claim.placeholder
+
+    filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=_resolver)
+    expanded = expand_scientific_claim_tokens(
+        filtered.scaffold,
+        resolve_claim=_resolver,
+        current_evidence_ids={claim.evidence_id},
+    )
+
+    assert filtered.scaffold == scaffold + "\n"
+    assert filtered.filtered_sentences == ()
+    assert expanded.scaffold.startswith(prefix + claim.render_reader_text())
+    assert f"{{evidence:{claim.evidence_id}}}" in expanded.scaffold
+    assert expanded.missing_claim_refs == ()
+    assert expanded.malformed_sentences == ()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{claim:unknown.adjusted_association}",
+        "Higher mortality {claim:04_association.adjusted_association}",
+        "{claim:04_association.adjusted_association} and a causal benefit.",
+        "{{claim:04_association.adjusted_association}}",
+        "{claim:04_association.adjusted_association} {evidence:unrelated}",
+    ],
+)
+def test_structured_abstract_label_does_not_authorize_unsupported_claims(body) -> None:
+    filtered = filter_evidence_bound_scaffold(
+        "**Results:** " + body,
+        resolve_claim=_resolver,
+    )
+
+    assert filtered.scaffold == "\n"
+    assert filtered.unsupported_scientific_claim_sentences
+
+
+def test_structured_abstract_label_still_checks_current_evidence_membership() -> None:
+    claim = _claim()
+    expanded = expand_scientific_claim_tokens(
+        "**Results:** " + claim.placeholder,
+        resolve_claim=_resolver,
+        current_evidence_ids=set(),
+    )
+
+    assert expanded.missing_claim_refs == (claim.claim_ref,)
+    assert claim.render_reader_text() not in expanded.scaffold
+
+
+def test_assertive_bold_label_cannot_hide_an_extra_scientific_claim() -> None:
+    scaffold = "**Higher mortality:** " + _claim().placeholder
+
+    filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=_resolver)
+    expanded = expand_scientific_claim_tokens(scaffold, resolve_claim=_resolver)
+
+    assert filtered.scaffold == "\n"
+    assert filtered.unsupported_scientific_claim_sentences == (scaffold,)
+    assert expanded.malformed_sentences == (scaffold,)
+
+
 def test_policy_collapses_exact_host_prose_followed_by_duplicate_claim_token() -> None:
     claim = _claim()
     sentence = (

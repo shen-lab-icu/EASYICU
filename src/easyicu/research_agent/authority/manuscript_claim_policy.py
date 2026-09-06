@@ -136,6 +136,10 @@ _HEADING_RESULT_VERB_RE = re.compile(
 )
 _RESULTS_HEADING_RE = re.compile(r"^##\s+results\s*$", re.I | re.MULTILINE)
 _NEXT_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
+_STRUCTURED_ABSTRACT_LABEL_RE = re.compile(
+    r"\*\*(?:Background|Methods|Results|Conclusions|背景|方法|结果|结论)[:：]\*\*\s*",
+    re.I,
+)
 
 
 def _looks_manuscript_metadata_sentence(sentence: str) -> bool:
@@ -282,6 +286,11 @@ def _split_markdown_structure_prefix(line: str) -> tuple[str, str]:
     cursor = len(line) - len(line.lstrip())
     marker_re = re.compile(r"(?:>\s*|[-+*]\s+|\d+[.)]\s+)")
     while match := marker_re.match(line, cursor):
+        cursor = match.end()
+    # The manuscript owner requires these neutral abstract labels. Preserve
+    # them as structure in both filtering and expansion; arbitrary bold text
+    # remains prose and cannot wrap a claim to smuggle in another assertion.
+    if match := _STRUCTURED_ABSTRACT_LABEL_RE.match(line, cursor):
         cursor = match.end()
     return line[:cursor], line[cursor:]
 
