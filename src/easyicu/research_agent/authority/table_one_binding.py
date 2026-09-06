@@ -19,6 +19,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_json as _canonical_json
+from ..contracts.table_one_semantics import validate_table_one_semantic_roles
 from ..methods.table_one import table_one_spec_sha256
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
 from .declared_levels import (
@@ -82,6 +83,7 @@ def bind_table_one_execution_spec(
     if planner_spec is None:
         step._table_one_execution_binding = None
         return None
+    validate_table_one_semantic_roles(planner_spec, context)
     variables = {variable.name: variable for variable in context.variables}
     payload = planner_spec.model_dump(mode="python")
     group_levels, observed_groups = _resolve_levels(

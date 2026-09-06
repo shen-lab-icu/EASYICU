@@ -1508,7 +1508,11 @@ class ProgressivePlannerAgent:
             "outcome follow-up. Bind descriptive denominators and captions to "
             "that window; never relabel it whole-stay prevalence. A post-zero "
             "association additionally needs an executable temporal design; "
-            "mentioning landmark in prose does not implement one.",
+            "mentioning landmark in prose does not implement one. "
+            "Identity/index fields are lineage coordinates, not clinical "
+            "Table 1 rows or strata. A baseline-context step should select "
+            "available clinically interpretable descriptors; exposure/outcome "
+            "columns alone do not describe baseline population composition.",
             (
                 "Closed-domain module rule:\nInclude a table_one outline step "
                 "only when the grouping variable represents the study's primary "
@@ -2884,7 +2888,8 @@ class ProgressivePlannerAgent:
                 "independent_inference or descriptive_smd_only; provide at "
                 "least one table_one_variables item using the exact nested "
                 "shape above; include the group and summarized variables in "
-                "raw_inputs. Keep outputs=[] because the host owns the canonical "
+                "raw_inputs. Never summarize or group by owner-declared "
+                "identity/index coordinates. Keep outputs=[] because the host owns the canonical "
                 "Table 1 product."
             )
         if outline_step.module_id == "absolute_risk_context":
