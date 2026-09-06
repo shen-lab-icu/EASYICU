@@ -104,6 +104,13 @@ class CitationRecord(BaseModel):
     key: str = Field(..., description="Stable citation key, e.g. 'vincent_sofa_1996'.")
     title: str
     year: str
+    authors: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Author display names retained in source order from bibliographic "
+            "metadata. Missing names must not be inferred from the citation key."
+        ),
+    )
     venue: Optional[str] = None
     relevance: Optional[str] = Field(
         default=None,
@@ -2139,6 +2146,19 @@ def _surname_from_authors(authors: Any) -> str:
     return ""
 
 
+def _source_author_names(authors: Any) -> List[str]:
+    if not isinstance(authors, list):
+        return []
+    return [
+        item["name"].strip()
+        for item in authors
+        if isinstance(item, dict)
+        and item.get("authtype") in (None, "Author", "CollectiveName")
+        and isinstance(item.get("name"), str)
+        and item["name"].strip()
+    ]
+
+
 def _doi_from_articleids(articleids: Any) -> Optional[str]:
     if not isinstance(articleids, list):
         return None
@@ -2236,6 +2256,7 @@ def parse_pubmed_esummary(payload: Dict[str, Any]) -> List[CitationRecord]:
                 key=key,
                 title=title or f"PMID {uid}",
                 year=year,
+                authors=_source_author_names(rec.get("authors")),
                 venue=venue,
                 doi=doi,
                 pmid=str(uid),

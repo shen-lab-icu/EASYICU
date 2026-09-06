@@ -116,6 +116,62 @@ def test_render_bibtex_empty(ra):
     assert render_bibtex(LiteratureBundle(research_question="x", citations=[])) == ""
 
 
+def test_bibliography_never_derives_authors_from_citation_keys(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.bibtex import render_bibtex
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[
+            CitationRecord(key="record_2015", title="Reporting guidance", year="2015"),
+            CitationRecord(key="surname_2020", title="Clinical study", year="2020"),
+        ],
+    )
+    rendered = render_bibtex(bundle)
+
+    assert not re.search(r"\bauthor\s*=", rendered)
+    assert "et al." not in rendered
+
+
+def test_bibliography_preserves_source_author_names_without_reparsing_them(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.bibtex import (
+        render_bibtex,
+        render_thebibliography_block,
+    )
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[CitationRecord(
+            key="unrelated_stable_key", title="A study", year="2020",
+            authors=["de Silva AB", "Research and Care Group"],
+        )],
+    )
+
+    assert "author  = {{de Silva AB} and {Research and Care Group}}" in render_bibtex(bundle)
+    inline = render_thebibliography_block(bundle)
+    assert "de Silva AB; Research and Care Group. A study" in inline
+    assert "Unrelated" not in inline
+
+
+def test_bibliography_escapes_source_author_names(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.bibtex import (
+        render_bibtex,
+        render_thebibliography_block,
+    )
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[CitationRecord(
+            key="source", title="Study", year="2020", authors=["Research & Care"],
+        )],
+    )
+
+    assert r"author  = {{Research \& Care}}" in render_bibtex(bundle)
+    assert r"Research \& Care. Study" in render_thebibliography_block(bundle)
+
+
 def test_bibliography_omits_explicitly_excluded_candidates(ra):
     from easyicu.research_agent.literature import (
         CitationRecord,
