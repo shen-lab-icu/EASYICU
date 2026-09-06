@@ -10,6 +10,7 @@ from easyicu.concept.metadata_projection import (
     project_concept_column_metadata,
 )
 from easyicu.concept.schema import ConceptDefinition
+from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
 from easyicu.research_agent.research_context.outbound import outbound_safe_context_payload
 from easyicu.research_agent.schema import CohortDescriptor, ConceptDescriptor, ResearchContext
 
@@ -92,3 +93,23 @@ def test_unrecognized_representation_text_cannot_leave_the_host():
     projected = outbound_safe_context_payload(context)["variables"][0]
     assert "materialized_representation" not in projected
     assert "private free-form value" not in str(projected)
+
+
+def test_outline_cards_share_safe_representation_authority_with_step_prompts():
+    context = ResearchContext(
+        research_question="Describe the cohort.",
+        cohort=CohortDescriptor(cohort_name="synthetic", database="synthetic", n_stays=0),
+        variables=[ConceptDescriptor(
+            name="opaque_coordinate", role="meta", dtype="float64",
+            source_concept="burden_score", description="private free-form label",
+            unit_normalization="window_nonnull_count",
+            derived_from_concepts=["not_an_authorized_concept"],
+            observed_domain={"levels": [123.456, 789.123], "n_unique": 2},
+        )],
+    )
+    card = ProgressivePlannerAgent._retrieved_data_cards(context, ("opaque_coordinate",))[0]
+    assert card["role"] == "meta"
+    assert card["materialized_representation"] == "window_nonnull_count"
+    assert card["table_one_restriction"] == "measurement_audit_only_unless_question_anchor"
+    for private in ("burden_score", "private free-form label", "not_an_authorized_concept", "123.456", "789.123"):
+        assert private not in str(card)

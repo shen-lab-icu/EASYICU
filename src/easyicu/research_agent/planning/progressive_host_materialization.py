@@ -17,7 +17,10 @@ from ..contracts.ordered_stratified import (
     PARENT_PRODUCT as ORDERED_STRATIFIED_PARENT_PRODUCT,
     SCIENTIFIC_ACTION_ID as ORDERED_STRATIFIED_ACTION_ID,
 )
-from ..contracts.table_one_semantics import table_one_identity_columns
+from ..contracts.table_one_semantics import (
+    table_one_identity_columns,
+    table_one_measurement_columns,
+)
 from ..schema import ResearchContext
 from .method_literature import METHOD_CARDS
 from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
@@ -420,6 +423,10 @@ def host_materialize_progressive_step(
     elif module == "table_one":
         exposure = context.primary_exposure
         identity_columns = table_one_identity_columns(context)
+        if set(raw) & table_one_measurement_columns(context):
+            # The host cannot replace a scientific descriptor or quietly drop
+            # it. Let the Planner repair its selection at the typed boundary.
+            return None
         if not exposure or exposure not in raw or exposure in identity_columns:
             return None
         rows = [

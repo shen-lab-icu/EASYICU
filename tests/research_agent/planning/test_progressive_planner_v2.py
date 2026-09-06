@@ -4188,7 +4188,6 @@ def test_retrieved_data_cards_use_concept_declared_domain_without_claiming_obser
             "role": "demographic",
             "dtype": "object",
             "source_concept": "sex",
-            "derived_from_concepts": [],
             "closed_domain_level_count": 2,
             "supports_closed_level_contrast": True,
             "closed_domain_basis": "declared_concept_dictionary_levels",
