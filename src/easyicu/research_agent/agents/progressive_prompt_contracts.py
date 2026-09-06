@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Mapping, Sequence
 
 from ..planning.progressive_contract import (
@@ -12,19 +13,46 @@ from ..planning.progressive_contract import (
 )
 
 
-_COUNTS_ONLY_INFERENCE_TOKENS = (
-    "confidence interval",
-    "confidence intervals",
-    "uncertainty",
-    "standard error",
-    "p-value",
-    "p value",
-    "置信区间",
-    "不确定性",
-    "标准误",
-    "p值",
-    "p 值",
+# This is a review-copy consistency check, not execution authority. Only mask
+# an explicit, locally scoped refusal of a known output. A negative elsewhere
+# in the sentence must not license that output (or a later affirmative clause).
+_INFERENCE_TERM = (
+    r"(?:confidence intervals?|uncertainty|standard errors?|p[- ]?values?"
+    r"|置信区间|不确定性|标准误|p\s*值)"
 )
+_INFERENCE_OUTPUT = re.compile(_INFERENCE_TERM)
+_OUTPUT_MODIFIER = r"(?:(?:any|inferential|sampling)\s+|\d{1,2}%\s*|推断性|抽样)?"
+_INFERENCE_LIST = (
+    _OUTPUT_MODIFIER + _INFERENCE_TERM
+    + r"(?:\s*(?:,\s*(?:(?:and|or)\s+)?|(?:and|or)\s+|、|，|和|及|或)\s*"
+    + _OUTPUT_MODIFIER + _INFERENCE_TERM + r")*"
+)
+_EXPLICIT_OUTPUT_DISCLAIMER = re.compile(
+    r"(?:\b(?:no|without)\s+"
+    r"|\b(?:do|does|will|shall|must)\s+not\s+"
+    r"(?:report|provide|calculate|estimate|show|include)\s+"
+    r"|(?:不(?:应|会)?|未|无需|不需要|不能|无)"
+    r"(?:报告|提供|计算|估计|展示|包含)?\s*)"
+    + _INFERENCE_LIST,
+)
+_NEGATED_DISCLAIMER_PREFIX = re.compile(
+    r"(?:\bnot|\bnever|\bcannot|\bcan't|并非|不是|不能|未能|无法)\s*$",
+)
+_INVERTED_DISCLAIMER_SUFFIX = re.compile(
+    r"\s+(?:is|are|was|were|will be|can be|should be|must be)\s+"
+    r"(?:not\b|omitted\b|excluded\b|withheld\b|suppressed\b|unavailable\b|missing\b)",
+)
+
+
+def _without_explicit_output_disclaimers(text: str) -> str:
+    def retain_or_mask(match: re.Match[str]) -> str:
+        if _NEGATED_DISCLAIMER_PREFIX.search(text[:match.start()]):
+            return match.group()
+        if _INVERTED_DISCLAIMER_SUFFIX.match(text[match.end():]):
+            return match.group()
+        return " " * len(match.group())
+
+    return _EXPLICIT_OUTPUT_DISCLAIMER.sub(retain_or_mask, text)
 
 
 def outline_shape_contract(
@@ -258,7 +286,8 @@ def selected_counts_only_inference_coordinate(
     )
     for field, value in fields:
         normalized = " ".join(str(value or "").casefold().split())
-        if any(token in normalized for token in _COUNTS_ONLY_INFERENCE_TOKENS):
+        promised_outputs = _without_explicit_output_disclaimers(normalized)
+        if _INFERENCE_OUTPUT.search(promised_outputs):
             return field
     return None
 

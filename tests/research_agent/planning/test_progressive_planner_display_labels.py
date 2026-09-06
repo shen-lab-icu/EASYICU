@@ -52,6 +52,9 @@ def test_outline_binds_sealed_method_source_to_applicable_scientific_module() ->
 
 def test_counts_only_outline_rejects_inferential_plan_review_copy() -> None:
     payload = _outline_payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    for candidate in payload["design_selection"]["candidates"]:
+        candidate["analysis_type"] = "descriptive_epidemiology"
     payload["design_selection"]["candidates"][0]["primary_method"] = (
         "按 stay-level 分母计算比例及其不确定性"
     )
@@ -62,7 +65,7 @@ def test_counts_only_outline_rejects_inferential_plan_review_copy() -> None:
                 data_constraints=json.dumps(
                     {
                         "analysis_design": {
-                            "analysis_family": "association",
+                            "analysis_family": "descriptive_epidemiology",
                             "analysis_unit": "icu_stay",
                             "cluster_unit": None,
                             "variance_estimator": "none_counts_only",
@@ -76,7 +79,7 @@ def test_counts_only_outline_rejects_inferential_plan_review_copy() -> None:
     with pytest.raises(ProgressivePlanCompileError) as caught:
         ProgressivePlannerAgent._validate_outline_authority(
             outline,
-            analysis_types=("association_study",),
+            analysis_types=("descriptive_epidemiology",),
             variable_names=tuple(variable.name for variable in context.variables),
             allowed_literature_citation_keys=(),
             primary_exposure=context.primary_exposure,
