@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -31,6 +31,10 @@ from easyicu.webserver import (
 )
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.plan_change_request import PlanChangeRequest
+from easyicu.webserver.research_plan_revision import (
+    PreparedPlanRevision,
+    load_prepared_plan_revision,
+)
 from easyicu.webserver.research_launch_resume import (
     _development_progressive_resume_binding,
     _development_resume_acquisition_profile,
@@ -149,6 +153,7 @@ class PreparedResearchPipelineRun:
     scientific: PreparedScientificLaunch
     authority: PreparedLaunchAuthority
     execution: PreparedLaunchExecution
+    prepared_plan_revision: Optional[PreparedPlanRevision] = None
 
 
 @dataclass(frozen=True)
@@ -541,6 +546,22 @@ def prepare_research_pipeline_run(
 ) -> PreparedResearchPipelineRun:
     """Validate one launch request completely before runner side effects."""
 
+    revision = load_prepared_plan_revision(
+        study=request.study_context, project_root=request.project_root,
+        source_run_id=request.plan_revision_source_run_id,
+    )
+    if revision is not None:
+        if (
+            request.development_resume_source_job_id
+            or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
+            or request.execution_resume_source_run_id
+            or request.plan_change_request is not None
+        ):
+            raise ResearchPipelineRunError(
+                "prepared_plan_revision_resume_conflict",
+                "A fresh scientific repair cannot also resume an old plan or execution.",
+            )
+        request = replace(request, budget_mode=revision.budget_mode)
     scientific = _prepare_scientific_launch(request)
     provider_authorization = _authorize_launch_provider(request)
     authority, execution = _prepare_launch_execution(
@@ -552,4 +573,5 @@ def prepare_research_pipeline_run(
         scientific=scientific,
         authority=authority,
         execution=execution,
+        prepared_plan_revision=revision,
     )

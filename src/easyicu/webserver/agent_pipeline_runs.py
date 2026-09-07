@@ -4530,6 +4530,28 @@ def make_research_pipeline_run_runner(
             if execution_resume_target is not None
             else None
         )
+        prepared_revision = prepared.prepared_plan_revision
+        # The input verifier grants no execution authority. A scientific
+        # revision uses its sealed bytes in a NEW run and NEW review, never
+        # the approved-execution resume path or an old approval decision.
+        if prepared_revision is not None:
+            from easyicu.webserver.research_plan_revision import load_prepared_plan_revision
+
+            current_revision = load_prepared_plan_revision(
+                study=study, project_root=project_root, source_run_id=source_run_id,
+            )
+            if current_revision != prepared_revision:
+                raise ResearchPipelineRunError(
+                    "prepared_plan_revision_source_invalid",
+                    "The prepared revision binding changed after launch validation.",
+                )
+            execution_resume_inputs = _verified_execution_resume_inputs(
+                _ExecutionResumeTarget(
+                    wrapper_dir=prepared_revision.run_dir.parents[1],
+                    pipeline_run_id=prepared_revision.run_dir.name,
+                    pipeline_config_sha256=prepared_revision.pipeline_config_sha256,
+                )
+            )
         wrapper_dir = (
             execution_resume_target.wrapper_dir
             if execution_resume_target is not None
@@ -4592,6 +4614,11 @@ def make_research_pipeline_run_runner(
                 bound_plan_revision_contract = render_agent_plan_revision_contract(
                     source_review
                 )
+                if prepared_revision is not None and prepared_revision.prior_plan_contract:
+                    bound_plan_revision_contract = "\n\n".join((
+                        prepared_revision.prior_plan_contract,
+                        bound_plan_revision_contract,
+                    ))
         if execution.development_resume_scope is not None:
             from easyicu.webserver.research_launch_resume import _development_resume_plan_contract
 
@@ -4654,6 +4681,10 @@ def make_research_pipeline_run_runner(
                 job,
                 step="data_foundation",
                 label=(
+                    "Reusing the digest-verified prepared input for a fresh "
+                    "plan revision; new plan approval is still required"
+                    if prepared_revision is not None
+                    else
                     "Reusing the digest-verified cohort and trajectory from the "
                     "approved execution checkpoint"
                     if execution_resume_inputs is not None
@@ -5061,7 +5092,9 @@ def make_research_pipeline_run_runner(
                         "development_progressive_resume_reuse_bound_literature": True,
                     }
                 )
-            if candidate_authority is not None:
+            if prepared_revision is not None:
+                required_cohort_mode = prepared_revision.required_primary_cohort_selection_mode
+            elif candidate_authority is not None:
                 required_cohort_mode = candidate_authority.primary_cohort_selection_mode
             elif metadata_only_planning:
                 required_cohort_mode = primary_cohort.planning_selection_mode(study.get("cohort"))
@@ -5215,7 +5248,7 @@ def make_research_pipeline_run_runner(
                     "pending human plan review"
                 ),
             )
-            outcome = pipeline.run(
+            run_arguments = dict(
                 question=question,
                 cohort=(
                     execution_resume_inputs.cohort_path
@@ -5290,6 +5323,26 @@ def make_research_pipeline_run_runner(
                 progress_callback=lambda event: _pipeline_progress(job, event),
                 stop_after_analysis=analysis_only_execution,
             )
+            if prepared_revision is not None:
+                # Preserve the sealed scientific input coordinates rather
+                # than infer a new window, endpoint or aggregation from prose.
+                # A fresh plan is nevertheless generated and reviewed normally.
+                from easyicu.research_agent.schema import UserPreferences
+
+                identity = execution_resume_inputs.scientific_identity
+                for name in (
+                    "cohort_name", "database", "inclusion_criteria",
+                    "exclusion_criteria", "id_columns", "concept_descriptions", "notes",
+                ):
+                    if name in identity:
+                        run_arguments[name] = identity[name]
+                run_arguments["time_windows"] = [
+                    TimeWindow.model_validate(item) for item in identity.get("time_windows", ())
+                ]
+                sealed_preferences = dict(identity.get("user_preferences") or {})
+                UserPreferences.model_validate(sealed_preferences)
+                run_arguments["user_preferences"] = sealed_preferences
+            outcome = pipeline.run(**run_arguments)
             if execution_resume_target is not None and isinstance(
                 outcome, HumanReviewPending
             ):
