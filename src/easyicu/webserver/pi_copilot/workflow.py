@@ -41,6 +41,7 @@ from .workflow_attempts import (
     PreservedPlanFailure,
     preserved_plan_failure,
     research_job_has_execution_progress,
+    research_job_has_report_repair_progress,
 )
 
 WorkflowStatus = Literal[
@@ -253,8 +254,12 @@ def build_research_workflow_snapshot(
     job_status = str(job_row.get("status") or "")
     extraction_running = job_kind == "extract" and job_status == "running"
     pipeline_running = job_kind == "agent-run" and job_status == "running"
-    analysis_running = pipeline_running and research_job_has_execution_progress(job_row)
-    planning_running = pipeline_running and not analysis_running
+    report_repair_running = pipeline_running and research_job_has_report_repair_progress(job_row)
+    analysis_running = (
+        pipeline_running and not report_repair_running
+        and research_job_has_execution_progress(job_row)
+    )
+    planning_running = pipeline_running and not analysis_running and not report_repair_running
     artifact_names = {
         str(item) for item in (run_row.get("artifact_names") or []) if item
     }
@@ -548,7 +553,7 @@ def build_research_workflow_snapshot(
         plan_review_declared
         and review_authority_available
         and plan_configuration_matches
-        and not pipeline_running
+        and not (planning_running or analysis_running)
     )
     # Sibling choices may continue across host-receipted edits, but the
     # superseded candidate still cannot be approved or executed.
@@ -557,10 +562,11 @@ def build_research_workflow_snapshot(
         and plan_review_declared
         and "plan_scientific_changes_required" in active_plan_review_codes
         and "scientific_plan_review_policy_stale" not in active_plan_review_codes
-        and not pipeline_running
+        and not (planning_running or analysis_running)
     )
     plan_execution_ready = bool(
         plan_review_pending
+        and not pipeline_running
         and not choices_pending
         and plan_approval_allowed(review_authority)
         and str(review_authority.get("budget_mode") or "full_reviewed")
@@ -601,7 +607,8 @@ def build_research_workflow_snapshot(
     # action is a fresh planning run rather than approval or in-place editing.
     plan_attention_required = bool(plan_review_pending or choices_pending)
     plan_regeneration_required = bool(
-        plan_review_declared and not plan_attention_required and not pipeline_running
+        plan_review_declared and not plan_attention_required
+        and not (planning_running or analysis_running)
     )
     analysis_complete = bool(
         full_run
@@ -878,11 +885,14 @@ def build_research_workflow_snapshot(
             id="manuscript",
             label="Manuscript",
             status=(
-                "review_required" if analysis_complete and has_manuscript else "blocked"
+                "running" if report_repair_running
+                else "review_required" if analysis_complete and has_manuscript else "blocked"
             ),
             owner="easyicu.research_agent.reporting",
             reason_code=(
-                "manuscript_draft_ready_for_review"
+                "report_repair_running"
+                if report_repair_running
+                else "manuscript_draft_ready_for_review"
                 if analysis_complete and has_manuscript
                 else "full_agent_manuscript_required"
             ),
@@ -896,7 +906,10 @@ def build_research_workflow_snapshot(
     completed = sum(1 for row in required if row.status == "complete")
     if pipeline_running:
         next_stage = next(
-            row for row in required if row.id == ("analysis" if analysis_running else "plan")
+            row for row in required if row.id == (
+                "manuscript" if report_repair_running
+                else "analysis" if analysis_running else "plan"
+            )
         )
     elif (
         eligibility_confirmation_required

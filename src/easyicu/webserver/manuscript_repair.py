@@ -184,7 +184,7 @@ def make_report_only_run_runner(
                         output
                         / "runtime"
                         / f"writer_candidate_{self.attempt:02d}.json",
-                        {"section": section, "text": text},
+                        {"section": section, "instruction": kwargs["instruction"], "text": text},
                     )
                     return text
 
