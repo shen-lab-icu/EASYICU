@@ -3073,9 +3073,9 @@ def test_fresh_planning_job_takes_precedence_over_superseded_plan() -> None:
     )
 
     by_id = {row.id: row for row in snapshot.stages}
-    assert snapshot.next_action_code == "analysis_running"
+    assert snapshot.next_action_code == "research_planning_running"
     assert by_id["plan"].status == "running"
-    assert by_id["analysis"].status == "running"
+    assert by_id["analysis"].status == "blocked"
 
 
 def test_terminal_failed_pipeline_returns_to_fresh_plan_confirmation() -> None:

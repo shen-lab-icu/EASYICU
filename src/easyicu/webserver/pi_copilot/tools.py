@@ -3956,6 +3956,14 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
             if study and study.get("id"):
                 workflow = _workflow_snapshot(context, study_override=study)
                 if (
+                    workflow.get("next_action_code") == "planner_checkpoint_resume_available"
+                    and workflow.get("latest_attempt_failure")
+                ):
+                    # A failed package-bound attempt is not a plan to approve.
+                    # Continue planning through the existing owned checkpoint
+                    # route, which pauses at a new exact-plan review gate.
+                    return _request_replan(context, {"strategy": "resume_checkpoint"})
+                if (
                     str(workflow.get("next_action_code") or "")
                     == "plan_execution_upgrade_required"
                 ):
@@ -4221,11 +4229,22 @@ def _request_replan(
         # mutation of an unregistered nested pipeline artifact.
         # `_run` consumes the fresh provider grant and invalidates this turn
         # after submission.
+        workflow = (
+            _workflow_snapshot(context, study_override=study)
+            if strategy == "resume_checkpoint" else {}
+        )
+        failure = workflow.get("latest_attempt_failure")
+        prepared_checkpoint = bool(
+            workflow.get("next_action_code") == "planner_checkpoint_resume_available"
+            and isinstance(failure, Mapping)
+            and failure.get("checkpoint_resume_available") is True
+            and failure.get("run_id") == (latest or {}).get("run_id")
+        )
         return _run(
             context,
             {"run_type": "full"},
             planner_start_mode=strategy,
-            run_intent="candidate_plan",
+            run_intent="reviewed_analysis" if prepared_checkpoint else "candidate_plan",
             plan_change_request=plan_change_request,
         )
     return _result(

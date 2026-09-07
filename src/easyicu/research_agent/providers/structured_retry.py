@@ -53,6 +53,7 @@ from typing import (
 
 from ..contracts.control_signals import ProgressControlSignal
 from .protocol import LLMMessage
+from .clients import safe_provider_http_status_code
 from .factory import authorized_complete
 from .llm import (
     clear_provider_call_receipt,
@@ -320,6 +321,8 @@ def safe_provider_error_category(value: Any) -> Optional[str]:
     if any(token in folded for token in ("permission", "authorization", "configuration")):
         return "authorization"
     if any(token in folded for token in ("http", "apierror", "status")):
+        return "provider_http"
+    if isinstance(value, BaseException) and safe_provider_http_status_code(value) is not None:
         return "provider_http"
     return "error"
 

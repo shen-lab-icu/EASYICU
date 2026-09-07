@@ -37,6 +37,11 @@ from .run_authority import (
     research_pipeline_project_root,
     workflow_authoritative_run,
 )
+from .workflow_attempts import (
+    PreservedPlanFailure,
+    preserved_plan_failure,
+    research_job_has_execution_progress,
+)
 
 WorkflowStatus = Literal[
     "blocked",
@@ -92,6 +97,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
     analysis_validation_retry_available: bool = False
+    latest_attempt_failure: Optional[PreservedPlanFailure] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -210,6 +216,7 @@ def build_research_workflow_snapshot(
     latest_run: Optional[Mapping[str, Any]],
     plan_review_authority: Optional[Mapping[str, Any]] = None,
     continuing_review_choices: bool = False,
+    latest_attempt: Optional[Mapping[str, Any]] = None,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -245,7 +252,9 @@ def build_research_workflow_snapshot(
     job_kind = str(job_row.get("kind") or "")
     job_status = str(job_row.get("status") or "")
     extraction_running = job_kind == "extract" and job_status == "running"
-    analysis_running = job_kind == "agent-run" and job_status == "running"
+    pipeline_running = job_kind == "agent-run" and job_status == "running"
+    analysis_running = pipeline_running and research_job_has_execution_progress(job_row)
+    planning_running = pipeline_running and not analysis_running
     artifact_names = {
         str(item) for item in (run_row.get("artifact_names") or []) if item
     }
@@ -515,6 +524,11 @@ def build_research_workflow_snapshot(
     current_scientific_digest = study_context_owner.scientific_configuration_sha256(
         study_row
     )
+    latest_attempt_failure = preserved_plan_failure(
+        latest_attempt=latest_attempt or {}, candidate=run_row,
+        study_id=str(study_row.get("id") or ""),
+        scientific_configuration_sha256=current_scientific_digest,
+    )
     planned_scientific_digest = str(
         review_authority.get("scientific_configuration_sha256")
         or run_row.get("scientific_configuration_sha256")
@@ -534,6 +548,7 @@ def build_research_workflow_snapshot(
         plan_review_declared
         and review_authority_available
         and plan_configuration_matches
+        and not pipeline_running
     )
     # Sibling choices may continue across host-receipted edits, but the
     # superseded candidate still cannot be approved or executed.
@@ -542,7 +557,7 @@ def build_research_workflow_snapshot(
         and plan_review_declared
         and "plan_scientific_changes_required" in active_plan_review_codes
         and "scientific_plan_review_policy_stale" not in active_plan_review_codes
-        and not analysis_running
+        and not pipeline_running
     )
     plan_execution_ready = bool(
         plan_review_pending
@@ -575,12 +590,18 @@ def build_research_workflow_snapshot(
         if plan_review_declared
         else ""
     )
+    if (
+        plan_review_reason_code == "plan_execution_upgrade_required"
+        and latest_attempt_failure is not None
+        and latest_attempt_failure.checkpoint_resume_available
+    ):
+        plan_review_reason_code = "planner_checkpoint_resume_available"
     # A live, digest-matching review is an approval gate. A stale or
     # non-resumable plan remains historical evidence, but the next governed
     # action is a fresh planning run rather than approval or in-place editing.
     plan_attention_required = bool(plan_review_pending or choices_pending)
     plan_regeneration_required = bool(
-        plan_review_declared and not plan_attention_required and not analysis_running
+        plan_review_declared and not plan_attention_required and not pipeline_running
     )
     analysis_complete = bool(
         full_run
@@ -631,7 +652,7 @@ def build_research_workflow_snapshot(
     # only be told that the old run failed).  The failed run stays immutable;
     # a newly authorized provider turn receives a new run id and Plan review.
     failed_pipeline_regeneration_required = bool(
-        pipeline_attempt_blocked and not analysis_running and not plan_review_declared
+        pipeline_attempt_blocked and not pipeline_running and not plan_review_declared
     )
     failed_execution_retry_available = bool(
         failed_pipeline_regeneration_required
@@ -730,7 +751,7 @@ def build_research_workflow_snapshot(
                 else "review_required"
                 if plan_attention_required
                 else "running"
-                if analysis_running
+                if planning_running
                 else "ready"
                 if plan_regeneration_required
                 else "complete"
@@ -745,8 +766,8 @@ def build_research_workflow_snapshot(
                 if idea_blocks_execution
                 else plan_review_reason_code
                 if plan_attention_required
-                else "analysis_running"
-                if analysis_running
+                else "research_planning_running"
+                if planning_running
                 else plan_regeneration_reason_code
                 if plan_regeneration_required
                 else "agent_plan_ready"
@@ -796,6 +817,8 @@ def build_research_workflow_snapshot(
                 "blocked"
                 if idea_blocks_execution
                 else "blocked"
+                if planning_running
+                else "blocked"
                 if plan_attention_required or plan_regeneration_required
                 else "running"
                 if analysis_running
@@ -813,6 +836,8 @@ def build_research_workflow_snapshot(
             reason_code=(
                 "idea_feasibility_refresh_required"
                 if idea_blocks_execution
+                else "research_planning_running"
+                if planning_running
                 else (
                     plan_review_reason_code
                     if plan_attention_required
@@ -869,7 +894,11 @@ def build_research_workflow_snapshot(
     # stage.  Counting it as done made analysis-only runs appear as 7/7 even
     # though their interpretation and manuscript were still awaiting review.
     completed = sum(1 for row in required if row.status == "complete")
-    if (
+    if pipeline_running:
+        next_stage = next(
+            row for row in required if row.id == ("analysis" if analysis_running else "plan")
+        )
+    elif (
         eligibility_confirmation_required
         and not plan_attention_required
         and not plan_regeneration_required
@@ -913,6 +942,7 @@ def build_research_workflow_snapshot(
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
         analysis_validation_retry_available=(analysis_validation_retry_available),
+        latest_attempt_failure=latest_attempt_failure,
     )
 
 
@@ -1056,6 +1086,7 @@ def build_project_workflow_projection(
         active_export_present=registered_export_matches_study(study, registry),
         active_job=active_job,
         latest_run=latest_run,
+        latest_attempt=rows[0] if rows else None,
         plan_review_authority=plan_review_authority,
         continuing_review_choices=plan_review_progress.has_pending_choices(
             study, latest_run or {}, review,

@@ -176,12 +176,17 @@
       if (code === 'planner_checkpoint_resume_available') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(
-          'Keep the bounded Planner run as immutable history. Continue formal plan generation from its validated checkpoint for the unchanged study configuration, and pause for my review before analysis.',
-          '保留受预算限制的 Planner 运行为不可变历史。请基于未改变研究配置的已验证 checkpoint 继续生成正式计划，并在分析前停下让我审核。',
+          'Keep the failed Planner attempt as immutable history. Continue plan generation from its validated checkpoint for the unchanged study configuration, reuse its verified input, and pause for my review before analysis.',
+          '保留失败的 Planner 尝试作为不可变历史。请基于未改变研究配置的已验证检查点继续生成计划，复用已校验输入，并在分析前停下让我审核。',
         ),
         title: tr('The Planner saved a validated checkpoint. Continue?', 'Planner 已保存验证检查点，是否继续？'),
         note: tr('The validated prefix is reused under a new bounded provider turn. No analysis has run.', '已验证前缀会在新的受限模型轮次中复用；尚未运行任何分析。'),
         approve: tr('Continue plan generation', '继续生成计划'),
+        reviewMaterialsTitle: tr('Preserved candidate plan · read only', '保留的候选方案 · 只读'),
+        reviewResources: workflow.latest_attempt_failure && reviewedPlanRunId ? [
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Preview the current candidate', '预览保留的候选方案'), media_type: 'application/json' },
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('View its literature evidence', '查看对应文献依据'), media_type: 'application/json' },
+        ] : [],
       };
       if (code === 'operator_plan_approval_required') return {
         code, grants: ['provider_run'],
@@ -343,6 +348,7 @@
         : '';
       const displayedTitle = firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
       const displayedNote = firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
+      const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? String(firstDecisionItem && firstDecisionItem.code || '') === 'REPEATED_STAY_METHOD_NOT_DECLARED'
             ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-confirm-action><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
@@ -350,7 +356,7 @@
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div><strong>${esc(displayedTitle)}</strong><small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong><small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
@@ -359,6 +365,28 @@
           ${confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}
         </div>
       </section>`;
+    }
+
+    function latestAttemptFailureHtml() {
+      const workflow = host.workflow() || {};
+      const failure = workflow.latest_attempt_failure;
+      const reviewedId = workflow.plan_review_summary && workflow.plan_review_summary.run_id;
+      if (!failure || !failure.run_id || failure.run_id === reviewedId
+        || !reviewedId || failure.candidate_run_id !== reviewedId) return '';
+      const title = failure.reason === 'provider_unavailable'
+        ? tr('The latest planning provider request failed', '最近一次规划服务调用失败')
+        : failure.reason === 'planner_budget_exhausted'
+          ? tr('The latest planning attempt reached its budget', '最近一次规划达到预算上限')
+          : tr('The latest preparation attempt failed', '最近一次数据准备或规划失败');
+      const detail = tr(
+        'The previous candidate remains available below. This failed attempt did not add plan approval or validated results.',
+        '下方保留的是之前的候选方案；这次失败没有新增计划批准或已验证结果。',
+      );
+      const receipt = resourceButton({
+        kind: 'research_artifact', run_id: failure.run_id, artifact: 'source_run_manifest.json',
+        media_type: 'application/json', label: tr('View failure receipt', '查看失败回执'),
+      }, tr('View failure receipt', '查看失败回执'));
+      return `<div class="gpi-confirmation-failure" role="status"><strong>${esc(title)}</strong><small>${esc(detail)}</small>${receipt}</div>`;
     }
 
     function planConversationHtml(preview) {
