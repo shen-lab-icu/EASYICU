@@ -1,6 +1,6 @@
 /* Guided Copilot workflow-authority panel owner.
 
-   Owner: projecting the bound 7-stage workflow into the right-hand panel --
+   Owner: projecting 7 required stages plus optional idea mining into the panel --
    current stage, its reason, progress, and the full stage list. Split out of
    screens-guided-pi.js, which was hundreds of lines past its size ratchet.
 
@@ -42,7 +42,7 @@
         question: reviewerDemo ? tr('Reviewer protocol', '审稿协议') : tr('Scientific question', '科学问题'),
         idea: reviewerDemo ? tr('Validation scope', '验证范围') : tr('Idea mining', '想法发掘'),
         setup: reviewerDemo ? tr('Data contract', '数据合同') : tr('Study setup', '研究配置'),
-        extraction: reviewerDemo ? tr('Safe projection', '安全投影') : tr('Feature extraction', '特征提取'),
+        extraction: reviewerDemo ? tr('Safe projection', '安全投影') : tr('Research data preparation', '研究数据准备'),
         plan: tr('Analysis plan', '分析计划'), analysis: tr('Analysis and validation', '分析与验证'),
         interpretation: tr('Result interpretation', '结果解读'), manuscript: reviewerDemo ? tr('Reviewer dossier', '审稿报告') : tr('Manuscript', '稿件'),
       };
@@ -54,6 +54,10 @@
         study_setup_complete: tr('Required study setup is complete', '必需研究配置已完成'),
         approved_plan_setup_receipt: tr('The approved plan records the study setup used for this analysis', '已批准的计划记录了本次分析采用的研究配置'),
         active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
+        approved_analysis_input_receipt: tr('The completed analysis records its prepared input', '已完成的分析记录了本次使用的研究输入'),
+        bound_research_input_prepared: tr('The bound research input is prepared; scientific validation remains separate', '本次研究输入已备妥；科学验证仍需单独完成'),
+        metadata_only_input_not_prepared: tr('This candidate uses metadata only; research data are not prepared yet', '当前候选计划仅使用元数据，本次研究数据尚未备妥'),
+        research_input_preparation_required: tr('The source is registered; prepare this question’s research input', '数据源已登记，仍需准备本次研究输入'),
         plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
         provider_ready_to_generate_plan: tr('Question and data source are ready; generate a candidate plan for review', '问题和数据源已就绪，可以生成候选计划供审阅'),
         agent_plan_ready: tr('The digest-bound analysis plan is ready', '摘要绑定分析计划已就绪'),
@@ -102,13 +106,14 @@
       body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
         <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
         <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
-        <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('stages complete', '个阶段已完成')}</span></div>
+        <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
         ${next ? `<div class="gd-pipeline-next"><span>${nextCaption}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
       </div>
       <details class="gd-pipeline-disclosure" open><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${stages.length}</small></summary><div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
-        const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
+        const optional = stage.required_for_completion === false;
+        const status = stage.status === 'complete' ? 'done' : stage.status === 'optional' ? 'optional' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
         const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
-        return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}</div></div></div>`;
+        return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}${optional ? tr(' · Optional', ' · 可选') : ''}</div></div></div>`;
       }).join('')}</div></details>`;
     }
 

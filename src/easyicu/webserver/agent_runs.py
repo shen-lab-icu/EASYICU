@@ -35,6 +35,7 @@ from easyicu.webserver.research_evidence_preview import (
     build_evidence_preview,
 )
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
+from easyicu.webserver.research_input_progress import project_research_input_state
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.run_record import (
     RunDirectory,
@@ -1469,6 +1470,7 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "gate_reason": gate.reason,
         "gate_checks": gate_checks,
         "run_status": source_manifest.get("status"),
+        "research_input_state": project_research_input_state(source_manifest.get("research_input_state")),
         "pending_review_reason_codes": pending_reason_codes,
         "plan_approval_allowed": source_manifest.get("plan_approval_allowed"),
         "scientific_plan_review_status": source_manifest.get(

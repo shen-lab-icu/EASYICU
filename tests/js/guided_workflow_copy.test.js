@@ -22,7 +22,7 @@ let workflow = null;
 const owner = global.EasyICU.guidedPi.require('aside').create({
   tr: en => en,
   esc: value => String(value == null ? '' : value),
-  iconHtml: () => '',
+  iconHtml: name => `[${name}]`,
   projectId: () => 'project-copy',
   displayProjectTitle: value => String(value || ''),
   demoMode: () => false,
@@ -48,5 +48,16 @@ workflow.stages[1].status = 'ready';
 owner.syncProjectWorkflowAside();
 assert.match(body.innerHTML, /Next step/);
 assert.doesNotMatch(body.innerHTML, /Later stage/);
+
+workflow.stages.unshift({ id: 'idea', status: 'optional', required_for_completion: false });
+owner.syncProjectWorkflowAside();
+assert.match(body.innerHTML, /4\/7<\/strong> required stages complete/);
+assert.match(body.innerHTML, /Idea mining · Optional/);
+assert.match(body.innerHTML, /study-item optional.*?\[dot\]/);
+assert.doesNotMatch(body.innerHTML, /study-item optional.*?\[lock\]/);
+assert.equal(workflow.completed_required_stages, 4);
+workflow.stages[0] = { id: 'idea', status: 'complete', required_for_completion: true };
+owner.syncProjectWorkflowAside();
+assert.doesNotMatch(body.innerHTML, /· Optional/);
 
 process.stdout.write(JSON.stringify({ locked: true, actionable: true }));
