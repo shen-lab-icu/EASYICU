@@ -588,6 +588,16 @@ def _executed_method_boundary_rows(
             value = summary.get(key)
             if isinstance(value, (str, int, float, bool)) and str(value).strip():
                 row[key] = value
+        if (
+            record.get("deterministic_standard_analysis") == "grouped_table_one"
+            and summary.get("analysis_family") == "grouped_table_one"
+        ):
+            variables = summary.get("variables")
+            if isinstance(variables, list) and all(isinstance(name, str) for name in variables):
+                row["baseline_variables"] = list(variables)
+            group_by = summary.get("group_by")
+            if isinstance(group_by, str) and group_by:
+                row["group_by"] = group_by
         contracts = summary.get("model_contracts")
         if isinstance(contracts, list):
             fit_methods = sorted(

@@ -186,6 +186,13 @@ SCIENTIFIC_CLAIM_WRITER_RULES = (
     "- Results, Abstract results, Conclusion and figure/table captions admit "
     "complete claim tokens, cited neutral numeric facts, and registered display "
     "callouts such as `See Table 1 {evidence:table_one}.` Use the requested "
+    "display-callout form rather than a new explanatory sentence. For a "
+    "registered result count, use `The recorded sensitivity analysis result "
+    "count was <n> {evidence:<owner>}.` only with the exact count and owner "
+    "supplied in the digest; a missing result count does not establish model "
+    "nonconvergence, successful validation, or lack of a need for sensitivity "
+    "analysis. Use ordinary numeric descriptions of the cohort, events, "
+    "denominators and proportions, without an interpretation. Use the requested "
     "structural subsection headings. Do not add free-form finding sentences or "
     "claim-bearing headings, even with an evidence or literature citation. "
     "Preserve the supplied confidence level; never assume 95%. For neutral "
@@ -207,6 +214,7 @@ _RESULT_NUMBER_RE = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+
 _RESULT_FACT_WORDS = frozenset("""
     the a an of in at for and with from to versus was were is are
     cohort analysis model included comprised contained patients participants
+    recorded result results
     admissions stays observations rows total n sample size events deaths
     observed overall hospital icu in-hospital mortality incidence prevalence
     absolute risk event rate percentage percent points mean median age years
@@ -250,6 +258,10 @@ def _neutral_findings_text(sentence: str) -> bool:
     if _RESULT_NUMBER_RE.search(plain) is None:
         return False
     residue = _RESULT_NUMBER_RE.sub(" ", plain)
+    # These are noun-phrase spellings of the already admitted ICU coordinate,
+    # not additional clinical assertions or permission to use a new value.
+    # Leave the original sentence intact for exact numeric-source binding.
+    residue = re.sub(r"\bintensive care(?: unit)?\b", "ICU", residue, flags=re.I)
     words = re.findall(r"[^\W\d_]+(?:-[^\W\d_]+)*", residue.casefold())
     return bool(words) and all(word in _RESULT_FACT_WORDS for word in words)
 
