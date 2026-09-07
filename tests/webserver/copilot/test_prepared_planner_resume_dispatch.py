@@ -29,12 +29,12 @@ def dispatch(monkeypatch):
     return context, workflow, calls
 
 
-def test_prepared_checkpoint_stays_package_bound_instead_of_reverting_to_metadata(dispatch):
+def test_prepared_checkpoint_delegates_scope_to_shared_submission_owner(dispatch):
     context, _, calls = dispatch
     result = owner._request_replan(context, {"strategy": "resume_checkpoint"})
     assert result["code"] == "submitted"
     assert calls[0]["planner_start_mode"] == "resume_checkpoint"
-    assert calls[0]["run_intent"] == "reviewed_analysis"
+    assert calls[0]["run_intent"] == "candidate_plan"
     assert calls[0].get("plan_change_request") is None
 
 
@@ -61,4 +61,4 @@ def test_approval_tool_at_prepared_checkpoint_routes_to_planning_not_analysis(di
     result = owner._resume(context, {"decision": "approved"})
     assert result["code"] == "submitted"
     assert calls[0]["planner_start_mode"] == "resume_checkpoint"
-    assert calls[0]["run_intent"] == "reviewed_analysis"
+    assert calls[0]["run_intent"] == "candidate_plan"
