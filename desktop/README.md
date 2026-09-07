@@ -52,6 +52,18 @@ it does not add the source checkout to PyInstaller's import path. Build inputs
 (commit, dirty flag, Python/Node versions, and dependency lock hashes) are
 recorded in `.build/build-inputs.json`. Keep that receipt with the artifacts.
 
+Build caches can be kept outside a synchronized Documents checkout:
+
+```bash
+EASYICU_DESKTOP_BUILD_DIR="$TMPDIR/easyicu-build" \
+CARGO_TARGET_DIR="$TMPDIR/easyicu-cargo-target" \
+python3.11 desktop/scripts/build_macos.py
+```
+
+With these overrides, `build-inputs.json` is in `EASYICU_DESKTOP_BUILD_DIR`
+and the DMG is in `CARGO_TARGET_DIR/release/bundle/dmg/`. Copy the receipt and
+final DMG to a retained release directory before the temporary area is cleared.
+
 ## Updating Python dependencies
 
 The committed lock is for macOS arm64 / Python 3.11 only. Its initial runtime
@@ -76,9 +88,11 @@ tools are maintainer dependencies; they are not required on an end user's Mac.
 
 ## Distribution
 
-Local builds receive an ad-hoc signature and are suitable for internal testing.
-The signing step clears extended attributes from the generated app bundle,
-including Finder metadata that macOS refuses to sign; source files are untouched.
+The app inside a locally built DMG receives an ad-hoc signature and is suitable
+for internal testing. The Tauri target `.app` is an intermediate; distribute the
+DMG. Its payload is copied into the system temporary directory before metadata
+cleanup and signing, because File Provider can restore Finder metadata inside
+a Documents checkout. Source files are untouched.
 Public distribution requires an Apple Developer ID, hardened-runtime signing,
 and notarization; set `APPLE_SIGNING_IDENTITY` and use the standard Tauri/Apple
 release credentials when producing a public release.
