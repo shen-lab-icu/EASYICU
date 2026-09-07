@@ -224,6 +224,7 @@
       engine: 'research_agent_pipeline',
       planner_start_mode: 'auto',
       execution_resume_source_run_id: runId,
+      ...(host.reportOnly === true ? { report_only: true } : {}),
     });
   }
 

@@ -74,12 +74,22 @@ class ResearchRunSubmissionRequest(BaseModel):
     planner_start_mode: PlannerStartMode = "auto"
     plan_revision_source_run_id: str = ""
     execution_resume_source_run_id: str = ""
+    report_only: bool = False
     literature_search_authorized: bool = False
     compute_target: Literal["local"] = "local"
     plan_change_request: Optional[PlanChangeRequest] = None
 
     @model_validator(mode="after")
     def _amendments_require_fresh_candidate(self) -> "ResearchRunSubmissionRequest":
+        if self.report_only and (
+            self.intent != "reviewed_analysis"
+            or self.planner_start_mode != "auto"
+            or not self.execution_resume_source_run_id.strip()
+            or self.plan_revision_source_run_id
+            or self.plan_change_request is not None
+            or self.literature_search_authorized
+        ):
+            raise ValueError("report_only_requires_exact_completed_run")
         if self.plan_change_request is not None and (
             self.intent != "candidate_plan"
             or self.planner_start_mode != "fresh"
@@ -420,9 +430,18 @@ def submit_research_run(
             runner_kwargs["development_resume_source_job_id"] = (
                 development_resume_source_job_id
             )
-        base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-            **runner_kwargs
-        )
+        if request.report_only:
+            from easyicu.webserver.manuscript_repair import make_report_only_run_runner
+            from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
+
+            try:
+                base_runner = make_report_only_run_runner(**runner_kwargs)
+            except WriterOnlyMigrationError as exc:
+                _reject({"error": exc.code, "message": "The sealed report inputs did not pass validation; the original analysis was preserved."})
+        else:
+            base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+                **runner_kwargs
+            )
     except agent_runs.AgentRunConfigError as exc:
         raise ResearchRunSubmissionError(exc.detail) from exc
     except context_store.StudyContextError as exc:

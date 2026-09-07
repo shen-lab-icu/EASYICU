@@ -133,7 +133,8 @@
         if (previewPlanData) { previewApprovedPlanDataPackage(previewPlanData); return; }
         const previewAnalysisData = event.target.closest('[data-gpi-run-outcome-data]');
         if (previewAnalysisData) { RUN_OUTCOME.openData(previewAnalysisData); return; }
-        if (event.target.closest('[data-gpi-run-outcome-retry]')) { retryFailedExecution('validation_repair'); return; }
+        const reportRetry = event.target.closest('[data-gpi-run-outcome-retry]');
+        if (reportRetry) { retryFailedExecution(reportRetry.dataset.gpiRunOutcomeRetry === 'report_only' ? 'report_only' : 'validation_repair'); return; }
         if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
         if (event.target.closest('[data-gpi-confirm-reject]')) { rejectWorkflowAction(); return; }
         if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }

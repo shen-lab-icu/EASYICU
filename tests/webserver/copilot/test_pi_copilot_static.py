@@ -98,21 +98,21 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20260904-empty-gallery1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
-    assert "js/screens-guided-pi-replay.js?v=20260907-report-quality1" in index
+    assert "js/screens-guided-pi-replay.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-resources.js?v=20260907-preparation-state1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260907-report-quality1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-activity.js?v=20260901-plan-retries2" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
-    assert "js/screens-guided-pi-events.js?v=20260902-zero-direction1" in index
+    assert "js/screens-guided-pi-events.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260904-agent-plan-auto1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20260907-stopped-plan-retry1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi.js?v=20260906-plan-change1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
@@ -6203,7 +6203,7 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "正在恢复稿件与证据校验" in childjob
     assert "preparePiCopilotDataWorkbenchSnapshot" in owner
     assert "RUN_OUTCOME.openData(previewAnalysisData)" in events
-    assert "retryFailedExecution('validation_repair')" in events
+    assert "reportRetry.dataset.gpiRunOutcomeRetry === 'report_only'" in events
     assert "previewApprovedPlanDataPackage, confirmWorkflowAction,\n      retryFailedExecution," in events
     assert "previewApprovedPlanDataPackage, confirmWorkflowAction,\n    retryFailedExecution," in guided
     assert "screens-guided-pi-run-outcome.js" in index

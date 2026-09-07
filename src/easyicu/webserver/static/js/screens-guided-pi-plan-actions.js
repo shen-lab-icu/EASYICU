@@ -489,10 +489,13 @@
         host.render();
         return;
       }
-      const validationRepair = reason === 'validation_repair';
+      const reportOnly = reason === 'report_only';
+      const validationRepair = reason === 'validation_repair' || reportOnly;
       host.appendMessage({
         id: 'execution-retry-' + Date.now(), role: 'user', complete: true,
-        text: validationRepair
+        text: reportOnly
+          ? tr('Repair only the report from sealed results; do not rerun analysis', '只使用封存结果修订报告，不重跑分析')
+          : validationRepair
           ? tr('Repair the remaining validation item', '修复剩余校验项')
           : tr('Retry analysis from the failed step', '从失败步骤重试分析'),
       });
@@ -500,6 +503,7 @@
       try {
         const payload = await replay.retryFailedExecution({
           api: host.api(), session: host.session(),
+          reportOnly,
         });
         await host.recordHostAction(
           'retry_analysis', String(payload.job_id || ''), String(payload.job_id || ''),
