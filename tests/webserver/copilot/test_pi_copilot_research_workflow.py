@@ -6823,6 +6823,7 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     assert result["engine"] == "easyicu.research_agent.pipeline"
     assert result["gate"]["status"] == "analysis_only"
     assert projected_inputs == [run_dir]
+    assert result["research_input_state"] == "prepared"
     source_manifest = json.loads((wrapper / "source_run_manifest.json").read_text())
     assert source_manifest["research_input_state"] == "prepared"
     history = agent_runs.list_run_history(project_root=str(tmp_path))
@@ -7577,6 +7578,7 @@ def test_pipeline_projection_fails_closed_when_source_contains_a_host_path(
 
     assert result["gate"]["status"] == "blocked"
     assert result["gate"]["reason"] == "research_pipeline_projection_privacy_blocked"
+    assert result["research_input_state"] == "unavailable"
     assert not (wrapper / "manuscript_draft.json").exists()
     gate = json.loads((wrapper / "quality_gate.json").read_text(encoding="utf-8"))
     assert gate["privacy"]["payloads_withheld"] is True
