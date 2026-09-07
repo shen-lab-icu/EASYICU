@@ -46,6 +46,31 @@ def _claim_payload(claims: Sequence[ScientificClaim]) -> list[dict]:
     return [claim.model_dump(mode="json") for claim in claims]
 
 
+def _persisted_payload_matches(
+    raw: object, *, summary: dict, record: EvidenceRecord,
+    current_claims: Sequence[ScientificClaim],
+) -> bool:
+    if raw == _claim_payload(current_claims):
+        return True
+    if not isinstance(raw, list) or not raw or not all(
+        isinstance(item, dict)
+        and item.get("schema_version") == "easyicu.scientific_claim/2"
+        for item in raw
+    ):
+        return False
+    # Verify the old sealed payload with its original compiler contract BEFORE
+    # returning a new projection derived from the same registered source bytes.
+    # Neither metadata nor evidence is rewritten during this compatibility read.
+    legacy = bind_scientific_claim_drafts(
+        [draft.model_dump(mode="json") for draft in derive_scientific_claim_drafts(
+            summary, legacy_descriptive=True
+        )],
+        step_id=str(record.produced_by_step or "").strip(),
+        evidence_id=record.evidence_id,
+    )
+    return raw == _claim_payload(legacy)
+
+
 def validate_scientific_claim_registration(
     *,
     root: Path,
@@ -80,6 +105,13 @@ def validate_scientific_claim_registration(
         raise ScientificClaimRegistryError(
             "scientific_claims must come from the registered summary bytes"
         )
+    if [draft.model_dump(mode="json") for draft in drafts] != [
+        draft.model_dump(mode="json")
+        for draft in derive_scientific_claim_drafts(registered_summary)
+    ]:
+        raise ScientificClaimRegistryError(
+            "scientific_claims drafts differ from the registered summary derivation"
+        )
     claims = tuple(
         bind_scientific_claim_drafts(
             [draft.model_dump(mode="json") for draft in drafts],
@@ -88,8 +120,10 @@ def validate_scientific_claim_registration(
         )
     )
     existing = dict(record.metadata or {}).get("scientific_claims")
-    payload = _claim_payload(claims)
-    if existing is not None and existing != payload:
+    if existing is not None and not _persisted_payload_matches(
+        existing, summary=registered_summary, record=record,
+        current_claims=claims,
+    ):
         raise ScientificClaimRegistryError(
             "scientific_claims cannot change for registered evidence"
         )
@@ -131,7 +165,10 @@ def load_registered_scientific_claims(
             raise ScientificClaimRegistryError(
                 "scientific claim authority cannot be reproduced from evidence"
             ) from exc
-        if raw_claims != _claim_payload(expected_claims):
+        if not _persisted_payload_matches(
+            raw_claims, summary=registered_summary, record=record,
+            current_claims=expected_claims,
+        ):
             raise ScientificClaimRegistryError(
                 "scientific claim authority differs from host derivation"
             )

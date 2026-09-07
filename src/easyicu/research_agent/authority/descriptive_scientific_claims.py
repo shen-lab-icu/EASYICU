@@ -186,7 +186,7 @@ def _require_interval_arithmetic(
 
 
 def derive_descriptive_claim_payloads(
-    summary: Mapping[str, Any],
+    summary: Mapping[str, Any], *, legacy: bool = False,
 ) -> list[dict[str, Any]]:
     """Validate one versioned descriptive envelope and compile claim payloads."""
 
@@ -322,7 +322,9 @@ def derive_descriptive_claim_payloads(
         levels[index] = (level_key, level, denominator, interval[0], interval)
         claims.append(
             {
-                "schema_version": "easyicu.scientific_claim/2",
+                "schema_version": (
+                    "easyicu.scientific_claim/2" if legacy else "easyicu.scientific_claim/3"
+                ),
                 "claim_id": f"observed_absolute_risk_level_{index}",
                 "claim_type": "descriptive_absolute_risk",
                 "exposure": f"{exposure}={_display_level(level)}",
@@ -334,6 +336,14 @@ def derive_descriptive_claim_payloads(
                 "population": population,
                 "analysis_role": role,
                 "status": "supported",
+                **({} if legacy else {
+                    "point_estimate": interval[0],
+                    "interval_lower": interval[1],
+                    "interval_upper": interval[2],
+                    "confidence_level": interval[3],
+                    "interval_method": interval[4],
+                    "effect_scale": "percent",
+                }),
             }
         )
     if set(levels) != set(range(len(absolute_risks))):
@@ -429,7 +439,9 @@ def derive_descriptive_claim_payloads(
     )
     claims.append(
         {
-            "schema_version": "easyicu.scientific_claim/2",
+            "schema_version": (
+                "easyicu.scientific_claim/2" if legacy else "easyicu.scientific_claim/3"
+            ),
             "claim_id": "prespecified_unadjusted_risk_difference",
             "claim_type": "descriptive_risk_difference",
             "exposure": (
@@ -449,6 +461,14 @@ def derive_descriptive_claim_payloads(
             "population": population,
             "analysis_role": role,
             "status": "supported",
+            **({} if legacy else {
+                "point_estimate": interval[0],
+                "interval_lower": interval[1],
+                "interval_upper": interval[2],
+                "confidence_level": interval[3],
+                "interval_method": interval[4],
+                "effect_scale": "percentage_points",
+            }),
         }
     )
     return claims

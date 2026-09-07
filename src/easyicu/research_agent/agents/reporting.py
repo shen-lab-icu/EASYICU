@@ -15,6 +15,7 @@ from ..authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
+from ..authority.manuscript_claim_policy import SCIENTIFIC_CLAIM_WRITER_RULES
 from ..schema import (
     AnalysisStep,
     ResearchContext,
@@ -297,18 +298,8 @@ class WriterAgent:
                     "never promote planned prose into a completed-method claim.\n"
                     "- Do not claim that an LLM generated analysis code unless the "
                     "machine digest explicitly records that generation mode.\n\n"
-                    "SCIENTIFIC CLAIM RULE:\n"
-                    "- The machine digest may contain a `host-authorized scientific "
-                    "claims` block. For any current-study direction, comparison, or "
-                    "qualitative interpretation covered by that block, output the exact "
-                    "`{claim:<step>.<claim>}` token as the complete standalone sentence.\n"
-                    "- Do not paraphrase a host claim and do not replace `{claim:...}` "
-                    "with `{evidence:...}`. Evidence citations authorize numeric facts; "
-                    "they do not authorize independently worded scientific conclusions.\n"
-                    "- A claim token cannot be attached to a heading, label, or other "
-                    "prose. If no exact host claim applies, omit the qualitative "
-                    "assertion.\n\n"
-                    "LITERATURE RULE:\n"
+                    + SCIENTIFIC_CLAIM_WRITER_RULES
+                    + "LITERATURE RULE:\n"
                     "- Cite prior work only with an exact `[@key]` from the "
                     "run-bound literature digest below.\n"
                     "- Claims about prior studies or plausible clinical mechanisms "

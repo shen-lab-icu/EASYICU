@@ -133,14 +133,18 @@ jobs:
 
       - name: Collect full test suite
         run: |
-          pytest --collect-only -q -m "" > /tmp/easyicu-collected-tests.txt
-          tail -n 1 /tmp/easyicu-collected-tests.txt
+          mkdir -p ci-receipts
+          git rev-parse HEAD > ci-receipts/commit-sha.txt
+          python --version > ci-receipts/python-version.txt
+          python -m pip freeze --all > ci-receipts/resolved-requirements.txt
+          pytest --collect-only -q -m "" > ci-receipts/collected-tests.txt
+          tail -n 1 ci-receipts/collected-tests.txt
 
       - name: Run test suite
         run: |
           # Exercise fail-closed backend selection without development overrides.
           # Kept serial and unfiltered: it asserts on runner selection itself.
-          pytest tests/research_agent/execution/test_runner.py -q -m ""
+          pytest tests/research_agent/execution/test_runner.py -q -m "" --junitxml=ci-receipts/runner-results.xml
           # Remaining offline integration tests may use the ephemeral Actions host.
           # -m "" cancels the pytest.ini dev default (-m "not slow"): CI always
           # runs the slow/integration tier. -n auto spreads it over the runner's
@@ -148,7 +152,16 @@ jobs:
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             pytest -q -m "" -n auto --dist loadfile \
-              --ignore=tests/research_agent/execution/test_runner.py
+              --ignore=tests/research_agent/execution/test_runner.py \
+              --junitxml=ci-receipts/results.xml
+
+      - name: Preserve exact candidate validation receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-receipts-py${{ matrix.python-version }}-${{ github.sha }}
+          path: ci-receipts/
+          retention-days: 30
 
   packaging:
     name: wheel + sdist install

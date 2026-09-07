@@ -7,6 +7,7 @@ on:
       - "tests/research_agent/**"
       - "tests/governance/test_arch_measure.py"
       - "tests/governance/test_research_agent_module_graph.py"
+      - "tests/governance/test_research_agent_critical_ci.py"
       - "tools/arch_measure.py"
       - "tools/arch_baselines/execution_phase.json"
       - "tools/arch_baselines/research_agent_module_graph.json"
@@ -20,6 +21,7 @@ on:
       - "tests/research_agent/**"
       - "tests/governance/test_arch_measure.py"
       - "tests/governance/test_research_agent_module_graph.py"
+      - "tests/governance/test_research_agent_critical_ci.py"
       - "tools/arch_measure.py"
       - "tools/arch_baselines/execution_phase.json"
       - "tools/arch_baselines/research_agent_module_graph.json"
@@ -39,10 +41,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-# T1.1 — research_agent has its own CI gate so a regression in the
-# minimum supported Python/runtime dependency stack shows up before it
-# lands in the main suite. The job installs the package's complete core
-# runtime explicitly, then installs EasyICU editable without extras.
+# This gate checks the explicitly installed runtime on supported Python versions.
+# Lower-bound requirements let pip resolve a compatible current combination;
+# they do not test the lowest supported versions. Preserve the actual resolved
+# environment in the receipts instead of claiming a minimum-version matrix.
 jobs:
   architecture:
     name: research_agent architecture
@@ -128,25 +130,46 @@ jobs:
       - name: Compile Python source and tests
         run: python -m compileall -q src tests
 
+      - name: Record the tested candidate and resolved runtime
+        run: |
+          mkdir -p ci-receipts
+          git rev-parse HEAD > ci-receipts/commit-sha.txt
+          python --version > ci-receipts/python-version.txt
+          python -m pip freeze --all > ci-receipts/resolved-requirements.txt
+
+      - name: Run named critical regressions without keyword filtering
+        shell: bash
+        run: |
+          mapfile -t critical_tests < tests/research_agent/critical_regressions.txt
+          test "${#critical_tests[@]}" -gt 0
+          printf '%s\n' "${critical_tests[@]}" > ci-receipts/critical-files.txt
+          pytest "${critical_tests[@]}" -q -m "" --collect-only > ci-receipts/critical-collected-tests.txt
+          pytest "${critical_tests[@]}" -q -m "" --junitxml=ci-receipts/critical-results.xml
+
       - name: Run research_agent functional contract suite
         run: |
           # Keep fail-closed runner policy tests in their default environment.
           pytest tests/research_agent/execution/test_runner.py -q -m ""
-          # 2026-08-17: this job used to re-run the whole 10,577-test
-          # research_agent suite that ci.yml already runs, doubling the wall
-          # clock of every research_agent PR for zero extra coverage. This
-          # job's unique value is the MINIMUM dependency stack (core runtime
-          # installed explicitly, then `pip install --no-deps -e .`), so it now
-          # proves import health and the typed contract surface under that
-          # stack and leaves exhaustive behaviour coverage to ci.yml.
+          # This keyword-selected suite checks import health and typed contracts
+          # under the resolved runtime. Named critical regressions run separately
+          # above; exhaustive behaviour coverage remains in ci.yml.
           python -c "import easyicu.research_agent as m; print('import OK', m.__name__)"
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             pytest tests/research_agent -q -m "" -n auto --dist loadfile \
               -k "contract or boundary or package or schema or import" \
-              --ignore=tests/research_agent/execution/test_runner.py
+              --ignore=tests/research_agent/execution/test_runner.py \
+              --junitxml=ci-receipts/functional-results.xml
 
-  # The `test` job above proves the MINIMUM dependency stack, which by design
+      - name: Preserve candidate, collection and execution receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: research-agent-receipts-py${{ matrix.python-version }}-${{ github.sha }}
+          path: ci-receipts/
+          retention-days: 30
+
+  # The explicit runtime in the `test` job above intentionally
   # has no `anthropic`, so tests/research_agent/providers/test_anthropic_messages_client.py
   # importorskips there. That skip is only safe while some job still exercises
   # the real adapter -- otherwise CI goes green while the native Claude

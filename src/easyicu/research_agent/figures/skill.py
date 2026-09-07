@@ -948,8 +948,8 @@ class PublicationFigureSkill:
                 "claim": (
                     (
                         "The prespecified unadjusted risk difference in percentage "
-                        "points and its 95% confidence interval are drawn from the "
-                        "typed distribution table."
+                        f"points and its {100 * float(plot_df.attrs['confidence_level']):g}% "
+                        "confidence interval are drawn from the typed distribution table."
                     )
                     if typed_distribution
                     else (
