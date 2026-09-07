@@ -7864,6 +7864,94 @@ def test_execution_retry_preserves_sealed_coordinates_and_prior_projection(
             assert payload["exception_types"] == ["RunInputIdentityError"]
 
 
+def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.research_agent as research_agent
+    from easyicu.research_agent.acquisition import foundation
+    from easyicu.webserver import research_plan_revision
+    from tests.research_agent.planning.test_baseline_requirements import _requirements
+
+    _assume_execution_runtime_ready(monkeypatch)
+    monkeypatch.delenv("EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID", raising=False)
+    root = tmp_path / "projects"
+    old_run = root / "study-workflow" / "run_old" / "pipeline" / "run_source"
+    old_run.mkdir(parents=True)
+    cohort, trajectory = old_run / "cohort.parquet", old_run / "cohort_trajectory.parquet"
+    pd.DataFrame({"heart_rate_max": [90.0], "death": [0], "charlson": [2.0]}).to_parquet(cohort)
+    pd.DataFrame({"heart_rate": [90.0]}).to_parquet(trajectory)
+    before = {path: path.read_bytes() for path in (cohort, trajectory)}
+    scope = research_plan_revision.PreparedPlanRevision(
+        run_dir=old_run, pipeline_config_sha256="a" * 64,
+        prepared_package_binding={"sha256": "b" * 64},
+        prior_plan_contract="Retain the reviewed baseline and 48-hour window.",
+        required_primary_cohort_selection_mode="all_input_rows",
+    )
+    inputs = agent_pipeline_runs._ExecutionResumeInputs(
+        cohort_path=cohort, cohort_authority_path=None, cohort_authority_ref=None,
+        trajectory_path=trajectory, trajectory_authority_path=None, trajectory_authority_ref=None,
+        scientific_identity={
+            "primary_exposure": "heart_rate_max", "target_outcome": "death", "outcome_columns": ["death"],
+            "time_windows": [{"name": "reviewed_window", "start_hours": 0, "end_hours": 48}],
+            "user_preferences": {"data_constraints": "Keep the sealed population."},
+            "inclusion_criteria": ["reviewed population"],
+        },
+    )
+    monkeypatch.setattr(research_plan_revision, "load_prepared_plan_revision", lambda **kw: scope)
+    monkeypatch.setattr(research_pipeline_run_preparation, "load_prepared_plan_revision", lambda **kw: scope)
+    monkeypatch.setattr(agent_pipeline_runs, "_verified_execution_resume_inputs", lambda target: inputs)
+    monkeypatch.setattr(agent_pipeline_runs, "_load_candidate_plan_materialization_authority", lambda **kw: None)
+    review = _nonapprovable_review_payload(finding_code="ACCEPTED_BASELINE_CONTENT_MISSING")
+    baseline = _requirements("age", "charlson").model_dump(mode="json")
+    review["facts"] = {"accepted_baseline_requirements": baseline}
+    monkeypatch.setattr(agent_pipeline_runs, "_load_plan_revision_source_review", lambda **kw: PlanScientificReview.model_validate(review))
+    monkeypatch.setattr(research_pipeline_run_preparation, "_data_foundation_profile", lambda **kw: _foundation_profile())
+    monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client", lambda *a, **kw: (object(), {"provider": "openai", "model": "test"}))
+
+    def forbidden(*a, **kw):
+        pytest.fail("Prepared plan revision must not reselect concepts, extract or resume execution")
+
+    monkeypatch.setattr(foundation, "acquire_universe_for_question", forbidden)
+    monkeypatch.setattr(agent_pipeline_runs, "_metadata_only_planning_acquisition", forbidden)
+    monkeypatch.setattr(agent_pipeline_runs, "_resolve_execution_resume_wrapper", forbidden)
+    captured = {}
+
+    class FakePipeline:
+        def run(self, **kw):
+            captured["request"] = kw
+            raise agent_pipeline_runs.ResearchPipelineRunError("research_pipeline_cancelled", "test stops before planning")
+
+    def pipeline(config, *, services):
+        captured["config"] = config
+        return FakePipeline()
+
+    monkeypatch.setattr(research_agent.ResearchAgentPipeline, "from_config", pipeline)
+    export = _write_pipeline_export(tmp_path / "export")
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export), study_context=_complete_study(), project_root=str(root),
+        provider={"provider": "openai", "external": True}, provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        budget_mode="planner_canary", plan_revision_source_run_id="run_source",
+    )
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError, match="test stops"):
+        runner(SimpleNamespace(id="new-revision", cancel_requested=False, emit=lambda event: None))
+    request, config = captured["request"], captured["config"]
+    assert request["cohort"] == cohort and request["trajectory_path"] == trajectory
+    assert request["primary_exposure"] == "heart_rate_max" and request["target_outcome"] == "death"
+    assert request["time_windows"][0].end_hours == 48
+    assert request["inclusion_criteria"] == ["reviewed population"]
+    assert request["user_preferences"] == {"data_constraints": "Keep the sealed population."}
+    assert request["resume_run_id"] is None
+    assert config.workdir == root / "study-workflow" / "run_new-revision" / "pipeline"
+    assert config.require_human_plan_review is True and config.enable_replanning is False
+    assert config.required_primary_cohort_selection_mode == "all_input_rows"
+    from easyicu.research_agent.contracts.frozen_payload import thaw_payload
+
+    assert thaw_payload(config.bound_baseline_requirements) == baseline
+    assert "48-hour" in config.bound_plan_revision_contract
+    assert "ACCEPTED_BASELINE_CONTENT_MISSING" in config.bound_plan_revision_contract
+    assert all(path.read_bytes() == content for path, content in before.items())
+
+
 def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
     tmp_path: Path,
 ) -> None:
@@ -9345,7 +9433,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     assert Path(captured["project_root"]) != tmp_path / "client-controlled"
     assert captured["budget_mode"] == "planner_canary"
     assert result["planner_start_mode"] == planner_start_mode
-    if resume_source_job_id:
+    if resume_source_job_id and not plan_revision_source_run_id:
         assert captured["development_resume_source_job_id"] == resume_source_job_id
         assert result["resume_source_job_id"] == resume_source_job_id
     else:

@@ -33,6 +33,7 @@ from easyicu.webserver.pi_copilot.run_authority import (
 )
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
 from easyicu.webserver.research_launch_resume import _development_resume_launch_scope
+from easyicu.webserver.research_plan_revision import load_prepared_plan_revision
 
 
 _DEVELOPMENT_REVIEWED_EXECUTION_ENV = "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
@@ -373,6 +374,15 @@ def submit_research_run(
             _reject({"error": "planner_checkpoint_resume_coordinate_conflict"})
         if plan_revision_source_run_id:
             runner_kwargs["plan_revision_source_run_id"] = plan_revision_source_run_id
+            revision = load_prepared_plan_revision(
+                study=study_context, project_root=project_root,
+                source_run_id=plan_revision_source_run_id,
+            )
+            if revision is not None:
+                # Restore the selected prepared launch scope, not authority
+                # from a neighbouring export or an older plan's approval.
+                budget_mode = revision.budget_mode
+                runner_kwargs["budget_mode"] = budget_mode
         if execution_resume_source_run_id:
             runner_kwargs["execution_resume_source_run_id"] = (
                 execution_resume_source_run_id
@@ -380,6 +390,7 @@ def submit_research_run(
         if (
             not development_resume_source_job_id
             and not execution_resume_source_run_id
+            and not plan_revision_source_run_id
             and planner_start_mode != "fresh"
         ):
             development_resume_source_job_id = resumable_planner_checkpoint_job_id(
