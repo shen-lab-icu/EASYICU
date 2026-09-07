@@ -109,6 +109,7 @@ from .manuscript_claim_policy import (
     filter_evidence_bound_scaffold,
     malformed_authority_placeholder_sentences,
 )
+from .manuscript_method_facts import load_manuscript_method_facts, ManuscriptMethodFact
 from .source_fingerprints import registered_source_fingerprints_match
 from ..schema import EvidenceRecord
 
@@ -3181,9 +3182,23 @@ class EvidenceStore:
     # Manuscript binding
     # ------------------------------------------------------------------
 
+    def manuscript_method_facts(
+        self, per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    ) -> tuple[ManuscriptMethodFact, ...]:
+        """Reproduce exact metadata statements from the selected context source."""
+
+        return load_manuscript_method_facts(
+            root=self.root,
+            records=(
+                self.current_verified_records(per_step_records)
+                if per_step_records is not None else self.verified_records()
+            ),
+        )
+
     def enforce_evidence_bound_scaffold(self, scaffold: str) -> tuple[str, List[str]]:
         """Apply the manuscript claim policy and enforce this store's mode."""
-        verified_ids = {record.evidence_id for record in self.verified_records()}
+        verified_records = self.verified_records()
+        verified_ids = {record.evidence_id for record in verified_records}
 
         def resolve_evidence(ref: str) -> bool:
             record = self.get(ref)
@@ -3193,6 +3208,7 @@ class EvidenceStore:
             scaffold,
             resolve_claim=self._scientific_claim_by_ref,
             resolve_evidence=resolve_evidence,
+            method_facts=load_manuscript_method_facts(root=self.root, records=verified_records),
         )
         if result.filtered_sentences and (
             self.enforcement_mode is EvidenceEnforcementMode.STRICT

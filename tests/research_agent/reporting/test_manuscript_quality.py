@@ -109,6 +109,19 @@ def _codes(text: str) -> set[str]:
     return {finding.code for finding in audit_manuscript_quality(text).findings}
 
 
+def test_variables_with_removed_definition_cannot_pass_quality():
+    source = _valid_manuscript().replace(
+        "The exposure was Sepsis-3 status and the outcome was in-hospital death.",
+        "The clinical definition followed the registered framework. "
+        "The maximum representation was retained as supplied.",
+    )
+    assert "MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING" in _codes(source)
+
+
+def test_named_variable_definition_is_not_a_dependent_opener():
+    assert "MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING" not in _codes(_valid_manuscript())
+
+
 def test_reader_title_uses_host_packet_and_fails_to_draft_label(tmp_path) -> None:
     assert _load_reader_title(tmp_path) == "EasyICU analysis-only manuscript draft"
     (tmp_path / "manuscript_packet.json").write_text(
@@ -138,7 +151,7 @@ def test_complete_reader_facing_manuscript_passes() -> None:
     audit = audit_manuscript_quality(_valid_manuscript())
 
     assert audit.status == "pass"
-    assert audit.schema_version == "manuscript-quality-audit-v3"
+    assert audit.schema_version == "manuscript-quality-audit-v4"
     assert audit.adjustment_sets == {
         "Methods": ("age", "sex"),
         "Results": ("age", "sex"),

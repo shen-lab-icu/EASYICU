@@ -34,6 +34,7 @@ from ..authority.evidence_store import (
 )
 from ..schema import ResearchContext
 from .writer_repair_decision import coerce_writer_repair_decisions
+from .manuscript_sentence_context import contextual_sentence_deletion
 from .side_findings import (
     SideFinding,
     annotate_side_finding_leaks,
@@ -449,13 +450,28 @@ def _apply_writer_evidence_repair_decisions(
     rewritten = scaffold
     applied: List[Dict[str, object]] = []
     seen: set[int] = set()
+    removed_context: set[str] = set()
     for decision in validated:
         index = decision.index
         if index >= len(sentences) or index in seen:
             raise ValueError("writer evidence repair index is invalid or duplicated")
+        if decision.action == "cite" and allowed_evidence and any(
+            item not in allowed_evidence for item in decision.evidence_ids
+        ):
+            raise ValueError("cite decision requires registered allowed evidence ids")
+        if decision.action == "claim" and decision.claim_ref not in allowed_claims:
+            raise ValueError("claim decision requires an allowed claim_ref")
         target = sentences[index]
         target_span = _writer_repair_target_span(rewritten, target)
         if target_span is None:
+            if " ".join(target.split()) in removed_context:
+                seen.add(index)
+                applied.append({
+                    "index": index, "action": "drop", "evidence_ids": [],
+                    "sentence": target[:500],
+                    "reason_code": "writer_dependent_context_already_removed",
+                })
+                continue
             raise ValueError(
                 "writer evidence repair target is absent from the current scaffold"
             )
@@ -463,13 +479,8 @@ def _apply_writer_evidence_repair_decisions(
         matched_target = rewritten[target_start:target_end]
         action = decision.action
         evidence_ids = list(decision.evidence_ids)
+        dependent_context_drops: tuple[str, ...] = ()
         if action == "cite":
-            if allowed_evidence and any(
-                evidence_id not in allowed_evidence for evidence_id in evidence_ids
-            ):
-                raise ValueError(
-                    "cite decision requires registered allowed evidence ids"
-                )
             replacement = matched_target
             if allowed_evidence:
                 replacement, _ = _remove_unregistered_evidence_placeholders(
@@ -483,8 +494,6 @@ def _apply_writer_evidence_repair_decisions(
                     replacement = _append_evidence_citation(replacement, evidence_id)
         elif action == "claim":
             claim_ref = decision.claim_ref
-            if claim_ref not in allowed_claims:
-                raise ValueError("claim decision requires an allowed claim_ref")
             token = "{claim:" + claim_ref + "}"
             line_start = rewritten.rfind("\n", 0, target_start) + 1
             before_target = rewritten[line_start:target_start]
@@ -506,6 +515,10 @@ def _apply_writer_evidence_repair_decisions(
                 )
         else:  # "drop" — the only remaining legal action
             replacement = ""
+            deletion = contextual_sentence_deletion(rewritten, target_start, target_end)
+            target_end = deletion.end
+            dependent_context_drops = deletion.dependent_sentences
+            removed_context.update(" ".join(item.split()) for item in dependent_context_drops)
         rewritten = rewritten[:target_start] + replacement + rewritten[target_end:]
         seen.add(index)
         applied.append(
@@ -517,6 +530,8 @@ def _apply_writer_evidence_repair_decisions(
                 "action": action,
                 "evidence_ids": evidence_ids,
                 "sentence": target[:500],
+                **({"dependent_context_drops": list(dependent_context_drops)}
+                   if dependent_context_drops else {}),
             }
         )
     return rewritten, sorted(applied, key=lambda item: int(item["index"]))
@@ -2157,6 +2172,10 @@ def drop_untraceable_numeric_sentences(
         return manuscript, []
     merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
     for (start, end), detail in sorted(rejected_by_span.items()):
+        deletion = contextual_sentence_deletion(manuscript, start, end)
+        end = deletion.end
+        if deletion.dependent_sentences:
+            detail["dependent_context_drops"] = list(deletion.dependent_sentences)
         if merged and start <= merged[-1][1]:
             previous_start, previous_end, previous_details = merged[-1]
             merged[-1] = (
@@ -2189,6 +2208,9 @@ def drop_untraceable_numeric_sentences(
                     for detail in details
                     for item in detail.get("miscited", [])
                 ],
+                **({"dependent_context_drops": [
+                    item for detail in details for item in detail.get("dependent_context_drops", [])
+                ]} if any(detail.get("dependent_context_drops") for detail in details) else {}),
             }
         )
     return filtered, removed

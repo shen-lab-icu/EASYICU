@@ -112,3 +112,17 @@ def test_provider_transport_failure_retains_its_owner_boundary() -> None:
 
     with pytest.raises(ProviderTransportFailure, match="provider unavailable"):
         _run(_repair_pass(fail))
+
+
+def test_deterministic_fallback_records_dependent_context_removal():
+    repair = _repair_pass(lambda *_args, **_kwargs: [])
+    opener = "The outcome was an unsupported endpoint."
+    actual, receipts, detail = repair.repair_rejected(
+        f"### Variables\n\n{opener} It represented hospital death.\n",
+        llm=object(), evidence_ids=["source"], evidence_digest=None,
+        rejected_sentences=[opener], scientific_claims={},
+        claim_required_sentences=[], allowed_claim_refs=[], language="en",
+    )
+    assert "It represented" not in actual
+    assert receipts[0]["dependent_context_drops"] == ["It represented hospital death."]
+    assert detail["reason_code"] == "writer_evidence_repair_deterministic_drop"

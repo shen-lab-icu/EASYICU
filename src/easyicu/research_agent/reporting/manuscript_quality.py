@@ -17,6 +17,7 @@ from ..authority.reader_numeric_display import (
     OVERPRECISE_READER_DECIMAL_RE,
     round_reader_numeric_display,
 )
+from .manuscript_sentence_context import has_dependent_opener
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
     "Abstract": (),
@@ -1054,6 +1055,25 @@ def audit_manuscript_quality(
             )
 
     adjustments = _adjustment_sets(section_map)
+    variables = _subsections(section_map.get("Methods", "")).get("Variables", "")
+    dependent_paragraphs = [
+        paragraph.strip() for paragraph in re.split(r"\n\s*\n", variables)
+        if has_dependent_opener(_strip_audit_markup(paragraph))
+    ]
+    if dependent_paragraphs:
+        findings.append(
+            ManuscriptQualityFinding(
+                code="MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING",
+                severity="error",
+                section="Methods",
+                message=(
+                    "A Variables paragraph starts with a dependent statement "
+                    "without introducing its variable; provenance-safe deletion "
+                    "does not establish a complete methods description."
+                ),
+                excerpts=tuple(paragraph[:500] for paragraph in dependent_paragraphs),
+            )
+        )
     if (
         "Methods" in adjustments
         and "Results" in adjustments
@@ -1191,7 +1211,7 @@ def audit_manuscript_quality(
         )
 
     return ManuscriptQualityAudit(
-        schema_version="manuscript-quality-audit-v3",
+        schema_version="manuscript-quality-audit-v4",
         status="pass"
         if not any(item.severity == "error" for item in findings)
         else "changes_required",
