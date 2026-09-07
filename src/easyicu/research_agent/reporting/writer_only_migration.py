@@ -49,6 +49,7 @@ from .manuscript_quality import (
     render_reader_manuscript,
 )
 from .manuscript_sections import quality_repair_section_keys
+from .manuscript_baseline import baseline_reporting_mentions
 
 
 WRITER_ONLY_MIGRATION_SCHEMA = "easyicu.writer_only_manuscript_migration/1"
@@ -429,6 +430,7 @@ def prepare_writer_only_migration(
     source_quality = audit_manuscript_quality(
         manuscript,
         expected_display_labels=labels,
+        expected_baseline_mentions=baseline_reporting_mentions(context, plan.display_labels if plan else None),
     )
     source_literature = audit_manuscript_literature(manuscript, literature)
     return PreparedWriterOnlyMigration(
@@ -451,6 +453,7 @@ def prepare_writer_only_migration(
         planned_section_keys=quality_repair_section_keys(
             manuscript,
             expected_display_labels=labels,
+            expected_baseline_mentions=baseline_reporting_mentions(context, plan.display_labels if plan else None),
         ),
         removed_unknown_literature_keys=tuple(unknown_keys),
         removed_unknown_literature_sentences=int(removed_sentences),
@@ -523,6 +526,7 @@ def repair_writer_only(
             evidence_ids=prepared.evidence_ids,
             evidence_digest=prepared.evidence_digest,
             literature_digest=prepared.literature_digest,
+            reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
             administrative_authority=prepared.administrative_authority,
         )
     except Exception as exc:
@@ -601,6 +605,7 @@ def repair_writer_only(
         canonical_quality = audit_manuscript_quality(
             canonical,
             expected_display_labels=prepared.expected_display_labels,
+            expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
         )
         canonical_literature = audit_manuscript_literature(
             canonical,
@@ -629,6 +634,7 @@ def repair_writer_only(
                 evidence_ids=prepared.evidence_ids,
                 evidence_digest=prepared.evidence_digest,
                 literature_digest=prepared.literature_digest,
+                reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
                 administrative_authority=prepared.administrative_authority,
             )
         except Exception as exc:
@@ -651,6 +657,7 @@ def repair_writer_only(
     quality = audit_manuscript_quality(
         manuscript,
         expected_display_labels=prepared.expected_display_labels,
+        expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
     )
     if quality.status != "pass":
         codes = sorted({finding.code for finding in quality.findings})
@@ -803,6 +810,7 @@ def publish_writer_only_result(
     bound_quality = audit_manuscript_quality(
         bound_manuscript,
         expected_display_labels=prepared.expected_display_labels,
+        expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
     )
     if bound_quality.status != "pass":
         raise WriterOnlyMigrationError(

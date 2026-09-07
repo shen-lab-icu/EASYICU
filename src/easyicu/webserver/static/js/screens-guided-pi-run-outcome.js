@@ -13,6 +13,7 @@
       'result_tables.json': ['View result tables', '查看结果表'],
       'figure_gallery.json': ['View analysis figures', '查看分析图表'],
       'manuscript_provenance.json': ['Preview evidence-bound article', '预览证据绑定文章'],
+      'manuscript_draft.json': ['View report draft and revision status', '查看报告草稿与修订状态'],
       'scientific_readiness.json': ['View scientific review', '查看科学审阅'],
     };
 
@@ -70,10 +71,10 @@
         workflow && workflow.analysis_validation_retry_available === true
       );
       if (retryAvailable && (!validated || !manuscriptReady)) {
-        const retryLabel = validated
+        const retryLabel = validated && numericVerified
           ? tr('Restore manuscript and evidence checks', '恢复稿件与证据校验')
           : tr('Repair and revalidate', '修复并重新校验');
-        primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry>${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
+        primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry="${validated && numericVerified ? 'report_only' : 'validation_repair'}">${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
       }
       if (!primaryActions.length && !detailActions.length) return '';
       const figureNote = figureCount === 0
