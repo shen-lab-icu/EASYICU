@@ -2408,6 +2408,7 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
             "run_id": "run-plan-review",
             "resumable_here": True,
             "plan_approval_allowed": True,
+            "research_input_state": "prepared",
             "scientific_configuration_sha256": (
                 study_context_owner.scientific_configuration_sha256(study)
             ),
@@ -2422,6 +2423,42 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
     assert by_id["plan"].reason_code == "operator_plan_approval_required"
     assert by_id["analysis"].status == "blocked"
     assert by_id["analysis"].reason_code == "operator_plan_approval_required"
+
+
+@pytest.mark.parametrize("input_state", [None, "metadata_only", "unavailable", "unknown", "prepared"])
+def test_registered_source_does_not_complete_question_specific_input(input_state) -> None:
+    study = _complete_study()
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run={
+            "run_id": "run-input-progress", "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+            "run_status": "human_review_pending", "research_input_state": input_state,
+            "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(study),
+            "pending_review_reason_codes": ["operator_plan_approval_required"],
+            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+        },
+    )
+    by_id = {row.id: row for row in snapshot.stages}
+    assert (by_id["extraction"].status == "complete") is (input_state == "prepared")
+    assert by_id["analysis"].status == "blocked"
+    assert len(snapshot.stages) == 8
+    assert snapshot.required_stage_count == 7
+    assert by_id["idea"].required_for_completion is False
+    assert sum(row.required_for_completion for row in snapshot.stages) == 7
+
+
+def test_prepared_input_from_superseded_configuration_does_not_complete_new_setup() -> None:
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(), active_export_present=True, active_job=None,
+        latest_run={
+            "run_id": "run-stale-input", "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+            "research_input_state": "prepared", "scientific_configuration_sha256": "f" * 64,
+            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+        },
+    )
+    assert next(row for row in snapshot.stages if row.id == "extraction").status != "complete"
 
 
 def test_live_review_authority_overrides_stale_approvable_run_history() -> None:
@@ -6781,13 +6818,21 @@ def _write_development_resume_planner_catalog(
 
 def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_dir = tmp_path / "real-run"
     _write_real_pipeline_fixture(
         run_dir,
         manuscript="# Results\nThe registered aggregate estimate is analysis-only.",
     )
-    wrapper = tmp_path / "web-projection"
+    wrapper = tmp_path / "study-workflow" / "run_web-projection"
+    projected_inputs = []
+
+    def input_progress(path):
+        projected_inputs.append(path)
+        return "prepared"
+
+    monkeypatch.setattr(agent_pipeline_runs, "research_input_state", input_progress)
 
     result = agent_pipeline_runs._write_projection(
         wrapper_dir=wrapper,
@@ -6799,6 +6844,11 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
 
     assert result["engine"] == "easyicu.research_agent.pipeline"
     assert result["gate"]["status"] == "analysis_only"
+    assert projected_inputs == [run_dir]
+    source_manifest = json.loads((wrapper / "source_run_manifest.json").read_text())
+    assert source_manifest["research_input_state"] == "prepared"
+    history = agent_runs.list_run_history(project_root=str(tmp_path))
+    assert history["runs"][0]["research_input_state"] == "prepared"
     tables = json.loads((wrapper / "result_tables.json").read_text(encoding="utf-8"))
     assert tables["table_count"] == 1
     assert tables["tables"][0]["evidence_id"] == "ev-table"

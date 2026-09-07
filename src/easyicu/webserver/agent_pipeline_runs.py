@@ -82,6 +82,10 @@ from easyicu.webserver.scientific_readiness_projection import (
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_input_progress import (
+    project_research_input_state,
+    research_input_state,
+)
 from easyicu.webserver.run_record import RunDirectory, RunRecordReadError
 from easyicu.webserver.research_launch_resume import (
     _DevelopmentResumeAcquisition,
@@ -3086,6 +3090,7 @@ def _write_projection(
         "run_id": run_id,
         "status": "human_review_pending" if pending is not None else gate["status"],
         "resume_scope": getattr(pending, "resume_scope", None),
+        "research_input_state": research_input_state(run_dir),
         "plan_revision_source_run_id": _clean_text(
             plan_revision_source_run_id, 160
         ),
@@ -3399,6 +3404,11 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         "credential_source": credential_source,
         "provider": provider_name,
         "budget_mode": budget_mode,
+        "research_input_state": (
+            project_research_input_state(source_manifest["research_input_state"])
+            if isinstance(source_manifest, Mapping) and "research_input_state" in source_manifest
+            else research_input_state(run_dir)
+        ),
         "resumable_here": bool(pending.resumable_here),
         "requests": [
             {

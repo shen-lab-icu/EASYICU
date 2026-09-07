@@ -65,6 +65,7 @@ class ResearchWorkflowStage(BaseModel):
     status: WorkflowStatus
     owner: str
     reason_code: str
+    required_for_completion: bool = True
 
 
 class ResearchWorkflowSnapshot(BaseModel):
@@ -597,8 +598,24 @@ def build_research_workflow_snapshot(
     setup_receipted = bool(
         setup_ready or analysis_complete or analysis_outputs_available
     )
+    input_state = (
+        review_authority.get("research_input_state")
+        if review_authority.get("run_id") == run_row.get("run_id")
+        and "research_input_state" in review_authority
+        else run_row.get("research_input_state")
+    )
+    bound_input_prepared = bool(
+        input_state == "prepared" and pipeline_run and pipeline_receipt and has_plan
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+    )
+    # A registered export is a planning source, not a receipt for this
+    # question's materialized input. Keep successful downstream/preflight
+    # receipts stronger than legacy setup flags without completing zero-row
+    # metadata-only candidates.
     extraction_receipted = bool(
-        prepared_export_receipted or analysis_complete or analysis_outputs_available
+        bound_input_prepared or preflight_complete
+        or analysis_complete or analysis_outputs_available
     )
     pipeline_attempt_blocked = bool(
         full_run
@@ -660,6 +677,7 @@ def build_research_workflow_snapshot(
     stages = [
         ResearchWorkflowStage(
             id="idea",
+            required_for_completion=False,
             label="Idea mining",
             status=(
                 "review_required"
@@ -742,7 +760,7 @@ def build_research_workflow_snapshot(
         ),
         ResearchWorkflowStage(
             id="extraction",
-            label="Feature extraction",
+            label="Research data preparation",
             status=(
                 "complete"
                 if extraction_receipted
@@ -755,12 +773,17 @@ def build_research_workflow_snapshot(
             owner="easyicu.webserver.routes.jobs",
             reason_code=(
                 "approved_analysis_input_receipt"
-                if (analysis_complete or analysis_outputs_available)
-                and not prepared_export_receipted
+                if analysis_complete or analysis_outputs_available
+                else "bound_research_input_prepared"
+                if bound_input_prepared
                 else "active_export_ready"
-                if extraction_receipted
+                if preflight_complete
                 else "extraction_running"
                 if extraction_running
+                else "metadata_only_input_not_prepared"
+                if input_state == "metadata_only"
+                else "research_input_preparation_required"
+                if active_export_present
                 else "extraction_ready"
                 if setup_ready
                 else "study_setup_incomplete"
@@ -841,7 +864,7 @@ def build_research_workflow_snapshot(
         ),
     ]
 
-    required = [row for row in stages if row.id != "idea"]
+    required = [row for row in stages if row.required_for_completion]
     # ``review_required`` is an outstanding human action, never a completed
     # stage.  Counting it as done made analysis-only runs appear as 7/7 even
     # though their interpretation and manuscript were still awaiting review.
