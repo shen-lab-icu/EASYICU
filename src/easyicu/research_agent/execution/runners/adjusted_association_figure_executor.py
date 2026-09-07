@@ -794,16 +794,7 @@ def run_association_overview_figure(
     ax.set_title("Adjusted association", loc="left", pad=8)
     add_panel_label(ax, "B", x=-0.13, y=1.04, fontsize=presentation.font_size * 1.1 if presentation else 11)
     adjustment = _adjustment_note(estimates["covariates"].iloc[0])
-    if presentation is None:
-        fig.text(0.51, 0.01, adjustment, ha="center", va="bottom", fontsize=5.8)
-    else:
-        fig.supxlabel(
-            textwrap.fill(
-                adjustment,
-                width=max(30, int(presentation.width_mm / presentation.font_size * 3)),
-            ),
-            fontsize=presentation.font_size * 0.85,
-        )
+    if presentation is not None:
         finish_presented_figure(fig, presentation, base_font_size=7.0)
 
     evidence_ids = [
@@ -846,6 +837,13 @@ def run_association_overview_figure(
             },
         ],
         source_data=[distribution_source.name, estimate_source.name],
+        reader_caption=(
+            "(A) Exposure prevalence and observed outcome risk by the declared "
+            "exposure groups. (B) Host-fitted association estimates with their "
+            f"confidence intervals. {adjustment} "
+            "All values and intervals reproduce the bound analysis tables; "
+            "the figure does not fit another model."
+        ),
         statistics_note=(
             "All plotted values are direct projections of registered tables; "
             "the renderer performs no fitting, filtering, or denominator choice."
@@ -949,11 +947,9 @@ def run_adjusted_association_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
-    # Keep the axis label and the model declaration in separate physical
-    # bands.  The earlier 33 mm one-row canvas made those two independent text
-    # groups overlap even though both were individually legible.  The model
-    # declaration is part of the scientific contract, so dropping it is not a
-    # layout fix; reserve enough height for both instead.
+    # Reserve room for the axis label and estimate rows. The full model
+    # declaration is retained in the source-bound reader caption, not drawn
+    # as small prose inside the figure.
     height_mm = 42.0 + 7.0 * len(rows)
     presentation = presentation_from_panels(panels)
     if presentation is None:
@@ -1044,10 +1040,8 @@ def run_adjusted_association_figure(
         subtitle += f" — {int(total_events):,} of {int(total_n):,}"
     ax.set_title(subtitle, loc="left", pad=4, fontsize=6.6)
 
-    # The adjustment set belongs on the figure, not only in its contract. A
-    # forest of adjusted estimates whose plotted surface never says what was
-    # adjusted for is the figure a reader cannot check against the protocol,
-    # and the caption travels separately from the image.
+    # Preserve the exact adjustment set in the reader caption, not as tiny
+    # canvas text. The caption remains bound to this figure's source table.
     adjustment = _adjustment_note(frame["covariates"].iloc[0])
     estimator = _reader_label(_text(frame["estimator_kind"].iloc[0]))
     association_kind = "unadjusted" if adjustment.startswith("Unadjusted:") else "adjusted"
@@ -1055,24 +1049,7 @@ def run_adjusted_association_figure(
         raise ValueError("unsupported_planned_figure_design: chart adjustment declaration disagrees with the source")
     model_note = f"{adjustment} {estimator[:1].upper()}{estimator[1:]} model."
     if presentation is None:
-        fig.text(
-            0.02,
-            0.04,
-            model_note,
-            fontsize=5.9,
-            color=palette["neutral"],
-            ha="left",
-            va="bottom",
-        )
-        fig.subplots_adjust(left=0.30, right=0.72, bottom=0.36, top=0.88)
-    else:
-        fig.supxlabel(
-            textwrap.fill(
-                model_note,
-                width=max(30, int(presentation.width_mm / presentation.font_size * 3)),
-            ),
-            fontsize=presentation.font_size * 0.85,
-        )
+        fig.subplots_adjust(left=0.30, right=0.72, bottom=0.22, top=0.88)
     if presentation is not None:
         finish_presented_figure(fig, presentation, base_font_size=7.0)
     contract = make_figure_contract(
@@ -1110,6 +1087,14 @@ def run_adjusted_association_figure(
             }
         ],
         source_data=[source_path.name],
+        reader_caption=(
+            f"{association_kind.capitalize()} association between "
+            f"{_reader_label(exposure)} and {_reader_label(outcome)}. "
+            f"Points and horizontal intervals reproduce the {_reader_label(scale.name)} "
+            f"estimates and confidence intervals in the bound analysis table. {model_note} "
+            "Fits without an estimate retain the producer's status rather than "
+            "being omitted."
+        ),
         statistics_note=(
             "Estimates, intervals, effect scale and adjustment set are "
             "reproduced from the bound estimates table without recomputation. "

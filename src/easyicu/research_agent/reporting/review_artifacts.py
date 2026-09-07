@@ -99,6 +99,14 @@ def _figure_artifact_row(
             else "supporting_context_not_primary"
         ),
     }
+    caption = raw.get("reader_caption")
+    if (
+        isinstance(caption, str)
+        and caption.strip()
+        and len(caption) <= 4000
+        and not any(ord(character) < 32 for character in caption)
+    ):
+        row["caption"] = caption
     if include_data_url and (png_path := exports.get("png")):
         data_url = _png_data_url(png_path)
         if data_url:

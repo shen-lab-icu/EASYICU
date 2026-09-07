@@ -159,6 +159,14 @@
   white-space:nowrap;
 }
 
+.ag-figure-gallery .ag-figure-caption{
+  margin:5px 0;
+  font-size:14px;
+  line-height:1.6;
+  color:var(--ink-2);
+  overflow-wrap:anywhere;
+}
+
 /* Project Monitor output review cards. Owner: screens-agent.js / legacy #agent. */
 .ag-present-brief{
   display:grid;

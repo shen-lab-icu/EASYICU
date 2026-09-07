@@ -28,6 +28,16 @@ const escaped = renderer.figureGallery({
 assert.ok(escaped.includes('&quot;'), 'attribute quotes must be entity escaped');
 assert.ok(!escaped.includes('alt="figure" onerror='), 'label must not create a new attribute');
 
+const captioned = renderer.figureGallery({
+  figures: [{ label: 'Coverage', data_url: safePng,
+    caption: 'Unknown is not zero. <script>alert(1)</script>' }],
+});
+assert.match(captioned, /<figcaption>[\s\S]*<p class="ag-figure-caption">Unknown is not zero\./,
+  'the explanatory caption must be outside the image in readable page text');
+assert.ok(captioned.includes('&lt;script&gt;'), 'caption markup must be escaped');
+assert.ok(!captioned.includes('<script>'), 'caption must not execute markup');
+assert.ok(!escaped.includes('ag-figure-caption'), 'legacy figures need no empty caption paragraph');
+
 const hostileSource = renderer.figureGallery({
   figures: [{
     label: 'bad source',
@@ -117,4 +127,4 @@ assert.ok(!manuscriptReader.includes('[research_context]'), 'internal evidence i
 assert.ok(!manuscriptReader.includes('<img src=x'), 'article text must be escaped');
 assert.ok(!manuscriptReader.includes('onclick="globalThis.pwned=5'), 'claim ids must not create handlers');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 12 }));
+process.stdout.write(JSON.stringify({ ok: true, cases: 13 }));
