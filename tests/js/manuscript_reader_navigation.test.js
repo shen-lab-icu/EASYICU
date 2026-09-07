@@ -12,7 +12,10 @@ const host = {
   addEventListener: (type, callback) => { handler = callback; },
   querySelector: selector => {
     assert.equal(selector, '#gpi-reference-2');
-    return { scrollIntoView: () => { scrolled += 1; } };
+    return { scrollIntoView: options => {
+      assert.equal(options.block, 'start', 'show the reference instead of leaving it at the viewport foot');
+      scrolled += 1;
+    } };
   },
 };
 window.EasyICU.guidedPi.require('preview').mount(host);

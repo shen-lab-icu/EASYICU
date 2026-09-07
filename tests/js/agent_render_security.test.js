@@ -149,6 +149,7 @@ assert.equal((assembled.match(/Bound caption\./g) || []).length, 1);
 assert.ok(assembled.indexOf('Table 1. Baseline') < assembled.indexOf('<h2>Discussion</h2>'));
 assert.ok(assembled.includes('href="#gpi-reference-1"') && assembled.includes('href="#gpi-reference-2"'));
 assert.ok(assembled.includes('References') && assembled.includes('A Author'));
+assert.ok(assembled.includes('Some source records have no author metadata'));
 assert.ok(assembled.includes('Correction: &lt;img'));
 assert.ok(assembled.includes('revision-1'));
 assert.ok(!assembled.includes('href="javascript:'));
