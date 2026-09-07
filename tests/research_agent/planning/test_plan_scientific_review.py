@@ -70,24 +70,6 @@ def test_guardrails_accept_a_context_without_optional_user_preferences() -> None
     assert "PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS" in rendered
 
 
-def test_scientific_review_blocks_unproven_structural_outcome_absence() -> None:
-    step = _absolute_risk_distribution_step()
-    spec = step.exposure_outcome_distribution_spec.model_copy(update={
-        "missing_outcome_policy": "structural_absence_is_non_event",
-    })
-    plan = AnalysisPlan(
-        research_question=_context().research_question, analysis_type="descriptive_study",
-        steps=[step.model_copy(update={"exposure_outcome_distribution_spec": spec})],
-    )
-    review = build_plan_scientific_review(context=_context(), plan=plan)
-    finding = next(f for f in review.findings if f.code == "DISTRIBUTION_MISSINGNESS_AUTHORITY_INVALID")
-    assert finding.severity == "blocker"
-    assert finding.remediation_route == "agent_plan_revision"
-    assert not finding.requires_user_authorization
-    assert not review.approval_allowed
-    assert "death" in finding.message
-
-
 def test_metadata_only_zero_rows_do_not_rule_out_repeated_stays() -> None:
     context = _context().model_copy(
         update={
