@@ -4392,14 +4392,28 @@ def _materialization_concept_roster(
         ),
     }
     if baseline_requirements is not None:
+        from easyicu.concept_output_sources import resolve_composite_concept_output
+
+        available = foundation_profile.get("available_concepts", ())
         already_classified = set(roster["static_concepts"]) | set(roster["outcome_concepts"])
-        baseline_concepts = {
+        requested = {
             coordinate.source_concept
             for table in baseline_requirements.tables
             for coordinate in (table.group_by, *table.variables)
             if coordinate.source_concept is not None
-            and coordinate.source_concept not in already_classified
         }
+        resolved = {
+            concept: resolve_composite_concept_output(concept, available)
+            for concept in requested
+        }
+        if any(value is None for value in resolved.values()):
+            raise ResearchPipelineRunError(
+                "accepted_baseline_source_unresolved",
+                "An accepted baseline concept has no unique owner-declared "
+                "output in the selected prepared-data modules.",
+                details={"concepts": sorted(key for key, value in resolved.items() if value is None)},
+            )
+        baseline_concepts = set(resolved.values()) - already_classified
         if materialized is not None and baseline_concepts - set(roster["required_feature_concepts"]):
             raise ResearchPipelineRunError(
                 "accepted_baseline_resume_materialization_mismatch",
