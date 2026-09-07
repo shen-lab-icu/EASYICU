@@ -22,7 +22,7 @@ _MAX_FAILURE_PROJECTION_BYTES = 64 * 1024
 
 
 def _normalized_planner_gate_reason(row: Mapping[str, Any]) -> str:
-    """Upgrade one legacy planner-only Provider 5xx projection on read.
+    """Upgrade one legacy planner-only Provider HTTP projection on read.
 
     Older wrappers used the generic execution-failure code even though their
     immutable source manifest recorded that analysis never started and the

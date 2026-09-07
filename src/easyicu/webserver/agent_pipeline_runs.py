@@ -36,6 +36,7 @@ from easyicu.research_agent.providers.structured_retry import (
     safe_provider_error_category,
     safe_structured_attempt_metadata,
 )
+from easyicu.research_agent.providers.clients import safe_provider_http_status_code
 from easyicu.research_agent.acquisition.patient_grouping import (
     PatientGroupingBinding,
 )
@@ -675,6 +676,14 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             if isinstance(exit_code, int) and not isinstance(exit_code, bool) and -128 <= exit_code <= 255:
                 projected["exit_code"] = exit_code
             return projected
+    for item in _pipeline_exception_chain(exc):
+        status_code = safe_provider_http_status_code(item)
+        if status_code is not None:
+            return {
+                "owner": "easyicu.providers.http_transport_v1",
+                "reason_code": "provider_http_error",
+                "status_code": status_code,
+            }
     return {}
 
 

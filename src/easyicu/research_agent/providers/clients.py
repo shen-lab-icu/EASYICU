@@ -242,6 +242,17 @@ def _structured_provider_http_status_code(exc: Exception) -> Optional[int]:
     return None
 
 
+def safe_provider_http_status_code(exc: BaseException) -> Optional[int]:
+    """Expose only a typed HTTP error status for response-free diagnostics.
+
+    This is not retry authority. In particular, unlike the legacy transport
+    compatibility reader, it never parses exception text or response bodies.
+    """
+
+    status_code = _structured_provider_http_status_code(exc)
+    return status_code if status_code is not None and status_code >= 400 else None
+
+
 def _is_rate_limit_error(exc: Exception) -> bool:
     text = f"{type(exc).__name__}: {exc}".lower()
     return _provider_http_status_code(exc) == 429 or any(
