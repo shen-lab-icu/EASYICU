@@ -275,6 +275,9 @@ _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "cohort_definition_spec",
         "measurement_audit_spec",
         "robustness_replay_spec",
+        "functional_form_spec",
+        "phenotype_comparison_spec",
+        "phenotyping_feature_columns",
     }
 )
 _ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS = frozenset()

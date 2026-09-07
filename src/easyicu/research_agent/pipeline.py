@@ -2946,6 +2946,8 @@ class ResearchAgentPipeline:
         # after its last revision, so it never got to satisfy it.
         long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
+        from .planning.baseline_requirements import bind_baseline_requirements
+
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
             # never a newly built context from the incoming call. Scientific
@@ -2955,6 +2957,9 @@ class ResearchAgentPipeline:
             # part of the original evidence bytes).
             context = parse_research_context_json(
                 resume_context_evidence_path.read_text(encoding="utf-8")
+            )
+            bind_baseline_requirements(
+                context, self._config.bound_baseline_requirements, restoring=True,
             )
             if not context_path.is_file() or sha256_of_file(
                 context_path
@@ -2988,6 +2993,9 @@ class ResearchAgentPipeline:
             if builder is build_research_context:
                 context_kwargs["trajectory_binding"] = trajectory_binding
             context = builder(**context_kwargs)
+            context = bind_baseline_requirements(
+                context, self._config.bound_baseline_requirements,
+            )
             context_path.write_text(
                 context.model_dump_json(indent=2),
                 encoding="utf-8",

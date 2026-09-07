@@ -1564,6 +1564,11 @@ def retrieve_context_variables(
         required.add(context.target_outcome)
     if context.primary_exposure:
         required.add(context.primary_exposure)
+    from ..planning.baseline_requirements import baseline_requirement_projection
+
+    for table in baseline_requirement_projection(context)["tables"]:
+        for coordinate in (table["group_by"], *table["variables"]):
+            required.update(coordinate["available_columns"])
     by_name = {v.name: v for v in context.variables}
     selected_names = {v.name for v in selected}
     for name in required:

@@ -153,6 +153,24 @@ def test_execution_resume_rejects_review_binding_drift(tmp_path: Path) -> None:
     assert exc_info.value.code == "scientific_plan_review_binding_drift"
 
 
+def test_old_review_is_readable_but_not_current_execution_authority(tmp_path: Path) -> None:
+    evidence = EvidenceStore(tmp_path)
+    archived = _review(status="analysis_only", approval_allowed=True).model_copy(
+        update={"schema_version": "easyicu.plan_scientific_review/10"}
+    )
+    assert PlanScientificReview.model_validate(archived.model_dump()) == archived
+    _, path = persist_or_validate_scientific_plan_review(
+        run_dir=tmp_path, evidence=evidence, current_review=archived,
+    )
+    original_bytes = path.read_bytes()
+    with pytest.raises(ScientificPlanReviewArtifactError, match="binding_drift"):
+        persist_or_validate_scientific_plan_review(
+            run_dir=tmp_path, evidence=evidence, current_review=_review(),
+            reuse_existing_review=True,
+        )
+    assert path.read_bytes() == original_bytes
+
+
 @pytest.mark.parametrize(
     ("status", "approval_allowed", "severity", "reason"),
     [

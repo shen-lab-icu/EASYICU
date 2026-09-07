@@ -51,6 +51,11 @@ from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority
+from .baseline_requirements import (
+    baseline_requirement_coverage,
+    baseline_requirement_projection,
+    context_baseline_requirements,
+)
 from .dependence_authority import (
     context_patient_group_authority,
     descriptive_counts_only_required,
@@ -97,13 +102,18 @@ class PlanScientificFinding(BaseModel):
     authorization_question: Optional[str] = None
 
 
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/11"
+
+
 class PlanScientificReview(BaseModel):
     """Digest-bound pre-approval review of an exact context/plan/literature set."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/10"] = (
-        "easyicu.plan_scientific_review/10"
+    # Archived /10 reviews remain readable, but cannot substitute for a /11
+    # execution review (the resume gate also binds the review version).
+    schema_version: Literal["easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11"] = (
+        CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -1286,6 +1296,17 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
     """Render case-neutral, context-derived guardrails before Planner generation."""
 
     lines = ["PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS (host-derived):"]
+    baseline = baseline_requirement_projection(context)
+    if baseline["tables"]:
+        lines.append(
+            "- ACCEPTED BASELINE CONTENT: retain every required variable in an "
+            "actual table_one_spec with the required grouping. Choose and explain "
+            "any still-open value aggregation from the available host-declared "
+            "columns; counts/timestamps, step-input mentions, and prose do not "
+            "satisfy a clinical-value requirement. Unavailable items remain gaps, "
+            "not permission to omit or substitute them. "
+            + json.dumps(baseline, ensure_ascii=False, sort_keys=True)
+        )
     lines.append("- " + DISTRIBUTION_MISSINGNESS_GUIDANCE)
     alignment = primary_exposure_time_anchor_alignment(context)
     if alignment.status in {"mismatch", "declared_only"}:
@@ -1464,6 +1485,34 @@ def build_plan_scientific_review(
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
+    baseline_coverage = baseline_requirement_coverage(context, plan)
+    accepted_baseline = context_baseline_requirements(context)
+    for table in baseline_coverage["tables"]:
+        if table["complete"]:
+            continue
+        unavailable = table["unavailable_coordinates"]
+        findings.append(PlanScientificFinding(
+            code=("ACCEPTED_BASELINE_MATERIALIZATION_MISSING" if unavailable
+                  else "ACCEPTED_BASELINE_CONTENT_MISSING"),
+            severity="blocker",
+            dimension="content_completeness",
+            message=(
+                f"Accepted baseline {table['source_step_id']!r}, grouped by "
+                f"{table['group_by']['required']!r}, is not preserved. "
+                f"Missing variables: {table['missing_variables']}; "
+                f"unavailable coordinates: {unavailable}; "
+                f"matched table step: {table['matched_step_id']!r}."
+            ),
+            evidence_refs=["research_context", "analysis_plan"],
+            remediation=(
+                "Restore the missing source-bound data coordinates before replanning; "
+                "a change to the accepted requirement needs a newly reviewed scope."
+                if unavailable else
+                "Restore every missing variable in a typed baseline table with the "
+                "accepted grouping; keep any aggregation choice explicit for review."
+            ),
+            remediation_route=("runtime_capability" if unavailable else "agent_plan_revision"),
+        ))
     variables = {variable.name: variable for variable in context.variables}
     primary_clusters = [step for step in plan.steps if step.scientific_action_id == PHENOTYPING_PRIMARY_ACTION]
     compared_outcomes: set[str] = set()
@@ -2430,6 +2479,12 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            "accepted_baseline_coverage": baseline_coverage,
+            # Carry the exact host contract into a subsequent plan-revision
+            # request; a failed first replan must not erase its own requirements.
+            "accepted_baseline_requirements": (
+                accepted_baseline.model_dump(mode="json") if accepted_baseline else None
+            ),
             "scientific_capability": capability_assessment.to_dict(),
             "reportable_capability_required": bool(require_reportable_capability),
             "score_interpretation": {
