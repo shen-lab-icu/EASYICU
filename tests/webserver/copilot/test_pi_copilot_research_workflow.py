@@ -9233,6 +9233,11 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         lambda **_kwargs: resume_source_job_id,
     )
     monkeypatch.setattr(
+        research_run_submission,
+        "_development_resume_budget_mode",
+        lambda **_kwargs: "planner_canary",
+    )
+    monkeypatch.setattr(
         agent_route.PiProviderConfigStore,
         "research_agent_environment",
         lambda self, **_kwargs: dict(_PI_PROVIDER_ENVIRONMENT),

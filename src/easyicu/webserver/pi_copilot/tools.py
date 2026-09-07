@@ -4229,22 +4229,11 @@ def _request_replan(
         # mutation of an unregistered nested pipeline artifact.
         # `_run` consumes the fresh provider grant and invalidates this turn
         # after submission.
-        workflow = (
-            _workflow_snapshot(context, study_override=study)
-            if strategy == "resume_checkpoint" else {}
-        )
-        failure = workflow.get("latest_attempt_failure")
-        prepared_checkpoint = bool(
-            workflow.get("next_action_code") == "planner_checkpoint_resume_available"
-            and isinstance(failure, Mapping)
-            and failure.get("checkpoint_resume_available") is True
-            and failure.get("run_id") == (latest or {}).get("run_id")
-        )
         return _run(
             context,
             {"run_type": "full"},
             planner_start_mode=strategy,
-            run_intent="reviewed_analysis" if prepared_checkpoint else "candidate_plan",
+            run_intent="candidate_plan",
             plan_change_request=plan_change_request,
         )
     return _result(
