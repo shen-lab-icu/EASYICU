@@ -12,6 +12,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
+from ..authority.scientific_claims import ScientificClaim
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class DescriptiveReportFact:
     evidence_id: str
     source_sha256: str
     source_fields: tuple[str, ...]
+    replaces_claim_ref: str | None = None
 
     @property
     def scaffold(self) -> str:
@@ -70,6 +72,7 @@ def compile_counts_only_report_facts(
     *,
     evidence: Any,
     reader_display_labels: Mapping[str, str],
+    scientific_claims: Sequence[ScientificClaim] = (),
 ) -> tuple[DescriptiveReportFact, ...]:
     """Compile the exact primary counts-only capability, not arbitrary tables."""
 
@@ -138,17 +141,45 @@ def compile_counts_only_report_facts(
                 raise ValueError("Outcome fact denominator differs from its exposure group")
             estimate = _estimate(row, events, denominator)
             prefix = f"descriptive_estimates.outcome_absolute_risks[{position}]"
+            matching_claims = [claim for claim in scientific_claims if (
+                claim.evidence_id == source.evidence_id
+                and claim.step_id == record["step_id"]
+                and claim.claim_type == "descriptive_absolute_risk"
+                and claim.exposure == f"{summary['exposure']}={level}"
+                and claim.outcome == summary["outcome"]
+            )]
+            if len(matching_claims) > 1:
+                raise ValueError("Ambiguous source-bound descriptive claim")
             facts.append(DescriptiveReportFact(
                 subsection="Primary outcome",
                 text=f"Observed {outcome_label} in the {label} group was {events:,} of {denominator:,} observations ({estimate:.2f}%)",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
                 source_fields=tuple(f"{prefix}.{key}" for key in ("level", "events", "denominator", "estimate_pct")),
+                replaces_claim_ref=matching_claims[0].claim_ref if matching_claims else None,
             ))
     return tuple(facts)
 
 
+def render_descriptive_report_claims(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:
+    """Project admitted claim tokens only after the scientific grammar gate.
+
+    Numeric binding still follows this display projection. Keep machine claim
+    tokens during Writer repair, where they are the semantic authority.
+    """
+    # Replace only a complete token matched to the same verified source/level.
+    # Other claims and model-authored sentences are not deduplicated by numbers
+    # or similarity; an unrelated endpoint can have exactly the same count.
+    for fact in facts:
+        if fact.replaces_claim_ref:
+            manuscript = re.sub(
+                rf"^[ \t]*\{{claim:{re.escape(fact.replaces_claim_ref)}\}}[.!?]?[ \t]*$",
+                lambda _match: fact.scaffold, manuscript, flags=re.M,
+            )
+    return place_descriptive_report_facts(manuscript, facts)
+
+
 def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:
-    """Place host-owned sentences after strict filtering, without model prose."""
+    """Place host-owned Results sentences after filtering, without model prose."""
 
     section = re.search(r"^## Results[ \t]*$", manuscript, re.M)
     if section is None or not facts:
@@ -156,6 +187,16 @@ def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveR
     following = re.search(r"^##\s+", manuscript[section.end():], re.M)
     end = section.end() + following.start() if following else len(manuscript)
     body = manuscript[section.end():end]
+    seen: set[str] = set()
+    owned_lines = {fact.scaffold for fact in facts}
+    lines = []
+    for line in body.splitlines():
+        if line.strip() in owned_lines:
+            if line.strip() in seen:
+                continue
+            seen.add(line.strip())
+        lines.append(line)
+    body = "\n".join(lines) + ("\n" if body.endswith("\n") else "")
     for subsection in dict.fromkeys(fact.subsection for fact in facts):
         heading = re.search(rf"^### {re.escape(subsection)}[ \t]*$", body, re.M)
         if heading is None:

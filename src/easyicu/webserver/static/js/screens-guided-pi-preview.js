@@ -566,6 +566,20 @@
           state.projectId, state.resource.run_id, state.resource.artifact,
           state.resource.sha256,
         );
+        if (ticket !== state.request) return;
+        const reader = payload && payload.payload && (payload.payload.reader || (
+          payload.payload.schema_version === 'easyicu.manuscript-provenance/1' ? payload.payload : null
+        ));
+        const galleryRef = reader && reader.figure_gallery_artifact;
+        if (galleryRef) {
+          if (galleryRef.name !== 'figure_gallery.json' || !/^[a-f0-9]{64}$/.test(String(galleryRef.sha256 || ''))) {
+            throw new Error(tr('The reader figure source is invalid.', '文章图件来源绑定无效。'));
+          }
+          const gallery = await api.loadPiCopilotResearchArtifact(
+            state.projectId, state.resource.run_id, galleryRef.name, galleryRef.sha256,
+          );
+          reader.figure_gallery = gallery.payload;
+        }
       } else if (isIdeaPlan()) {
         if (!api.loadIdeaRun) throw new Error(tr('The Idea Mining run API is unavailable.', 'Idea Mining 运行接口不可用。'));
         const loaded = await api.loadIdeaRun({ run_id: state.resource.run_id });
@@ -695,6 +709,17 @@
       }
       const evidenceButton = event.target.closest('[data-gpi-evidence-open]');
       if (evidenceButton) { openEvidence(evidenceButton); return; }
+      const referenceLink = event.target.closest('[data-gpi-reference]');
+      if (referenceLink) {
+        // The app owns URL hashes for routing; keep article anchors local.
+        event.preventDefault();
+        const number = String(referenceLink.dataset.gpiReference || '');
+        if (/^[1-9][0-9]*$/.test(number)) {
+          const reference = host.querySelector('#gpi-reference-' + number);
+          if (reference) reference.scrollIntoView({ block: 'nearest' });
+        }
+        return;
+      }
       const reportArtifact = event.target.closest('[data-gpi-report-artifact]');
       if (reportArtifact && state.resource && state.resource.run_id) {
         const artifact = String(reportArtifact.dataset.gpiReportArtifact || '');

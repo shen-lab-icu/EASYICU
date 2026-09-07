@@ -156,6 +156,14 @@
 
 .ag-artifact-table.is-compact { min-width:0; }
 
+.gpi-reader-table { margin:24px 0; min-width:0; }
+.gpi-reader-table .ag-artifact-table { font-size:14px; }
+.gpi-reader-table details { padding:10px 0; font-size:14px; overflow-wrap:anywhere; }
+.gpi-reader-references { font-size:14px; line-height:1.7; overflow-wrap:anywhere; }
+.gpi-reader-references li { margin:0 0 14px; scroll-margin-top:24px; }
+.gpi-reference-notice { color:var(--ink-3); }
+.gpi-reader-revision { padding:0 18px; font-size:14px; line-height:1.6; overflow-wrap:anywhere; }
+
 .ag-result-reader-note {
   margin:0;
   padding:12px 18px 16px;

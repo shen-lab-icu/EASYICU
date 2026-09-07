@@ -479,6 +479,8 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     const claims = Array.isArray(p.claims) ? p.claims.slice(0, 240) : [];
     const blocks = Array.isArray(p.article_blocks) ? p.article_blocks.slice(0, 240) : [];
+    const references = Array.isArray(p.references) ? p.references.slice(0, 120) : [];
+    const referenceMap = new Map(references.map(row => [String(row.key || ''), row]));
     const claimMap = new Map(claims.map(row => [String(row && row.claim_id || ''), row || {}]));
     const readableText = value => {
       const source = String(value || '')
@@ -488,8 +490,12 @@
       return tokens.map(token => {
         if (/^\*\*[^*]+\*\*$/.test(token)) return `<strong>${esc(token.slice(2, -2))}</strong>`;
         if (/^\[@[^\]]+\]$/.test(token)) {
-          const key = token.slice(2, -1);
-          return `<span class="gpi-reader-citation" title="${esc(key)}">[ref]</span>`;
+          const keys = Array.from(token.matchAll(/@([A-Za-z0-9_.:-]+)/g), match => match[1]);
+          return keys.map(key => {
+            const ref = referenceMap.get(key);
+            if (!ref || !Number.isInteger(ref.number) || ref.number < 1) return `<span class="gpi-reader-citation" title="${escAttr(key)}">[ref]</span>`;
+            return `<a class="gpi-reader-citation" data-gpi-reference="${ref.number}" href="#gpi-reference-${ref.number}" title="${escAttr(ref.title || key)}">[${ref.number}]</a>`;
+          }).join(' ');
         }
         return esc(token);
       }).join('');
@@ -510,20 +516,35 @@
       return `<button type="button" class="gpi-bound-number" id="claim-${escAttr(claimId)}" data-gpi-claim="${escAttr(claimId)}"${evidenceAttrs} aria-controls="gpi-claim-detail-${escAttr(claimId)}" aria-expanded="false" title="${escAttr(evidenceAttrs ? t('Open result evidence preview', '打开结果证据预览') : t('Open evidence lineage', '查看证据链路'))}">${text}</button>`;
     }).join('');
     const reportFigures = figureGallery(p.figure_gallery || {});
+    const tables = (Array.isArray(p.tables) ? p.tables.slice(0, 20) : []).map(table =>
+      `<section class="gpi-reader-table">${artifactTable(`${table.label || ''}. ${table.caption || ''}`, table.columns || [], table.rows || [])}<details><summary>${esc(t('Table definitions and source', '表格定义与来源'))}</summary>${(Array.isArray(table.notes) ? table.notes : []).map(note => `<p>${esc(note)}</p>`).join('')}</details></section>`
+    ).join('');
+    let displaysInserted = false;
+    const displayInsert = tables + (reportFigures
+      ? `<section class="gpi-article-figure-insert"><div class="gpi-article-figure-head"><h2>${esc(t('Result figures', '结果图件'))}</h2><p>${esc(p.figure_gallery && p.figure_gallery.presentation_variant ? t('Re-rendered from digest-verified source tables. Original run figures remain unchanged.', '根据摘要核验后的源数据表重新排版；原始运行图件保持不变。') : t('Figures registered by this run.', '本次运行登记的图件。'))}</p></div>${reportFigures}</section>` : '');
     const article = blocks.map(block => {
       const content = renderSegments(block && block.segments);
       const headingText = (Array.isArray(block && block.segments) ? block.segments : [])
         .map(segment => String(segment && segment.text || '')).join('').trim();
-      const figureInsert = reportFigures && block && block.kind === 'heading'
-        && Number(block.level || 2) === 2 && /^Discussion$/i.test(headingText)
-        ? `<section class="gpi-article-figure-insert"><div class="gpi-article-figure-head"><span>${esc(t('Registered result figures', '已登记结果图'))}</span><h2>${esc(t('Main visual results', '主要可视化结果'))}</h2><p>${esc(p.figure_gallery && p.figure_gallery.presentation_variant ? t('Re-rendered from digest-verified source tables. Original run figures remain unchanged.', '根据摘要核验后的源数据表重新排版；原始运行图件保持不变。') : t('Figures registered by this run.', '本次运行登记的图件。'))}</p></div>${reportFigures}</section>`
-        : '';
+      const insertHere = !displaysInserted && block && block.kind === 'heading'
+        && Number(block.level || 2) === 2 && /^(Discussion|讨论)$/i.test(headingText);
+      const figureInsert = insertHere ? displayInsert : '';
+      if (insertHere) displaysInserted = true;
       if (block && block.kind === 'heading') {
         const level = Math.max(2, Math.min(4, Number(block.level || 2)));
         return `${figureInsert}<h${level}>${content}</h${level}>`;
       }
       return `${figureInsert}<p>${content}</p>`;
     }).join('');
+    const referenceList = references.length ? `<section class="gpi-reader-references"><h2>${esc(t('References', '参考文献'))}</h2><ol>${references.map(ref => {
+      const authors = Array.isArray(ref.authors) ? ref.authors.join(', ') : '';
+      const url = ref.doi ? `https://doi.org/${encodeURIComponent(ref.doi)}` : (/^https:\/\//i.test(String(ref.url || '')) ? ref.url : '');
+      const title = url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener noreferrer">${esc(ref.title || '')}</a>` : esc(ref.title || '');
+      const notices = Array.isArray(ref.bibliographic_notices) ? ref.bibliographic_notices : [];
+      return `<li id="gpi-reference-${Number.isInteger(ref.number) ? ref.number : 0}">${esc(authors)}${authors ? '. ' : ''}${title}. ${esc(ref.venue || '')}${ref.venue ? '. ' : ''}${esc(ref.year || '')}.${notices.map(note => `<p class="gpi-reference-notice">${esc(note)}</p>`).join('')}</li>`;
+    }).join('')}</ol></section>` : '';
+    const revision = p.report_revision && p.report_revision.status === 'pass'
+      ? `<p class="gpi-reader-revision">${esc(t('Report revision', '报告修订'))}: ${esc(p.report_revision.revision_id || '')} · ${esc(t('Source analysis unchanged; not publication authorization.', '源分析不变；不代表发表授权。'))}</p>` : '';
     const evidenceButton = (row, label, pointer, sourceValue) => {
       const evidenceId = String(row && row.evidence_id || '').trim();
       const sha256 = String(row && row.sha256 || '').trim().toLowerCase();
@@ -561,7 +582,7 @@
     }).join('');
     return `<div class="ag-artifact-readable ag-manuscript-reader">
       <div class="ag-artifact-readable-head"><div><div class="eyebrow">${esc(t('Evidence-bound article', '证据绑定文章'))}</div><div class="ag-artifact-readable-title">${esc(t('Click a highlighted number to open its exact result evidence preview. Full lineage remains available when needed.', '点击高亮数字，直接打开对应结果证据的可视化；需要时仍可查看完整证据链。'))}</div></div><span class="pill warn">analysis-only</span></div>
-      <div class="gpi-manuscript-layout" data-gpi-manuscript-layout><article class="gpi-manuscript-article">${article || `<p>${esc(t('No reader blocks are available.', '没有可用的文章阅读内容。'))}</p>`}</article><aside class="gpi-claim-drawer" aria-live="polite"><div class="gpi-claim-empty" data-gpi-claim-empty>${esc(t('Claims without a previewable result source can still open their exact audit lineage here.', '没有可直接预览结果来源的论断，仍可在这里打开准确审计链路。'))}</div>${panels}</aside></div>
+      ${revision}<div class="gpi-manuscript-layout" data-gpi-manuscript-layout><article class="gpi-manuscript-article">${article || `<p>${esc(t('No reader blocks are available.', '没有可用的文章阅读内容。'))}</p>`}${displaysInserted ? '' : displayInsert}${referenceList}</article><aside class="gpi-claim-drawer" aria-live="polite"><div class="gpi-claim-empty" data-gpi-claim-empty>${esc(t('Claims without a previewable result source can still open their exact audit lineage here.', '没有可直接预览结果来源的论断，仍可在这里打开准确审计链路。'))}</div>${panels}</aside></div>
     </div>`;
   }
   function scientificFindingCopy(row) {
@@ -1170,6 +1191,9 @@
     const n = String(name || '').toLowerCase();
     const p = payload && typeof payload === 'object' ? payload : {};
     const gate = p.gate && typeof p.gate === 'object' ? p.gate : p;
+    if (n === 'manuscript_draft.json' && p.reader && p.reader.schema_version === 'easyicu.manuscript-provenance/1') {
+      return manuscriptProvenanceView(p.reader);
+    }
     if (String(p.schema_version || '') === 'easyicu.manuscript-provenance/1') {
       return manuscriptProvenanceView(p);
     }

@@ -127,4 +127,33 @@ assert.ok(!manuscriptReader.includes('[research_context]'), 'internal evidence i
 assert.ok(!manuscriptReader.includes('<img src=x'), 'article text must be escaped');
 assert.ok(!manuscriptReader.includes('onclick="globalThis.pwned=5'), 'claim ids must not create handlers');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 13 }));
+const assembledPayload = {
+  schema_version: 'easyicu.manuscript-provenance/1',
+  article_blocks: [
+    { kind: 'heading', level: 2, segments: [{ kind: 'text', text: 'Results' }] },
+    { kind: 'paragraph', segments: [{ kind: 'text', text: 'See Table 1. Sources [@first; @second].' }] },
+    { kind: 'heading', level: 2, segments: [{ kind: 'text', text: 'Discussion' }] },
+  ],
+  tables: [{ label: 'Table 1', caption: 'Baseline', columns: ['Variable', 'N'], rows: [['<svg onload=bad()>', '120']], notes: ['Unknown is not zero.'] }],
+  references: [
+    { key: 'first', number: 1, title: '<script>bad()</script>', authors: ['A Author'], year: '2020', url: 'javascript:bad()', bibliographic_notices: ['Correction: <img src=x onerror=bad()>'] },
+    { key: 'second', number: 2, title: 'Second source', authors: [], year: '2021', doi: '10.1234/test' },
+  ],
+  figure_gallery: { figures: [{ label: 'Figure', data_url: safePng, caption: 'Bound caption.' }] },
+  report_revision: { status: 'pass', revision_id: 'revision-1' },
+};
+const assembled = renderer.artifactStructuredView('manuscript_draft.json', { reader: assembledPayload });
+assert.ok(assembled.includes('gpi-manuscript-article'), 'new drafts use the actual article reader');
+assert.ok(assembled.includes('Table 1. Baseline'));
+assert.equal((assembled.match(/Bound caption\./g) || []).length, 1);
+assert.ok(assembled.indexOf('Table 1. Baseline') < assembled.indexOf('<h2>Discussion</h2>'));
+assert.ok(assembled.includes('href="#gpi-reference-1"') && assembled.includes('href="#gpi-reference-2"'));
+assert.ok(assembled.includes('References') && assembled.includes('A Author'));
+assert.ok(assembled.includes('Correction: &lt;img'));
+assert.ok(assembled.includes('revision-1'));
+assert.ok(!assembled.includes('href="javascript:'));
+assert.ok(!assembled.includes('<script>') && !assembled.includes('<svg onload'));
+const withoutDiscussion = renderer.manuscriptProvenanceView({ ...assembledPayload, article_blocks: [] });
+assert.equal((withoutDiscussion.match(/Bound caption\./g) || []).length, 1, 'figures are not lost when a heading is missing');
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 15 }));

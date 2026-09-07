@@ -16,6 +16,7 @@ from typing import Any
 
 from easyicu.research_agent.reporting.registered_report_inputs import (
     bind_registered_report_numbers,
+    build_registered_report_reader,
     prepare_registered_report_repair,
 )
 from easyicu.research_agent.reporting.writer_only_migration import (
@@ -45,6 +46,18 @@ def _source_fingerprint(root: Path) -> str:
             digest.update(relative)
             digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
+
+
+def _report_only_limits(limits):
+    """Narrow the approved budget; a report revision cannot expand it."""
+    return replace(
+        limits,
+        max_provider_attempts_per_run=min(6, limits.max_provider_attempts_per_run),
+        max_provider_attempts_per_batch=min(6, limits.max_provider_attempts_per_batch),
+        max_total_tokens_per_run=min(100_000, limits.max_total_tokens_per_run),
+        max_total_tokens_per_batch=min(100_000, limits.max_total_tokens_per_batch),
+        max_wall_clock_seconds_per_task=min(600, limits.max_wall_clock_seconds_per_task),
+    )
 
 
 def make_report_only_run_runner(
@@ -128,16 +141,7 @@ def make_report_only_run_runner(
             output / "preflight.json", writer_only_preflight_payload(prepared)
         )
         limits = provider_adapter.web_research_agent_hard_stop_limits("full_reviewed")
-        limits = replace(
-            limits,
-            max_provider_attempts_per_run=min(6, limits.max_provider_attempts_per_run),
-            max_provider_attempts_per_batch=min(
-                6, limits.max_provider_attempts_per_batch
-            ),
-            max_wall_clock_seconds_per_task=min(
-                600, limits.max_wall_clock_seconds_per_task
-            ),
-        )
+        limits = _report_only_limits(limits)
         ledger_path = output / "runtime" / "provider_hard_stop.json"
         ledger = ProviderHardStopLedger(
             path=ledger_path,
@@ -218,9 +222,6 @@ def make_report_only_run_runner(
                 ),
                 provider_ledger=str(ledger_path),
             )
-            task.finish(
-                score={"report_quality": "pass", "publication_authorized": False}
-            )
             revision = {
                 "schema_version": "easyicu.web-report-revision/1",
                 "revision_id": str(job.id),
@@ -236,13 +237,20 @@ def make_report_only_run_runner(
                 "claim_ceiling": "analysis_only",
                 "publication_authorized": False,
             }
-            return _project_revision(
+            provenance = build_registered_report_reader(
+                run_dir, (output / "manuscript_bound.md").read_text(encoding="utf-8"),
+            )
+            pipeline_owner._write_json(output / "manuscript_provenance.json", provenance)
+            projected = _project_revision(
                 target,
                 study_context,
                 result.reader_manuscript,
                 revision,
                 public_provider,
+                provenance=provenance,
             )
+            task.finish(score={"report_quality": "pass", "publication_authorized": False})
+            return projected
         except BaseException as exc:
             task.finish(error=type(exc).__name__)
             publish_writer_only_failure(
@@ -265,32 +273,49 @@ def make_report_only_run_runner(
 
 
 def _project_revision(
-    target, study, reader: str, revision: dict, provider: dict
+    target, study, reader: str, revision: dict, provider: dict, *, provenance: dict
 ) -> dict:
     """Replace only the mutable Web draft projection, never source run gates."""
 
     wrapper = target.wrapper_dir
+    if (
+        provenance.get("schema_version") != "easyicu.manuscript-provenance/1"
+        or provenance.get("manuscript_sha256") != revision.get("output_sha256")
+        or provenance.get("claim_ceiling") != "analysis_only"
+        or provenance.get("publication_authorized") is not False
+    ):
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_READER_BINDING_FAILED", detail="Reader does not match this revision.",
+        )
+    ledger = json.loads((wrapper / "evidence_ledger.json").read_text())
+    provenance = {**provenance, "report_revision": revision}
+    gallery = next((row for row in ledger["artifacts"] if row.get("name") == "figure_gallery.json"), None)
+    if gallery:
+        provenance["figure_gallery_artifact"] = {"name": "figure_gallery.json", "sha256": gallery["sha256"]}
     draft = json.loads((wrapper / "manuscript_draft.json").read_text())
     draft.update(
         status="report_revision_quality_pass_analysis_only",
         markdown_preview=reader,
         source="registered_report_only_revision",
         report_revision=revision,
+        claims=[],
+        sentences=[],
+        reader=provenance,
     )
-    payloads = {"manuscript_draft.json": draft}
+    payloads = {"manuscript_draft.json": draft, "manuscript_provenance.json": provenance}
     if not run_artifact_disclosure.scan_browser_projection(payloads)["passed"]:
         raise WriterOnlyMigrationError(
             code="WRITER_ONLY_PROJECTION_PRIVACY_FAILED",
             detail="Report preview withheld.",
         )
-    # Rebuild the one changed artifact entry; every scientific gate stays as it
+    # Rebuild only reader projections; every scientific gate stays as it
     # was. The revision is a separately identified report, not a new analysis.
-    pipeline_owner._write_json(wrapper / "manuscript_draft.json", draft)
-    ledger = json.loads((wrapper / "evidence_ledger.json").read_text())
-    updated = pipeline_owner._artifact_record(wrapper / "manuscript_draft.json")
+    for name, payload in payloads.items():
+        pipeline_owner._write_json(wrapper / name, payload)
     ledger["artifacts"] = [
-        updated if row.get("name") == "manuscript_draft.json" else row
-        for row in ledger["artifacts"]
+        row for row in ledger["artifacts"] if row.get("name") not in payloads
+    ] + [
+        pipeline_owner._artifact_record(wrapper / name) for name in payloads
     ]
     pipeline_owner._write_json(wrapper / "evidence_ledger.json", ledger)
     gate = json.loads((wrapper / "quality_gate.json").read_text())["gate"]

@@ -1559,6 +1559,7 @@ def _public_review_payloads(
             "markdown_preview": row.get("markdown_preview"),
             "source": row.get("source"),
             "report_revision": row.get("report_revision"),
+            "reader": row.get("reader"),
         }
     if "manuscript_provenance.json" in payloads:
         # This artifact is already a path-free host projection.  Preserve its
