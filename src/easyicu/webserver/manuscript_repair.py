@@ -14,6 +14,10 @@ from pathlib import Path
 import re
 from typing import Any
 
+from easyicu.research_agent.authority.provider_hard_stop import (
+    ProviderHardStopLimits,
+    validate_provider_transport_reservation_capacity,
+)
 from easyicu.research_agent.reporting.registered_report_inputs import (
     bind_registered_report_numbers,
     build_registered_report_reader,
@@ -48,16 +52,18 @@ def _source_fingerprint(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _report_only_limits(limits):
+def _report_only_limits(limits: ProviderHardStopLimits) -> ProviderHardStopLimits:
     """Narrow the approved budget; a report revision cannot expand it."""
-    return replace(
+    narrowed = replace(
         limits,
         max_provider_attempts_per_run=min(6, limits.max_provider_attempts_per_run),
         max_provider_attempts_per_batch=min(6, limits.max_provider_attempts_per_batch),
-        max_total_tokens_per_run=min(100_000, limits.max_total_tokens_per_run),
-        max_total_tokens_per_batch=min(100_000, limits.max_total_tokens_per_batch),
         max_wall_clock_seconds_per_task=min(600, limits.max_wall_clock_seconds_per_task),
     )
+    # Preserve approved token ceilings: transports without an enforceable
+    # output cap need the existing conservative completion reservation.
+    validate_provider_transport_reservation_capacity(narrowed)
+    return narrowed
 
 
 def make_report_only_run_runner(
@@ -79,6 +85,9 @@ def make_report_only_run_runner(
             "report_only_scope_invalid",
             "Report repair requires an exact reviewed run and no planning amendments.",
         )
+    limits = _report_only_limits(
+        provider_adapter.web_research_agent_hard_stop_limits(budget_mode)
+    )
     target = pipeline_owner._resolve_execution_resume_wrapper(
         study=study_context,
         project_root=project_root,
@@ -140,8 +149,6 @@ def make_report_only_run_runner(
         pipeline_owner._write_json(
             output / "preflight.json", writer_only_preflight_payload(prepared)
         )
-        limits = provider_adapter.web_research_agent_hard_stop_limits("full_reviewed")
-        limits = _report_only_limits(limits)
         ledger_path = output / "runtime" / "provider_hard_stop.json"
         ledger = ProviderHardStopLedger(
             path=ledger_path,
