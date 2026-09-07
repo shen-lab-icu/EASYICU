@@ -15,6 +15,7 @@ desktop/.build
 desktop/node_modules
 desktop/src-tauri/target
 node_modules
+**/node_modules
 output
 baselines
 research_output
@@ -37,4 +38,6 @@ tools
 *.tar.gz
 *.bak*
 __pycache__
+**/__pycache__
 *.py[cod]
+**/*.py[cod]
