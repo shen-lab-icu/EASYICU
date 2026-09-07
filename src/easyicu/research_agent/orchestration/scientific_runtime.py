@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from ..authority.current_case_scientific_runtime import (
     AssociationModelGridRuntimeAuthority,
     CurrentCaseScientificRuntimeAuthority,
+    LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     LandmarkSurvivalRuntimeAuthority,
     SourceFeasibilityRuntimeAuthority,
@@ -143,6 +144,30 @@ class ScientificRuntimeAuthorities:
                         "reason_code": "landmark_survival_suite_host_compiled",
                         "step_id": step.step_id,
                         "output_products": list(authority.plan_outputs),
+                        "execution_contract_sha256": (
+                            authority.execution_contract_sha256
+                        ),
+                    },
+                )
+            ]
+        if isinstance(authority, LandmarkCategoricalAssociationRuntimeAuthority):
+            bound = authority.bind_plan(plan)
+            primary = authority.governed_primary_step(bound)
+            cohort = authority.governed_cohort_step(bound)
+            return bound, [
+                ValidationFinding(
+                    validator="scientific_runtime_plan_compiler",
+                    severity="warning",
+                    message=(
+                        "Compiled the categorical landmark cohort and primary "
+                        "association into verified host-tool routes."
+                    ),
+                    detail={
+                        "reason_code": (
+                            "landmark_categorical_association_host_compiled"
+                        ),
+                        "cohort_step_id": cohort.step_id,
+                        "primary_step_id": primary.step_id,
                         "execution_contract_sha256": (
                             authority.execution_contract_sha256
                         ),

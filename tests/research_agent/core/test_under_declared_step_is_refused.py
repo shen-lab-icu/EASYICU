@@ -26,6 +26,7 @@ not produced one.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
 import pandas as pd
@@ -342,19 +343,19 @@ def test_a_claimed_step_is_never_refused_over_another_owners_gap():
     """
 
     gap = _Candidate("some_other_owner", ("model_requirements[0].covariates",))
-    assert execution_declaration_refusal(claimed_by=object(), trace=[gap]) == ()
+    assert execution_declaration_refusal(SimpleNamespace(claimed_by="owner", candidates=(gap,))) == ()
 
 
 def test_an_unclaimed_step_with_a_gap_is_refused():
     gap = _Candidate("adjusted_association_estimates", ("model_requirements",))
-    assert execution_declaration_refusal(claimed_by=None, trace=[gap]) == (gap,)
+    assert execution_declaration_refusal(SimpleNamespace(claimed_by=None, candidates=(gap,))) == (gap,)
 
 
 def test_an_unclaimed_step_without_a_gap_is_not_refused():
     """No owner and no gap: nothing is waiting on a field, the Coder is right."""
 
     wrong_shape = _Candidate("adjusted_association_estimates", ())
-    assert execution_declaration_refusal(claimed_by=None, trace=[wrong_shape]) == ()
+    assert execution_declaration_refusal(SimpleNamespace(claimed_by=None, candidates=(wrong_shape,))) == ()
 
 
 def test_every_owner_still_waiting_is_named_not_just_the_first():
@@ -363,5 +364,5 @@ def test_every_owner_still_waiting_is_named_not_just_the_first():
     first = _Candidate("owner_a", ("spec.alpha",))
     second = _Candidate("owner_b", ("spec.beta",))
     assert execution_declaration_refusal(
-        claimed_by=None, trace=[first, _Candidate("owner_c", ()), second]
+        SimpleNamespace(claimed_by=None, candidates=(first, _Candidate("owner_c", ()), second))
     ) == (first, second)

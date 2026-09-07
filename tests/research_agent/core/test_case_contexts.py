@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import pandas as pd
 
+from easyicu.research_agent.planning.scientific_review import requested_outcomes
+
 
 def test_lactate_map_vaso_context_injects_source_and_rules(ra):
     cohort = pd.DataFrame({
         "stay_id": [1, 2, 3, 4],
         "age": [60, 70, 80, 65],
         "death": [0, 1, 0, 1],
+        "los_icu": [2.0, 3.0, 4.0, 5.0],
+        "los_hosp": [4.0, 5.0, 6.0, 7.0],
         "lactate_max_24h": [1.5, 3.2, None, 5.0],
         "lactate_measured_24h": [1, 1, 0, 1],
         "map_min_24h": [72, 68, 80, 60],
@@ -36,6 +40,8 @@ def test_lactate_map_vaso_context_injects_source_and_rules(ra):
     )
 
     lact = ctx.variable("lactate_max_24h")
+    assert set(ctx.cohort.outcome_columns) == {"death", "los_icu", "los_hosp"}
+    assert requested_outcomes(ctx) == ("death",)
     assert lact is not None
     assert lact.derived_from_concepts == ["lact"]
     assert lact.source_files == ["blood_gas_be_cai_lact_methb_etc8.parquet"]

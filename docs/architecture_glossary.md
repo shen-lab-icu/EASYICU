@@ -95,6 +95,20 @@ Code examples: `tools/run_research_agent_bench.py`,
 
 ## Naming Rules
 
+- An **executor ownership decision** is the complete claim/refusal result for
+  one already-declared step. Querying ownership does not generate code and does
+  not grant execution authority.
+- A **current figure contract inventory** is an immutable observation shared
+  within one reporting pass, selected by current successful step records. It
+  preserves content digests and read failures; scientific validators and the
+  EvidenceStore retain their existing authority.
+- A **run completion decision** distinguishes content readiness
+  (`publication_ready`) from runtime paper permission (`paper_authorized`).
+  The latter also requires a paper-eligible execution, verified plan digest,
+  and no diagnostic demotion. Formal experiment and human sign-off contracts
+  remain separate requirements. `submission_ready` retains its narrower legacy
+  meaning of content plus administrative-metadata readiness, not authorization
+  to submit a paper.
 - Use "LLM agent" only for planner, replanner, coder, analyzer, writer,
   and related prompt-driven roles.
 - Use "deterministic gate" or "runtime check" for validators, binders,

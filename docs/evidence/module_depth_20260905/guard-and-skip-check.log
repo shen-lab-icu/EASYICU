@@ -1,0 +1,4 @@
+.s.                                                                      [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/research_agent/core/test_security_boundary_regressions.py:993: replaced by the on-disk mode assertion in the 20260726 suite
+2 passed, 1 skipped in 2.15s

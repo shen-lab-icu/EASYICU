@@ -13,13 +13,15 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..canonical_json import canonical_sha256
+from ..authority.filesystem import publish_write_once_bytes
 from .discovery_handoff import build_handoff_from_row, write_handoff_packet
 
-LONGITUDINAL_TASK_PACK_SCHEMA_VERSION = "easyicu.longitudinal_analysis_task_pack/1"
+LONGITUDINAL_TASK_PACK_SCHEMA_VERSION = "easyicu.longitudinal_analysis_task_pack/2"
 
 DEFAULT_LONGITUDINAL_PROTOCOL_CONFIRMATIONS = [
     "time_zero",
@@ -49,11 +51,11 @@ def _sha256(path: Path) -> str:
 class LongitudinalDatabaseTask(BaseModel):
     """One database child of a cross-database longitudinal task pack."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     database: str
     artifact_path: str
-    artifact_sha256: str
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     row_count: int = Field(ge=1)
     id_column: str
     time_column: str
@@ -79,12 +81,14 @@ class LongitudinalDatabaseTask(BaseModel):
 class LongitudinalAnalysisTaskPack(BaseModel):
     """Frozen parent task plus database-specific child handoffs."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = LONGITUDINAL_TASK_PACK_SCHEMA_VERSION
+    schema_version: Literal["easyicu.longitudinal_analysis_task_pack/2"] = LONGITUDINAL_TASK_PACK_SCHEMA_VERSION
     created_at: str = Field(default_factory=_utc_now_iso)
     source_manifest_path: str
-    source_manifest_sha256: str
+    source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     candidate_id: str
     concept: str
     analysis_family: str = "trajectory_clustering"
@@ -93,10 +97,10 @@ class LongitudinalAnalysisTaskPack(BaseModel):
     go_no_go: str = "hold"
     go_no_go_reason: str
     protocol_status: str = "awaiting_human_confirmation"
-    required_protocol_confirmations: List[str] = Field(
-        default_factory=lambda: list(DEFAULT_LONGITUDINAL_PROTOCOL_CONFIRMATIONS)
+    required_protocol_confirmations: tuple[str, ...] = Field(
+        default_factory=lambda: tuple(DEFAULT_LONGITUDINAL_PROTOCOL_CONFIRMATIONS)
     )
-    database_tasks: List[LongitudinalDatabaseTask]
+    database_tasks: tuple[LongitudinalDatabaseTask, ...]
     novelty_claimed: bool = False
     scientific_result_claimed: bool = False
     paper_authorized: bool = False
@@ -111,8 +115,12 @@ class LongitudinalAnalysisTaskPack(BaseModel):
             raise ValueError("database tasks must be unique by database")
         if not self.database_tasks:
             raise ValueError("task pack requires at least one database task")
-        if self.go_no_go != "hold" or self.paper_authorized:
+        if (self.go_no_go != "hold" or self.paper_authorized
+                or self.novelty_claimed or self.scientific_result_claimed
+                or self.protocol_status != "awaiting_human_confirmation"):
             raise ValueError("unreviewed task pack must remain hold and unauthorized")
+        if canonical_sha256(self.model_dump(mode="json", exclude={"task_pack_sha256"})) != self.task_pack_sha256:
+            raise ValueError("longitudinal_task_pack_digest_mismatch")
         return self
 
 
@@ -125,7 +133,9 @@ def build_longitudinal_analysis_task_pack(
     """Convert one readiness candidate into frozen per-database handoffs."""
 
     source = Path(manifest_path).resolve()
-    payload = json.loads(source.read_text(encoding="utf-8"))
+    source_bytes = source.read_bytes()
+    source_digest = hashlib.sha256(source_bytes).hexdigest()
+    payload = json.loads(source_bytes)
     raw_candidates = payload.get("candidates")
     if not isinstance(raw_candidates, list) or not raw_candidates:
         raise ValueError("longitudinal discovery manifest has no candidates")
@@ -168,24 +178,26 @@ def build_longitudinal_analysis_task_pack(
         "target_databases": [
             str(profile.get("database") or "") for profile in profiles
         ],
-        "source_longitudinal_manifest_sha256": _sha256(source),
+        "source_longitudinal_manifest_sha256": source_digest,
         "required_protocol_confirmations": list(
             DEFAULT_LONGITUDINAL_PROTOCOL_CONFIRMATIONS
         ),
     }
     ledger_path = out / "candidate_triage_report.json"
-    ledger_path.write_text(
+    publish_write_once_bytes(
+        ledger_path,
         json.dumps(
             {
                 "schema_version": "easyicu.longitudinal_candidate_triage/1",
                 "source_manifest_path": str(source),
-                "source_manifest_sha256": _sha256(source),
+                "source_manifest_sha256": source_digest,
                 "discovery_ledger": [row],
             },
             ensure_ascii=False,
             indent=2,
-        ),
-        encoding="utf-8",
+        ).encode("utf-8"),
+        temp_prefix=".longitudinal-source-", conflict_error=ValueError,
+        conflict_message="longitudinal_source_immutable_conflict",
     )
 
     database_tasks: List[LongitudinalDatabaseTask] = []
@@ -216,18 +228,32 @@ def build_longitudinal_analysis_task_pack(
             )
         )
 
-    pack = LongitudinalAnalysisTaskPack(
+    pack_payload = dict(
+        schema_version=LONGITUDINAL_TASK_PACK_SCHEMA_VERSION,
+        created_at=_utc_now_iso(),
         source_manifest_path=str(source),
-        source_manifest_sha256=_sha256(source),
+        source_manifest_sha256=source_digest,
+        selected_candidate_sha256=canonical_sha256(selected),
         candidate_id=str(row["executable_candidate_id"]),
         concept=selected_concept,
+        analysis_family="trajectory_clustering",
+        design_archetype="cross_database_trajectory_transportability",
         research_question=question,
+        go_no_go="hold",
         go_no_go_reason=str(row["go_no_go_reason"]),
-        database_tasks=database_tasks,
+        protocol_status="awaiting_human_confirmation",
+        required_protocol_confirmations=list(DEFAULT_LONGITUDINAL_PROTOCOL_CONFIRMATIONS),
+        database_tasks=[task.model_dump(mode="json") for task in database_tasks],
+        novelty_claimed=False, scientific_result_claimed=False, paper_authorized=False,
     )
-    (out / "longitudinal_analysis_task_pack.json").write_text(
-        pack.model_dump_json(indent=2),
-        encoding="utf-8",
+    if _sha256(source) != source_digest:
+        raise ValueError("longitudinal_source_changed_during_build")
+    pack = LongitudinalAnalysisTaskPack(**pack_payload, task_pack_sha256=canonical_sha256(pack_payload))
+    publish_write_once_bytes(
+        out / "longitudinal_analysis_task_pack.json",
+        pack.model_dump_json(indent=2).encode("utf-8"),
+        temp_prefix=".longitudinal-task-", conflict_error=ValueError,
+        conflict_message="longitudinal_task_pack_immutable_conflict",
     )
     return pack
 

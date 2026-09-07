@@ -8,17 +8,18 @@ pin that it observes the selector rather than re-deciding for it.
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, Dict
 
 import pytest
 
-from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.execution.runners import selection as selection_module
-from easyicu.research_agent.execution.runners.selection_report import (
+from easyicu.research_agent.execution.step_executor_registry import (
     STANDARD_EXECUTOR_CANDIDATE_SCHEMA_VERSION,
-    standard_executor_candidate_report,
+    StepExecutor,
+    StepExecutorContext,
+    StepExecutorRegistry,
 )
+from easyicu.research_agent.contracts.ownership_verdict import OwnershipVerdict
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -35,31 +36,14 @@ def _report(
     *,
     plan: AnalysisPlan | None = None,
     plausibility_scope: Any = None,
-    **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Report what the real selector concluded for this exact step.
-
-    The report is a renderer over the selector's trace, so a test that built the
-    record any other way would be testing a path production never takes.
-    """
-
-    plan = _plan() if plan is None else plan
-    trace: list[selection_module.StandardExecutorCandidate] = []
-    selection = selection_module.select_standard_executor(
+    """Project the real ownership query without generating code."""
+    decision = selection_module.resolve_standard_executor(
         step,
-        plan=plan,
+        plan=_plan() if plan is None else plan,
         plausibility_scope=plausibility_scope,
-        trace=trace,
     )
-    kwargs.setdefault(
-        "claimed_by", None if selection is None else selection.analysis_kind
-    )
-    return standard_executor_candidate_report(
-        step,
-        plan=plan,
-        trace=trace,
-        **kwargs,
-    )
+    return decision.report()
 
 
 def _kinds(report: Dict[str, Any]) -> Dict[str, bool]:
@@ -69,6 +53,34 @@ def _kinds(report: Dict[str, Any]) -> Dict[str, bool]:
         )
         for entry in report["candidates"]
     }
+
+
+def test_candidate_report_preserves_exact_refusal_diagnostics():
+    step = _missingness_step()
+    registry = StepExecutorRegistry()
+    registry.declare(
+        StepExecutor(
+            key="adjusted_association_figure",
+            owns=lambda _c: OwnershipVerdict.incomplete_declaration(
+                "adjusted_association_figure",
+                reason="unsupported_planned_figure_design",
+                missing=("figure_panels",),
+            ),
+            render=lambda _c: pytest.fail("a declined owner cannot render"),
+            analysis_kind="adjusted_association_figure",
+            selection_reason="",
+            progress_message="",
+            consumed_input_keys=lambda _c: (),
+        )
+    )
+    decision = registry.resolve(StepExecutorContext(step=step, plan=_plan()))
+    owner = decision.report()["candidates"][0]
+    assert owner["decline_reason"] == "unsupported_planned_figure_design"
+    assert owner["missing_declarations"] == ["figure_panels"]
+    owner["missing_declarations"].clear()
+    assert decision.report()["candidates"][0]["missing_declarations"] == [
+        "figure_panels"
+    ]
 
 
 def test_report_names_every_owner_the_selector_consults() -> None:
@@ -227,7 +239,7 @@ def test_a_raising_detail_classifier_is_recorded_not_propagated(
         expected_outputs=["table:bespoke_product"],
     )
 
-    report = standard_executor_candidate_report(step, plan=_plan(), trace=[])
+    report = _report(step)
 
     assert report["claimed_by"] is None
     assert report["owning_candidates"] == []
@@ -292,52 +304,29 @@ def test_the_report_cannot_claim_an_owner_the_selector_declined() -> None:
     assert outcome["prevalence_mortality_figure"] == "declined_receipt_required"
 
 
-def test_a_report_without_a_trace_says_so_instead_of_guessing() -> None:
-    """An absent diagnostic is recoverable; a confident wrong one is not."""
+def test_report_uses_the_decision_without_requerying_or_rendering():
+    from dataclasses import FrozenInstanceError
 
-    step = AnalysisStep(
-        step_id="09_bespoke_analysis",
-        intent="Something outside every closed contract.",
-        method="bespoke_method",
-        inputs=[],
-        expected_outputs=["table:bespoke_product"],
+    events = []
+    registry = StepExecutorRegistry()
+    registry.declare(
+        StepExecutor(
+            key="owner",
+            owns=lambda _c: events.append("claim") or True,
+            render=lambda _c: events.append("render") or "generated code",
+            analysis_kind="selected_analysis",
+            selection_reason="contract",
+            progress_message="Selected",
+            consumed_input_keys=lambda _c: (),
+        )
     )
-
-    report = standard_executor_candidate_report(step, plan=_plan())
-
-    assert report["trace_available"] is False
-    assert report["owning_candidates"] == []
-    assert not any(entry["kind"] == "owner" for entry in report["candidates"])
-
-
-def test_execute_phase_records_the_report_for_claimed_and_unclaimed_steps() -> None:
-    source = (
-        inspect.getsource(execution_phase._step_settle_initial_code)
-        + "\n"
-        + inspect.getsource(execution_phase.run_execute_phase)
-    )
-
-    assert 'step_record["standard_executor_candidates"] = (' in source
-    # Written outside the `if standard_executor is not None:` body, so an
-    # unclaimed step — the case that needs explaining — is recorded too.
-    claimed_branch = source.index("if standard_executor is not None:")
-    write_site = source.index('step_record["standard_executor_candidates"] = (')
-    preflight_assignment = source.index(
-        "preflight_standard_code = standard_executor.code", claimed_branch
-    )
-    assert write_site > preflight_assignment
-
-
-@pytest.mark.parametrize("claimed", ["grouped_table_one", None])
-def test_claimed_by_is_recorded_verbatim(claimed: str | None) -> None:
-    step = AnalysisStep(
-        step_id="03_table_one",
-        intent="Compare baseline characteristics.",
-        method="descriptive_table_one",
-        inputs=[],
-        expected_outputs=["table:table_one"],
-    )
-
-    report = _report(step, claimed_by=claimed)
-
-    assert report["claimed_by"] == claimed
+    step = _missingness_step()
+    decision = registry.resolve(StepExecutorContext(step=step, plan=_plan()))
+    assert events == ["claim"]
+    assert decision.report()["claimed_by"] == "selected_analysis"
+    assert decision.report()["declared_method"] == step.method
+    assert events == ["claim"]
+    with pytest.raises(FrozenInstanceError):
+        decision.claimed_by = "invented_owner"
+    assert decision.render_selection().code == "generated code"
+    assert events == ["claim", "render"]

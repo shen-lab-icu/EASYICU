@@ -15,6 +15,7 @@ from ...contracts.ordered_stratified import (
     CONTRACT_KEY,
     CONTRACT_SCHEMA_VERSION,
     CONTROLLED_METHOD,
+    PARENT_PRODUCT,
     SCIENTIFIC_ACTION_ID,
 )
 from ...methods.ordered_trends import (
@@ -33,7 +34,7 @@ from .typed_input_binding import (
 )
 
 ORDERED_STRATIFIED_ANALYSIS_KIND = "ordered_stratified_analysis"
-ORDERED_STRATIFIED_PARENT_PRODUCT = "table:adjusted_association_estimates"
+ORDERED_STRATIFIED_PARENT_PRODUCT = PARENT_PRODUCT
 
 
 def _typed_cohort_input(step: AnalysisStep) -> str:

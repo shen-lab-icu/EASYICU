@@ -8,6 +8,22 @@ from easyicu.extensions import ExtensionRegistry, ExtensionRegistryError
 from easyicu.extensions.mcp_client import call_mcp_tool
 
 
+def test_default_registry_uses_isolated_application_state(monkeypatch, tmp_path):
+    monkeypatch.delenv("EASYICU_EXTENSION_HOME", raising=False)
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path))
+    registry = ExtensionRegistry()
+    assert registry.root == tmp_path / ".easyicu" / "extensions"
+    assert registry.snapshot().skills == ()
+    assert registry.lock_path.exists()
+
+
+def test_explicit_extension_roots_take_precedence(monkeypatch, tmp_path):
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("EASYICU_EXTENSION_HOME", str(tmp_path / "extension"))
+    assert ExtensionRegistry().root == tmp_path / "extension"
+    assert ExtensionRegistry(tmp_path / "explicit").root == tmp_path / "explicit"
+
+
 def _skill(name: str, body: str, *, disable: bool = False) -> str:
     disabled = "\ndisable-model-invocation: true" if disable else ""
     return (

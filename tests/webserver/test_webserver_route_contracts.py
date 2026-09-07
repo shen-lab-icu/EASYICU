@@ -209,6 +209,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
+        "/api/copilot/pi/sessions/{session_id}/agent-plan-configuration",
+        "post_pi_copilot_agent_plan_configuration",
+    ),
+    (
+        "POST",
         "/api/copilot/pi/sessions/{session_id}/regenerate",
         "post_pi_copilot_regenerate",
     ),

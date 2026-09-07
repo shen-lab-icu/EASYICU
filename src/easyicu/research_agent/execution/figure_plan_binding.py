@@ -178,6 +178,13 @@ def _contract_for_output(
     out_dir = Path(out_dir).resolve()
     contract_path = out_dir / contract_name
     try:
+        figure_path = out_dir / figure_name
+        if (
+            figure_path.is_symlink()
+            or not figure_path.is_file()
+            or figure_path.resolve(strict=True).parent != out_dir
+        ):
+            return None, contract_name, "runtime_figure_is_missing_or_unsafe"
         if (
             contract_path.is_symlink()
             or not contract_path.is_file()
@@ -202,21 +209,31 @@ def validate_step_planned_figure_contract_binding(
 
     if not step.figure_panels:
         return []
-    panels_by_output: dict[str, list[Any]] = {}
+    panels_by_output: dict[tuple[str, str], list[Any]] = {}
     for panel in step.figure_panels:
-        # This validator binds the current main-figure artifact.  A panel that
-        # the final article strategy moved to the supplement is satisfied by
-        # the dedicated supporting display step and must not be required to
-        # remain embedded in the main composite.
-        if str(getattr(panel, "placement", "main")) == "supplementary":
-            continue
-        panels_by_output.setdefault(str(panel.figure_output), []).append(panel)
+        panels_by_output.setdefault(
+            (str(panel.figure_output), panel.placement), []
+        ).append(panel)
 
     findings: list[ValidationFinding] = []
-    for figure_output, planned_panels in panels_by_output.items():
+    for (figure_output, placement), planned_panels in panels_by_output.items():
+        binding_summary = step_summary
+        if placement == "supplementary":
+            supplemental = step_summary.get("supplementary_output_files")
+            # An entirely supplementary output can keep its declared product
+            # slot. Split main/supplementary panels require an explicit artifact
+            # binding, never a list of supposedly satisfied panel identifiers.
+            if supplemental is not None or (figure_output, "main") in panels_by_output:
+                binding_summary = {
+                    **step_summary,
+                    "output_files": supplemental,
+                    "planner_product_slot_bindings": step_summary.get(
+                        "supplementary_product_slot_bindings"
+                    ),
+                }
         contract, contract_name, contract_error = _contract_for_output(
             out_dir=out_dir,
-            step_summary=step_summary,
+            step_summary=binding_summary,
             figure_output=figure_output,
         )
         if contract_error is not None or contract is None:
@@ -235,9 +252,9 @@ def validate_step_planned_figure_contract_binding(
             continue
         runtime_panels, panel_error = _contract_panels_for_output(
             contract=contract,
-            step_summary=step_summary,
+            step_summary=binding_summary,
             figure_output=figure_output,
-            declared_output_count=len(panels_by_output),
+            declared_output_count=sum(p == placement for _, p in panels_by_output),
         )
         if panel_error is not None or runtime_panels is None:
             findings.append(

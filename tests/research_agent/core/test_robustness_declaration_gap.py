@@ -29,7 +29,7 @@ from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_replay_declaration_verdict,
 )
 from easyicu.research_agent.execution.runners.selection import (
-    select_standard_executor,
+    resolve_standard_executor,
 )
 from easyicu.research_agent.execution.owner_declaration import (
     execution_declaration_refusal,
@@ -91,10 +91,9 @@ def test_the_gate_reports_it_and_the_execution_refusal_acts_on_it():
     ]
     assert findings[0].detail["missing_declarations"] == ["robustness_replay_spec"]
 
-    trace: list = []
-    chosen = select_standard_executor(step, plan=_Plan(), trace=trace)
-    assert chosen is None
-    refused = execution_declaration_refusal(claimed_by=chosen, trace=trace)
+    decision = resolve_standard_executor(step, plan=_Plan())
+    assert decision.claimed_by is None
+    refused = execution_declaration_refusal(decision)
     assert [c.analysis_kind for c in refused] == [ROBUSTNESS_REPLAY_ANALYSIS_KIND]
 
 
@@ -238,7 +237,7 @@ def test_this_owner_never_claims_a_step():
         class _Plan:
             steps = (step,)
 
-        assert select_standard_executor(step, plan=_Plan()) is None
+        assert resolve_standard_executor(step, plan=_Plan()).claimed_by is None
 
 
 def test_the_gap_is_not_keyed_on_the_method_label():

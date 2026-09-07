@@ -870,6 +870,17 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
         "action_key": "job-child-1",
         "child_job_id": "job-child-1",
     }
+    automatic_plan = client.post(
+        action_path,
+        json={
+            "project_id": "guided-project-2",
+            "action_code": "auto_generate_plan",
+            "action_key": "job-child-2",
+            "child_job_id": "job-child-2",
+        },
+    )
+    assert automatic_plan.status_code == 200
+    assert automatic_plan.json()["received"]["action_code"] == "auto_generate_plan"
     automatic_revision = client.post(
         action_path,
         json={

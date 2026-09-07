@@ -119,6 +119,8 @@
     const gallery = window.AGENT_RENDER && typeof window.AGENT_RENDER.figureGallery === 'function'
       ? window.AGENT_RENDER.figureGallery(p.figure_gallery || {}) : '';
     const presentation = !!(p.figure_gallery && p.figure_gallery.presentation_variant);
+    const figureCount = Array.isArray(p.figure_gallery && p.figure_gallery.figures)
+      ? p.figure_gallery.figures.length : 0;
     const interpretation = [
       effect && low && high
         ? tr(
@@ -148,7 +150,7 @@
       <section class="gpi-analysis-section is-interpretation"><div class="gpi-analysis-section-head"><span>03</span><div><small>${esc(tr('Result interpretation', '结果解读'))}</small><h3>${esc(tr('Clinical and statistical meaning', '临床与统计含义'))}</h3></div></div><ol>${interpretation.map(value => `<li>${esc(value)}</li>`).join('')}</ol>${discussion.length ? `<details><summary>${esc(tr('Show evidence-bound discussion text', '展开证据绑定的 Discussion 文本'))}</summary>${discussion.map(value => `<p>${esc(value)}</p>`).join('')}</details>` : ''}</section>
       <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>04</span><div><small>${esc(tr('Robustness and data quality', '稳健性与数据质量'))}</small><h3>${esc(tr('What was checked—and how to read it', '检查了什么，以及应如何理解'))}</h3></div></div><ul><li>${esc(tr('Displayed denominators and estimates come from registered evidence; unavailable values remain unavailable.', '展示的分母和估计值来自已登记证据；不可用的数值继续保持不可用。'))}</li><li>${esc(tr('Measurement opportunity, missingness and applicability must be interpreted using the run-specific audit artifacts.', '测量机会、缺失性和适用性必须依据本次运行的审计产物解读。'))}</li><li>${esc(tr('Primary and sensitivity rows must not be treated as independent or equivalent unless the registered analysis says so.', '除非已登记分析明确说明，否则不得把主要分析与敏感性分析视为相互独立或等价。'))}</li></ul></section>
       <section class="gpi-analysis-section is-limit"><div class="gpi-analysis-section-head"><span>05</span><div><small>${esc(tr('Limitations', '局限性'))}</small><h3>${esc(tr('What this report cannot prove', '这份报告不能证明什么'))}</h3></div></div>${limitations.length ? limitations.map(value => `<p>${esc(value)}</p>`).join('') : `<p>${esc(tr('Interpretation is limited to the design, data, estimand and evidence scope registered by this run. This report alone cannot establish causation, clinical validity or external generalizability.', '解释范围受本次运行登记的设计、数据、estimand 和证据边界限制；仅凭本报告不能确立因果关系、临床有效性或外部可推广性。'))}</p>`}</section>
-      <nav class="gpi-analysis-links" aria-label="${esc(tr('Traceable report artifacts', '可追溯报告产物'))}"><span>${esc(tr('Open underlying artifact', '打开底层产物'))}</span>${artifactButton('result_tables.json', tr('Result tables', '结果表'))}${artifactButton('figure_gallery.json', tr('Figure gallery', '图件画廊'))}${artifactButton('manuscript_provenance.json', manuscriptReady ? tr('Evidence-bound article', '证据绑定文章') : tr('Manuscript generation diagnosis', '稿件生成诊断'))}${artifactButton('quality_gate.json', tr('Quality gate', '质量闸门'))}</nav>
+      <nav class="gpi-analysis-links" aria-label="${esc(tr('Traceable report artifacts', '可追溯报告产物'))}"><span>${esc(tr('Open underlying artifact', '打开底层产物'))}</span>${artifactButton('result_tables.json', tr('Result tables', '结果表'))}${figureCount > 0 ? artifactButton('figure_gallery.json', tr('Figure gallery', '图件画廊')) : ''}${artifactButton('manuscript_provenance.json', manuscriptReady ? tr('Evidence-bound article', '证据绑定文章') : tr('Manuscript generation diagnosis', '稿件生成诊断'))}${artifactButton('quality_gate.json', tr('Quality gate', '质量闸门'))}</nav>
     </div>`;
   }
 

@@ -109,6 +109,96 @@ def _host_bindings(columns=None):
     }
 
 
+@pytest.mark.parametrize("chart_type,accepted", [("forest", True), ("table", False)])
+def test_owner_requires_implemented_planned_chart(chart_type, accepted):
+    step = _step(
+        figure_panels=[
+            dict(
+                panel_id="A",
+                figure_output="figure:adjusted_effect",
+                article_role="primary_estimand",
+                chart_type=chart_type,
+                source_products=[ADJUSTED_ASSOCIATION_FIGURE_INPUT],
+            )
+        ]
+    )
+    assert (
+        adjusted_association_figure_executor_owns_step(
+            step, resolved_bindings=_host_bindings()
+        )
+        is accepted
+    )
+    if not accepted:
+        with pytest.raises(ValueError, match="unsupported_planned_figure_design"):
+            adjusted_association_figure_executor_code(step)
+
+
+def test_owner_refuses_reversed_panel_source_combinations():
+    step = _step(
+        inputs=list(ASSOCIATION_OVERVIEW_FIGURE_INPUTS),
+        input_consumption_contracts=[
+            dict(input_key=key, mode="all_rows")
+            for key in ASSOCIATION_OVERVIEW_FIGURE_INPUTS
+        ],
+        expected_outputs=["figure:overview"],
+        figure_panels=[
+            dict(
+                panel_id="A",
+                article_role="descriptive_result",
+                chart_type="event_rate_panel",
+                source_products=[ADJUSTED_ASSOCIATION_FIGURE_INPUT],
+                figure_output="figure:overview",
+            ),
+            dict(
+                panel_id="B",
+                article_role="primary_estimand",
+                chart_type="forest",
+                source_products=[ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0]],
+                figure_output="figure:overview",
+            ),
+        ],
+    )
+    bindings = {
+        **_host_bindings(),
+        ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0]: {
+            "product_contract": {"columns": list(EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS)}
+        },
+    }
+    assert not association_overview_figure_executor_owns_step(
+        step, resolved_bindings=bindings
+    )
+
+
+def test_supported_panel_is_consumed_and_binds_actual_export(tmp_path):
+    from easyicu.research_agent.execution.figure_plan_binding import (
+        validate_step_planned_figure_contract_binding,
+    )
+
+    step = _step(
+        figure_panels=[
+            dict(
+                panel_id="effect",
+                figure_output="figure:adjusted_effect",
+                article_role="primary_estimand",
+                chart_type="forest",
+                source_products=[ADJUSTED_ASSOCIATION_FIGURE_INPUT],
+            )
+        ]
+    )
+    run_dir, manifest = _write_bound_table(tmp_path, [_REAL_ROW])
+    summary = run_adjusted_association_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=step.step_id,
+        figure_product="adjusted_effect",
+        panel_specs=[panel.model_dump(mode="json") for panel in step.figure_panels],
+    )
+    assert not validate_step_planned_figure_contract_binding(
+        step=step, out_dir=tmp_path / "out", step_summary=summary
+    )
+
+
 def _write_bound_table(tmp_path: Path, rows, columns=None) -> tuple[Path, dict]:
     """Write a bound estimates CSV and the manifest the sandbox would receive."""
 

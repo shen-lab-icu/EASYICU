@@ -30,7 +30,7 @@ def test_host_candidate_plan_control_recovers_server_owned_planner_intent(
             "planner_start_mode": "fresh",
         }
     )
-    assert not agent_route._candidate_plan_only_authorized(
+    assert agent_route._candidate_plan_only_authorized(
         {
             "study_context_id": "study-1",
             "planner_start_mode": "auto",
@@ -42,14 +42,25 @@ def test_host_candidate_plan_control_recovers_server_owned_planner_intent(
         "build_project_workflow_projection",
         lambda **_kwargs: SimpleNamespace(
             workflow=SimpleNamespace(
-                next_action_code="plan_scientific_changes_required"
+                next_action_code="planner_checkpoint_resume_available"
             )
         ),
     )
+    assert agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "resume_checkpoint",
+        }
+    )
+
     monkeypatch.setattr(
         agent_route,
-        "_package_bound_plan_history_present",
-        lambda _study_context_id: False,
+        "build_project_workflow_projection",
+        lambda **_kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(
+                next_action_code="plan_scientific_changes_required"
+            )
+        ),
     )
     assert agent_route._candidate_plan_only_authorized(
         {
@@ -74,6 +85,12 @@ def test_host_candidate_plan_control_recovers_server_owned_planner_intent(
             "planner_start_mode": "fresh",
         }
     )
+    assert agent_route._candidate_plan_only_authorized(
+        {
+            "study_context_id": "study-1",
+            "planner_start_mode": "auto",
+        }
+    )
 
     monkeypatch.setattr(
         agent_route,
@@ -81,11 +98,6 @@ def test_host_candidate_plan_control_recovers_server_owned_planner_intent(
         lambda **_kwargs: SimpleNamespace(
             workflow=SimpleNamespace(next_action_code="plan_configuration_superseded")
         ),
-    )
-    monkeypatch.setattr(
-        agent_route,
-        "_package_bound_plan_history_present",
-        lambda _study_context_id: False,
     )
     assert agent_route._candidate_plan_only_authorized(
         {
@@ -95,7 +107,7 @@ def test_host_candidate_plan_control_recovers_server_owned_planner_intent(
     )
 
 
-def test_failed_plan_regeneration_stays_package_bound_after_data_preparation(
+def test_failed_plan_regeneration_stays_candidate_only_after_data_preparation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -107,13 +119,7 @@ def test_failed_plan_regeneration_stays_package_bound_after_data_preparation(
             )
         ),
     )
-    monkeypatch.setattr(
-        agent_route,
-        "_package_bound_plan_history_present",
-        lambda _study_context_id: True,
-    )
-
-    assert not agent_route._candidate_plan_only_authorized(
+    assert agent_route._candidate_plan_only_authorized(
         {
             "study_context_id": "study-1",
             "planner_start_mode": "fresh",

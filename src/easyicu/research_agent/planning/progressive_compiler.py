@@ -64,6 +64,7 @@ from .cohort_contract import (
 from .dependence_authority import context_counts_only_authority
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
+from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
 from .progressive_contract import (
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCompiledStepReceipt,
@@ -655,21 +656,23 @@ def _compile_ordered_stratified_contract(
             step_index=step_index,
             path="raw_inputs",
         )
+    contract = resolve_ordinal_multi_outcome_contract(context)
     continuous_outcome = remaining[0]
-    descriptor = variables[continuous_outcome]
-    domain = descriptor.observed_domain or {}
-    if descriptor.role.value != "outcome" or domain.get("is_binary") is not False:
+    if contract is None or (
+        exposure,
+        binary_outcome,
+        continuous_outcome,
+    ) != contract.variables:
         raise _fail(
             "progressive_ordered_trend_continuous_outcome_invalid",
-            "the additional ordered-trend input must be a typed non-binary outcome",
+            "the additional ordered-trend input must match the typed ordinal "
+            "multi-outcome contract",
             step=step,
             step_index=step_index,
             path="raw_inputs",
         )
-    levels = list(observed_levels_for(name=exposure, variables=dict(variables)))
-    binary_levels = list(
-        observed_levels_for(name=binary_outcome, variables=dict(variables))
-    )
+    levels = list(contract.exposure_levels)
+    binary_levels = list(contract.binary_levels)
     event_index = int(parent.event_level_index)
     if len(levels) < 3 or binary_levels != [0, 1] or event_index != 1:
         raise _fail(
@@ -1353,11 +1356,8 @@ def _compile_model_terms(
                 value for value in exposure_levels if value != reference
             )
         else:
-            observed = observed_levels_for(
-                name=exposure_term.name, variables=dict(variables)
-            )
             value = _level_at(
-                observed,
+                exposure_levels,
                 step.primary_contrast_level_index,
                 label="primary_contrast_level_index",
                 step=step,
@@ -1440,6 +1440,46 @@ def _compile_adjusted_association(
             step_index=step_index,
             path="model_terms",
         )
+    if adjustment_authority.selection != "exact":
+        nonbaseline = [
+            name
+            for name in covariates
+            if str(getattr(variables[name].role, "value", variables[name].role))
+            != "demographic"
+        ]
+        if nonbaseline:
+            raise _fail(
+                "progressive_planner_covariate_baseline_authority_missing",
+                "Planner-selected adjustment is limited to owner-declared "
+                "baseline demographic variables; unavailable timing authority "
+                "cannot be replaced by a generated rationale",
+                step=step,
+                step_index=step_index,
+                path="model_terms",
+                detail={"ineligible_covariates": nonbaseline},
+            )
+    if adjustment_authority.selection == "exact":
+        authority_rationales = adjustment_authority.operational_rationales
+        authority_temporal_roles = adjustment_authority.operational_temporal_roles
+        covariate_rationales = {
+            name: authority_rationales[name]
+            for name in covariates
+            if name in authority_rationales
+        }
+        covariate_temporal_roles = {
+            name: authority_temporal_roles[name]
+            for name in covariates
+            if name in authority_temporal_roles
+        }
+    else:
+        covariate_rationales = {
+            term.name: str(term.clinical_rationale)
+            for term in step.model_terms
+            if term.role == "covariate" and term.name in covariates
+        }
+        covariate_temporal_roles = {
+            name: "baseline_static" for name in covariates
+        }
     method_family = (
         ASSOCIATION_LOGIT_ESTIMATOR
         if step.outcome_type == "binary"
@@ -1456,6 +1496,8 @@ def _compile_adjusted_association(
             analysis_set="source_aware",
             required_for_step_success=True,
             covariates=covariates,
+            covariate_rationales=covariate_rationales,
+            covariate_temporal_roles=covariate_temporal_roles,
             model_terms=terms,
             exposure_levels=exposure_levels or None,
             exposure_reference_level=reference or None,
@@ -2328,7 +2370,10 @@ def compile_progressive_plan(
     )
     allowed_modules = set(progressive_module_ids_for_analysis_types((canonical_type,)))
     for index, step in enumerate(skeleton.steps):
-        if step.module_id not in allowed_modules:
+        if step.module_id not in allowed_modules and not (
+            canonical_type == "descriptive_epidemiology"
+            and _is_ungrouped_baseline_summary(step)
+        ):
             raise _fail(
                 "progressive_analysis_module_unavailable",
                 f"module {step.module_id!r} is unavailable for analysis type "
@@ -2405,6 +2450,12 @@ def compile_progressive_plan(
             allowed_citations=allowed_citations,
         )
         if any(intent.axis == "missing" for intent in skeleton.robustness_intents)
+        or any(
+            step.module_id == "measurement_audit"
+            and step.planned_analysis_role
+            in {"primary", "secondary", "sensitivity"}
+            for step in skeleton.steps
+        )
         else None
     )
     host_missing_data_target_index = next(

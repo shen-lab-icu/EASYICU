@@ -45,6 +45,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...contracts.ownership_verdict import OwnershipContractDetail
 from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep, spec_backs_every_declared_product
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -60,6 +61,7 @@ __all__ = [
     "is_missingness_measurement_availability_contract",
     "missingness_audit_cohort_input_key",
     "missingness_audit_executor_owns_step",
+    "missingness_contract_details",
     "missingness_audit_input_scope_supported",
     "is_measurement_bias_audit_contract",
     "missingness_measurement_audit_code",
@@ -1649,3 +1651,41 @@ def missingness_measurement_audit_code(
         "__EASYICU_PLAUSIBILITY_SUMMARY_ENTRY__",
         plausibility_summary_entry,
     )
+
+
+def missingness_contract_details(step: AnalysisStep) -> tuple[OwnershipContractDetail, ...]:
+    """Describe this adapter's closed contracts without claiming ownership."""
+    predicates = (
+        ("missingness_audit:input_scope", missingness_audit_input_scope_supported),
+        (
+            "missingness_audit:availability_contract",
+            lambda step: is_missingness_measurement_availability_contract(
+                step.method, step.expected_outputs
+            ),
+        ),
+        (
+            "missingness_audit:complete_case_contract",
+            lambda step: is_missingness_complete_case_contract(
+                step.method, step.expected_outputs
+            ),
+        ),
+        (
+            "missingness_audit:compact_contract",
+            lambda step: is_compact_missingness_measurement_contract(
+                step.method, step.expected_outputs
+            ),
+        ),
+        (
+            "missingness_audit:measurement_bias_contract",
+            lambda step: is_measurement_bias_audit_contract(
+                step.method, step.expected_outputs
+            ),
+        ),
+    )
+    details = []
+    for name, predicate in predicates:
+        try:
+            details.append(OwnershipContractDetail(name, bool(predicate(step))))
+        except Exception as exc:  # a diagnostic cannot change the ownership verdict
+            details.append(OwnershipContractDetail(name, False, f"{type(exc).__name__}: {exc}"[:200]))
+    return tuple(details)

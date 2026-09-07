@@ -211,8 +211,15 @@ def validate_discovery_manuscript_package(
     )
     blocked_steps = _blocked_outcome_steps(root)
     leak_terms = _outcome_leak_terms(manuscript_text) if blocked_steps else []
+    source_error = None
+    if handoff is not None:
+        try:
+            handoff.verify_source()
+        except ValueError as exc:
+            source_error = str(exc)
     checks = {
         "handoff_present": handoff is not None,
+        "handoff_source_evidence_intact": handoff is not None and source_error is None,
         "handoff_evidence_registered": handoff_evidence_registered,
         "handoff_evidence_hash_match": handoff_evidence_hash_match,
         "handoff_agent_selected": bool(
@@ -246,7 +253,9 @@ def validate_discovery_manuscript_package(
     }
     blocking: List[str] = []
     if require_handoff and not checks["handoff_present"]:
-        blocking.append("missing discovery_handoff.json")
+        blocking.append("missing or invalid discovery_handoff.json")
+    if source_error is not None:
+        blocking.append(f"discovery source evidence failed integrity validation: {source_error}")
     if (require_handoff or handoff is not None) and not handoff_evidence_registered:
         blocking.append(
             "discovery_handoff.json is not explicitly registered in EvidenceStore"

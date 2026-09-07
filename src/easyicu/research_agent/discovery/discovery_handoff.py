@@ -8,19 +8,25 @@ the research task's provenance rather than being rewritten by hand.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+
+from ..canonical_json import canonical_sha256
+from ..contracts.frozen_payload import freeze_payload, thaw_payload
+from ..authority.filesystem import publish_write_once_bytes
+from .source_provenance import DiscoveryCandidateSource, bind_source_candidate
 
 from ..planning.analysis_types import (
     is_concept_set_family,
     normalize_analysis_family,
 )
 
-DISCOVERY_HANDOFF_SCHEMA_VERSION = "easyicu.discovery_handoff/3"
+DISCOVERY_HANDOFF_SCHEMA_VERSION = "easyicu.discovery_handoff/5"
 
 DiscoverySelectionMode = Literal[
     "agent_selected",
@@ -40,15 +46,21 @@ ANALYSIS_READY_DECISIONS = frozenset({"go", "recommend"})
 
 
 class DiscoveryHandoffPacket(BaseModel):
-    """Frozen packet passed from idea mining into analysis/writing."""
+    """Sealed proposal provenance; never a substitute for plan/execution approval."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = DISCOVERY_HANDOFF_SCHEMA_VERSION
+    schema_version: Literal["easyicu.discovery_handoff/5"] = (
+        DISCOVERY_HANDOFF_SCHEMA_VERSION
+    )
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     source_triage_report_path: str
+    source_triage_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_source: DiscoveryCandidateSource
+    handoff_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     selection_mode: DiscoverySelectionMode = "agent_selected"
     selection_rationale: str
     literature_idea_id: str
@@ -65,17 +77,38 @@ class DiscoveryHandoffPacket(BaseModel):
     feasibility_route: Optional[str] = None
     feasibility_next_action: Optional[str] = None
     analysis_family: str = "association_study"
-    resolved_analysis_concepts: List[str] = Field(default_factory=list)
+    resolved_analysis_concepts: tuple[str, ...] = ()
     resolved_predictor_concept: Optional[str] = None
     resolved_outcome_concept: Optional[str] = None
     target_outcome: Optional[str] = None
     database: str = "miiv"
     research_question: str
-    inclusion_criteria: List[str] = Field(default_factory=list)
-    selected_ledger_row: Dict[str, Any] = Field(default_factory=dict)
-    required_manuscript_figure_roles: List[str] = Field(
-        default_factory=lambda: list(DEFAULT_DISCOVERY_FIGURE_ROLES)
+    inclusion_criteria: tuple[str, ...] = ()
+    selected_ledger_row: Mapping[str, Any]
+    required_manuscript_figure_roles: tuple[str, ...] = Field(
+        default_factory=lambda: tuple(DEFAULT_DISCOVERY_FIGURE_ROLES)
     )
+
+    @field_validator("analysis_family", mode="before")
+    @classmethod
+    def _canonical_family(cls, value: Any) -> str:
+        return normalize_analysis_family(value)
+
+    @field_validator("resolved_analysis_concepts", mode="before")
+    @classmethod
+    def _canonical_concepts(cls, value: Any) -> tuple[str, ...]:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("resolved_analysis_concepts must be a sequence")
+        return tuple(dict.fromkeys(str(item).strip() for item in (value or ()) if str(item).strip()))
+
+    @field_validator("selected_ledger_row")
+    @classmethod
+    def _freeze_row(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return freeze_payload(value)
+
+    @field_serializer("selected_ledger_row")
+    def _row_projection(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return thaw_payload(value)
 
     @field_validator(
         "source_triage_report_path",
@@ -103,14 +136,6 @@ class DiscoveryHandoffPacket(BaseModel):
             raise ValueError(
                 "human confirmation requires confirmed_at and a confirmation note"
             )
-        self.analysis_family = normalize_analysis_family(self.analysis_family)
-        self.resolved_analysis_concepts = list(
-            dict.fromkeys(
-                str(value).strip()
-                for value in self.resolved_analysis_concepts
-                if str(value).strip()
-            )
-        )
         concept_set = is_concept_set_family(self.analysis_family)
         if concept_set and not self.resolved_analysis_concepts:
             raise ValueError(
@@ -127,10 +152,40 @@ class DiscoveryHandoffPacket(BaseModel):
                 "resolved_outcome_concept and target_outcome must identify the "
                 "same endpoint"
             )
+        self.verify_seal()
         return self
+
+    def verify_seal(self) -> None:
+        """Recheck also at use time to reject unvalidated model_copy updates."""
+        payload = self.model_dump(mode="json", exclude={"handoff_sha256"})
+        if canonical_sha256(payload["selected_ledger_row"]) != self.selected_candidate_sha256:
+            raise ValueError("discovery_candidate_digest_mismatch")
+        if canonical_sha256(payload) != self.handoff_sha256:
+            raise ValueError("discovery_handoff_digest_mismatch")
+
+    def verify_source(self) -> None:
+        self.verify_seal()
+        try:
+            raw = Path(self.source_triage_report_path).read_bytes()
+        except OSError as exc:
+            raise ValueError("discovery_source_evidence_unavailable") from exc
+        if hashlib.sha256(raw).hexdigest() != self.source_triage_report_sha256:
+            raise ValueError("discovery_source_evidence_changed")
+        observed = bind_source_candidate(
+            payload=json.loads(raw),
+            source_path=Path(self.source_triage_report_path),
+            row=self.selected_ledger_row,
+            transformation=self.candidate_source.transformation,
+        )
+        if observed != self.candidate_source:
+            raise ValueError("discovery_source_candidate_binding_mismatch")
 
     @property
     def analysis_ready(self) -> bool:
+        try:
+            self.verify_source()
+        except ValueError:
+            return False
         return (
             _normalise_decision(self.go_no_go) in ANALYSIS_READY_DECISIONS
             and self.human_confirmed
@@ -211,6 +266,7 @@ def build_handoff_from_row(
     inclusion_criteria: Optional[Sequence[str]] = None,
     human_confirmed: bool = False,
     human_confirmation_note: Optional[str] = None,
+    candidate_transformation: Mapping[str, Any] | None = None,
 ) -> DiscoveryHandoffPacket:
     """Create a frozen handoff packet from one discovery-ledger row."""
 
@@ -258,8 +314,24 @@ def build_handoff_from_row(
             human_confirmation_note
             or "Explicitly confirmed by the discovery launcher operator."
         ).strip()
-    return DiscoveryHandoffPacket(
-        source_triage_report_path=str(Path(triage_report_path)),
+    source = Path(triage_report_path).resolve()
+    try:
+        source_bytes = source.read_bytes()
+    except OSError as exc:
+        raise ValueError("discovery_source_evidence_unavailable") from exc
+    candidate_source = bind_source_candidate(
+        payload=json.loads(source_bytes),
+        source_path=source,
+        row=row,
+        transformation=candidate_transformation,
+    )
+    payload = dict(
+        schema_version=DISCOVERY_HANDOFF_SCHEMA_VERSION,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        source_triage_report_path=str(source),
+        source_triage_report_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        candidate_source=candidate_source.model_dump(mode="json"),
+        selected_candidate_sha256=canonical_sha256(thaw_payload(row)),
         selection_mode=selection_mode,
         selection_rationale=rationale,
         literature_idea_id=str(row.get("literature_idea_id") or ""),
@@ -294,7 +366,7 @@ def build_handoff_from_row(
             else None
         ),
         analysis_family=analysis_family,
-        resolved_analysis_concepts=resolved_analysis_concepts,
+        resolved_analysis_concepts=list(dict.fromkeys(resolved_analysis_concepts)),
         resolved_predictor_concept=(
             str(row.get("resolved_predictor_concept"))
             if row.get("resolved_predictor_concept")
@@ -305,16 +377,28 @@ def build_handoff_from_row(
         database=database,
         research_question=question,
         inclusion_criteria=list(inclusion_criteria or _default_inclusion_criteria()),
-        selected_ledger_row=dict(row),
+        selected_ledger_row=thaw_payload(row),
+        required_manuscript_figure_roles=list(DEFAULT_DISCOVERY_FIGURE_ROLES),
     )
+    for key in (
+        "source_triage_report_path", "selection_rationale", "literature_idea_id",
+        "candidate_topic", "go_no_go", "go_no_go_reason", "analysis_family",
+        "database", "research_question",
+    ):
+        payload[key] = str(payload[key]).strip()
+    return DiscoveryHandoffPacket(**payload, handoff_sha256=canonical_sha256(payload))
 
 
 def write_handoff_packet(packet: DiscoveryHandoffPacket, path: str | Path) -> Path:
     """Write a handoff packet as JSON and return the output path."""
 
     out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(packet.model_dump_json(indent=2), encoding="utf-8")
+    packet.verify_source()
+    publish_write_once_bytes(
+        out, packet.model_dump_json(indent=2).encode("utf-8"),
+        temp_prefix=".discovery-handoff-", conflict_error=ValueError,
+        conflict_message="discovery_handoff_immutable_conflict: create a new version",
+    )
     return out
 
 
@@ -368,13 +452,14 @@ def _same_endpoint(left: Any, right: Any) -> bool:
 
 
 def assert_discovery_analysis_ready(packet: DiscoveryHandoffPacket) -> bool:
-    """Fail closed unless the frozen handoff licenses downstream analysis."""
+    """Validate proposal intake; reviewed plan and execution authority remain required."""
 
     decision = _normalise_decision(packet.go_no_go)
     if decision not in ANALYSIS_READY_DECISIONS:
         raise ValueError(f"discovery decision {packet.go_no_go!r} is not go/recommend")
     if not packet.human_confirmed:
         raise ValueError("explicit human confirmation is required before analysis")
+    packet.verify_source()
     if not _handoff_shape_is_valid(packet):
         raise ValueError("discovery handoff has no valid executable analysis shape")
     return True

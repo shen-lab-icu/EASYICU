@@ -413,8 +413,7 @@ from ..trajectory.plan_contract import (
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
-from .runners.selection import StandardExecutorCandidate, select_standard_executor
-from .runners.selection_report import standard_executor_candidate_report
+from .runners.selection import resolve_standard_executor
 from .standard_executor_diagnostics import standard_executor_failure_finding
 from ..repair_registry import (
     InvariantStatus,
@@ -2808,8 +2807,7 @@ def _step_settle_initial_code(
         step_current=step_current,
         total_steps=total_steps,
     )
-    standard_executor_trace: list[StandardExecutorCandidate] = []
-    standard_executor = select_standard_executor(
+    executor_decision = resolve_standard_executor(
         step,
         plan=plan,
         plausibility_scope=plausibility_authority.scope,
@@ -2819,8 +2817,8 @@ def _step_settle_initial_code(
         scientific_runtime_projection_sha256=getattr(
             pipeline, "_scientific_runtime_projection_sha256", None
         ),
-        trace=standard_executor_trace,
     )
+    standard_executor = executor_decision.render_selection()
     preflight_standard_code = None
     if standard_executor is not None:
         worker_progress.deterministic_standard_executor_used = True
@@ -2840,50 +2838,9 @@ def _step_settle_initial_code(
             fallback_reason=standard_executor.selection_reason,
         )
         preflight_standard_code = standard_executor.code
-    # A step no deterministic owner claims falls to the stochastic Coder
-    # silently.  Record which owners were consulted and how they answered,
-    # so the next reader can tell an unsupported analysis apart from a
-    # supported one wearing a name or a product count nobody recognises.
-    # The verdicts come from the selector's own trace, never from re-running
-    # its predicates here -- a second evaluation cannot see the gates the
-    # selector applies after a contract matches.
-    step_record["standard_executor_candidates"] = (
-        standard_executor_candidate_report(
-            step,
-            plan=plan,
-            trace=standard_executor_trace,
-            resolved_bindings=resolved_input_bindings,
-            claimed_by=(
-                standard_executor.analysis_kind
-                if standard_executor is not None
-                else None
-            ),
-        )
-    )
-    # ...and "silently" is the part that is not acceptable when the owner is
-    # only waiting on a field.  The plan-time gate already asked for it and
-    # spent a forced replan on the answer; arriving here means the Planner
-    # did not fill it in.  Handing the step to the Coder anyway is a
-    # fail-open at a declaration boundary: it produces a number for the
-    # paper's primary result whose model nobody declared, by the one actor
-    # whose accumulated repair guidance records it going wrong.
-    #
-    # Blocked per step, not per run.  The sibling plan-DAG blocks set
-    # ``steps_to_run = []`` and kill everything; a step the host merely
-    # cannot claim should not take the table-one and missingness steps down
-    # with it.  The manuscript still cannot be authorised without its
-    # primary result -- that is a different gate's job, and it already
-    # holds.
-    #
-    # What counts as under-declared is decided in one place, shared with the
-    # plan-time gate that already asked for the field.  The verdicts come
-    # from the selector's own trace, never from re-running its predicates
-    # here -- a second evaluation cannot see the gates the selector applies
-    # after a contract matches.
-    owner_declaration_gaps = execution_declaration_refusal(
-        claimed_by=standard_executor,
-        trace=standard_executor_trace,
-    )
+    # Persist the same complete decision consumed by plan and execution gates.
+    step_record["standard_executor_candidates"] = executor_decision.report()
+    owner_declaration_gaps = execution_declaration_refusal(executor_decision)
     if owner_declaration_gaps:
         missing_by_owner = {
             candidate.analysis_kind: list(candidate.missing_declarations)

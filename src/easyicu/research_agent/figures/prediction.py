@@ -22,6 +22,11 @@ import pandas as pd
 
 from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext
+from .presentation import (
+    create_presented_axes,
+    finish_presented_figure,
+    presentation_from_panels,
+)
 from .base import RenderedFigure, load_table, numeric_series, resolve_column
 
 _CALIBRATION_NAMES = [
@@ -222,23 +227,36 @@ def render_prediction_figure(
     blue = palette.get("blue", "#0F4D92")
     neutral = palette.get("neutral", "#8F8F8F")
 
-    fig = plt.figure(figsize=(183 / 25.4, 74 / 25.4), constrained_layout=False)
-    grid = fig.add_gridspec(
-        1,
-        3,
-        width_ratios=[1.0, 1.0, 0.9],
-        left=0.075,
-        right=0.98,
-        top=0.9,
-        bottom=0.19,
-        wspace=0.42,
-    )
-    ax_cal = fig.add_subplot(grid[0, 0])
-    ax_roc = fig.add_subplot(grid[0, 1])
-    ax_val = fig.add_subplot(grid[0, 2])
+    planned_panels = [
+        panel
+        for step in plan.steps
+        for panel in step.figure_panels
+        if panel.article_role in {"calibration", "model_performance", "validation"}
+    ]
+    outputs = {
+        panel.figure_output
+        for panel in planned_panels
+        if panel.presentation is not None
+    }
+    if len(outputs) > 1:
+        raise ValueError(
+            "ambiguous_prediction_presentation: multiple planned outputs select this publication renderer"
+        )
+    presentation = presentation_from_panels(planned_panels)
+    if presentation is None:
+        from ..contracts.figure_plan import FigurePresentationSpec
+
+        display = FigurePresentationSpec(width_mm=183, height_mm=85)
+    else:
+        display = presentation
+    fig, (ax_cal, ax_roc, ax_val), palette = create_presented_axes(3, display)
+    blue = palette["blue"]
+    neutral = palette["neutral"]
 
     # A -- calibration (hero)
-    ax_cal.plot([0, 1], [0, 1], color=neutral, linestyle="--", linewidth=0.8)
+    ax_cal.plot(
+        [0, 1], [0, 1], color=neutral, linestyle="--", linewidth=0.8, label="Reference"
+    )
     order = np.argsort(pred.to_numpy())
     ax_cal.plot(
         pred.to_numpy()[order],
@@ -247,6 +265,7 @@ def render_prediction_figure(
         markersize=3.4,
         color=blue,
         linewidth=1.2,
+        label="Model",
     )
     ax_cal.set_xlim(0, 1)
     ax_cal.set_ylim(0, 1)
@@ -262,14 +281,16 @@ def render_prediction_figure(
             fontsize=6.4,
             color=palette.get("baseline", "#272727"),
         )
-    add_panel_label(ax_cal, "A", x=-0.2)
+    add_panel_label(ax_cal, "A", x=-0.2, fontsize=display.font_size * 1.1)
 
     # B -- ROC
     fpr_v = fpr.to_numpy()
     tpr_v = tpr.to_numpy()
     ro = np.argsort(fpr_v)
-    ax_roc.plot([0, 1], [0, 1], color=neutral, linestyle="--", linewidth=0.8)
-    ax_roc.plot(fpr_v[ro], tpr_v[ro], color=blue, linewidth=1.3)
+    ax_roc.plot(
+        [0, 1], [0, 1], color=neutral, linestyle="--", linewidth=0.8, label="Reference"
+    )
+    ax_roc.plot(fpr_v[ro], tpr_v[ro], color=blue, linewidth=1.3, label="Model")
     ax_roc.set_xlim(0, 1)
     ax_roc.set_ylim(0, 1.02)
     ax_roc.set_xlabel("1 - specificity")
@@ -284,7 +305,7 @@ def render_prediction_figure(
             fontsize=6.6,
             color=palette.get("baseline", "#272727"),
         )
-    add_panel_label(ax_roc, "B", x=-0.2)
+    add_panel_label(ax_roc, "B", x=-0.2, fontsize=display.font_size * 1.1)
 
     # C -- validation / metric summary
     labels: List[str] = []
@@ -310,12 +331,16 @@ def render_prediction_figure(
                 values.append(metrics[key])
         ax_val.set_ylabel("Value")
     if not labels:
-        labels, values = ["AUROC"], [float(auroc) if auroc is not None else 0.0]
+        raise ValueError(
+            "prediction_performance_evidence_missing: no registered metric may be replaced with zero"
+        )
     ax_val.bar(range(len(labels)), values, color=blue, width=0.6)
     ax_val.set_xticks(range(len(labels)), labels, rotation=20, ha="right", fontsize=6.0)
     ax_val.set_ylim(0, max(1.0, max(values) * 1.15))
     ax_val.set_title("Held-out performance", loc="left", pad=4)
-    add_panel_label(ax_val, "C", x=-0.24)
+    add_panel_label(ax_val, "C", x=-0.24, fontsize=display.font_size * 1.1)
+
+    finish_presented_figure(fig, display)
 
     outcome = context.target_outcome or "the outcome"
     core_claim = (
@@ -361,9 +386,13 @@ def render_prediction_figure(
         },
     ]
 
+    for panel in panels:
+        panel["metadata"] = {"presentation": display.model_dump(mode="json")}
+
     source_frames: Dict[str, pd.DataFrame] = {
         "calibration_curve": pd.DataFrame({"predicted": pred, "observed": obs}),
         "roc_curve": pd.DataFrame({"fpr": fpr, "tpr": tpr}),
+        "performance": pd.DataFrame({"metric": labels, "value": values}),
     }
 
     return RenderedFigure(

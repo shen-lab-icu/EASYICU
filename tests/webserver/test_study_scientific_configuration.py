@@ -114,6 +114,22 @@ def test_decision_state_and_patch_helpers_have_one_owner() -> None:
     ]
 
 
+def test_agent_plan_exact_adjustment_does_not_fabricate_user_confirmation() -> None:
+    configuration = ScientificConfiguration.inspect(
+        {
+            "covariate_selection": "exact",
+            "covariate_authority": "agent_plan",
+            "confirmations": {
+                "agent_plan_configuration_compiled": True,
+                "plan_adjustment_set_confirmed": False,
+            },
+        }
+    )
+
+    assert configuration.decision_is_resolved("ADJUSTMENT_SET_NOT_USER_CONFIRMED")
+    assert configuration.covariate_authority() == "agent_plan"
+
+
 def test_repeated_stay_decision_requires_matching_typed_design() -> None:
     stale = ScientificConfiguration.inspect(
         {

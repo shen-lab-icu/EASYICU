@@ -39,7 +39,7 @@ def test_cohort_selection_renders_exact_server_contracts() -> None:
     assert "message.match" not in owner
 
 
-def test_repeated_stay_review_uses_typed_plan_decision_not_chat_text() -> None:
+def test_repeated_stay_method_stays_system_owned_not_a_user_choice() -> None:
     node = shutil.which("node")
     if node is None:
         return
@@ -102,8 +102,8 @@ process.stdout.write(JSON.stringify({
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
-        "clustered": True,
-        "code": True,
+        "clustered": False,
+        "code": False,
         "oldCohortSelector": False,
         "chatFallback": False,
     }
@@ -120,6 +120,8 @@ def test_cohort_selection_only_replaces_a_plan_stage_blocker() -> None:
     assert "COHORT_ELIGIBILITY.render() || workflowConfirmationHtml()" in shell
     assert "value.blocker_code !== 'cohort_eligibility_confirmation_required'" in owner
     assert "planNeedsThisDecision" in owner
+    assert "actionCode === 'cohort_eligibility_confirmation_required'" in owner
+    assert "'planner_checkpoint_resume_available'," not in owner
 
 
 def test_cohort_selection_css_and_event_marker_stay_route_owned() -> None:

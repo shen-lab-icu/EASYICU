@@ -126,16 +126,23 @@ def latest_bound_run_id(
     study_context_id: Optional[str],
     project_root: Optional[Path | str] = None,
 ) -> Optional[str]:
-    """Return the latest exact run coordinate for one Copilot project."""
+    """Return the latest workflow-owning run coordinate for one project.
+
+    A failed preparation attempt remains immutable history, but it does not
+    replace an unchanged reviewable candidate plan. Session rebinding and the
+    workflow card must select the same authority or the next system-owned
+    revision loses the very plan it is meant to revise.
+    """
 
     rows = list_bound_run_history(
         study_context_id=study_context_id,
         project_root=project_root,
-        limit=1,
+        limit=50,
     )
-    if not rows:
+    owner = workflow_authoritative_run(rows)
+    if owner is None:
         return None
-    return str(rows[0].get("run_id") or "") or None
+    return str(owner.get("run_id") or "") or None
 
 
 def workflow_authoritative_run(
@@ -211,10 +218,7 @@ def _updated_epoch(row: Dict[str, Any]) -> float:
 def _development_planner_checkpoint_available(row: Dict[str, Any]) -> bool:
     """Project presence only; the run owner validates chain integrity later."""
 
-    if (
-        str(row.get("gate_reason") or "")
-        not in PLANNER_CHECKPOINT_GATE_REASONS
-    ):
+    if not _checkpoint_can_seed_planning(row):
         return False
     project_dir = Path(str(row.get("project_dir") or "")).expanduser()
     pipeline_root = project_dir / "pipeline"
@@ -242,6 +246,42 @@ def _development_planner_checkpoint_available(row: Dict[str, Any]) -> bool:
         return False
 
 
+def _checkpoint_can_seed_planning(row: Mapping[str, Any]) -> bool:
+    """Return whether this terminal failure stopped before scientific execution.
+
+    Planner-owned failures are closed by their reason codes.  A Pydantic schema
+    failure is broader and may also happen during analysis, so it is eligible
+    only when the immutable wrapper manifest says analysis never started.  This
+    lets a late plan-schema repair reuse validated Planner checkpoints without
+    treating an execution failure as planning authority.
+    """
+
+    reason = str(row.get("gate_reason") or "")
+    if reason in PLANNER_CHECKPOINT_GATE_REASONS:
+        return True
+    if reason != "research_pipeline_schema_validation_failed":
+        return False
+    project_dir = Path(str(row.get("project_dir") or "")).expanduser()
+    manifest = project_dir / "source_run_manifest.json"
+    try:
+        if manifest.is_symlink() or not manifest.is_file():
+            return False
+        raw = manifest.read_bytes()
+        if not raw or len(raw) > _MAX_FAILURE_PROJECTION_BYTES:
+            return False
+        payload = json.loads(raw)
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(
+        isinstance(payload, Mapping)
+        and payload.get("schema_version")
+        == "easyicu.web-research-pipeline-projection/1"
+        and payload.get("status") == "failed"
+        and payload.get("failure_code") == reason
+        and payload.get("analysis_started") is False
+    )
+
+
 def resumable_planner_checkpoint_job_id(
     *,
     study: Mapping[str, Any],
@@ -264,7 +304,7 @@ def resumable_planner_checkpoint_job_id(
     candidate: Mapping[str, Any] | None = None
     for row in rows:
         reason = str(row.get("gate_reason") or "")
-        if reason in resumable_reasons:
+        if reason in resumable_reasons or _checkpoint_can_seed_planning(row):
             candidate = row
             break
         if reason in transparent_attempt_reasons:

@@ -112,14 +112,20 @@ def test_database_mention_or_local_choice_does_not_confirm_prepared_source(
         ("我想从现有 ICU 数据开始", "data_first_entry"),
         ("我目前还没有具体研究方向", "idea_discovery_entry"),
         ("我不知道做什么研究", "idea_discovery_entry"),
-        ("液体平衡会不会影响撤机？", "clarify_research_entry"),
+        ("液体平衡会不会影响撤机？", "implement_scientific_question"),
         (
             "研究成人 ICU 早期液体平衡与拔管失败的关系",
-            "clarify_research_entry",
+            "implement_scientific_question",
         ),
+        (
+            "在 MIMIC-IV ICU 患者中，入 ICU 后前 24 小时的 KDIGO AKI "
+            "分级与 ICU 住院时长和院内死亡有什么关系？",
+            "implement_scientific_question",
+        ),
+        ("我想研究成人 ICU 的液体平衡", "clarify_research_entry"),
     ],
 )
-def test_first_turn_research_entry_intent_requires_explicit_user_direction(
+def test_first_turn_research_entry_intent_routes_natural_questions(
     message: str,
     expected: str,
 ) -> None:

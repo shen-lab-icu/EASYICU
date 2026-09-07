@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, Iterator, Mapping, Sequence
 
 import yaml
 
+from easyicu.state_paths import state_root
 from easyicu.outbound_url_security import (
     OutboundUrlSecurityError,
     validate_outbound_http_endpoint,
@@ -178,7 +179,7 @@ class ExtensionRegistry:
         self.root = (
             Path(configured).expanduser()
             if configured
-            else Path.home() / ".easyicu" / "extensions"
+            else state_root() / "extensions"
         ).absolute()
         self.state_path = self.root / "registry.json"
         self.lock_path = self.root / ".registry.lock"

@@ -40,9 +40,6 @@ from easyicu.research_agent.planning.scientific_review import (
     render_plan_scientific_guardrails,
     timing_design_closed,
 )
-from easyicu.research_agent.reporting.article_contract import (
-    build_article_analysis_contract,
-)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -56,50 +53,11 @@ from easyicu.research_agent.schema import (
     VariableRole,
 )
 
-
-def _context() -> ResearchContext:
-    return ResearchContext(
-        research_question=(
-            "Among adult ICU stays, is a first-24-hour exposure associated "
-            "with in-hospital mortality?"
-        ),
-        cohort=CohortDescriptor(
-            cohort_name="adult ICU stays",
-            database="miiv",
-            n_patients=None,
-            n_stays=94_458,
-            inclusion_criteria=["adult ICU stays; retain ICU readmissions"],
-            id_columns=["stay_id"],
-            provenance={"analysis_unit": "icu_stay"},
-        ),
-        variables=[
-            ConceptDescriptor(
-                name="exposure",
-                role=VariableRole.OTHER,
-                dtype="int64",
-                analysis_window="icu_admission[0,24]h",
-                analysis_window_role="exposure_definition",
-            ),
-            ConceptDescriptor(name="death", role=VariableRole.OUTCOME, dtype="int64"),
-            ConceptDescriptor(
-                name="age", role=VariableRole.DEMOGRAPHIC, dtype="float64"
-            ),
-        ],
-        target_outcome="death",
-        endpoint=EndpointSpec(
-            name="death",
-            kind="binary",
-            absence_semantics="no_absent_rows",
-            levels=[0, 1],
-        ),
-        primary_exposure="exposure",
-        user_preferences=UserPreferences(
-            covariates=["age"],
-            covariate_selection="planner_selectable",
-            timing_and_design="Audit timing and readmissions.",
-            must_have_outputs="Execute timing and readmission sensitivity analyses.",
-        ),
-    )
+from .scientific_review_fixtures import (
+    _context,
+    _absolute_risk_distribution_step,
+    _traditional_table_one_step,
+)
 
 
 def test_guardrails_accept_a_context_without_optional_user_preferences() -> None:
@@ -666,7 +624,7 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     assert {
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
-        "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
+        "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE",
         "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
         "FIGURE_ROLE_COVERAGE_INCOMPLETE",
     } <= codes
@@ -741,6 +699,163 @@ def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None
     }
 
 
+def test_selected_temporal_design_routes_missing_execution_to_runtime_owner() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                ConceptDescriptor(
+                    name="exposure", role=VariableRole.OTHER, dtype="int64"
+                ),
+                *[item for item in _context().variables if item.name != "exposure"],
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "confirmations": {"feature_time_window": True},
+                        "materialization_window": {
+                            "role": "outer_observation_window",
+                            "anchor": "ICU admission",
+                            "hours": 24,
+                        },
+                    }
+                ),
+            ),
+        }
+    )
+    plan = _plan().model_copy(
+        update={
+            "design_selection": _legacy_design_selection_without_reviewable_plan()
+        }
+    )
+
+    review = build_plan_scientific_review(context=context, plan=plan)
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
+    )
+
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.requires_user_authorization is False
+
+
+@pytest.mark.parametrize("requested", [None, ["death"], ["death", "los_icu"]])
+def test_only_requested_outcomes_require_model_contracts(requested) -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "outcome_columns": ["death", "los_icu"],
+                    "requested_outcome_columns": requested,
+                }
+            ),
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="los_icu",
+                    role=VariableRole.OUTCOME,
+                    dtype="float64",
+                ),
+            ],
+        }
+    )
+
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    if not requested or "los_icu" not in requested:
+        assert not any(
+            item.code == "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE"
+            for item in review.findings
+        )
+        assert review.facts["requested_outcomes"] == ["death"]
+        assert review.facts["missing_model_outcomes"] == []
+        return
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE"
+    )
+
+    assert finding.remediation_route == "agent_plan_revision"
+    assert finding.requires_user_authorization is False
+    assert "los_icu" in finding.message
+    assert review.facts["requested_outcomes"] == ["death", "los_icu"]
+    assert review.facts["model_covered_outcomes"] == ["death"]
+    assert review.facts["missing_model_outcomes"] == ["los_icu"]
+
+
+def test_controlled_ordered_analysis_counts_both_typed_outcomes() -> None:
+    context = ResearchContext(
+        research_question=(
+            "Assess an ordered stage against mortality and length of stay."
+        ),
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_stays=120,
+            id_columns=["stay_id"],
+            outcome_columns=["death", "los_icu"],
+            requested_outcome_columns=["death", "los_icu"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="stage",
+                role=VariableRole.ORDINAL_SCORE,
+                dtype="int64",
+                is_ordinal=True,
+                ordinal_levels=[0, 1, 2, 3],
+            ),
+            ConceptDescriptor(
+                name="death", role=VariableRole.OUTCOME, dtype="int64"
+            ),
+            ConceptDescriptor(
+                name="los_icu", role=VariableRole.OUTCOME, dtype="float64"
+            ),
+        ],
+        primary_exposure="stage",
+        target_outcome="death",
+        endpoint=EndpointSpec(
+            name="death",
+            kind="binary",
+            absence_semantics="no_absent_rows",
+            levels=[0, 1],
+        ),
+    )
+    primary = _plan().steps[0].model_copy(
+        update={
+            "inputs": ["stage", "death"],
+            "model_requirements": [
+                _plan().steps[0].model_requirements[0].model_copy(
+                    update={"exposure_source": "stage"}
+                )
+            ],
+        }
+    )
+    ordered = AnalysisStep(
+        step_id="ordered_multioutcome_trend",
+        planned_analysis_role="secondary",
+        intent="Estimate ordered gradients for both typed outcomes.",
+        inputs=[
+            "stage",
+            "death",
+            "los_icu",
+            "artifact:analysis_cohort",
+            "table:adjusted_association_estimates",
+        ],
+        expected_outputs=["table:ordered_multioutcome_trend"],
+        method="ordinal_stratified_descriptive_analysis",
+        scientific_action_id="association.ordinal_trend",
+    )
+    plan = _plan().model_copy(update={"steps": [primary, ordered]})
+
+    review = build_plan_scientific_review(context=context, plan=plan)
+
+    assert "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE" not in {
+        item.code for item in review.findings
+    }
+    assert review.facts["model_covered_outcomes"] == ["death", "los_icu"]
+
+
 def test_time_varying_intent_is_a_runtime_blocker_not_a_new_user_decision() -> None:
     context = _context().model_copy(
         update={
@@ -781,7 +896,7 @@ def test_time_varying_intent_is_a_runtime_blocker_not_a_new_user_decision() -> N
     )
 
 
-def test_stay_level_cohort_without_patient_identity_fails_closed_on_dependence() -> None:
+def test_stay_level_cohort_without_patient_identity_limits_paper_authority() -> None:
     context = _context().model_copy(
         update={
             "cohort": _context().cohort.model_copy(
@@ -808,8 +923,9 @@ def test_stay_level_cohort_without_patient_identity_fails_closed_on_dependence()
         for item in review.findings
         if item.code == "REPEATED_STAY_IDENTITY_UNAVAILABLE"
     )
-    assert finding.severity == "blocker"
-    assert review.approval_allowed is False
+    assert finding.severity == "major"
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.requires_user_authorization is False
 
 
 
@@ -840,7 +956,7 @@ def test_equal_patient_and_stay_counts_do_not_raise_dependence_blocker() -> None
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
 
 
-def test_planner_selected_adjustment_roster_requires_new_user_revision() -> None:
+def test_planner_selected_adjustment_roster_is_agent_owned() -> None:
     context = _context().model_copy(
         update={
             "cohort": _context().cohort.model_copy(
@@ -859,11 +975,55 @@ def test_planner_selected_adjustment_roster_requires_new_user_revision() -> None
     finding = next(
         item
         for item in review.findings
-        if item.code == "ADJUSTMENT_SET_NOT_USER_CONFIRMED"
+        if item.code == "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE"
     )
     assert finding.severity == "blocker"
-    assert finding.requires_user_authorization is True
+    assert finding.remediation_route == "agent_plan_revision"
+    assert finding.requires_user_authorization is False
     assert review.approval_allowed is False
+
+
+def test_complete_planner_adjustment_proposal_needs_no_separate_user_field() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={"n_patients": 94_458, "n_stays": 94_458}
+            )
+        }
+    )
+    plan = _plan()
+    primary = plan.steps[0]
+    requirement = primary.model_requirements[0].model_copy(
+        update={
+            "covariate_rationales": {
+                "age": "Age is a baseline cause of both AKI severity and mortality."
+            },
+            "covariate_temporal_roles": {"age": "baseline_static"},
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "steps": [
+                primary.model_copy(update={"model_requirements": [requirement]}),
+                *plan.steps[1:],
+            ]
+        }
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    codes = {item.code for item in review.findings}
+    assert "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE" not in codes
+    assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" not in codes
+    assert review.facts["covariate_rationales"] == requirement.covariate_rationales
+    assert review.facts["covariate_temporal_roles"] == {
+        "age": "baseline_static"
+    }
 
 
 def test_free_text_cannot_create_a_required_sensitivity_axis() -> None:
@@ -1129,41 +1289,6 @@ def test_non_descriptive_capability_cannot_borrow_typed_claim_ceiling() -> None:
     assert review.facts["descriptive_only_step_ids"] == []
 
 
-def _absolute_risk_distribution_step(*, descriptive: bool = True) -> AnalysisStep:
-    return AnalysisStep(
-        step_id="absolute_risk_distribution",
-        planned_analysis_role="primary",
-        intent="Report observed prevalence, absolute risks, and risk difference.",
-        inputs=["cohort:analysis_set", "exposure", "death"],
-        expected_outputs=["table:exposure_outcome_distribution"],
-        method="descriptive",
-        descriptive_claim=(
-            DescriptiveClaimContract(
-                unresolved_limitations=(
-                    "post_baseline_exposure_opportunity_unresolved",
-                )
-            )
-            if descriptive
-            else None
-        ),
-        exposure_outcome_distribution_spec={
-            "exposure": "exposure",
-            "exposure_levels": [0, 1],
-            "outcome": "death",
-            "outcome_levels": [0, 1],
-            "outcome_positive_value": 1,
-            "level_match_policy": "exact_typed",
-            "denominator_policy": "all_declared_rows",
-            "missing_outcome_policy": "structural_absence_is_non_event",
-            "risk_difference_contrast": {
-                "reference_exposure_level": 0,
-                "comparison_exposure_level": 1,
-            },
-            "confidence_level": 0.95,
-        },
-    )
-
-
 def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_inference() -> (
     None
 ):
@@ -1221,7 +1346,14 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
         "effect_style_grid_required": False,
     }
     assert "ROBUSTNESS_AXES_TOO_NARROW" not in codes
-    assert "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED" in codes
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED"
+    )
+    assert finding.requires_user_authorization is False
+    assert finding.authorization_question is None
+    assert finding.remediation_route == "agent_plan_revision"
 
 
 def test_absolute_risk_difference_without_typed_ceiling_remains_inferential() -> None:
@@ -1396,29 +1528,6 @@ def test_host_binds_patient_dependence_into_descriptive_risk_product() -> None:
     assert review.facts["repeated_unit_design_executable"] is True
 
 
-def _traditional_table_one_step() -> AnalysisStep:
-    return AnalysisStep(
-        step_id="table_one",
-        planned_analysis_role="auxiliary",
-        intent="Describe the cohort by exposure group.",
-        inputs=["cohort:analysis_set", "exposure", "age"],
-        expected_outputs=["table:table_one"],
-        method="descriptive",
-        table_one_spec={
-            "group_by": "exposure",
-            "group_levels": [0, 1],
-            "variables": [
-                {
-                    "name": "age",
-                    "variable_kind": "continuous",
-                    "summary": "median_iqr",
-                    "test": "mann_whitney_or_kruskal",
-                }
-            ],
-        },
-    )
-
-
 def test_host_turns_repeated_unit_table_one_into_descriptive_smd_only() -> None:
     context = _context().model_copy(
         update={
@@ -1545,343 +1654,6 @@ def test_independent_unit_table_one_keeps_its_declared_tests() -> None:
     assert unchanged.steps[0].table_one_spec.p_values_required is True
 
 
-def test_counts_only_authority_removes_all_uncertainty_before_review() -> None:
-    context = _context().model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-    distribution_step = _absolute_risk_distribution_step()
-    distribution_spec = distribution_step.exposure_outcome_distribution_spec
-    assert distribution_spec is not None
-    distribution_step = distribution_step.model_copy(
-        update={
-            "scientific_capability": ("descriptive_exposure_outcome_distribution_v1"),
-            "exposure_outcome_distribution_spec": distribution_spec.model_copy(
-                update={"risk_difference_contrast": None}
-            ),
-        }
-    )
-    plan = AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="descriptive_study",
-        steps=[distribution_step],
-    )
-
-    bound = bind_context_dependence_authority(plan=plan, context=context)
-
-    distribution = bound.steps[0].exposure_outcome_distribution_spec
-    assert distribution is not None
-    assert distribution.schema_version == "easyicu.exposure_outcome_distribution/3"
-    assert distribution.interval_method == "none_counts_only"
-    assert distribution.repeated_unit_interval_method is None
-    assert distribution.confidence_level is None
-    assert distribution.dependence is None
-    assert repeated_unit_design_closed(context, bound) is True
-
-
-def test_counts_only_article_contract_does_not_require_forbidden_table_one() -> None:
-    ordinary = _context()
-    context = ordinary.model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-
-    contract = build_article_analysis_contract(
-        context,
-        analysis_type="descriptive_epidemiology",
-    )
-    ordinary_contract = build_article_analysis_contract(
-        ordinary,
-        analysis_type="descriptive_epidemiology",
-    )
-
-    assert "baseline_context" not in contract.required_roles
-    assert all(item.role != "baseline_context" for item in contract.requirements)
-    assert all(
-        item.module_id != "distribution_prevalence" for item in contract.requirements
-    )
-    expected_roles = {
-        item.role
-        for item in ordinary_contract.requirements
-        if item.required
-        and item.role != "baseline_context"
-        and item.module_id != "distribution_prevalence"
-    }
-    assert set(contract.required_roles) == expected_roles
-
-
-def test_counts_only_typed_primary_subsumes_generic_distribution_module() -> None:
-    context = _context().model_copy(
-        update={
-            "research_question": (
-                "Estimate exposure prevalence and observed outcome event rates "
-                "by exposure among ICU stays."
-            ),
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            ),
-        }
-    )
-
-    contract = build_article_analysis_contract(
-        context,
-        analysis_type="descriptive_epidemiology",
-    )
-
-    assert "descriptive_result" in contract.required_roles
-    assert "distribution" not in contract.required_roles
-    assert "baseline_context" not in contract.required_roles
-
-
-def test_counts_only_authority_rejects_inferential_table_one_tests() -> None:
-    context = _context().model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-    plan = AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="descriptive_study",
-        steps=[_traditional_table_one_step()],
-    )
-
-    with pytest.raises(
-        DependenceAuthorityError,
-        match="forbids inferential Table One",
-    ):
-        bind_context_dependence_authority(plan=plan, context=context)
-
-
-def test_counts_only_authority_accepts_descriptive_smd_table_one_and_report() -> None:
-    context = _context().model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-    table_step = _traditional_table_one_step()
-    table_spec = table_step.table_one_spec
-    assert table_spec is not None
-    table_payload = table_spec.model_dump(mode="python")
-    table_payload.update(
-        schema_version="easyicu.table_one/2",
-        p_values_required=False,
-        p_value_adjustment="not_applicable_repeated_units",
-    )
-    for variable in table_payload["variables"]:
-        variable["test"] = "none_descriptive_smd_only"
-    table_step = table_step.model_copy(
-        update={
-            "table_one_spec": type(table_spec).model_validate(table_payload),
-        }
-    )
-    report_step = AnalysisStep(
-        step_id="report",
-        planned_analysis_role="auxiliary",
-        intent="Render the counts-only report.",
-        inputs=["table:table_one"],
-        expected_outputs=["report:strobe_style_report"],
-        method="feasibility_protocol",
-    )
-    plan = AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="descriptive_study",
-        steps=[table_step, report_step],
-    )
-
-    bound = bind_context_dependence_authority(plan=plan, context=context)
-
-    assert bound.steps[0].table_one_spec == table_step.table_one_spec
-    assert bound.steps[1] == report_step
-
-
-def test_counts_only_authority_rejects_untyped_descriptive_summaries() -> None:
-    context = _context().model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-    plan = AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="descriptive_study",
-        steps=[
-            AnalysisStep(
-                step_id="age_distribution",
-                planned_analysis_role="auxiliary",
-                intent="Summarize age by exposure.",
-                method="descriptive_distribution",
-                inputs=["artifact:analysis_cohort", "exposure", "age"],
-                expected_outputs=["table:distribution_prevalence"],
-            )
-        ],
-    )
-
-    with pytest.raises(DependenceAuthorityError, match="permits only"):
-        bind_context_dependence_authority(plan=plan, context=context)
-
-
-def test_counts_only_audit_cannot_launder_a_prevalence_product() -> None:
-    context = _context().model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-    plan = AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="descriptive_study",
-        steps=[
-            AnalysisStep(
-                step_id="laundered_prevalence",
-                planned_analysis_role="secondary",
-                intent="Mislabel a measurement-process audit as prevalence.",
-                method="measurement_audit",
-                inputs=["artifact:analysis_cohort", "exposure"],
-                expected_outputs=["table:distribution_prevalence"],
-                measurement_audit_spec={
-                    "products": [
-                        {
-                            "product_id": "distribution_prevalence",
-                            "audit": "measurement_process",
-                        }
-                    ]
-                },
-            )
-        ],
-    )
-
-    with pytest.raises(DependenceAuthorityError, match="audit product names"):
-        bind_context_dependence_authority(plan=plan, context=context)
-
-
-def test_counts_only_spec_cannot_launder_a_p_value_output() -> None:
-    context = _context().model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-    distribution = _absolute_risk_distribution_step().exposure_outcome_distribution_spec
-    assert distribution is not None
-    plan = AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="descriptive_study",
-        steps=[
-            AnalysisStep(
-                step_id="laundered_test",
-                planned_analysis_role="auxiliary",
-                intent="Run a prohibited hypothesis test.",
-                method="chi_square_test",
-                inputs=["artifact:analysis_cohort", "exposure", "death"],
-                expected_outputs=[
-                    "table:exposure_outcome_distribution",
-                    "statistic:p_value",
-                ],
-                exposure_outcome_distribution_spec=distribution.model_copy(
-                    update={"risk_difference_contrast": None}
-                ),
-            )
-        ],
-    )
-
-    with pytest.raises(DependenceAuthorityError, match="permits only"):
-        bind_context_dependence_authority(plan=plan, context=context)
-
-
-def test_counts_only_authority_rejects_a_risk_difference() -> None:
-    context = _context().model_copy(
-        update={
-            "user_preferences": UserPreferences(
-                data_constraints=json.dumps(
-                    {
-                        "analysis_design": {
-                            "analysis_unit": "icu_stay",
-                            "variance_estimator": "none_counts_only",
-                        }
-                    }
-                )
-            )
-        }
-    )
-    plan = AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="descriptive_study",
-        steps=[_absolute_risk_distribution_step()],
-    )
-
-    with pytest.raises(DependenceAuthorityError, match="forbids risk-difference"):
-        bind_context_dependence_authority(plan=plan, context=context)
-
-
 def test_host_binds_dependence_for_marginal_risks_even_without_a_contrast() -> None:
     context = _context().model_copy(
         update={
@@ -1998,9 +1770,14 @@ def test_one_clustered_step_cannot_mask_an_unclosed_scientific_model() -> None:
         literature=_literature(),
         figure_strategy=build_article_figure_strategy(context),
     )
-    assert "REPEATED_STAY_METHOD_NOT_DECLARED" in {
-        finding.code for finding in review.findings
-    }
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "REPEATED_STAY_METHOD_NOT_DECLARED"
+    )
+    assert finding.requires_user_authorization is False
+    assert finding.authorization_question is None
+    assert finding.remediation_route == "agent_plan_revision"
 
 
 def test_signed_landmark_runtime_group_input_closes_repeated_stay_design() -> None:
@@ -2565,7 +2342,7 @@ def test_generic_overview_inputs_do_not_infer_figure_roles_or_chart_breadth() ->
     assert facts["distinct_chart_types_complete"] is False
     codes = {item.code for item in review.findings}
     assert "FIGURE_ROLE_COVERAGE_INCOMPLETE" in codes
-    assert "FIGURE_CHART_TYPES_TOO_NARROW" in codes
+    assert "FIGURE_CHART_TYPES_TOO_NARROW" not in codes
 
 
 def test_revision_contract_contains_only_agent_owned_findings() -> None:
@@ -2580,7 +2357,7 @@ def test_revision_contract_contains_only_agent_owned_findings() -> None:
     contract = render_agent_plan_revision_contract(review)
 
     assert "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED" in contract
-    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in contract
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in contract
     assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" not in contract
     assert "preserve the exact research question" in contract
 

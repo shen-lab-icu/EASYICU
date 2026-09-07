@@ -37,3 +37,34 @@ def test_plan_decision_route_accepts_only_typed_coordinates(monkeypatch) -> None
     )
     assert extra.status_code == 422
     assert len(calls) == 1
+
+
+def test_agent_plan_configuration_route_never_accepts_prompt_text(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    class Service:
+        def apply_agent_plan_configuration(self, session_id: str, **kwargs) -> dict:
+            calls.append({"session_id": session_id, **kwargs})
+            return {"ok": True, "code": "agent_plan_configuration_compiled"}
+
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", Service)
+    client = TestClient(app)
+    payload = {
+        "project_id": "project-agent-plan",
+        "expected_revision": 9,
+        "run_id": "run_20260904T223604_4a2d7e",
+    }
+
+    accepted = client.post(
+        "/api/copilot/pi/sessions/pi-agent-plan/agent-plan-configuration",
+        json=payload,
+    )
+    assert accepted.status_code == 200
+    assert calls == [{"session_id": "pi-agent-plan", **payload}]
+
+    rejected = client.post(
+        "/api/copilot/pi/sessions/pi-agent-plan/agent-plan-configuration",
+        json={**payload, "prompt": "Use a landmark model"},
+    )
+    assert rejected.status_code == 422
+    assert len(calls) == 1

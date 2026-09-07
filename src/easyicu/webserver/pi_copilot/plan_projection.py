@@ -22,10 +22,45 @@ compiled reading aids, and they are marked as projections.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Mapping, Optional
 
 
 PLAN_ARTIFACT_NAME = "agent_plan.json"
+
+# A plan may legitimately require the database's identity columns to define
+# clustering or repeated-admission handling.  Those exact column names are not
+# useful to the reader and the model-visible projection correctly rejects them
+# as row-identifier vocabulary.  Project the closed set to semantic roles at
+# this owner boundary; never relax the global PHI guard.
+_IDENTITY_VARIABLE_LABELS = {
+    "stay_id": "ICU stay grouping key",
+    "icustay_id": "ICU stay grouping key",
+    "hadm_id": "hospital admission grouping key",
+    "subject_id": "patient clustering key",
+    "patient_id": "patient clustering key",
+    "entity_id": "entity grouping key",
+}
+_IDENTITY_VARIABLE_PATTERN = re.compile(
+    r"\b(?:" + "|".join(map(re.escape, _IDENTITY_VARIABLE_LABELS)) + r")\b",
+    re.I,
+)
+
+
+def _project_plan_text(value: Any, *, limit: int) -> str:
+    """Keep plan prose useful without exposing exact row-identity columns."""
+
+    text = " ".join(str(value or "").split())
+
+    def replace(match: re.Match[str]) -> str:
+        return _IDENTITY_VARIABLE_LABELS[match.group(0).lower()]
+
+    return _IDENTITY_VARIABLE_PATTERN.sub(replace, text)[:limit]
+
+
+def _project_required_variable(value: Any) -> str:
+    text = str(value or "").strip()
+    return _IDENTITY_VARIABLE_LABELS.get(text.lower(), text)[:120]
 
 
 def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
@@ -65,7 +100,7 @@ def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
 
     if len(reviewable) != len(REVIEWABLE_PLAN_ITEM_ORDER):
         return None
-    texts = [" ".join(str(value or "").split())[:800] for value in reviewable]
+    texts = [_project_plan_text(value, limit=800) for value in reviewable]
     if any(not value for value in texts):
         return None
 
@@ -90,7 +125,7 @@ def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
         if str(output or "").strip()
     }
     design = {
-        key: " ".join(str(selected.get(key) or "").split())[:1_200]
+        key: _project_plan_text(selected.get(key), limit=1_200)
         for key in (
             "estimand",
             "time_zero",
@@ -100,7 +135,7 @@ def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
         if str(selected.get(key) or "").strip()
     }
     required_variables = [
-        str(value or "").strip()[:120]
+        _project_required_variable(value)
         for value in (
             selected.get("required_variables")
             if isinstance(selected.get("required_variables"), list)
@@ -111,9 +146,9 @@ def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
     if required_variables:
         design["required_variables"] = required_variables
     return {
-        "research_question": " ".join(
-            str(payload.get("research_question") or "").split()
-        )[:500],
+        "research_question": _project_plan_text(
+            payload.get("research_question"), limit=500
+        ),
         "analysis_type": str(payload.get("analysis_type") or "")[:120],
         "items": [
             {"key": key, "text": text}

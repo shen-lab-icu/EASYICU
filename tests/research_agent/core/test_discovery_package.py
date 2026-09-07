@@ -7,7 +7,7 @@ import pytest
 
 from easyicu.research_agent.discovery.discovery_handoff import (
     assert_discovery_analysis_ready,
-    build_handoff_from_row,
+    build_handoff_from_row as _build_handoff_from_row,
     select_discovery_row,
     write_handoff_packet,
 )
@@ -25,6 +25,14 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def build_handoff_from_row(row, *, triage_report_path, **kwargs):
+    """Package fixtures include the source evidence required by a sealed proposal."""
+    source = Path(triage_report_path)
+    if not source.exists():
+        _write_json(source, {"discovery_ledger": [row]})
+    return _build_handoff_from_row(row, triage_report_path=source, **kwargs)
 
 
 def _register_text_evidence(
@@ -329,9 +337,19 @@ def test_discovery_package_rejects_plain_handoff_hash_mismatch(tmp_path: Path):
 
     assessment = validate_discovery_manuscript_package(run_dir=tmp_path)
 
-    assert assessment.checks["handoff_present"] is True
+    assert handoff_path.is_file()
+    assert assessment.checks["handoff_present"] is False  # rejected by the packet seal
     assert assessment.checks["handoff_evidence_registered"] is True
     assert assessment.checks["handoff_evidence_hash_match"] is False
+    assert assessment.package_ready is False
+
+
+def test_discovery_package_rejects_source_evidence_changed_after_confirmation(tmp_path):
+    _build_strict_ready_package(tmp_path)
+    (tmp_path / "triage.json").write_text("{}")
+    assessment = validate_discovery_manuscript_package(run_dir=tmp_path)
+    assert assessment.checks["handoff_present"] is True
+    assert assessment.checks["handoff_source_evidence_intact"] is False
     assert assessment.package_ready is False
 
 
@@ -692,7 +710,7 @@ def test_discovery_handoff_accepts_outcome_free_trajectory_concept_set(
     )
 
     assert handoff.analysis_family == "trajectory_clustering"
-    assert handoff.resolved_analysis_concepts == ["sofa2"]
+    assert handoff.resolved_analysis_concepts == ("sofa2",)
     assert handoff.target_outcome is None
     assert handoff.resolved_predictor_concept is None
     assert assert_discovery_analysis_ready(handoff) is True

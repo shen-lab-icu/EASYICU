@@ -117,7 +117,7 @@ def _artifact_consumption_transport_schema(
         )
 
     def branch(
-        mode: str,
+        modes: tuple[str, ...],
         *,
         role_column: Dict[str, Any],
         expected_roles: Dict[str, Any],
@@ -128,7 +128,10 @@ def _artifact_consumption_transport_schema(
             {
                 "schema_version": copy.deepcopy(properties["schema_version"]),
                 "input_key": input_key,
-                "mode": {"type": "string", "const": mode},
+                "mode": {
+                    "type": "string",
+                    **({"const": modes[0]} if len(modes) == 1 else {"enum": list(modes)}),
+                },
                 "role_column": role_column,
                 "expected_roles": expected_roles,
             }
@@ -138,17 +141,12 @@ def _artifact_consumption_transport_schema(
     return {
         "anyOf": [
             branch(
-                "all_rows",
+                ("all_rows", "single_row"),
                 role_column={"type": "null"},
                 expected_roles=copy.deepcopy(empty_roles),
             ),
             branch(
-                "single_row",
-                role_column={"type": "null"},
-                expected_roles=copy.deepcopy(empty_roles),
-            ),
-            branch(
-                "one_per_role",
+                ("one_per_role",),
                 role_column={"type": "string", "minLength": 1},
                 expected_roles={
                     "type": "array",
@@ -297,17 +295,49 @@ def _assert_closed_planner_transport_schema(node: Any, *, path: str = "$") -> No
         raise PlannerStructuredOutputSchemaError(str(exc)) from exc
 
 
+def _share_planner_transport_shapes(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Reference repeated scalar shapes without changing their accepted values."""
+
+    shared = {
+        "JsonScalar": _json_scalar_schema(),
+        "NullableText": _nullable_string_schema(),
+        "NullableTextList": _nullable_string_list_schema(),
+    }
+    used: set[str] = set()
+
+    def compile_node(node: Any) -> Any:
+        if isinstance(node, dict):
+            for name, shape in shared.items():
+                if node == shape:
+                    used.add(name)
+                    return {"$ref": f"#/$defs/{name}"}
+            return {key: compile_node(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [compile_node(value) for value in node]
+        return node
+
+    compiled = compile_node(schema)
+    definitions = compiled["$defs"]
+    for name in sorted(used):
+        if name in definitions:
+            raise PlannerStructuredOutputSchemaError(
+                f"Planner transport shape name collides with an authority model: {name}"
+            )
+        definitions[name] = shared[name]
+    return compiled
+
+
 def _planner_transport_schema(
     allowed_literature_citation_keys: tuple[str, ...] | None = None,
 ) -> Dict[str, Any]:
     """Return a strict transport schema derived from the authority model.
 
-    Pydantic's validation schema contains three open maps and several ``Any``
+    Pydantic's validation schema contains open maps and several ``Any``
     level values. Those are not representable in strict JSON Schema. The
     replacements below do not choose science: they expose the exact scalar
     family and robustness keys already consumed by their owner validators.
-    Presentation-only ``display_labels`` travels as key/value rows and is
-    decoded back to the public mapping before Pydantic validation.
+    ``display_labels`` and model covariate decisions travel as key/value rows
+    and are decoded back to public mappings before Pydantic validation.
     """
 
     schema = copy.deepcopy(AnalysisPlan.model_json_schema(mode="validation"))
@@ -364,6 +394,18 @@ def _planner_transport_schema(
             "type": "array",
             "items": label_entry,
         }
+        model_requirement = definitions["PlannedModelRequirement"]["properties"]
+        for field in ("covariate_rationales", "covariate_temporal_roles"):
+            value_schema = copy.deepcopy(model_requirement[field]["additionalProperties"])
+            model_requirement[field] = {
+                "type": "array",
+                "items": _closed_object_schema(
+                    {
+                        "key": {"type": "string", "minLength": 1},
+                        "value": value_schema,
+                    }
+                ),
+            }
 
         concept_value = definitions["ConceptPredicate"]["properties"]
         concept_value["value"] = {
@@ -417,6 +459,7 @@ def _planner_transport_schema(
         ) from exc
 
     _strictify_planner_transport_schema(schema)
+    schema = _share_planner_transport_shapes(schema)
     _assert_closed_planner_transport_schema(schema)
     return schema
 
@@ -635,6 +678,11 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
         for raw_step in raw_steps:
             if not isinstance(raw_step, dict):
                 continue
+            requirements = raw_step.get("model_requirements")
+            if isinstance(requirements, list):
+                for requirement in requirements:
+                    if isinstance(requirement, dict):
+                        _decode_model_covariate_decisions(requirement)
             citations = raw_step.get("literature_citation_keys")
             bindings = raw_step.get("literature_design_bindings")
             if not isinstance(citations, list) or not isinstance(bindings, list):
@@ -648,6 +696,42 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
                     compiled.append(citation_key)
             raw_step["literature_citation_keys"] = compiled
     return decoded
+
+
+def parse_runtime_plan_suffix(raw: str) -> RuntimePlanSuffixRevision:
+    """Parse a suffix through the same scientific transport boundary as a plan."""
+
+    payload = json.loads(str(raw or "").strip())
+    if isinstance(payload, dict) and isinstance(payload.get("replacement_step"), dict):
+        payload["replacement_step"] = decode_planner_transport_payload(
+            {"steps": [payload["replacement_step"]]}
+        )["steps"][0]
+    return RuntimePlanSuffixRevision.model_validate(payload)
+
+
+def _decode_model_covariate_decisions(requirement: Dict[str, Any]) -> None:
+    """Restore model maps without permitting duplicate scientific decisions."""
+
+    for field in ("covariate_rationales", "covariate_temporal_roles"):
+        rows = requirement.get(field)
+        if not isinstance(rows, list):
+            continue
+        values: Dict[str, Any] = {}
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict) or set(row) != {"key", "value"}:
+                raise PlannerStructuredOutputSchemaError(
+                    f"{field}[{index}] is not one exact key/value row"
+                )
+            raw_key = row["key"]
+            if not isinstance(raw_key, str) or not raw_key.strip():
+                raise PlannerStructuredOutputSchemaError(
+                    f"{field}[{index}] requires a non-empty covariate name"
+                )
+            key = raw_key.strip()
+            if key in values:
+                raise PlannerStructuredOutputSchemaError(f"{field} repeats key {key!r}")
+            values[key] = row["value"]
+        requirement[field] = values
 
 
 def planner_descriptive_method_guidance(analysis_type: str) -> str:
@@ -1774,6 +1858,7 @@ __all__ = [
     "decode_planner_transport_payload",
     "planner_structured_output_request",
     "runtime_suffix_structured_output_request",
+    "parse_runtime_plan_suffix",
     "planner_descriptive_method_guidance",
     "planner_descriptive_robustness_guidance",
     "planner_adjusted_association_owner_guidance",

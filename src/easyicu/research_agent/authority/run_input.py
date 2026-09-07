@@ -1067,11 +1067,14 @@ def adopt_verified_legacy_run_input_capsule(
     for key, expected in (
         ("id_columns", list(context.cohort.id_columns)),
         ("time_columns", list(context.cohort.time_columns)),
-        ("outcome_columns", list(context.cohort.outcome_columns)),
     ):
         requested = list(scientific_identity.get(key) or [])
         if requested and requested != expected:
             mismatched.append(key)
+    if list(scientific_identity.get("outcome_columns") or ()) != list(
+        context.cohort.requested_outcome_columns or ()
+    ):
+        mismatched.append("outcome_columns")
     requested_windows = scientific_identity.get("time_windows")
     if requested_windows is not None and requested_windows != [
         window.model_dump(mode="json") for window in context.time_windows

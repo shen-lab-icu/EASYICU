@@ -19,8 +19,8 @@ one focused replan directive and the Planner can still act, rather than after
 execution where the only remaining move is to repair generated code.
 
 It deliberately does **not** re-implement any ownership predicate.  It calls
-``select_standard_executor`` -- the code that actually decides -- and reports
-what the owners said through its trace.  A gate that reasons about the rule
+``resolve_standard_executor`` -- the code that actually decides -- and reports
+what the owners said without generating code.  A gate that reasons about the rule
 instead of invoking it is how one call chain ends up treating the same fact as
 harmless in one place and fatal in another.
 
@@ -48,8 +48,9 @@ from typing import Any, Iterable, List, Sequence, Tuple
 
 from .runners.selection import (
     StandardExecutorCandidate,
-    select_standard_executor,
+    resolve_standard_executor,
 )
+from .step_executor_registry import StepExecutorDecision
 from ..schema import ValidationFinding
 
 __all__ = [
@@ -62,9 +63,7 @@ _VALIDATOR = "plan_owner_declaration"
 
 
 def execution_declaration_refusal(
-    *,
-    claimed_by: Any,
-    trace: Sequence[StandardExecutorCandidate],
+    decision: StepExecutorDecision,
 ) -> Tuple[StandardExecutorCandidate, ...]:
     """The declaration gaps that must refuse a step at execution time.
 
@@ -92,9 +91,9 @@ def execution_declaration_refusal(
     paying for.
     """
 
-    if claimed_by is not None:
+    if decision.claimed_by is not None:
         return ()
-    return tuple(candidate for candidate in trace if candidate.missing_declarations)
+    return tuple(candidate for candidate in decision.candidates if candidate.missing_declarations)
 
 #: The scientific choices a replan must not *make* in order to satisfy this
 #: gate.  The gap is a missing declaration of something the plan already chose,
@@ -176,9 +175,8 @@ def _declaration_gaps(step: Any, plan: Any) -> tuple[StandardExecutorCandidate, 
     reads the gap exactly, rather than reading an optimistic bound of it.
     """
 
-    trace: List[StandardExecutorCandidate] = []
-    select_standard_executor(step, plan=plan, trace=trace)
-    return tuple(candidate for candidate in trace if candidate.missing_declarations)
+    decision = resolve_standard_executor(step, plan=plan)
+    return tuple(candidate for candidate in decision.candidates if candidate.missing_declarations)
 
 
 def owner_declaration_plan_findings(*, plan: Any) -> List[ValidationFinding]:

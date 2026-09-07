@@ -1,0 +1,85 @@
+{
+  "schema_version": "easyicu.engineering_validation/1",
+  "evidence_level": "combined",
+  "base_commit": "89cb7ed00dd08545bf1a455f2e63ed86ad87fff8",
+  "code_commit": "f9340065a0434236a663f1363f93526325742d47",
+  "branch": "codex/authority-closure-20260904",
+  "snapshot": {
+    "scope": "git ls-files src tests tools pyproject.toml .importlinter; includes reviewed ratchet files in final documentation commit",
+    "file_count": 2282,
+    "sha256": "35b246c2e0af5084af664437a2ce8062dc9dac3ccc3e65020fda3affba50021e",
+    "algorithm": "SHA256 of sorted path/sha256 JSON list; sort_keys=True and separators=(comma,colon)"
+  },
+  "combined": {
+    "test_files": 58,
+    "passed": 1310,
+    "failed": 0,
+    "warnings": 32,
+    "seconds": 97.82,
+    "selection": "combined_test_files.txt",
+    "command": "PYTHONPATH=\"$PWD/src\" <python> -m pytest -q -m \"\" -p no:randomly <each path in combined_test_files.txt>"
+  },
+  "architecture": {
+    "gates_passed": 5,
+    "structure_budget_tests_passed": 142,
+    "structure_budget_tests_seconds": 32.15,
+    "import_contracts_kept": 7,
+    "import_contracts_broken": 0,
+    "command": "PATH=<venv>/bin:$PATH PYTHONPATH=\"$PWD/src\" <python> tools/check_architecture_gates.py"
+  },
+  "progress": {
+    "modules_passed": 6,
+    "warnings": 0,
+    "command": "<python> EASYICU/tools/lint_progress.py (from workspace root)"
+  },
+  "additional_checks": [
+    "ruff --no-cache src tests and both changed CLI tools",
+    "git diff --check",
+    "direct preserve_run_receipt.py --help"
+  ],
+  "investigated_failures": [
+    {
+      "stage": "initial selector subset",
+      "cause": "relative PYTHONPATH failed in nested generated-executor subprocesses",
+      "resolution": "absolute isolated-checkout PYTHONPATH; final combined pass"
+    },
+    {
+      "stage": "initial broad combined",
+      "failed": 46,
+      "cause": "ExtensionRegistry bypassed EASYICU_HOME and tried the real user state lock",
+      "resolution": "shared application state owner, explicit extension roots preserved"
+    },
+    {
+      "stage": "after state isolation repair",
+      "failed": 1,
+      "cause": "Web literature authority returns dict; typed runtime projection dereferenced LiteratureBundle attributes",
+      "resolution": "typed boundary validation, valid reuse and invalid-seed negative regression"
+    }
+  ],
+  "runtime": {
+    "python": "3.11.15 (main, May 10 2026, 19:23:07) [Clang 22.1.3 ]",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "packages": {
+      "pytest": "9.1.1",
+      "pydantic": "2.13.4",
+      "numpy": "2.4.6",
+      "pandas": "3.0.5",
+      "ruff": "0.16.0"
+    }
+  },
+  "limits": [
+    "Not full exact-head CI or a browser research UAT",
+    "No live Provider, patient-data analysis, formal benchmark or paper authority",
+    "Older CI run 33859935779 belongs only to 802bcf5",
+    "Main remains dirty and was not merged or restarted by this task",
+    "No xfail added and no deleted-run receipt reconstructed"
+  ],
+  "artifacts": {
+    "architecture.log": "4703b41d1fc7e28a972fa81d923c1712b7581e4b35a627d3ef727c68c22744ad",
+    "architecture_delta.json": "b245f7476f0b52fcb7aac2648955273425a97f65d912601d94886f19e2e870ed",
+    "combined.log": "5243a227640965ddd6039b334081727bc15462cb19d22f491871f299d1229f93",
+    "combined_test_files.txt": "2078d4ddd4809a065078f06408d7a90731df2bc635693e688157da756271cdad",
+    "prior_candidate_ci.json": "067945cca6b1063611b69f109da4f518a0cb65c98b2a56ec7d6d93bde18a7725",
+    "progress.log": "8325bc7dd74b209390995eacc51bccebbab8ff4cfa7748bd4ab6d5a3d16fdc93"
+  }
+}

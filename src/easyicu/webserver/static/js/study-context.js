@@ -12,7 +12,7 @@
   const EVENT_NAME = 'easyicu:study-context';
   const PERSISTED_FIELDS = [
     'id', 'title', 'question', 'purpose', 'data_source', 'crossdb_selection', 'cohort', 'modules',
-    'outcome', 'primary_exposure', 'covariates', 'covariate_selection',
+    'outcome', 'primary_exposure', 'covariates', 'covariate_selection', 'covariate_authority',
     'covariate_rationales', 'covariate_temporal_roles', 'covariate_operationalizations', 'execution_concepts',
     'analysis_design', 'sensitivity_specs', 'time_window', 'comparator',
     'export_format', 'analysis_goal', 'current_stage', 'last_route',
@@ -250,6 +250,7 @@
       primary_exposure: metadataText(raw.primary_exposure, 160),
       covariates: Array.from(new Set(cleanList(raw.covariates).slice(0, 64).filter(item => typeof item === 'string').map(item => metadataText(item, 160)).filter(Boolean))),
       covariate_selection: ['planner_selectable', 'exact'].includes(text(raw.covariate_selection)) ? text(raw.covariate_selection) : 'planner_selectable',
+      covariate_authority: ['user', 'agent_plan'].includes(text(raw.covariate_authority)) ? text(raw.covariate_authority) : null,
       covariate_rationales: Object.fromEntries(Object.entries(cleanObject(raw.covariate_rationales)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && typeof value === 'string').map(([key, value]) => [key, metadataText(value, 500)]).filter(([, value]) => value)),
       covariate_temporal_roles: Object.fromEntries(Object.entries(cleanObject(raw.covariate_temporal_roles)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && ['baseline_static', 'at_or_before_time_zero'].includes(value))),
       covariate_operationalizations: Object.fromEntries(Object.entries(cleanObject(raw.covariate_operationalizations)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value))),

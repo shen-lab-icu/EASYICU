@@ -197,7 +197,7 @@ def test_unowned_products_reports_what_no_owner_can_emit(rows) -> None:
 def test_the_ledger_asks_the_selector_rather_than_the_predicates() -> None:
     """A second copy of the ownership predicates would drift from the selector.
 
-    ``select_standard_executor`` applies gates *after* a contract matches -- a
+    ``resolve_standard_executor`` applies gates *after* a contract matches -- a
     receipt an owner cannot discharge, a typed input scope it does not support
     -- so a tool that called ``*_owns_step`` directly would eventually report
     an owner the selector declined.
@@ -211,7 +211,8 @@ def test_the_ledger_asks_the_selector_rather_than_the_predicates() -> None:
         for alias in node.names
     }
 
-    assert "select_standard_executor" in imported
+    assert "resolve_standard_executor" in imported
+    assert "select_standard_executor" not in imported
     assert not [name for name in imported if name.endswith("_owns_step")]
 
 
@@ -231,3 +232,22 @@ def test_the_fixture_records_where_it_came_from() -> None:
         assert entry["run_id"].startswith("run_2026")
         assert len(entry["source_sha256"]) == 64
         assert "canonical9_runs" in entry["source_path"]
+
+
+def test_all_builtin_routes_are_order_independent_on_the_recorded_plan_corpus(monkeypatch):
+    from easyicu.research_agent.execution.runners import selection
+    from easyicu.research_agent.execution.step_executor_registry import StepExecutorRegistry
+
+    def decisions():
+        return {
+            label: [(row.step_id, row.upper_owner, row.lower_owner)
+                    for row in measure_plan(plan, raw_steps)]
+            for label, (plan, raw_steps, _granted) in _plans().items()
+        }
+
+    original = decisions()
+    reversed_registry = StepExecutorRegistry()
+    for executor in reversed(selection.STANDARD_EXECUTORS.executors):
+        reversed_registry.declare(executor)
+    monkeypatch.setattr(selection, "STANDARD_EXECUTORS", reversed_registry)
+    assert decisions() == original

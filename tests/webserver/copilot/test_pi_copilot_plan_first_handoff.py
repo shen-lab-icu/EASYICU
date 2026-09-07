@@ -255,12 +255,20 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
     assert "打开完整计划" in rendered
 
 
-def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> None:
+@pytest.mark.parametrize("archived_authorization_question", [False, True])
+def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
+    archived_authorization_question,
+) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
 
     owner = _read("js/screens-guided-pi-confirmation.js")
+    questions = (
+        [{"code": "REPEATED_STAY_IDENTITY_UNAVAILABLE"}]
+        if archived_authorization_question
+        else []
+    )
     script = f"""
       global.window = {{}};
       eval({MODULES_SOURCE!r});
@@ -269,8 +277,13 @@ def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> Non
         next_action_code: 'plan_scientific_changes_required',
         plan_review_summary: {{
           run_id: 'run-test',
-          authorization_questions: [{{ code: 'REPEATED_STAY_IDENTITY_UNAVAILABLE' }}],
-          remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }},
+          authorization_questions: {json.dumps(questions)},
+          remediation_buckets: {{
+            agent_plan_revision: [],
+            runtime_capability: ['REPEATED_STAY_IDENTITY_UNAVAILABLE'],
+            external_evidence: [],
+            independent_review: [],
+          }},
         }},
         plan_conversation_preview: {{ items: [{{ key: 'population_and_unit', text: '纳入 ICU 住院。' }}] }},
       }};
@@ -285,25 +298,28 @@ def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> Non
         busy: () => false,
       }};
       const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
-      process.stdout.write(confirmation.workflowConfirmationHtml());
+      process.stdout.write(JSON.stringify({{
+        spec: confirmation.workflowConfirmation(),
+        html: confirmation.workflowConfirmationHtml(),
+      }}));
     """
-    rendered = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    ).stdout
+    result = json.loads(
+        subprocess.run(
+            [node, "--eval", script], check=True, capture_output=True, text=True
+        ).stdout
+    )
+    rendered = result["html"]
 
-    assert "请选择重复 ICU 入住的研究目标" in rendered
-    assert "重复患者比例未知" in rendered
-    assert "这里没有无条件默认答案" in rendered
-    assert "研究首次 ICU 入住" in rendered
-    assert "研究每次 ICU 入住" in rendered
-    assert "获授权的患者映射" in rendered
-    assert "首次入住／再入院标记" in rendered
-    assert "核验患者分组" in rendered
-    assert "按患者聚类的稳健方差" in rendered
-    assert rendered.count('data-gpi-plan-decision-option=') == 1
-    assert 'data-gpi-plan-decision-option="all_icu_stays_clustered"' in rendered
-    assert 'data-gpi-confirm-edit' in rendered
-    assert "（推荐）" not in rendered
-    assert "选择处理方式" not in rendered
+    assert result["spec"]["nonApprovable"] is True
+    assert "暂不能执行" in rendered
+    assert "1 项运行时合同仍被阻断" in rendered
+    assert "不需要再次回答科学设定问题" in rendered
+    assert "数据合同或独立证据缺口会保持阻断" in rendered
+    assert "打开完整计划" in rendered
+    assert "查看审阅详情" in rendered
+    assert "请选择重复 ICU 入住的研究目标" not in rendered
+    assert 'data-gpi-plan-decision-option=' not in rendered
+    assert 'data-gpi-confirm-action' not in rendered
+    assert 'data-gpi-confirm-edit' not in rendered
     assert 'class="gpi-plan-conversation"' in rendered
     assert '<details class="gpi-plan-conversation-summary">' in rendered

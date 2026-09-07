@@ -22,6 +22,7 @@ from easyicu.webserver.pi_copilot.plan_projection import (
     project_plan_conversation_preview,
     project_plan_reader_fields,
 )
+from easyicu.webserver.pi_copilot.projections import ensure_safe_projection
 
 
 def _plan() -> dict:
@@ -106,8 +107,50 @@ def test_conversation_preview_uses_only_the_selected_reviewable_plan() -> None:
         "time_zero": "24 hours after ICU admission.",
         "observation_window": "From 24 hours to hospital discharge.",
         "primary_method": "Restricted cubic spline logistic model.",
-        "required_variables": ["stay_id", "lact_max", "death", "age"],
+        "required_variables": [
+            "ICU stay grouping key",
+            "lact_max",
+            "death",
+            "age",
+        ],
     }
+
+
+def test_conversation_preview_projects_identity_columns_to_safe_roles() -> None:
+    source = _plan()
+    selected = source["design_selection"]["candidates"][0]
+    selected["reviewable_plan"] = [
+        "Use one row per stay_id.",
+        "Cluster by subject_id after the exposure window.",
+        "Follow the declared hospital outcome.",
+        "Fit the adjusted association model.",
+        "Report missingness and prespecify handling.",
+        "Audit stay_id duplicates without showing row identifiers.",
+    ]
+    selected["required_variables"] = [
+        "stay_id",
+        "subject_id",
+        "hadm_id",
+        "death",
+    ]
+
+    preview = project_plan_conversation_preview(source)
+
+    assert preview is not None
+    assert preview["items"][0]["text"] == "Use one row per ICU stay grouping key."
+    assert preview["items"][1]["text"] == (
+        "Cluster by patient clustering key after the exposure window."
+    )
+    assert preview["items"][5]["text"].startswith(
+        "Audit ICU stay grouping key duplicates"
+    )
+    assert preview["design"]["required_variables"] == [
+        "ICU stay grouping key",
+        "patient clustering key",
+        "hospital admission grouping key",
+        "death",
+    ]
+    assert ensure_safe_projection(preview) is preview
 
 
 def test_conversation_preview_refuses_incomplete_or_unselected_designs() -> None:

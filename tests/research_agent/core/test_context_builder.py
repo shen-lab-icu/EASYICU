@@ -411,6 +411,33 @@ def test_id_time_outcome_overrides(ra):
     assert roles["custom_id"] == "id"
     assert roles["ts_event"] == "time"
     assert roles["weird_outcome"] == "outcome"
+    assert ctx.cohort.requested_outcome_columns == ["weird_outcome"]
+
+
+@pytest.mark.parametrize("builder", ["build_research_context", "build_naive_research_context"])
+@pytest.mark.parametrize("requested", [None, ["death"], ["death", "los_icu"]])
+def test_available_outcomes_do_not_become_requested_endpoints(ra, builder, requested):
+    from easyicu.research_agent.planning.scientific_review import requested_outcomes
+    from easyicu.research_agent.research_context.typed import parse_research_context_json
+
+    frame = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0], "los_icu": [2.0, 5.0, 3.0]})
+    context = getattr(ra, builder)(
+        research_question="Assess mortality in this cohort.",
+        cohort=frame,
+        cohort_name="synthetic",
+        database="synthetic",
+        target_outcome="death",
+        outcome_columns=requested,
+    )
+    expected = tuple(requested or ["death"])
+    assert context.cohort.requested_outcome_columns == requested
+    assert requested_outcomes(context) == expected
+    if requested is None:
+        assert "los_icu" in context.cohort.outcome_columns
+    restored = parse_research_context_json(context.model_dump_json())
+    assert requested_outcomes(restored) == expected
+    outbound = outbound_safe_context_payload(context)
+    assert outbound["cohort"].get("requested_outcome_columns") == requested
 
 
 def test_missingness_profile_is_populated(ra):

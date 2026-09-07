@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from easyicu.research_agent.authority import run_heartbeat as heartbeat_owner
 from easyicu.research_agent.authority.run_heartbeat import (
     RUN_HEARTBEAT_SCHEMA,
+    RunHeartbeatSupervisor,
     bind_active_run_heartbeat,
+    finish_active_run_heartbeat,
     record_active_run_progress,
     run_heartbeat_scope,
 )
@@ -85,3 +88,165 @@ def test_heartbeat_records_exception_type_without_exception_text(tmp_path: Path)
     assert payload["active"] is False
     assert payload["terminal_reason"] == "call_failed:RuntimeError"
     assert secret not in json.dumps(payload)
+
+
+def test_completed_heartbeat_is_immutable_through_scope_exit(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_completed"
+    with run_heartbeat_scope(run_id=run_dir.name) as supervisor:
+        path = bind_active_run_heartbeat(run_dir, interval_seconds=3600.0)
+        assert path is not None
+        finish_active_run_heartbeat(run_id=run_dir.name)
+        terminal_bytes = path.read_bytes()
+        terminal = _load(path)
+        assert terminal["active"] is False
+        assert terminal["terminal_reason"] == "workflow_completed"
+        assert supervisor._thread is not None
+        assert not supervisor._thread.is_alive()
+
+        supervisor.finish(terminal_reason="call_returned")
+        supervisor.flush()
+        record_active_run_progress(stage="late", message="Delayed worker callback.")
+        with pytest.raises(RuntimeError, match="already finished"):
+            bind_active_run_heartbeat(run_dir)
+        with pytest.raises(RuntimeError, match="already finished"):
+            supervisor.bind(tmp_path / "another_run")
+        assert not (tmp_path / "another_run").exists()
+        assert path.read_bytes() == terminal_bytes
+
+    assert path.read_bytes() == terminal_bytes
+
+
+def test_finished_unbound_heartbeat_cannot_start_later(tmp_path: Path) -> None:
+    supervisor = RunHeartbeatSupervisor(run_id="unbound")
+    supervisor.finish(terminal_reason="workflow_completed")
+    supervisor.finish(terminal_reason="call_returned")
+    supervisor.record_progress(stage="late", message="Not bound.")
+    supervisor.flush()
+    with pytest.raises(RuntimeError, match="already finished"):
+        supervisor.bind(tmp_path / "unbound")
+    assert supervisor._thread is None
+    assert not (tmp_path / "unbound").exists()
+
+
+def test_finish_active_heartbeat_requires_matching_current_run(tmp_path: Path) -> None:
+    finish_active_run_heartbeat(run_id="outside_scope")
+    with run_heartbeat_scope(run_id="current"):
+        path = bind_active_run_heartbeat(tmp_path / "current", interval_seconds=3600.0)
+        assert path is not None
+        before = path.read_bytes()
+        with pytest.raises(RuntimeError, match="different run"):
+            finish_active_run_heartbeat(run_id="another_run")
+        assert path.read_bytes() == before
+        assert _load(path)["active"] is True
+
+
+def test_finish_drains_writers_before_one_final_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_periodic_write = threading.Event()
+    write_started = threading.Event()
+    release_write = threading.Event()
+    queued_flush_started = threading.Event()
+    finish_returned = threading.Event()
+    errors: list[BaseException] = []
+    writes: list[dict] = []
+    supervisor = RunHeartbeatSupervisor(run_id="run_concurrent")
+    original_write = heartbeat_owner._atomic_write_json
+
+    def periodic_loop() -> None:
+        try:
+            assert start_periodic_write.wait(timeout=5.0)
+            supervisor.flush()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def controlled_write(path: Path, payload: dict) -> None:
+        if threading.current_thread() is supervisor._thread:
+            write_started.set()
+            assert release_write.wait(timeout=5.0)
+        original_write(path, payload)
+        writes.append(payload)
+
+    def start_worker(action) -> threading.Thread:
+        def guarded() -> None:
+            try:
+                action()
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=guarded, daemon=True)
+        worker.start()
+        return worker
+
+    def queued_flush() -> None:
+        queued_flush_started.set()
+        supervisor.flush()
+
+    def complete() -> None:
+        supervisor.finish(terminal_reason="workflow_completed")
+        finish_returned.set()
+
+    monkeypatch.setattr(supervisor, "_heartbeat_loop", periodic_loop)
+    monkeypatch.setattr(heartbeat_owner, "_atomic_write_json", controlled_write)
+    path = supervisor.bind(tmp_path / supervisor.run_id, interval_seconds=3600.0)
+    writes.clear()
+    workers: list[threading.Thread] = []
+    try:
+        start_periodic_write.set()
+        assert write_started.wait(timeout=5.0)
+        workers.append(start_worker(queued_flush))
+        assert queued_flush_started.wait(timeout=5.0)
+        workers.append(start_worker(complete))
+        assert supervisor._stop_event.wait(timeout=5.0)
+        workers.append(
+            start_worker(lambda: supervisor.finish(terminal_reason="call_returned"))
+        )
+        assert not finish_returned.is_set()
+        supervisor.record_progress(stage="late", message="No longer active.")
+        with pytest.raises(RuntimeError, match="already finished"):
+            supervisor.bind(tmp_path / "late_binding")
+        release_write.set()
+    finally:
+        start_periodic_write.set()
+        release_write.set()
+        for worker in workers:
+            worker.join(timeout=5.0)
+        if all(not worker.is_alive() for worker in workers):
+            supervisor.finish(terminal_reason="cleanup")
+
+    assert not errors
+    assert all(not worker.is_alive() for worker in workers)
+    assert supervisor._thread is not None
+    assert not supervisor._thread.is_alive()
+    assert finish_returned.is_set()
+    assert [payload["active"] for payload in writes] == [True, False]
+    terminal = _load(path)
+    assert terminal == writes[-1]
+    assert terminal["terminal_reason"] == "workflow_completed"
+    assert terminal["stage"] == "run"
+    assert not (tmp_path / "late_binding").exists()
+
+
+def test_final_heartbeat_write_error_remains_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor = RunHeartbeatSupervisor(run_id="write_error")
+    path = supervisor.bind(tmp_path / "write_error", interval_seconds=3600.0)
+    before = path.read_bytes()
+    attempts: list[dict] = []
+
+    def fail_write(path: Path, payload: dict) -> None:
+        attempts.append(payload)
+        raise OSError("diagnostic disk write unavailable")
+
+    monkeypatch.setattr(heartbeat_owner, "_atomic_write_json", fail_write)
+    supervisor.finish(terminal_reason="workflow_completed")
+    supervisor.finish(terminal_reason="call_returned")
+    supervisor.flush()
+    supervisor.record_progress(stage="late", message="No new write attempt.")
+    assert len(attempts) == 1
+    assert attempts[0]["active"] is False
+    assert supervisor._last_write_error_type == "OSError"
+    assert path.read_bytes() == before
+    assert supervisor._thread is not None
+    assert not supervisor._thread.is_alive()

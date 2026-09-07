@@ -110,6 +110,23 @@ def test_a_complete_declaration_produces_no_finding():
     assert owner_declaration_plan_findings(plan=_plan(payload)) == []
 
 
+def test_plan_declaration_check_never_generates_code(monkeypatch):
+    from easyicu.research_agent.execution.runners import selection
+
+    rendered = []
+    monkeypatch.setattr(
+        selection,
+        "adjusted_association_executor_code",
+        lambda *_args, **_kwargs: rendered.append("render") or "unused code",
+    )
+    payload = json.loads(json.dumps(_real_step_payload()))
+    payload["model_requirements"][0]["covariates"] = list(_COVARIATES)
+    payload["model_requirements"][0]["model_terms"] = _model_terms(_COVARIATES)
+
+    assert owner_declaration_plan_findings(plan=_plan(payload)) == []
+    assert rendered == []
+
+
 def test_a_multi_model_step_produces_no_finding():
     """The 33-step case: a shape no owner covers, not a field anyone forgot.
 
@@ -158,7 +175,7 @@ def test_a_step_whose_selection_raises_is_reported_unevaluated(monkeypatch):
         raise RuntimeError("selector exploded")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.execution.owner_declaration.select_standard_executor",
+        "easyicu.research_agent.execution.owner_declaration.resolve_standard_executor",
         _boom,
     )
     findings = owner_declaration_plan_findings(plan=_plan(_real_step_payload()))

@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from ...authority.current_case_scientific_runtime import (
     AssociationModelGridRuntimeAuthority,
+    LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     LandmarkSurvivalRuntimeAuthority,
     SourceFeasibilityRuntimeAuthority,
@@ -16,10 +17,12 @@ from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
 from ...schema import AnalysisPlan, AnalysisStep
 from ..step_executor_registry import (
+    AmbiguousExecutorOwnership,
     StandardExecutorCandidate,
     StandardExecutorSelection,
     StepExecutor,
     StepExecutorContext,
+    StepExecutorDecision,
     StepExecutorRegistry,
 )
 from .adjusted_association_executor import (
@@ -30,6 +33,7 @@ from .adjusted_association_executor import (
 from .adjusted_association_figure_executor import (
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
     ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
+    association_figure_design_verdict,
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
     association_overview_figure_executor_code,
@@ -90,6 +94,7 @@ from .deterministic_missingness import (
     is_missingness_complete_case_contract,
     missingness_audit_cohort_input_key,
     missingness_audit_executor_owns_step,
+    missingness_contract_details,
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
@@ -118,6 +123,14 @@ from .host_bound_cohort_executor import (
     HOST_BOUND_COHORT_ANALYSIS_KIND,
     host_bound_cohort_executor_code,
     host_bound_cohort_executor_owns_step,
+)
+from .landmark_categorical_association_executor import (
+    LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+    LANDMARK_CATEGORICAL_PRIMARY_ANALYSIS_KIND,
+    landmark_categorical_cohort_executor_code,
+    landmark_categorical_cohort_executor_owns_step,
+    landmark_categorical_primary_executor_code,
+    landmark_categorical_primary_executor_owns_step,
 )
 from .landmark_association_figure_executor import (
     landmark_association_figure_executor_code,
@@ -230,6 +243,7 @@ __all__ = [
     "StandardExecutorCandidate",
     "StandardExecutorSelection",
     "select_standard_executor",
+    "resolve_standard_executor",
 ]
 
 
@@ -300,6 +314,54 @@ def _build_registry() -> StepExecutorRegistry:
                 c.current_case_scientific_runtime_authority.cohort_product,
                 c.current_case_scientific_runtime_authority.parent_product,
             ),
+        ),
+        StepExecutor(
+            key=LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                LandmarkCategoricalAssociationRuntimeAuthority,
+            ),
+            owns=lambda c: landmark_categorical_cohort_executor_owns_step(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+            ),
+            render=lambda c: landmark_categorical_cohort_executor_code(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+                runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+            selection_reason="signed_landmark_categorical_cohort_contract_preflight",
+            progress_message="Building the signed fixed-landmark analysis cohort",
+            consumed_input_keys=lambda _c: (),
+        ),
+        StepExecutor(
+            key=LANDMARK_CATEGORICAL_PRIMARY_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                LandmarkCategoricalAssociationRuntimeAuthority,
+            ),
+            owns=lambda c: landmark_categorical_primary_executor_owns_step(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+            ),
+            render=lambda c: landmark_categorical_primary_executor_code(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+                runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
+            selection_reason=(
+                "signed_landmark_categorical_association_contract_preflight"
+            ),
+            progress_message="Using the signed categorical landmark association",
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
         ),
         StepExecutor(
             key=LANDMARK_SURVIVAL_ANALYSIS_KIND,
@@ -579,6 +641,10 @@ def _build_registry() -> StepExecutorRegistry:
         ),
         StepExecutor(
             key="association_overview_figure",
+            accepts_figure_presentation=True,
+            declaration_verdict=lambda c: association_figure_design_verdict(
+                c.step, overview=True
+            ),
             owns=lambda c: association_overview_figure_executor_owns_step(
                 c.step, resolved_bindings=c.resolved_bindings
             ),
@@ -594,6 +660,8 @@ def _build_registry() -> StepExecutorRegistry:
         ),
         StepExecutor(
             key="adjusted_association_figure",
+            accepts_figure_presentation=True,
+            declaration_verdict=lambda c: association_figure_design_verdict(c.step),
             owns=lambda c: adjusted_association_figure_executor_owns_step(
                 c.step, resolved_bindings=c.resolved_bindings
             ),
@@ -779,6 +847,7 @@ def _build_registry() -> StepExecutorRegistry:
         ),
         StepExecutor(
             key="missingness_audit",
+            contract_details=lambda c: missingness_contract_details(c.step),
             owns=lambda c: missingness_audit_executor_owns_step(c.step),
             render=lambda c: missingness_measurement_audit_code(
                 c.step, plausibility_scope=c.plausibility_scope
@@ -887,7 +956,7 @@ def _build_registry() -> StepExecutorRegistry:
 STANDARD_EXECUTORS = _build_registry()
 
 
-def select_standard_executor(
+def resolve_standard_executor(
     step: AnalysisStep,
     *,
     plan: AnalysisPlan,
@@ -896,9 +965,8 @@ def select_standard_executor(
     trajectory_scientific_runtime_authority: Mapping[str, Any] | None = None,
     current_case_scientific_runtime_authority: Mapping[str, Any] | None = None,
     scientific_runtime_projection_sha256: str | None = None,
-    trace: list[StandardExecutorCandidate] | None = None,
-) -> StandardExecutorSelection | None:
-    """Select by exact typed contract, never prose or benchmark identity."""
+) -> StepExecutorDecision:
+    """Resolve ownership by exact typed contract without generating code."""
 
     if plausibility_scope is not None:
         plausibility_scope.require_step(step.step_id)
@@ -920,4 +988,34 @@ def select_standard_executor(
             scientific_runtime_projection_sha256 or ""
         ),
     )
-    return STANDARD_EXECUTORS.select(context, trace=trace)
+    return STANDARD_EXECUTORS.resolve(context)
+
+
+def select_standard_executor(
+    step: AnalysisStep,
+    *,
+    plan: AnalysisPlan,
+    plausibility_scope: FlagOnlyPlausibilityScope | None = None,
+    resolved_bindings: Mapping[str, Any] | None = None,
+    trajectory_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    current_case_scientific_runtime_authority: Mapping[str, Any] | None = None,
+    scientific_runtime_projection_sha256: str | None = None,
+    trace: list[StandardExecutorCandidate] | None = None,
+) -> StandardExecutorSelection | None:
+    """Select by exact typed contract, never prose or benchmark identity."""
+
+    try:
+        decision = resolve_standard_executor(
+            step, plan=plan, plausibility_scope=plausibility_scope,
+            resolved_bindings=resolved_bindings,
+            trajectory_scientific_runtime_authority=trajectory_scientific_runtime_authority,
+            current_case_scientific_runtime_authority=current_case_scientific_runtime_authority,
+            scientific_runtime_projection_sha256=scientific_runtime_projection_sha256,
+        )
+    except AmbiguousExecutorOwnership as exc:
+        if trace is not None:
+            trace.extend(exc.candidates)
+        raise
+    if trace is not None:
+        trace.extend(decision.candidates)
+    return decision.render_selection()

@@ -15,7 +15,7 @@ STATIC = Path(__file__).parents[3] / "src/easyicu/webserver/static"
 
 
 @pytest.mark.parametrize("matches", [True, False])
-def test_live_plan_review_precedes_setup_but_stale_plan_still_needs_reconfirmation(matches):
+def test_candidate_review_or_regeneration_precedes_standalone_setup_choice(matches):
     study = {
         "id": "study-candidate", "revision": 2,
         "question": "How is the exposure associated with the outcome?",
@@ -38,9 +38,9 @@ def test_live_plan_review_precedes_setup_but_stale_plan_still_needs_reconfirmati
         },
     )
     assert "cohort_eligibility" in snapshot.missing_setup_fields
-    assert snapshot.current_stage == ("plan" if matches else "setup")
+    assert snapshot.current_stage == "plan"
     assert snapshot.next_action_code == (
-        "plan_scientific_changes_required" if matches else "cohort_eligibility_confirmation_required"
+        "plan_scientific_changes_required" if matches else "plan_configuration_superseded"
     )
     assert snapshot.plan_execution_ready is False
     assert next(s for s in snapshot.stages if s.id == "analysis").status == "blocked"

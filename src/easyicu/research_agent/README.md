@@ -117,6 +117,26 @@ breaking-cleanup line: retired top-level module paths are absent rather than
 retained as façades. Fresh runs import responsibility packages directly, and
 the archive tag preserves the former diagnostic state.
 
+Three complete, typed projections keep callers out of module internals:
+
+- `execution.step_executor_registry.StepExecutorDecision` records one complete
+  ownership query. Plan gates and diagnostics use `resolve_standard_executor`
+  without generating code; execution explicitly calls `render_selection()`.
+  Its report retains every refusal reason and missing declaration. Family
+  classifiers live with their runner adapter.
+- `figures.contracts.FigureContractInventory` shares the same immutable current
+  contract read across article, display-suite and figure-strategy checks. It
+  retains file digests and read errors, enforces run/step selection on reuse,
+  and returns detached projections. It is a reporting-pass observation, not
+  an EvidenceStore or a substitute for exact figure-plan/source validation.
+- `reporting.completion.RunCompletionDecision` composes typed validator facts,
+  diagnostic demotions, execution eligibility and verified plan identity before
+  projecting any paper permission. Artifact writers consume that final decision;
+  `publication_ready` describes content readiness, while `paper_authorized`
+  also requires execution and plan authority.
+
+Implementation and focused/combined evidence: [module depth review](../../../docs/architecture/module_depth_20260905.md).
+
 The production module-top-level static import graph is now acyclic. `execution.phase` and
 `execution.publication_figure` receive host-owned compatibility helpers through
 a fresh immutable `execution.host_services.ExecutePhaseServices` snapshot; they

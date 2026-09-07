@@ -1,6 +1,7 @@
 """Sibling plan choices remain visible without reviving old execution authority."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -301,3 +302,140 @@ def test_host_choice_handler_persists_progress_and_rejects_unrelated_drift(
         )
     assert raised.value.code == "plan_decision_source_superseded"
     assert current["revision"] == 2
+
+
+def test_agent_plan_configuration_is_compiled_without_a_user_choice(
+    states, monkeypatch
+):
+    from easyicu.webserver.pi_copilot import service as service_module
+    from easyicu.webserver.pi_copilot.contracts import AuthorityBinding, PiSessionRecord
+
+    before, _after, run = states
+    before = {
+        **before,
+        "question": "KDIGO stage in the first 24 hours and hospital death",
+        "time_window": {"hours": 24, "anchor": "ICU admission"},
+        "cohort": {"preset": "all_icu", "exclude_readmissions": False},
+        "execution_concepts": {},
+        "confirmations": {"feature_time_window": True},
+    }
+    run = {
+        **run,
+        "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(
+            before
+        ),
+    }
+    service = service_module.PiCopilotService.__new__(service_module.PiCopilotService)
+    record = PiSessionRecord(
+        session_id="agent-plan-session",
+        project_id="agent-plan-project",
+        binding=AuthorityBinding(
+            study_context_id=before["id"],
+            study_revision=1,
+            run_id=run["run_id"],
+        ),
+    )
+    current = dict(before)
+    monkeypatch.setattr(service, "_scoped_record", lambda *a, **kw: record)
+    monkeypatch.setattr(service, "_stale_details", lambda *a: {})
+    monkeypatch.setattr(service, "_save_record", lambda *a: None)
+    monkeypatch.setattr(
+        service,
+        "_binding_for_context",
+        lambda context, run_id=None: AuthorityBinding(
+            study_context_id=context["id"],
+            study_revision=context["revision"],
+            run_id=run_id,
+        ),
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts, "get_context", lambda *a: dict(current)
+    )
+    monkeypatch.setattr(
+        service_module,
+        "list_bound_run_history",
+        lambda **kw: [{**run, "project_dir": "/test/agent-plan"}],
+    )
+    monkeypatch.setattr(
+        service_module, "research_pipeline_project_root", lambda *a: "/test"
+    )
+    monkeypatch.setattr(
+        service_module.source_identity_authority,
+        "resolve_patient_grouping_authority",
+        lambda **kw: SimpleNamespace(group_source="opaque_patient"),
+    )
+    plan = {
+        "design_selection": {
+            "candidates": [
+                {
+                    "design_id": "landmark_adjusted_association",
+                    "disposition": "selected",
+                }
+            ]
+        },
+        "steps": [
+            {
+                "model_requirements": [
+                    {
+                        "analysis_role": "primary",
+                        "exposure_source": "aki_stage",
+                        "outcome": "death",
+                        "covariates": ["age", "sex"],
+                        "covariate_rationales": {
+                            "age": "Baseline age precedes exposure.",
+                            "sex": "Baseline sex precedes exposure.",
+                        },
+                        "covariate_temporal_roles": {
+                            "age": "baseline_static",
+                            "sex": "baseline_static",
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_review",
+        lambda *a: {
+            "artifact_payloads": {
+                "agent_plan.json": plan,
+                "scientific_plan_review.json": {
+                    "facts": {
+                        "remediation_buckets": {
+                            "runtime_capability": [
+                                "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+                                "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+                            ]
+                        }
+                    }
+                },
+            }
+        },
+    )
+
+    seen_patch = {}
+
+    def update(patch, **kw):
+        seen_patch.update(patch)
+        current.update(patch)
+        current["revision"] += 1
+        return dict(current)
+
+    monkeypatch.setattr(service_module.study_contexts, "upsert_context", update)
+    result = service.apply_agent_plan_configuration(
+        "agent-plan-session",
+        project_id="agent-plan-project",
+        expected_revision=1,
+        run_id=run["run_id"],
+    )
+
+    assert result["next_action"] == "fresh_plan"
+    assert result["runtime_finding_codes"] == [
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+    ]
+    assert "question" not in seen_patch
+    assert current["question"] == before["question"]
+    assert seen_patch["analysis_design"]["variance_estimator"] == "cluster_robust"
+    assert seen_patch["confirmations"]["agent_plan_configuration_compiled"] is True

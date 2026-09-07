@@ -7336,13 +7336,26 @@ def test_readiness_publication_ready_requires_article_display_suite(
     assert "baseline_context" in gates["article_missing_artifact_roles"]
     assert "data_quality" in gates["article_missing_artifact_roles"]
     assert any("Table 1" in err for err in gates["display_suite_errors"])
-    assert any("fewer than two panels" in err for err in gates["display_suite_errors"])
+    assert any("fewer than two panels" in err for err in gates["display_design_advice"])
 
 
+@pytest.mark.parametrize("completion_kwargs,expected_status,authorized", [
+    ({}, "publication_ready", False),
+    ({"execution_paper_eligible": True}, "publication_ready", False),
+    ({"execution_paper_eligible": True, "plan_authority_verified": True,
+      "plan_authority_sha256": "a" * 64}, "publication_ready", True),
+    ({"execution_paper_eligible": True, "plan_authority_verified": True,
+      "plan_authority_sha256": "invalid"}, "publication_ready", False),
+    ({"execution_paper_eligible": True, "plan_authority_verified": True,
+      "plan_authority_sha256": "a" * 64, "force_diagnostic_only": True}, "diagnostic_only", False),
+])
 def test_readiness_publication_ready_accepts_complete_display_suite(
     ra,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    completion_kwargs,
+    expected_status,
+    authorized,
 ):
     _allow_reportable_capability_for_readiness_unit(monkeypatch)
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
@@ -7408,6 +7421,15 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
+    initial_gates = readiness_module._compute_readiness_gates(
+        context=context, plan=plan, findings=[],
+        per_step_records=_authoritative_readiness_records(plan, bound_evidence),
+        evidence=evidence, run_dir=tmp_path, manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+    assert initial_gates["publication_ready"] is True
+    assert initial_gates["paper_authorized"] is False
+
     gates, artifact_paths = _write_readiness_artifacts(
         context=context,
         plan=plan,
@@ -7417,6 +7439,7 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         run_dir=tmp_path,
         manuscript_path=bound_path,
         stop_after_analysis=False,
+        **completion_kwargs,
     )
 
     assert gates["display_suite_complete"] is True
@@ -7427,6 +7450,16 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     assert gates["display_absolute_risk_visual_present"] is True
     assert "dot_interval_absolute_risk" in gates["display_chart_types"]
     assert gates["publication_ready"] is True
+    assert gates["paper_authorized"] is authorized
+    status_payload = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+    assert status_payload["status"] == gates["completion_status"] == expected_status
+    assert status_payload["gates"]["paper_authorized"] is authorized
+    report = readiness_module.render_report(
+        context=context, plan=plan, findings=[],
+        per_step_records=_authoritative_readiness_records(plan, bound_evidence),
+        evidence=evidence, readiness=gates,
+    )
+    assert f"## Status: {expected_status.upper().replace('_', ' ')}" in report
     assert (tmp_path / artifact_paths["display_suite_audit"]).exists()
     assert (tmp_path / artifact_paths["article_contract_audit"]).exists()
     assert (tmp_path / artifact_paths["article_figure_strategy_audit"]).exists()
@@ -7576,11 +7609,11 @@ def test_display_suite_keeps_step_contracts_supporting_not_primary(
     assert gates["display_supporting_absolute_risk_visual_present"] is True
     assert any(
         "Primary publication figure exposes fewer" in err
-        for err in gates["display_suite_errors"]
+        for err in gates["display_design_advice"]
     )
     assert any(
         "Primary publication figure lacks panel-role" in err
-        for err in gates["display_suite_errors"]
+        for err in gates["display_design_advice"]
     )
     assert any(
         "Primary association figure lacks" in err
@@ -8048,7 +8081,7 @@ def test_association_display_suite_rejects_generic_chart_only_bundle(
         "lacks a visual prevalence" in err for err in gates["display_suite_errors"]
     )
     assert any(
-        "generic bar/forest/heatmap" in err for err in gates["display_suite_errors"]
+        "generic bar/forest/heatmap" in err for err in gates["display_design_advice"]
     )
 
 
@@ -9716,285 +9749,6 @@ def test_deterministic_runner_repair_fixes_column_hallucination(ra):
         code=repaired, run_log=run_log, previous_repair=repair_name
     )
     assert second is None or second[0] != repair_name
-
-
-def test_preserve_figure_steps_after_replan_re_attaches_dropped_figure_step(ra):
-    """Regression: Replanner must not silently drop figure-producing steps.
-
-    qwen3-coder-30b under naive arms (no ICU context) often returns a
-    revised plan that rationalises away the figure step after the probe
-    summary. Task contracts still require the figure artefact, so the
-    pipeline must re-attach any dropped step whose ``expected_outputs``
-    declare a figure/plot output.
-    """
-    from easyicu.research_agent.planning.figure_step_contract import (
-        _preserve_figure_steps_after_replan,
-        _step_produces_figure,
-    )
-
-    fig_step = ra.AnalysisStep(
-        step_id="02_summary_figure",
-        intent="Render publication-ready figure for the table-one summary.",
-        expected_outputs=["figure:table_one_summary"],
-    )
-    table_step = ra.AnalysisStep(
-        step_id="01_table_one",
-        intent="Build descriptive Table 1.",
-        expected_outputs=["table:table_one"],
-    )
-    current = ra.AnalysisPlan(
-        research_question="describe the cohort",
-        steps=[table_step, fig_step],
-    )
-    revised = ra.AnalysisPlan(
-        research_question="describe the cohort",
-        steps=[table_step],
-        revision=2,
-    )
-
-    assert _step_produces_figure(fig_step) is True
-    assert _step_produces_figure(table_step) is False
-
-    preserved, findings = _preserve_figure_steps_after_replan(
-        current=current,
-        revised=revised,
-    )
-
-    preserved_ids = [s.step_id for s in preserved.steps]
-    assert "02_summary_figure" in preserved_ids, (
-        "dropped figure step must be re-attached to revised plan; "
-        f"got steps={preserved_ids}"
-    )
-    assert any(
-        f.severity == "warning" and "figure-producing" in f.message for f in findings
-    )
-
-
-def test_preserve_figure_steps_after_replan_no_op_when_figure_kept(ra):
-    """No-op when the replanner kept all figure steps."""
-    from easyicu.research_agent.planning.figure_step_contract import _preserve_figure_steps_after_replan
-
-    fig_step = ra.AnalysisStep(
-        step_id="02_summary_figure",
-        intent="Render summary figure.",
-        expected_outputs=["figure:table_one_summary"],
-    )
-    table_step = ra.AnalysisStep(
-        step_id="01_table_one",
-        intent="Build Table 1.",
-        expected_outputs=["table:table_one"],
-    )
-    current = ra.AnalysisPlan(
-        research_question="describe the cohort",
-        steps=[table_step, fig_step],
-    )
-    revised = ra.AnalysisPlan(
-        research_question="describe the cohort",
-        steps=[table_step, fig_step],
-        revision=2,
-    )
-
-    preserved, findings = _preserve_figure_steps_after_replan(
-        current=current,
-        revised=revised,
-    )
-
-    assert findings == []
-    assert [s.step_id for s in preserved.steps] == [
-        "01_table_one",
-        "02_summary_figure",
-    ]
-
-
-def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
-    """An echoed pre-split parent must not strand the preserved render child."""
-    from easyicu.research_agent.planning.figure_step_contract import (
-        _preserve_figure_steps_after_replan,
-    )
-
-    current_parent = ra.AnalysisStep(
-        step_id="01_model_training",
-        intent="Fit the agent-selected prediction model.",
-        method="prediction_model",
-        expected_outputs=[
-            "statistic:auroc",
-            "table:model_performance",
-            "table:roc_curve",
-        ],
-    )
-    current_figure = ra.AnalysisStep(
-        step_id="01_model_training_figure",
-        intent=("Render the publication figure declared by step '01_model_training'."),
-        method="visualization",
-        inputs=["table:model_performance", "table:roc_curve"],
-        expected_outputs=["figure:discrimination_calibration"],
-    )
-    current = ra.AnalysisPlan(
-        research_question="build a prediction model",
-        steps=[current_parent, current_figure],
-    )
-    # The replanner echoes the original parent shape and drops the host-split
-    # child. It did not choose a different method or producer.
-    revised = ra.AnalysisPlan(
-        research_question="build a prediction model",
-        steps=[
-            current_parent.model_copy(update={"expected_outputs": ["statistic:auroc"]})
-        ],
-        revision=2,
-    )
-
-    preserved, findings = _preserve_figure_steps_after_replan(
-        current=current,
-        revised=revised,
-    )
-
-    by_id = {step.step_id: step for step in preserved.steps}
-    assert by_id["01_model_training"].expected_outputs == [
-        "statistic:auroc",
-        "table:model_performance",
-        "table:roc_curve",
-    ]
-    assert "01_model_training_figure" in by_id
-    assert any(
-        (finding.detail or {}).get("reason")
-        == "preserved_figure_parent_output_contract"
-        for finding in findings
-    )
-
-
-def test_preserved_robustness_parent_outputs_update_the_owner_spec(ra):
-    """Restoring a render edge must keep the deterministic owner in sync."""
-    from easyicu.research_agent.planning.figure_step_contract import _preserve_figure_steps_after_replan
-    from easyicu.research_agent.schema import RobustnessReplaySpec
-
-    base_spec = RobustnessReplaySpec.model_validate(
-        {
-            "products": [
-                {
-                    "product_id": "robustness_matrix",
-                    "output": "robustness_matrix",
-                },
-                {
-                    "product_id": "robustness_summary",
-                    "output": "robustness_summary",
-                },
-            ]
-        }
-    )
-    full_spec = RobustnessReplaySpec.model_validate(
-        {
-            "products": [
-                *base_spec.model_dump(mode="python")["products"],
-                {"product_id": "primary_or", "output": "primary_effect"},
-                {
-                    "product_id": "complete_case_n",
-                    "output": "complete_case_n",
-                },
-            ]
-        }
-    )
-    current_parent = ra.AnalysisStep(
-        step_id="05_robustness",
-        planned_analysis_role="sensitivity",
-        intent="Replay the locked robustness grid.",
-        method="robustness_sensitivity",
-        expected_outputs=[
-            "table:robustness_matrix",
-            "table:robustness_summary",
-            "statistic:primary_or",
-            "statistic:complete_case_n",
-        ],
-        robustness_replay_spec=full_spec,
-    )
-    current_figure = ra.AnalysisStep(
-        step_id="05_robustness_figure",
-        intent="Render the publication figure(s) declared by step '05_robustness'.",
-        method="visualization",
-        inputs=["statistic:primary_or", "statistic:complete_case_n"],
-        expected_outputs=["figure:robustness_forest"],
-    )
-    current = ra.AnalysisPlan(
-        research_question="Audit robustness.",
-        steps=[current_parent, current_figure],
-    )
-    revised = ra.AnalysisPlan(
-        research_question="Audit robustness.",
-        steps=[
-            current_parent.model_copy(
-                update={
-                    "expected_outputs": [
-                        "table:robustness_matrix",
-                        "table:robustness_summary",
-                    ],
-                    "robustness_replay_spec": base_spec,
-                }
-            )
-        ],
-        revision=2,
-    )
-
-    preserved, _findings = _preserve_figure_steps_after_replan(
-        current=current,
-        revised=revised,
-    )
-
-    parent = next(step for step in preserved.steps if step.step_id == "05_robustness")
-    assert parent.robustness_replay_spec is not None
-    mapped = {
-        item.product_id: item.output for item in parent.robustness_replay_spec.products
-    }
-    assert mapped["primary_or"] == "primary_effect"
-    assert mapped["complete_case_n"] == "complete_case_n"
-
-
-def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):
-    """A dropped producer remains a typed-DAG error; preservation cannot guess."""
-    from easyicu.research_agent.planning.figure_step_contract import (
-        _preserve_figure_steps_after_replan,
-    )
-
-    current_parent = ra.AnalysisStep(
-        step_id="01_model_training",
-        intent="Fit the agent-selected prediction model.",
-        expected_outputs=["table:model_performance"],
-    )
-    current_figure = ra.AnalysisStep(
-        step_id="01_model_training_figure",
-        intent=("Render the publication figure declared by step '01_model_training'."),
-        method="visualization",
-        inputs=["table:model_performance"],
-        expected_outputs=["figure:discrimination_calibration"],
-    )
-    current = ra.AnalysisPlan(
-        research_question="build a prediction model",
-        steps=[current_parent, current_figure],
-    )
-    revised = ra.AnalysisPlan(
-        research_question="build a prediction model",
-        steps=[
-            ra.AnalysisStep(
-                step_id="02_other",
-                intent="Retain an unrelated descriptive step.",
-                expected_outputs=[],
-            )
-        ],
-        revision=2,
-    )
-
-    preserved, findings = _preserve_figure_steps_after_replan(
-        current=current,
-        revised=revised,
-    )
-
-    assert [step.step_id for step in preserved.steps] == [
-        "02_other",
-        "01_model_training_figure",
-    ]
-    assert all(
-        (finding.detail or {}).get("reason")
-        != "preserved_figure_parent_output_contract"
-        for finding in findings
-    )
 
 
 def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra):

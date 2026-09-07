@@ -303,6 +303,23 @@ def _message_explicitly_selects_primary_exposure(
         return True
 
     normalized = str(message or "").casefold()
+    proposed_label = re.sub(
+        r"[^a-z0-9\u4e00-\u9fff]+", "", str(proposed or "").casefold()
+    )
+    modeling_assignment = re.search(
+        r"(?:把|将)\s*(?P<label>[a-z0-9\u4e00-\u9fff_-]{2,80}?)\s*"
+        r"(?:作为|设为|定义为|按)\s*(?:一?个?)?"
+        r"(?:有序|二元|连续|分类).{0,8}变量",
+        normalized,
+    )
+    if modeling_assignment is not None:
+        selected_label = re.sub(
+            r"[^a-z0-9\u4e00-\u9fff]+",
+            "",
+            modeling_assignment.group("label"),
+        )
+        if selected_label and selected_label in proposed_label:
+            return True
     return any(
         re.search(pattern, normalized)
         for pattern in (
@@ -366,12 +383,14 @@ def _message_explicitly_selects_analysis_goal(
         for pattern in (
             r"(?:分析目标|研究目标).*?(?:患病率|关联|因果|预测|描述)",
             r"(?:分析目标|研究目标).*?(?:同步|替换|改为|更新).*?(?:死亡|mortality|患病率|关联)",
+            r"(?:计划|输出|结果).{0,24}(?:应|需|需要|必须|要).{0,160}(?:包含|包括|纳入|展示|报告).{0,160}(?:table\s*1|图|figure|趋势|审计)",
             r"(?:估计|报告|计算).*?(?:患病率|比例|分布).*?(?:并|以及|同时).*?(?:描述|比较|展示).*?(?:关系|关联|死亡|结局)",
             r"先报告.*?患病率.*?(?:关联|关系)",
             r"(?:观察性关联|非因果|不要写成因果|不作因果解释|不.*?因果效应)",
             r"^(?:描述|报告).*?患病率.*?(?:未调整|协变量调整|调整后).*?关联(?:分析)?(?:\s*[（(]推荐[）)])?$",
             r"^仅(?:描述|报告).*?患病率.*?(?:不分析|不评估).*?(?:死亡)?关联$",
             r"\b(?:analysis|study)[\s_-]+goal\b",
+            r"\b(?:plan|outputs?|results?).{0,48}\b(?:must|should|need(?:s)?\s+to).{0,96}\b(?:include|contain|report|show)\b",
             r"\b(?:observational[\s_-]+association|non[\s_-]*causal)\b",
             r"\bfirst[\s_-]+report[\s_-]+.+?prevalence\b",
         )
@@ -984,6 +1003,7 @@ def update_study_context(
         # scientific decision.
         patch["covariates"] = []
         patch["covariate_selection"] = "exact"
+        patch["covariate_authority"] = "user"
         patch["covariate_rationales"] = {}
         patch["covariate_temporal_roles"] = {}
         patch["covariate_operationalizations"] = {}
@@ -1006,6 +1026,7 @@ def update_study_context(
         # explicitly chooses them for adjustment, their temporal role is an
         # EasyICU-owned semantic fact rather than another user decision.
         patch["covariate_selection"] = "exact"
+        patch["covariate_authority"] = "user"
         rationales = dict(patch.get("covariate_rationales") or {})
         temporal_roles = dict(patch.get("covariate_temporal_roles") or {})
         for covariate in proposed_covariates:
