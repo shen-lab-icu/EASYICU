@@ -41,6 +41,7 @@ from .concept_availability import (
     hypothesis_cross_database_feasibility,
     normalize_concept_name,
 )
+from .bibliographic_metadata import complete_missing_authors
 from .gates.data_answerability import analysis_answerability_findings
 from .literature_concepts import literature_concept_identity
 from .literature_excerpt import select_source_backed_excerpt
@@ -641,6 +642,7 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
     out: List[CitationRecord] = []
 
     def _add(c: CitationRecord) -> None:
+        c = CitationRecord.model_validate(complete_missing_authors(c.model_dump(mode="json"))[0])
         if c not in out:
             out.append(c)
 

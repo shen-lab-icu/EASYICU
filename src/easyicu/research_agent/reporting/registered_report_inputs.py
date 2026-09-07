@@ -25,8 +25,11 @@ from ..schema import EvidenceRecord
 from ..schema import AnalysisPlan
 from ..literature import LiteratureBundle
 from .manuscript_reader import build_manuscript_reader
-from .writer_evidence import _executed_method_boundary_rows, _verified_evidence_json
-from .descriptive_report_facts import compile_counts_only_report_facts, render_descriptive_report_claims
+from .writer_evidence import _executed_method_boundary_rows
+from .descriptive_report_facts import (
+    compile_counts_only_report_facts, render_descriptive_report_claims,
+    verified_descriptive_source_records,
+)
 from .writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
@@ -84,31 +87,6 @@ class ReadOnlyReportEvidence:
                 detail=name,
             )
         return sealed.read_bytes()
-
-
-def verified_descriptive_source_records(projected, evidence):
-    """Restore typed result structure from its sealed JSON, not a loose wrapper.
-
-    The general envelope projection intentionally omits some nonnumeric
-    strings. This capability needs its exact interpretation contract, so read
-    that contract from the already verified source owner instead of guessing.
-    """
-
-    records = []
-    for row in projected:
-        summary = row.get("step_summary", {})
-        if not (
-            isinstance(summary, dict) and "descriptive_estimates" in summary
-            and summary.get("analysis_role") == "primary"
-            and summary.get("interval_method") == "none_counts_only"
-        ):
-            continue
-        source = _verified_evidence_json(
-            evidence, str(row.get("step_summary_evidence_id") or ""),
-            exact_evidence_id=True, expected_kind="statistic",
-        )
-        records.append({**row, "step_summary": source})
-    return records
 
 
 def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigration:

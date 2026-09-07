@@ -9,6 +9,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ..literature import LiteratureBundle, manuscript_citable_records
+from ..bibliographic_metadata import complete_missing_authors
 from ..schema import AnalysisPlan, EvidenceRecord
 from .manuscript_provenance import ManuscriptProvenanceError, build_manuscript_provenance
 from .manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
@@ -53,6 +54,9 @@ def build_manuscript_reader(
         for number, key in enumerate(keys, 1):
             if key not in by_key:
                 raise ManuscriptProvenanceError(f"Manuscript citation is not citable: {key}")
-            references.append({"number": number, **by_key[key].model_dump(mode="json")})
+            reference, metadata_source = complete_missing_authors(by_key[key].model_dump(mode="json"))
+            if metadata_source is not None:
+                reference["metadata_source"] = metadata_source
+            references.append({"number": number, **reference})
     payload["references"] = references
     return payload

@@ -7,6 +7,8 @@ from easyicu.research_agent.reporting.descriptive_report_facts import (
     compile_counts_only_report_facts,
     place_descriptive_report_facts,
     render_descriptive_report_claims,
+    missing_primary_result_facts,
+    place_primary_result_summaries,
 )
 from easyicu.research_agent.reporting.manuscript_quality import remove_empty_optional_subsections
 
@@ -185,3 +187,103 @@ def test_empty_optional_headings_are_not_empty_required_results():
     assert result.endswith("## Discussion\n\nA preserved sentence.")
     nonempty = text.replace("### ICU-specific quality control", "### ICU-specific quality control\n\nExisting evidence.")
     assert remove_empty_optional_subsections(nonempty) == nonempty
+
+
+def test_primary_summary_coverage_cannot_borrow_another_metric_or_section():
+    from easyicu.research_agent.reporting.manuscript_quality import audit_manuscript_quality
+    from easyicu.research_agent.reporting.manuscript_sections import quality_repair_section_errors
+
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    risks = "\n\n".join(fact.scaffold for fact in facts[2:])
+    text = (
+        f"## Abstract\n\n**Results:**\n\n{risks}\n\n**Conclusions:**\nIndependent validation is required.\n\n"
+        "## Results\n\n### Cohort characteristics\n\n### Primary outcome\n\n"
+        "## Discussion\n\nA preserved limitation, not a result.\n\n## Conclusion\n\n" + risks
+    )
+    text = place_descriptive_report_facts(text, facts)
+    missing = missing_primary_result_facts(text, facts)
+    assert missing["Abstract"] == facts[:2]
+    assert missing["Conclusion"] == facts[:2]
+    assert missing["Discussion"] == facts
+    assert "Results" not in missing
+    audit = audit_manuscript_quality(text, expected_primary_result_facts=facts)
+    failures = [f for f in audit.findings if f.code == "MANUSCRIPT_PRIMARY_RESULT_COVERAGE_INCOMPLETE"]
+    assert {f.section for f in failures} == {"Abstract", "Discussion", "Conclusion"}
+    assert all(f.severity == "error" for f in failures)
+    owners = quality_repair_section_errors(text, expected_primary_result_facts=facts)
+    assert "MANUSCRIPT_PRIMARY_RESULT_COVERAGE_INCOMPLETE" in str(owners["abstract"])
+    repaired = place_primary_result_summaries(text, facts)
+    assert missing_primary_result_facts(repaired, facts) == {}
+    assert place_primary_result_summaries(repaired, facts) == repaired
+    assert "A preserved limitation, not a result." in repaired
+    assert all(repaired.count(f.scaffold) == 4 for f in facts)
+    assert "confidence interval" not in repaired and "risk difference" not in repaired
+
+
+def test_hidden_or_wrong_source_metric_text_does_not_satisfy_primary_coverage():
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    hidden = "\n\n".join(f"<!-- {fact.scaffold} -->" for fact in facts)
+    text = f"## Abstract\n\n**Results:**\n\n{hidden}\n\n## Conclusion\n\nUnrelated prose."
+    assert missing_primary_result_facts(text, facts)["Abstract"] == facts
+    wrong_metric = facts[0].scaffold.replace("Exposure prevalence", "Outcome prevalence")
+    assert facts[0] in missing_primary_result_facts(text.replace(hidden, wrong_metric), facts)["Abstract"]
+    assert "## Discussion" not in place_primary_result_summaries(text, facts)
+
+
+def test_primary_facts_remain_covered_after_strict_numeric_binding(tmp_path):
+    import json
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore, EvidenceEnforcementMode
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    records, _ = _inputs()
+    store = EvidenceStore(tmp_path / "run")
+    source = tmp_path / "summary.json"
+    source.write_text(json.dumps(records[0]["step_summary"]))
+    store.register_file(kind="statistic", source_path=source, evidence_id="summary", description="Counts", produced_by_step="distribution")
+    store.register_step_summary_numerics(step_id="distribution", evidence_id="summary", summary=records[0]["step_summary"])
+    records[0]["evidence_ids"] = ["summary"]
+    facts = compile_counts_only_report_facts(records, evidence=store, reader_display_labels={})
+    text = "## Abstract\n\n**Results:**\n\n**Conclusions:**\nCaution.\n\n## Results\n\n### Cohort characteristics\n\n### Primary outcome\n\n## Discussion\n\nBoundary.\n\n## Conclusion\n\nCaution."
+    projected = render_descriptive_report_claims(text, facts)
+    bound, bindings, untraced = bind_numeric_values(projected, evidence=store, enforcement_mode=EvidenceEnforcementMode.STRICT, per_step_records=records)
+    assert bindings and not untraced
+    assert missing_primary_result_facts(bound, facts) == {}
+
+
+def test_full_write_boundary_projects_only_after_model_grammar_and_preserves_claim_coverage(tmp_path, monkeypatch):
+    import json
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore, EvidenceEnforcementMode
+    from easyicu.research_agent.reporting import write_phase
+    from easyicu.research_agent.schema import CritiqueReport
+
+    records, _ = _inputs()
+    root = tmp_path / "run"
+    store = EvidenceStore(root, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    source = tmp_path / "summary.json"
+    source.write_text(json.dumps(records[0]["step_summary"]))
+    store.register_file(kind="statistic", source_path=source, evidence_id="summary", description="Counts", produced_by_step="distribution", generation_mode="deterministic_standard")
+    store.register_step_summary_numerics(step_id="distribution", evidence_id="summary", summary=records[0]["step_summary"])
+    claims = store.register_step_summary_scientific_claims(step_id="distribution", evidence_id="summary", summary=records[0]["step_summary"])
+    assert len(claims) == 2
+    records[0]["evidence_ids"] = ["summary"]
+    facts = compile_counts_only_report_facts(records, evidence=store, reader_display_labels={}, scientific_claims=claims)
+    # Envelope admission has independent contracts and the real frozen-run
+    # replay; this test exercises the downstream ordering against a real store.
+    monkeypatch.setattr(write_phase, "compile_primary_counts_only_report_facts", lambda *args, **kwargs: facts)
+    tokens = "\n\n".join("{claim:" + claim.claim_ref + "}" for claim in claims)
+    scaffold = "# Draft\n\n## Abstract\n\n**Background:** Context for the analysis is described here.\n\n**Methods:** The prespecified analysis was performed.\n\n**Results:**\n\n**Conclusions:**\nIndependent validation is required.\n\n## Results\n\n### Cohort characteristics\n\n### Primary outcome\n\n" + tokens + "\n\n## Discussion\n\nIndependent validation is required.\n\n## Conclusion\n\nIndependent validation is required."
+    findings = []
+    output = write_phase._bind_and_review_manuscript(
+        SimpleNamespace(_evidence_enforcement_mode=EvidenceEnforcementMode.STRICT),
+        critic=SimpleNamespace(review_manuscript=lambda **kwargs: CritiqueReport(reviewer="test fixture", status="blocked")),
+        evidence=store, findings=findings, literature=None, per_step_records=records,
+        current_evidence_names=["summary"], scaffold=scaffold, writer_error_message=None,
+        writer_probe_mode=False, writer_probe_failed_steps=(), run_dir=root,
+        reader_display_labels={}, manuscript_language="en",
+    )
+    assert missing_primary_result_facts(output.bound, facts) == {}
+    assert "[^claim_" in output.bound
+    assert not any(f.validator == "manuscript_result_sufficiency" for f in findings)
+    assert not any(f.validator == "manuscript_numeric_auditor" and f.severity == "error" for f in findings)

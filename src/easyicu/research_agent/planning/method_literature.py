@@ -31,6 +31,7 @@ import hashlib
 import json
 import re
 from typing import Any, Sequence
+from ..bibliographic_metadata import complete_missing_authors
 
 __all__ = [
     "METHOD_CARDS",
@@ -445,7 +446,7 @@ def method_literature_citations() -> tuple[dict[str, Any], ...]:
             "url": card.source_url or None,
             "bibliographic_notices": list(card.source_bibliographic_notices),
         }
-    return tuple(seen.values())
+    return tuple(complete_missing_authors(record)[0] for record in seen.values())
 
 
 def method_literature_pack(layers: Sequence[str] | None = None) -> dict[str, Any]:

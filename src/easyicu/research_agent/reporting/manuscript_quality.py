@@ -984,6 +984,7 @@ def audit_manuscript_quality(
     *,
     expected_display_labels: Sequence[str] = (),
     expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
+    expected_primary_result_facts: Sequence = (),
     require_administrative_sections: bool = True,
 ) -> ManuscriptQualityAudit:
     """Audit structure, terminology, and one high-confidence consistency rule."""
@@ -992,6 +993,19 @@ def audit_manuscript_quality(
     reader = render_reader_manuscript(text)
     section_map = _sections(text)
     findings: list[ManuscriptQualityFinding] = []
+    from .descriptive_report_facts import missing_primary_result_facts
+
+    for section, missing in missing_primary_result_facts(text, expected_primary_result_facts).items():
+        findings.append(ManuscriptQualityFinding(
+            code="MANUSCRIPT_PRIMARY_RESULT_COVERAGE_INCOMPLETE",
+            severity="error", section=section,
+            message=(
+                "The section omits admitted primary result metrics or levels. "
+                "A different result number, a methods description or a generic "
+                "validation caveat does not answer the omitted primary question."
+            ),
+            excerpts=tuple(fact.scaffold for fact in missing),
+        ))
 
     if not re.search(r"^#\s+\S+", text, flags=re.M):
         findings.append(
