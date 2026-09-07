@@ -1,0 +1,35 @@
+"""Reader mention requirements from the existing accepted baseline contract.
+
+This is a completeness check, not evidence that a baseline was computed or
+that its definition is clinically valid. Execution and source authorities
+remain separate; Writer must describe only the executed representation.
+"""
+
+from __future__ import annotations
+
+from typing import Mapping
+
+from ..planning.baseline_requirements import baseline_requirement_projection
+from ..schema import ResearchContext
+
+
+def baseline_reporting_mentions(
+    context: ResearchContext | None,
+    reader_display_labels: Mapping[str, str] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Return source names and approved reader labels for every accepted row."""
+
+    if not isinstance(context, ResearchContext):
+        return {}
+    labels = reader_display_labels or {}
+    mentions: dict[str, tuple[str, ...]] = {}
+    for table in baseline_requirement_projection(context)["tables"]:
+        for row in table["variables"]:
+            required = row["required"]
+            aliases = [required, *row["available_columns"]]
+            aliases.extend(labels.get(name, "") for name in row["available_columns"])
+            mentions[required] = tuple(dict.fromkeys(
+                " ".join(alias.split()) for alias in aliases if alias.strip()
+            ))
+    return mentions
+

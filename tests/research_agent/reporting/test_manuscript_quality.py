@@ -307,8 +307,8 @@ def test_registered_display_callouts_are_restored_without_inventing_results() ->
         expected_display_labels=("Table 1", "Figure 1", "Figure 2"),
     )
 
-    assert "Cohort characteristics are summarized in Table 1" in repaired
-    assert "The principal study results are presented in Figure 1" in repaired
+    assert "See Table 1 {evidence:table_one}." in repaired
+    assert "See Figure 1 {evidence:publication_figure_contract}." in repaired
     assert "Figure 2" not in repaired
     assert [item["label"] for item in repairs] == ["Table 1", "Figure 1"]
 

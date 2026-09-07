@@ -68,6 +68,7 @@ from .manuscript_quality import (
     expected_manuscript_display_labels,
     render_reader_manuscript,
 )
+from .manuscript_baseline import baseline_reporting_mentions
 from .administrative_authority import load_manuscript_administrative_authority
 from .manuscript_provenance import (
     ManuscriptProvenanceError,
@@ -122,7 +123,7 @@ from .reporting_checklist import (
     choose_checklist,
 )
 from .reviewer import run_reviewer_round
-from ..schema import AnalysisPlan, CritiqueReport, EvidenceRef, ManuscriptDraftPacket
+from ..schema import AnalysisPlan, CritiqueReport, EvidenceRef, ManuscriptDraftPacket, ResearchContext
 from .side_findings import collect_side_findings
 from ..robustness.panel import load_robustness_panel
 from ..gates.figure_egress import (
@@ -551,12 +552,14 @@ def _persist_manuscript_quality_artifacts(
     evidence: Any,
     findings: List[ValidationFinding],
     expected_display_labels: Sequence[str] = (),
+    expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[ManuscriptQualityFinding, ...]:
     """Persist a non-authoritative reader view and its deterministic audit."""
 
     audit = audit_manuscript_quality(
         bound,
         expected_display_labels=expected_display_labels,
+        expected_baseline_mentions=expected_baseline_mentions,
     )
     quality_audit_path = run_dir / "manuscript_quality_audit.json"
     quality_audit_path.write_text(
@@ -1820,6 +1823,7 @@ def _bind_and_review_manuscript(
     run_dir: Path,
     reader_display_labels: Mapping[str, str],
     manuscript_language: str,
+    context: ResearchContext | None = None,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
@@ -2189,6 +2193,7 @@ def _bind_and_review_manuscript(
         expected_display_labels=expected_manuscript_display_labels(
             current_evidence_names
         ),
+        expected_baseline_mentions=baseline_reporting_mentions(context, reader_display_labels),
     )
     if not writer_probe_mode:
         _persist_manuscript_provenance_artifact(
@@ -3238,6 +3243,7 @@ def run_write_phase(
         run_dir=run_dir,
         reader_display_labels=dict(execute_result.plan.display_labels or {}),
         manuscript_language=run_language,
+        context=context,
     )
     bound_path = binding.bound_path
     manuscript_critique = binding.manuscript_critique

@@ -1179,6 +1179,8 @@ def scoped_reporting_context(
     validation, and evidence binding.
     """
 
+    from ..planning.baseline_requirements import baseline_requirement_projection
+
     direct_names = {
         str(value or "").strip().lower()
         for value in (
@@ -1196,6 +1198,12 @@ def scoped_reporting_context(
             for value in context.user_preferences.covariates
             if str(value or "").strip()
         )
+    # An accepted baseline is a study requirement even when it is neither a
+    # model adjustment covariate nor a demographic. Preserve its source-owned
+    # clinical representations; the executed digest selects the actual one.
+    for table in baseline_requirement_projection(context)["tables"]:
+        for row in (table["group_by"], *table["variables"]):
+            direct_names.update(name.lower() for name in row["available_columns"])
     direct_names.update(
         variable.name.lower()
         for variable in context.variables

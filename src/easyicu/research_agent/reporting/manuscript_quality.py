@@ -265,13 +265,11 @@ def repair_registered_display_callouts(
     templates = {
         "Table 1": (
             "Cohort characteristics",
-            "Cohort characteristics are summarized in Table 1 "
-            "{evidence:table_one}.",
+            "See Table 1 {evidence:table_one}.",
         ),
         "Figure 1": (
             "Primary association",
-            "The principal study results are presented in Figure 1 "
-            "{evidence:publication_figure_contract}.",
+            "See Figure 1 {evidence:publication_figure_contract}.",
         ),
     }
     repairs: list[Mapping[str, str]] = []
@@ -957,6 +955,7 @@ def audit_manuscript_quality(
     bound_text: str,
     *,
     expected_display_labels: Sequence[str] = (),
+    expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
     require_administrative_sections: bool = True,
 ) -> ManuscriptQualityAudit:
     """Audit structure, terminology, and one high-confidence consistency rule."""
@@ -1069,6 +1068,28 @@ def audit_manuscript_quality(
 
     adjustments = _adjustment_sets(section_map)
     variables = _subsections(section_map.get("Methods", "")).get("Variables", "")
+    variable_prose = " ".join(re.sub(
+        r"<!--.*?-->", "", _strip_audit_markup(variables), flags=re.S,
+    ).split())
+    missing_baselines = tuple(
+        name for name, aliases in (expected_baseline_mentions or {}).items()
+        if not any(
+            re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", variable_prose, re.I)
+            for alias in aliases if alias
+        )
+    )
+    if missing_baselines:
+        findings.append(ManuscriptQualityFinding(
+            code="MANUSCRIPT_BASELINE_METHODS_INCOMPLETE",
+            severity="error", section="Methods",
+            message=(
+                "Methods/Variables omits accepted baseline content: "
+                + ", ".join(missing_baselines)
+                + ". Describe the executed representations using the supplied reader labels; "
+                "a mention elsewhere in the manuscript does not satisfy this requirement."
+            ),
+            excerpts=missing_baselines,
+        ))
     dependent_paragraphs = [
         paragraph.strip() for paragraph in re.split(r"\n\s*\n", variables)
         if has_dependent_opener(_strip_audit_markup(paragraph))

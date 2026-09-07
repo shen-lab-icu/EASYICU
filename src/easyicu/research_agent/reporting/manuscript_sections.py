@@ -19,6 +19,7 @@ from .administrative_authority import (
     ManuscriptAdministrativeAuthority,
     render_manuscript_administrative_sections,
 )
+from .manuscript_baseline import baseline_reporting_mentions
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,10 @@ MANUSCRIPT_SECTION_SPECS = (
             "verified precomputed representation and analysis window. A "
             "precomputed maximum, minimum, mean, or first value must not be "
             "reinterpreted using the source concept's default aggregation rule.\n"
+            "  Include every baseline variable listed in the verified "
+            "EXECUTED METHOD BOUNDARY, not only model adjustment covariates. "
+            "Use its exact executed representation and the supplied reader label; "
+            "mentioning a variable only in Introduction or Table 1 is insufficient.\n"
             "  Introduce the named variable in every Variables paragraph; do not "
             "start one with an unanchored pronoun or 'the representation'. "
             "Recorded source definitions are not independent clinical validation.\n"
@@ -211,6 +216,12 @@ MANUSCRIPT_SECTION_SPECS = (
             "declared adjustment and interpretation ceiling. Do not report an "
             "unauthorized constant hazard ratio.\n"
             "### Sensitivity and subgroup analyses\n"
+            "  When the digest records zero sensitivity result rows, report "
+            "only that registered count using `The recorded sensitivity "
+            "analysis result count was <n> {evidence:<owner>}.` Do not claim "
+            "that an unexecuted sensitivity analysis was performed, that "
+            "estimates were stable, or that a model failed to converge. "
+            "Do not turn a planned method into an executed result.\n"
             "  Multiple-testing result, subgroup heterogeneity, E-value if "
             "available. When the machine digest supplies a "
             "`reportable_descriptive_results` block, report its overall outcome "
@@ -328,7 +339,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "13"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "14"
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -434,6 +445,7 @@ def _quality_repair_specs(
     scientific: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
 ) -> tuple[tuple[ManuscriptSectionSpec, str], ...]:
     """Map deterministic manuscript findings to their section owners."""
 
@@ -455,6 +467,7 @@ def _quality_repair_specs(
     for finding in audit_manuscript_quality(
         scientific,
         expected_display_labels=expected_display_labels,
+        expected_baseline_mentions=expected_baseline_mentions,
         require_administrative_sections=False,
     ).findings:
         if finding.severity != "error":
@@ -481,6 +494,7 @@ def quality_repair_section_keys(
     manuscript: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
 ) -> tuple[str, ...]:
     """Return the Writer section owners selected by the quality contract.
 
@@ -494,6 +508,7 @@ def quality_repair_section_keys(
         for spec, _detail in _quality_repair_specs(
             manuscript,
             expected_display_labels=expected_display_labels,
+            expected_baseline_mentions=expected_baseline_mentions,
         )
     )
 
@@ -502,6 +517,7 @@ def _remaining_quality_errors(
     scientific: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
     from .manuscript_quality import audit_manuscript_quality
 
@@ -519,9 +535,16 @@ def _remaining_quality_errors(
         for finding in audit_manuscript_quality(
             scientific,
             expected_display_labels=expected_display_labels,
+            expected_baseline_mentions=expected_baseline_mentions,
             require_administrative_sections=False,
         ).findings
         if finding.severity == "error"
+    )
+
+
+def _baseline_mentions_for_common(common: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    return baseline_reporting_mentions(
+        common.get("context"), common.get("reader_display_labels"),
     )
 
 
@@ -589,6 +612,7 @@ def repair_existing_manuscript_sections(
         repair_specs = _quality_repair_specs(
             scientific,
             expected_display_labels=display_labels,
+            expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
         if not repair_specs:
             administrative = render_manuscript_administrative_sections(
@@ -645,6 +669,7 @@ def repair_existing_manuscript_sections(
     remaining = _remaining_quality_errors(
         scientific,
         expected_display_labels=display_labels,
+        expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     if remaining:
         raise ManuscriptReaderQualityContractError(findings=remaining)
@@ -732,6 +757,7 @@ def repair_named_manuscript_sections(
     remaining = _remaining_quality_errors(
         scientific,
         expected_display_labels=display_labels,
+        expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     if remaining:
         raise ManuscriptReaderQualityContractError(findings=remaining)
@@ -835,6 +861,7 @@ def render_manuscript_sections(
         repair_specs = _quality_repair_specs(
             scientific,
             expected_display_labels=display_labels,
+            expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
         if not repair_specs:
             break
@@ -885,6 +912,7 @@ def render_manuscript_sections(
     remaining = _remaining_quality_errors(
         scientific,
         expected_display_labels=display_labels,
+        expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     if remaining:
         raise ManuscriptReaderQualityContractError(findings=remaining)
