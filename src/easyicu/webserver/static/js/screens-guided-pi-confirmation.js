@@ -240,14 +240,24 @@
         code,
         nonApprovable: true,
         hideEdit: true,
+        retryPlanRevision: Boolean(
+          window.EasyICU.guidedPi.optional('planActions')
+          && window.EasyICU.guidedPi.require('planActions').canRetryStoppedPlan(workflow)
+        ),
+        retryLabel: tr('Replan once after repair', '修复后重新规划一次'),
         title: tr(
           'EasyICU stopped a non-improving plan revision',
           'EasyICU 已停止没有改进的计划修订',
         ),
         note: tr(
-          'The same system-owned plan defects remained after revision, so no further model call was started. This is an EasyICU architecture issue to repair; you do not need to choose statistical methods or rewrite the prompt.',
-          '修订后仍然存在同一批由系统负责的问题，因此不会继续调用模型。这是需要修复的 EasyICU 架构问题；你不需要选择统计方法，也不需要改写提示词。',
+          'Automatic revisions stopped because the same system-owned defects remained. After the defect is repaired, an explicit retry can generate one new plan using the original data and requirements. This does not approve or start analysis; you do not need to rewrite the research question.',
+          '修订后仍有相同的系统问题，自动修订已停止。修复问题后，可明确发起一次重新规划，保留原数据和研究要求；这不会批准或开始分析，也不需要改写研究问题。',
         ),
+        reviewMaterialsTitle: tr('Stopped plan and review evidence', '保留的计划与审阅依据'),
+        reviewResources: reviewedPlanRunId ? [
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
+        ] : [],
       };
       if (code === 'plan_scientific_changes_required') return {
         code, grants: ['provider_run', 'literature'],
@@ -362,7 +372,7 @@
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
           ${decisionActions && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
-          ${confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}
+          ${confirmation.retryPlanRevision ? `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.retryLabel)}</button>` : confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}
         </div>
       </section>`;
     }
