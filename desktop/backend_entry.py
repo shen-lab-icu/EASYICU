@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 import sys
 import threading
-import time
-from typing import Sequence
+from typing import Callable, Sequence
 
 
 def _absolute_directory(raw: str, *, name: str) -> Path:
@@ -55,22 +54,34 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _watch_parent_process(parent_pid: int, *, interval: float = 1.0) -> None:
+def _watch_parent_process(parent_pid: int, *, interval: float = 1.0,
+                          request_shutdown: Callable[[], None] | None = None) -> threading.Event:
     if parent_pid <= 1 or parent_pid == os.getpid():
         raise ValueError("parent-pid must identify the desktop shell")
+    if request_shutdown is None:
+        raise ValueError("a graceful shutdown callback is required")
+    stop = threading.Event()
 
     def monitor() -> None:
         import psutil
 
-        while psutil.pid_exists(parent_pid):
-            time.sleep(interval)
-        os._exit(0)
+        try:
+            parent = psutil.Process(parent_pid)
+            # Process.is_running checks creation time too, protecting PID reuse.
+            while parent.is_running():
+                if stop.wait(interval):
+                    return
+        except psutil.NoSuchProcess:
+            pass
+        if not stop.is_set():
+            request_shutdown()
 
     threading.Thread(
         target=monitor,
         name="easyicu-desktop-parent-watch",
         daemon=True,
     ).start()
+    return stop
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -84,19 +95,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         or os.environ.get("EASYICU_DESKTOP_SESSION_TOKEN", ""),
         node_bin=args.node_bin,
     )
-    _watch_parent_process(args.parent_pid)
-
     import uvicorn
 
     from easyicu.webserver.app import app
 
-    uvicorn.run(
+    server = uvicorn.Server(uvicorn.Config(
         app,
         host="127.0.0.1",
         port=args.port,
         access_log=False,
         log_level="info",
-    )
+        timeout_graceful_shutdown=10,
+    ))
+
+    def request_shutdown() -> None:
+        server.should_exit = True
+
+    stop = _watch_parent_process(args.parent_pid, request_shutdown=request_shutdown)
+    try:
+        server.run()
+    finally:
+        stop.set()
     return 0
 
 

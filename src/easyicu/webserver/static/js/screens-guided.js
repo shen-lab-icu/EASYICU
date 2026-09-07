@@ -3849,7 +3849,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           const target = openEl.dataset.open;
           // Copilot -> classic exits must carry the collected study config as a
           // real prefill instead of dumping the user on a blank expert form.
-          if (target === 'extraction' && guidedExtract && window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.set) {
+          if (target === 'extraction' && EXTRACT.state() && window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.set) {
             window.EU_GUIDED_HANDOFF.set({
               type: 'module_handoff', status: 'ready', goal: 'configure_extraction',
               target_route: 'extraction',

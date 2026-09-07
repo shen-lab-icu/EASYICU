@@ -371,7 +371,16 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     if is_module:
         source = "module"
         layout = ["EasyICU module export", "EasyICU 模块导出"]
-        ready = True
+        from easyicu.research_agent.intake.export_package import (
+            ExportPackageError, inspect_export_layout,
+        )
+        try:
+            inspect_export_layout(path)
+        except (ExportPackageError, ValueError, OSError) as exc:
+            return {"ok": False, "path": str(path), "source": "module", "ready": False,
+                    "error": getattr(exc, "code", "export_layout_invalid"),
+                    "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False}}
+        ready = True  # Layout only; scientific execution still requires sealed intake.
         tables = parquet_count + csv_count
     elif parquet_count > 0:
         source = "prepared"
@@ -426,11 +435,15 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
             source = "raw"
             ready = False
 
+    conversion_quality = _conversion_quality_for_path(path)
+    ready = ready and conversion_quality["data_quality_status"] == "clean"
     result: Dict[str, Any] = {
         "ok": True,
         "path": str(path),
         "db": db_label,
         "db_key": db_key,
+        "readiness_scope": "layout_only",
+        "conversion_quality": conversion_quality,
         "layout": layout,
         "source": source,
         "tables": tables,
@@ -482,11 +495,23 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
                     "rows": res.get("row_count"),
                     "shards": res.get("shards"),
                     "error": res.get("error"),
+                    "bad_rows_skipped": res.get("bad_rows_skipped", 0),
+                    "data_quality_status": "partial" if res.get("bad_rows_skipped", 0) else "clean",
                     "counts": dict(counts),
                 }
             )
 
         results = converter.convert_all(force=False, progress_callback=cb)
+        # Include cached conversion receipts too: no callback is emitted for an
+        # entirely cached run, and skipped files can still contain dropped rows.
+        if hasattr(converter, "get_conversion_status"):
+            results = {**converter.get_conversion_status(), **results}
+        quality = _conversion_quality(results)
+        counts = {
+            "converted": sum(r.get("status") == ConversionStatus.COMPLETED for r in results.values()),
+            "failed": sum(r.get("status") == ConversionStatus.FAILED for r in results.values()),
+            "skipped": sum(r.get("status") == ConversionStatus.SKIPPED for r in results.values()),
+        }
         nothing = counts["converted"] == 0 and counts["failed"] == 0
         return {
             "converted": counts["converted"],
@@ -494,9 +519,39 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
             "skipped": counts["skipped"],
             "total_files": len(results),
             "nothing_to_do": nothing,
+            **quality,
         }
 
     return runner
+
+
+def _conversion_quality(results: Mapping[str, Any]) -> Dict[str, Any]:
+    bad_rows = 0
+    incomplete = False
+    for result in results.values():
+        if not isinstance(result, Mapping):
+            raise ValueError("invalid conversion receipt")
+        count = result.get("bad_rows_skipped", 0)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError("invalid dropped-row count")
+        bad_rows += count
+        incomplete |= result.get("status") not in {"completed", "skipped"}
+    partial = bad_rows > 0 or incomplete
+    return {"bad_rows_skipped": bad_rows, "data_quality_status": "partial" if partial else "clean",
+            "ready_for_analysis": not partial}
+
+
+def _conversion_quality_for_path(path: Path) -> Dict[str, Any]:
+    receipt = path / ".easyicu_conversion_status.json"
+    if not receipt.exists():
+        return _conversion_quality({})
+    try:
+        results = json.loads(receipt.read_text(encoding="utf-8"))
+        if not isinstance(results, dict):
+            raise ValueError("invalid conversion status")
+        return _conversion_quality(results)
+    except (ValueError, OSError):
+        return {"bad_rows_skipped": None, "data_quality_status": "unknown", "ready_for_analysis": False}
 
 
 _EXPORT_EXT = {"csv": "csv", "excel": "xlsx", "parquet": "parquet"}
@@ -2036,6 +2091,10 @@ def make_export_runner(
     def runner(job: Any) -> Dict[str, Any]:
         import json
         import time
+
+        quality = _conversion_quality_for_path(Path(data_path).expanduser())
+        if quality["data_quality_status"] != "clean":
+            raise ExportCohortError("source_conversion_quality_incomplete", quality)
 
         # On this memory-tight machine the batch estimator over-predicts ~5x and
         # trips the low-mem path; force the fast in-process path (see CLAUDE.md).

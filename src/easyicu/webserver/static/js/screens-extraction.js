@@ -672,7 +672,8 @@
             : (p.counts || { converted: 0, failed: 0, skipped: 0 });
     // A job that finishes with per-file failures still ends status='done'
     // (jobs.py). Treat that as a partial/degraded outcome, not a clean pass.
-    const partial = done && Number(c.failed || 0) > 0;
+    const badRows = Number(c.bad_rows_skipped || 0);
+    const partial = done && (Number(c.failed || 0) > 0 || badRows > 0 || c.data_quality_status === 'partial');
     const headIco = err ? `<div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>`
                   : partial ? `<div class="cfg-ico" style="color:var(--warn,#a66a00);">${icon('alert', 17)}</div>`
                   : done ? `<div class="cfg-ico" style="color:var(--ok);">${icon('check', 17, 2.6)}</div>`
@@ -682,7 +683,7 @@
                     : done ? (convResult.nothing_to_do ? t('Already converted', '已转换') : t('Conversion complete', '转换完成'))
                     : t('Converting raw files…', '正在转换原始文件…');
     const pill = err ? `<span class="pill" style="height:20px;background:color-mix(in srgb,var(--bad,#c0392b) 14%,transparent);color:var(--bad,#c0392b);"><span class="dot" style="background:var(--bad,#c0392b);"></span>${t('failed', '失败')}</span>`
-               : partial ? `<span class="pill warn" style="height:20px;"><span class="dot"></span>${c.failed} ${t('failed', '失败')}</span>`
+               : partial ? `<span class="pill warn" style="height:20px;flex-shrink:0;"><span class="dot"></span>${t('incomplete data', '数据不完整')}</span>`
                : done ? `<span class="pill ok" style="height:20px;"><span class="dot"></span>${t('done', '完成')}</span>`
                : `<span class="pill warn" style="height:20px;"><span class="dot"></span>${t('running', '进行中')}</span>`;
     let body;
@@ -707,20 +708,20 @@
             : `${t('Converted', '已转换')} <b>${c.converted}</b> ${t('tables', '张表')}${c.skipped ? ` · ${c.skipped} ${t('cached', '缓存')}` : ''}${c.failed ? ` · ${c.failed} ${t('failed', '失败')}` : ''}.`)
         : `${tot ? `[${cur}/${tot}] ` : ''}${p.file ? `<span class="mono">${p.file}</span>` : t('preparing…', '准备中…')}${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}`;
       const partialNote = partial
-        ? `<div class="note warn mt-12" style="padding:10px 12px;"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${c.failed} ${t('source table(s) failed to convert', '张源表转换失败')}</div><div class="d" style="font-size:11px;margin:0;">${t('You can continue, but modules that depend on the failed tables will be incomplete. Re-run conversion to retry the failed files (converted tables are skipped).', '可以继续，但依赖失败表的模块会不完整。重新运行转换会重试失败文件（已转换的表会跳过）。')}</div></div></div>`
+        ? `<div class="note warn mt-12" data-conversion-quality="partial" style="padding:10px 12px;"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${c.failed || 0} ${t('source table(s) failed to convert', '张源表转换失败')} · ${badRows.toLocaleString()} ${t('malformed rows dropped', '行格式错误数据被丢弃')}</div><div class="d" style="font-size:11px;margin:0;">${t('This conversion does not establish complete analysis data. Repair the source and reconvert before extraction; cached outputs retain their quality warnings.', '此次转换不能证明分析数据完整。请修复源数据并重新转换后再抽取；缓存结果仍保留质量警告。')}</div></div></div>`
         : '';
       body = `
         ${bar}
         <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${line}</div>
         ${done
-          ? `${partialNote}<div class="row gap-8 mt-16"><button class="btn primary" data-ex-convdone>${icon('arrow', 14)} ${t('Continue to extraction', '继续抽取')}</button>${partial ? `<button class="btn ghost" data-ex-startconv>${icon('refresh', 13)} ${t('Re-run conversion', '重新转换')}</button>` : ''}</div>`
+          ? `${partialNote}<div class="row gap-8 mt-16"><button class="btn primary" data-ex-convdone ${partial ? 'disabled' : ''}>${icon('arrow', 14)} ${t('Continue to extraction', '继续抽取')}</button>${partial ? `<button class="btn ghost" data-ex-startconv>${icon('refresh', 13)} ${t('Re-run conversion', '重新转换')}</button>` : ''}</div>`
           : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Runs entirely on your machine. Already-converted tables are skipped, so a re-run is fast.', '全程在本机运行。已转换的表会跳过,再次运行很快。')}</div></div></div>`}`;
     }
     return `
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
           ${headIco}
-          <div class="grow"><div class="cfg-h">${headTitle}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))} → ${preparedDestinationHint()}</div></div>
+          <div class="grow" style="min-width:0;"><div class="cfg-h">${headTitle}</div><div class="cfg-sub mono" style="overflow-wrap:anywhere;white-space:normal;">${escHtml(pathDisplay(exPath))} → ${preparedDestinationHint()}</div></div>
           ${pill}
         </div>
         <div class="cfg-body">${body}</div>
