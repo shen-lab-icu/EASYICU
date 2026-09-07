@@ -467,11 +467,15 @@ def test_repository_does_not_ignore_contract_tests_or_governance_docs() -> None:
             "-C",
             str(REPO_ROOT),
             "check-ignore",
+            "--no-index",
             "CONTRIBUTING.md",
             "SECURITY.md",
             ".github/pull_request_template.md",
             "docs/release_checklist.md",
             "tests/governance/test_repository_contract.py",
+            "docs/new_user_guide.md",
+            "scripts/new_operator_entry.py",
+            "tests/fixtures/new_contract.json",
         ],
         capture_output=True,
         text=True,
@@ -488,6 +492,7 @@ def test_legacy_streamlit_package_is_decommissioned() -> None:
     assert "webapp-legacy" not in optional_dependencies
     assert "easyicu-webapp-legacy" not in scripts
     assert not (REPO_ROOT / "src" / "easyicu" / "webapp").exists()
+    assert not (REPO_ROOT / ".streamlit" / "config.toml").exists()
 
     tracked = subprocess.run(
         [

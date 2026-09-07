@@ -36,6 +36,8 @@ EasyICU has two layers that answer the two halves of one question — *how trust
 
 ## Start Here
 
+[Installation guide](docs/installation.md) covers desktop builds, Python wheels, and source checkouts. Desktop installers include their runtime; the source launchers below require Python.
+
 > **One rule before any API call:** every extraction API expects a **prepared (converted)** dataset, not a raw download. If you have never converted this database, run the **Convert step first** (Web UI *Validate Data Path → Convert & Setup*, or `DataConverter(...).convert_all()` — see [Python API](#-python-api)). `data_path` in every snippet below means *the prepared directory*.
 
 ### Quick Lookup: "I want to ... → run ..."
@@ -59,7 +61,7 @@ This README is the front door. Each major layer keeps a focused README next to i
 
 | Read this | For |
 |-----------|-----|
-| [`src/easyicu/README.md`](src/easyicu/README.md) | Package module map — how the ~75 modules layer (concept abstraction → convert → API → scores). Start here as a code contributor. |
+| [`src/easyicu/README.md`](src/easyicu/README.md) | Package module map — concept abstraction, conversion, APIs, scores, Web, and Research Agent owners. Start here as a code contributor. |
 | [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | The maintained native FastAPI WebApp path and local route/API QA commands. |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | The evidence-bound research-agent layer: four-layer design, readiness gates, replication protocol. |
 | [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | The concept dictionaries (`concept-dict.json`, the SOFA-2 overlay) that drive cross-database extraction. |
@@ -224,13 +226,7 @@ The **Cross-DB Benchmark** tab harmonizes the same clinical concepts across all 
 
 ## Visualization & Analysis
 
-EasyICU's main interface is organized as 5 top-level tabs:
-
-- **Tutorial** — data-preparation workflow guide (data source → cohort → concepts → export) shown on the leftmost tab so first-time users can find it without leaving the main pane; also reachable via the sidebar "📚 Workflow Help" button.
-- **Patient Review** — data tables, time-series review with clinical thresholds, per-patient overview, and data-quality audit (missingness / out-of-physio / temporal integrity).
-- **Cohort Statistics** — registered-source descriptive aggregates, coverage and eligibility review, a cohort snapshot, and SOFA-1 versus SOFA-2 reclassification when both modules are available. Generic group p-values, SMD, intervals, and matched analyses remain unsupported in this view.
-- **Cross-DB Benchmark** — harmonized feature-distribution comparison across multiple ICU databases (kept separate because it needs raw schema for ≥ 2 databases).
-- **Research Agent** — optional analysis-and-manuscript scaffolding driven by a research question; includes a built-in deterministic replication runner for paper reproduction.
+Start a research workflow in **Guided Copilot** with a question and a selected data source. Review the complete prepared plan before execution. **Project Monitor** shows run status and evidence. The extraction workspace provides data preparation, patient review, time series, cohort statistics, and cross-database comparison tools. These views share the same prepared data and scientific execution owners.
 
 The Research Agent layer turns a question + prepared EasyICU data into an evidence-bound research output via a 4-stage pipeline — **Plan → Build → Analyze → Gate** — and only drafts the manuscript after the evidence gate passes:
 
@@ -304,7 +300,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-GitHub Actions runs `ruff check src tests` and `pytest -q` on Python 3.10, 3.11, and 3.12 for pushes and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
+Pull requests run the Linux/Python 3.11 checkpoint. The exhaustive Python/OS matrix is manually dispatched for a declared final candidate; pushes to main do not start it. Local `pytest -q` uses the development marker filter. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
 
 ## 💻 Python API
 
