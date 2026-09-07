@@ -1099,6 +1099,36 @@ def run_exposure_outcome_distribution_figure(
             },
         ],
         source_data=source_data,
+        reader_caption=(
+            "Exposure distribution and observed outcome proportions. "
+            f"Exposure: {design['exposure_column']}; outcome: {design['outcome_column']}. "
+            "(A) Bars show each declared exposure level's share of the analysis cohort. "
+            "(B) Points show the observed outcome proportion within each level. "
+            "Annotations give percentages and their numerators/denominators. "
+            + (
+                "Outcome denominators include all declared analysis records. "
+                if design['denominator_policy'] == 'all_declared_rows'
+                else "Outcome denominators include only records with an observed outcome; "
+                "unobserved counts are shown separately when present. "
+            )
+            + "Missing-outcome policy: "
+            + {
+                "fail_closed": "unobserved outcomes are not permitted. ",
+                "exclude_from_denominator": "unobserved outcomes are excluded from the denominator. ",
+                "structural_absence_is_non_event": "declared structural absence is counted as no event. ",
+            }[str(design['missing_outcome_policy'])]
+            + (
+                "No confidence intervals or hypothesis tests are shown. "
+                if counts_only else (
+                    f"Error bars are {100 * float(design['confidence_level']):g}% "
+                    + ("Wilson confidence intervals. " if design['interval_method'] == 'wilson'
+                       else "patient-cluster-robust Wald confidence intervals. ")
+                )
+            )
+            + ("" if contrast is None else contrast_note + " ")
+            + "Records are not necessarily distinct patients. These descriptive "
+            "displays do not estimate an adjusted or causal effect."
+        ),
         statistics_note=(
             (
                 "Counts, denominators, and observed percentages are reproduced "

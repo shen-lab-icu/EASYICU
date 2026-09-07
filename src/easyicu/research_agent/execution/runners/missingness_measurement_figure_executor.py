@@ -1421,6 +1421,26 @@ def run_missingness_measurement_figure(
             process_source.name,
             missingness_panel_source.name,
         ],
+        reader_caption=(
+            "Source availability and record coverage. " + denominator_note
+            + (
+                "(A) Bars show completeness among eligible stays because every "
+                "audited missing count is zero. A variable with no eligible "
+                "stays remains N/A, not 100% complete. "
+                if zero_missing_display else "(A) Bars show stays with a missing "
+                "source value as a percentage of the whole cohort, with counts "
+                "alongside. "
+            )
+            + "(B) Shading and labels show applicable stays, stays with a source "
+            "value/status, and stays with repeated source records, each as a "
+            "percentage of the cohort. "
+            + ("The dagger marks variables applicable to only part of the cohort. "
+               if any(entry['conditional'] for entry in per_variable.values()) else "")
+            + "N/A denotes an event or event-time field with no repetition display; "
+            "Unknown denotes unestablished repetition-source semantics. Source "
+            "completeness is not event prevalence, and repeated records are not "
+            "independent measurements. No inferential uncertainty is shown."
+        ),
         statistics_note=(
             "Percentages are recomputed from the sealed integer counts. Both "
             "partitions are re-derived per variable (eligible + not applicable "

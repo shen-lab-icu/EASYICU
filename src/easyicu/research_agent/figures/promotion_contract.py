@@ -88,6 +88,10 @@ def contract_promoted_from_source(
             panels=panels,
             source_data=list(source_data if source_data is not None else source_ids),
             statistics_note=statistics_note,
+            reader_caption=payload.get("reader_caption"),
+            archetype=payload.get("archetype", "asymmetric_mixed_modality"),
+            width_mm=payload.get("width_mm", 183.0),
+            height_mm=payload.get("height_mm", 120.0),
         )
     except Exception:
         return make_figure_contract(

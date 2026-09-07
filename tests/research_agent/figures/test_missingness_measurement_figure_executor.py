@@ -551,6 +551,9 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
         "data_quality",
         "data_quality",
     ]
+    assert "percentage of the whole cohort" in contract["reader_caption"]
+    assert "Source completeness is not event prevalence" in contract["reader_caption"]
+    assert "Unknown denotes unestablished" in contract["reader_caption"]
     assert [panel["metadata"]["chart_type"] for panel in contract["panels"]] == [
         "availability_panel",
         "coverage_heatmap",
@@ -612,6 +615,8 @@ def test_all_zero_missingness_renders_explicit_completeness_instead_of_blank_bar
     assert panel["metadata"]["zero_missing_completeness_display"] is True
     assert panel["metadata"]["source_products"] == [MISSINGNESS_MEASUREMENT_AUDIT_INPUT]
     assert "zero missing source values" in panel["claim"]
+    assert "Bars show completeness among eligible stays" in contract["reader_caption"]
+    assert "no eligible stays remains N/A, not 100% complete" in contract["reader_caption"]
 
 
 def test_nonzero_missingness_never_rounds_to_apparent_zero(tmp_path: Path) -> None:

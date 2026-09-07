@@ -227,6 +227,11 @@ def test_counts_only_table_renders_without_error_bars(
         "descriptive_result",
     ]
     assert "no uncertainty is computed" in contract["statistics_note"]
+    assert "No confidence intervals or hypothesis tests are shown" in contract["reader_caption"]
+    assert "(A) Bars" in contract["reader_caption"]
+    assert "(B) Points" in contract["reader_caption"]
+    assert "structural absence is counted as no event" in contract["reader_caption"]
+    assert "outcomes are not permitted" not in contract["reader_caption"]
 
 
 @pytest.mark.parametrize(
@@ -438,6 +443,7 @@ def test_the_summary_and_note_carry_the_declared_design(
     assert "wilson" in note
     assert "structural 100% total" in note
     assert "no inferential interval" in note
+    assert "Error bars are 95% Wilson confidence intervals" in contract["reader_caption"]
 
 
 def test_patient_cluster_intervals_and_risk_difference_render_from_one_product(
@@ -528,6 +534,7 @@ def test_patient_cluster_intervals_and_risk_difference_render_from_one_product(
         "does not authorize association or causal interpretation"
         in contract["statistics_note"]
     )
+    assert "patient-cluster-robust Wald confidence intervals" in contract["reader_caption"]
     assert not [
         finding
         for finding in audit_publication_exports([out / f"{PRODUCT}.svg"])

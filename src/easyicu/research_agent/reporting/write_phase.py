@@ -34,7 +34,6 @@ from ..contracts.runtime import (
 from ..authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
-    evidence_artifact_basename_stem,
     sha256_of_file,
 )
 from ..authority.manuscript_claim_policy import (
@@ -46,15 +45,15 @@ from ..authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
 from ..figures.skill import PublicationFigureSkill
-from ..figures.contracts import (
-    figure_contract_label,
-    figure_contract_paths,
-    figure_contract_tier,
-    read_figure_contract,
-)
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
+from .manuscript_figures import (
+    ManuscriptFigureProjectionError,
+    build_manuscript_figures,
+    register_manuscript_figure_projection,
+    select_figure_exports,
+)
 from .manuscript_literature import (
     audit_manuscript_literature,
     remove_sentences_with_unknown_literature_keys,
@@ -143,131 +142,16 @@ def _latex_figure_paths(
     *,
     run_dir: Optional[Path] = None,
 ) -> Tuple[List[Tuple[str, str]], Tuple[str, ...]]:
-    """Choose one LaTeX-safe export for each registered logical figure.
-
-    Figure evidence intentionally registers several publication exports of the
-    same plot.  Embedding every export duplicated figures in the manuscript and
-    let TIFF files reach engines that cannot determine their bounding box.  The
-    PDF renderer owns a single review document, so it selects one compile-safe
-    representative per logical figure: PDF first, then PNG.
-
-    Grouping uses the evidence store's own ``<evidence_id>__<filename>`` reader.
-    Splitting on the first ``__`` here would corrupt the key whenever an
-    evidence id ends in ``_``, and because each export of one figure carries its
-    own id, a corrupted key silently reinstates the duplicate embedding this
-    selection exists to prevent.
-
-    Returns the selected ``(evidence_id, relative_path)`` pairs plus the ids of
-    registered figures that own no compile-safe export, so the caller can report
-    the omission instead of letting a figure disappear from the document.
-    """
-
-    priority = {".pdf": 0, ".png": 1}
-    selected: Dict[str, Tuple[int, int, str, str]] = {}
-    unrepresented: Dict[str, str] = {}
-    for index, record in enumerate(evidence_records):
-        if getattr(record, "kind", None) != "figure":
-            continue
-        relative_path = str(getattr(record, "relative_path", "") or "").replace(
-            "\\", "/"
-        )
-        if not relative_path:
-            continue
-        evidence_id = str(getattr(record, "evidence_id", "") or "")
-        logical_key = evidence_artifact_basename_stem(Path(relative_path), evidence_id)
-        suffix = Path(relative_path).suffix.lower()
-        if suffix not in priority:
-            unrepresented.setdefault(logical_key, evidence_id or logical_key)
-            continue
-        candidate = (
-            priority[suffix],
-            index,
-            evidence_id or logical_key,
-            relative_path,
-        )
-        current = selected.get(logical_key)
-        if current is None or candidate[:2] < current[:2]:
-            selected[logical_key] = candidate
-    chosen_rows = [
-        (logical_key, *row)
-        for logical_key, row in sorted(selected.items(), key=lambda item: item[1][1])
-    ]
-    if run_dir is not None:
-        contract_by_stem: Dict[str, Tuple[Path, str, set[str]]] = {}
-        for contract_path in figure_contract_paths(run_dir):
-            name = contract_path.name
-            stem = (
-                name[: -len(".figure_contract.json")]
-                if name.endswith(".figure_contract.json")
-                else contract_path.stem
-            )
-            raw = read_figure_contract(contract_path)
-            roles = {
-                str(panel.get("role") or "").strip().lower()
-                for panel in (raw.get("panels") or [])
-                if isinstance(panel, Mapping) and str(panel.get("role") or "").strip()
-            }
-            contract_by_stem[stem] = (
-                contract_path,
-                figure_contract_tier(contract_path, run_dir),
-                roles,
-            )
-
-        primary_roles = {
-            role
-            for _path, tier, roles in contract_by_stem.values()
-            if tier == "primary_publication"
-            for role in roles
-        }
-        primary_like_roles = {
-            "descriptive_result",
-            "primary_estimand",
-            "relationship",
-        }
-        reader_rows: List[Tuple[int, int, str, str]] = []
-        for logical_key, _priority, index, evidence_id, relative_path in chosen_rows:
-            contract = contract_by_stem.get(logical_key)
-            if contract is None:
-                reader_rows.append((1, index, evidence_id, relative_path))
-                continue
-            contract_path, tier, roles = contract
-            if (
-                tier == "supporting_step"
-                and primary_roles
-                and roles
-                and roles <= primary_roles
-                and bool(roles & primary_like_roles)
-            ):
-                # The canonical publication figure already covers this
-                # scientific display. Keep the step artifact in the evidence
-                # ledger, but do not duplicate it in the reader PDF.
-                continue
-            if tier == "primary_publication":
-                label = "Primary publication figure"
-                rank = 0
-            else:
-                label = figure_contract_label(contract_path)
-                if label.casefold().startswith("figure:"):
-                    label = label.split(":", 1)[1]
-                label = label.replace("_", " ").strip()
-                label = label[:1].upper() + label[1:] if label else "Supporting figure"
-                rank = 1
-            reader_rows.append((rank, index, label, relative_path))
-        chosen = [
-            (label, relative_path)
-            for _rank, _index, label, relative_path in sorted(reader_rows)
-        ]
-    else:
-        chosen = [
-            (evidence_id, relative_path)
-            for _logical_key, _priority, _index, evidence_id, relative_path in chosen_rows
-        ]
-    omitted = tuple(
-        identifier
-        for logical_key, identifier in unrepresented.items()
-        if logical_key not in selected
+    """Compatibility export selector; production uses the typed projection."""
+    if run_dir is None:
+        records, omitted = select_figure_exports(evidence_records)
+        return [(record.evidence_id, record.relative_path) for record in records], omitted
+    projection = build_manuscript_figures(
+        evidence_records=evidence_records, run_dir=run_dir,
     )
-    return chosen, omitted
+    return [
+        (figure.caption, figure.relative_path) for figure in projection.figures
+    ], projection.omitted_evidence_ids
 
 
 def _manuscript_repair_pass() -> ManuscriptRepairPass:
@@ -2449,12 +2333,12 @@ def _publish_and_audit_manuscript(
             # ``evidence/<file>``).  Select exactly one compile-safe export per
             # logical figure; publication TIFF remains registered for release
             # but is not a LaTeX input.
-            fig_paths_for_latex, figures_without_latex_export = (
-                _latex_figure_paths(
-                    current_verified_evidence_records,
-                    run_dir=run_dir,
-                )
+            figure_projection = build_manuscript_figures(
+                evidence_records=current_verified_evidence_records, run_dir=run_dir,
             )
+            findings.extend(figure_projection.findings)
+            register_manuscript_figure_projection(evidence, figure_projection)
+            figures_without_latex_export = figure_projection.omitted_evidence_ids
             if figures_without_latex_export:
                 findings.append(
                     ValidationFinding(
@@ -2480,7 +2364,7 @@ def _publish_and_audit_manuscript(
                 bibliography=literature,
                 bibliography_basename=bib_basename,
                 venue_template=pipeline._latex_venue_template,
-                figure_paths=fig_paths_for_latex or None,
+                figures=figure_projection.figures,
                 tables=build_manuscript_tables(
                     plan=plan, evidence_records=current_verified_evidence_records, run_dir=run_dir,
                 ),
@@ -2574,6 +2458,11 @@ def _publish_and_audit_manuscript(
                             ),
                         )
                     )
+        except ManuscriptFigureProjectionError as exc:
+            findings.append(ValidationFinding(
+                validator="manuscript_figure_projection", severity="error",
+                message=f"Source-bound figure projection failed: {exc}",
+            ))
         except ManuscriptTableProjectionError as exc:
             findings.append(ValidationFinding(
                 validator="manuscript_table_projection", severity="error", message=str(exc),

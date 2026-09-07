@@ -279,6 +279,8 @@ def test_a_single_stage_that_is_not_the_universe_still_reports_the_gap(
     )
     assert "upstream eligibility and attrition are " in contract["core_claim"].lower()
     assert "no eligibility filter" not in contract["core_claim"].lower()
+    assert "final number of bound analysis records" in contract["reader_caption"]
+    assert "no eligibility filter" not in contract["reader_caption"]
 
 
 def test_single_denominator_is_not_promoted_to_complete_cohort_accounting(
@@ -333,6 +335,8 @@ def test_single_denominator_is_not_promoted_to_complete_cohort_accounting(
     claim = contract["core_claim"].lower()
     assert "no eligibility filter was applied" in claim
     assert "every bound input row is the analysis cohort" in claim
+    assert "no eligibility filter was applied" in contract["reader_caption"]
+    assert "not a complete participant-flow diagram" in contract["reader_caption"]
 
 
 def test_owner_and_runner_fail_closed_on_widening_or_arithmetic_drift(

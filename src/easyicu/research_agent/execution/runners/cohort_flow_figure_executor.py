@@ -514,6 +514,20 @@ def run_cohort_flow_figure(
             }
         ],
         source_data=[source_path.name],
+        reader_caption=(
+            "Cohort accounting. Counts reproduce the bound sequential ledger of "
+            "records entering, excluded from, and remaining after each recorded "
+            "eligibility stage; no additional selection is applied by the figure. "
+            "The ledger begins at the bound input universe, not necessarily the "
+            "entire source database."
+            if complete else (
+                "Analysis denominator. The single bar shows all bound input "
+                "records; no eligibility filter was applied within this ledger. "
+                if unfiltered_universe else "Analysis denominator. The single bar "
+                "shows the final number of bound analysis records. "
+            ) + "Earlier eligibility stages and exclusions are unavailable; "
+            "this is not a complete participant-flow diagram."
+        ),
         statistics_note=(
             "All bound attrition rows are preserved. The renderer introduces no "
             "cohort filter, imputation, or denominator change."
