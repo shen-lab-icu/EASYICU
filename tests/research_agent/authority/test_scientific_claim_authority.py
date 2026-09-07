@@ -511,7 +511,9 @@ def test_descriptive_reader_retains_typed_group_and_outcome_without_relabeling(
 
     level_text = json.dumps(level, ensure_ascii=False)
     claim = ScientificClaim(
-        schema_version="easyicu.scientific_claim/2",
+        schema_version=(
+            "easyicu.scientific_claim/2" if counts_only else "easyicu.scientific_claim/3"
+        ),
         claim_id="observed_absolute_risk_level_0",
         claim_type="descriptive_absolute_risk",
         exposure=f"exposure_flag={level_text}",
@@ -528,6 +530,9 @@ def test_descriptive_reader_retains_typed_group_and_outcome_without_relabeling(
         point_estimate=None if counts_only else 10.0,
         interval_lower=None if counts_only else 6.0,
         interval_upper=None if counts_only else 14.0,
+        confidence_level=None if counts_only else 0.95,
+        interval_method=None if counts_only else "patient_cluster_robust_wald",
+        effect_scale=None if counts_only else "percent",
         step_id="describe",
         evidence_id="summary",
     )
@@ -551,7 +556,7 @@ def test_descriptive_reader_keeps_contrast_order_and_literal_string_levels() -> 
     from easyicu.research_agent.authority.scientific_claims import ScientificClaim
 
     claim = ScientificClaim(
-        schema_version="easyicu.scientific_claim/2",
+        schema_version="easyicu.scientific_claim/3",
         claim_id="prespecified_unadjusted_risk_difference",
         claim_type="descriptive_risk_difference",
         exposure='exposure_flag="a_b=2 versus c_d=1" versus exposure_flag="baseline"',
@@ -564,6 +569,9 @@ def test_descriptive_reader_keeps_contrast_order_and_literal_string_levels() -> 
         point_estimate=20.0,
         interval_lower=10.0,
         interval_upper=30.0,
+        confidence_level=0.90,
+        interval_method="linear_probability_wald",
+        effect_scale="percentage_points",
         step_id="describe",
         evidence_id="summary",
     )
@@ -573,6 +581,7 @@ def test_descriptive_reader_keeps_contrast_order_and_literal_string_levels() -> 
     assert 'exposure flag="a_b=2 versus c_d=1" versus exposure flag="baseline"' in reader
     assert "hospital mortality" in reader
     assert "comparison minus reference" in reader
+    assert "90% CI" in reader
 
 
 def test_descriptive_reader_coordinates_survive_strict_binding(ra, tmp_path: Path) -> None:
