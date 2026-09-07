@@ -166,17 +166,18 @@ def read_parquet_parallel(
         if filters:
             logger.debug(f"应用过滤器: {filters}")
     
-    dfs = []
+    dfs = [None] * len(file_paths)
     failures: list[str] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(read_one, path): path for path in file_paths}
+        futures = {executor.submit(read_one, path): (index, path) for index, path in enumerate(file_paths)}
 
         for i, future in enumerate(as_completed(futures), 1):
             outcome = future.result()
+            index, path = futures[future]
             if isinstance(outcome, Exception):
-                failures.append(f"{Path(futures[future]).name}: {outcome}")
+                failures.append(f"{Path(path).name}: {outcome}")
             else:
-                dfs.append(outcome)
+                dfs[index] = outcome
 
             if verbose and i % 10 == 0:
                 print(f"   进度: {i}/{len(file_paths)}")

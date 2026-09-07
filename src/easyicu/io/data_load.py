@@ -48,6 +48,7 @@ class TimeOriginError(ValueError):
 
 #: Time units this loader will accept for a numeric time column.
 VALID_TIME_UNITS = frozenset({"seconds", "minutes", "hours", "days"})
+_DATASOURCE_KW_KEYS = frozenset({"base_path", "table_sources", "registry", "default_format", "enable_cache"})
 
 
 def _identifier_digest(values: pd.Series) -> str:
@@ -89,9 +90,8 @@ def load_src(
         >>> load_src(data_source, rows=lambda df: df['itemid'] == 50809)
     """
     # Extract keyword arguments relevant for ICUDataSource initialisation
-    datasource_kw_keys = {"base_path", "table_sources", "registry", "default_format", "enable_cache"}
     datasource_kwargs = {
-        key: kwargs.pop(key) for key in list(kwargs.keys()) if key in datasource_kw_keys
+        key: kwargs.pop(key) for key in list(kwargs.keys()) if key in _DATASOURCE_KW_KEYS
     }
 
     # Optional explicit table name can be supplied via kwargs
@@ -132,6 +132,8 @@ def load_src(
         if src is None:
             raise ValueError("src argument required when x is a string")
         if isinstance(src, ICUDataSource):
+            if datasource_kwargs:
+                raise ValueError("source instance cannot be overridden with datasource keyword arguments")
             data_source = src
         elif isinstance(src, DataSourceConfig):
             data_source = ICUDataSource(src, **datasource_kwargs)
@@ -206,16 +208,18 @@ def load_src(
     return frame
 
 def _resolve_source(
-    x: Union[str, ICUDataSource, Any], src: Optional[str]
+    x: Union[str, ICUDataSource, Any], src: Optional[str], **datasource_kwargs
 ) -> "tuple[DataSourceConfig, Optional[ICUDataSource]]":
     """The config, and a source object able to load the origin/map tables."""
 
+    if (isinstance(x, ICUDataSource) or isinstance(src, ICUDataSource)) and datasource_kwargs:
+        raise ValueError("source instance cannot be overridden with datasource keyword arguments")
     if isinstance(x, ICUDataSource):
         return x.config, x
     if isinstance(src, ICUDataSource):
         return src.config, src
     if isinstance(src, DataSourceConfig):
-        return src, ICUDataSource(src)
+        return src, ICUDataSource(src, **datasource_kwargs)
     if isinstance(x, str):
         if src is None:
             raise ValueError("src argument required when x is a string")
@@ -225,7 +229,7 @@ def _resolve_source(
         config = registry.get(src)
         if not config:
             raise ValueError(f"Data source '{src}' not found")
-        return config, ICUDataSource(config)
+        return config, ICUDataSource(config, **datasource_kwargs)
     raise TypeError(f"Cannot determine data source from {type(x)}")
 
 
@@ -272,7 +276,15 @@ def _load_origin(
             f"origin table {cfg.table!r} does not carry {cfg.id!r} and "
             f"{cfg.start!r}"
         )
-    return origin[[cfg.id, cfg.start]].drop_duplicates(subset=[cfg.id]), cfg.start
+    origin = origin[[cfg.id, cfg.start]].drop_duplicates()
+    conflicting = origin.duplicated(cfg.id, keep=False)
+    if conflicting.any() or origin[cfg.id].isna().any():
+        raise TimeOriginError(
+            f"{config.name}: conflicting or missing origin identities; "
+            f"affected_rows={int(conflicting.sum())}; "
+            f"id_sha256={_identifier_digest(origin.loc[conflicting, cfg.id])}"
+        )
+    return origin, cfg.start
 
 
 def _to_relative(
@@ -350,10 +362,10 @@ def load_difftime(
             + ", ".join(sorted(VALID_TIME_UNITS))
         )
 
-    # Load raw data
-    data = load_src(x, rows=rows, cols=cols, src=src, **kwargs)
-
-    config, data_source = _resolve_source(x, src)
+    datasource_kwargs = {key: kwargs.pop(key) for key in list(kwargs) if key in _DATASOURCE_KW_KEYS}
+    config, data_source = _resolve_source(x, src, **datasource_kwargs)
+    # Resolve once: observations and time origins share the selected source.
+    data = load_src(x, rows=rows, cols=cols, src=data_source, **kwargs)
 
     # Determine ID column
     if id_hint and id_hint in data.columns:
@@ -396,6 +408,7 @@ def load_difftime(
             origin_frame.rename(columns={origin_col: merged_origin}),
             on=id_col,
             how="left",
+            validate="many_to_one",
         )
         missing_origin = data[merged_origin].isna() & data[pending].notna().any(axis=1)
         if missing_origin.any():
@@ -498,8 +511,9 @@ def load_id(
     Examples:
         >>> load_id('patients', src='mimic_demo', id_var='subject_id')
     """
-    # Load with difftime
-    tbl = load_difftime(x, rows=rows, cols=cols, id_hint=id_var, src=src, **kwargs)
+    datasource_kwargs = {key: kwargs.pop(key) for key in list(kwargs) if key in _DATASOURCE_KW_KEYS}
+    config, data_source = _resolve_source(x, src, **datasource_kwargs)
+    tbl = load_difftime(x, rows=rows, cols=cols, id_hint=id_var, src=data_source, **kwargs)
 
     if not id_var:
         return tbl
@@ -516,7 +530,6 @@ def load_id(
 
     from ..table import change_id
 
-    config, data_source = _resolve_source(x, src)
     id_map = _load_id_map(data_source, config, current_list[0], id_var)
     return as_id_tbl(
         change_id(

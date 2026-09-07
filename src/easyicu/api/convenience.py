@@ -286,23 +286,17 @@ def load_demographics(
 
     demo_concepts = ["age", "bmi", "height", "sex", "weight"]
 
-    try:
-        result = load_concepts(
-            concepts=demo_concepts,
-            patient_ids=patient_ids,
-            database=database,
-            data_path=data_path,
-            merge=True,
-            verbose=verbose,
-        )
-        if result is None:
-            return pd.DataFrame()
-        return result
-
-    except Exception as e:
-        if verbose:
-            print(f"  ❌ 人口统计学数据加载失败: {e}")
-        return pd.DataFrame()
+    result = load_concepts(
+        concepts=demo_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        merge=True,
+        verbose=verbose,
+    )
+    if not isinstance(result, pd.DataFrame):
+        raise TypeError("demographics loader did not return a DataFrame")
+    return result
 
 
 def load_outcomes(
