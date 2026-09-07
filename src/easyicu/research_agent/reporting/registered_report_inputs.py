@@ -22,7 +22,8 @@ from ..authority.runtime_artifacts import (
     current_step_records,
 )
 from ..schema import EvidenceRecord
-from .writer_evidence import _executed_method_boundary_rows
+from .writer_evidence import _executed_method_boundary_rows, _verified_evidence_json
+from .descriptive_report_facts import compile_counts_only_report_facts
 from .writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
@@ -80,6 +81,31 @@ class ReadOnlyReportEvidence:
                 detail=name,
             )
         return sealed.read_bytes()
+
+
+def verified_descriptive_source_records(projected, evidence):
+    """Restore typed result structure from its sealed JSON, not a loose wrapper.
+
+    The general envelope projection intentionally omits some nonnumeric
+    strings. This capability needs its exact interpretation contract, so read
+    that contract from the already verified source owner instead of guessing.
+    """
+
+    records = []
+    for row in projected:
+        summary = row.get("step_summary", {})
+        if not (
+            isinstance(summary, dict) and "descriptive_estimates" in summary
+            and summary.get("analysis_role") == "primary"
+            and summary.get("interval_method") == "none_counts_only"
+        ):
+            continue
+        source = _verified_evidence_json(
+            evidence, str(row.get("step_summary_evidence_id") or ""),
+            exact_evidence_id=True, expected_kind="statistic",
+        )
+        records.append({**row, "step_summary": source})
+    return records
 
 
 def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigration:
@@ -155,7 +181,13 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
             code="WRITER_ONLY_METHOD_DIGEST_UNAVAILABLE",
             detail="No registered method block.",
         )
-    return replace(prepared, evidence_digest=digest)
+    return replace(
+        prepared, evidence_digest=digest,
+        host_result_facts=compile_counts_only_report_facts(
+            verified_descriptive_source_records(projected, evidence),
+            evidence=evidence, reader_display_labels=prepared.plan.display_labels,
+        ),
+    )
 
 
 def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str, int]:

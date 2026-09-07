@@ -472,16 +472,30 @@ def test_host_claim_remains_present_after_deterministic_reader_rounding() -> Non
         "## Results\n\n### Primary association\n\n" + claim.placeholder + "\n",
         resolve_claim=lambda ref: claim if ref == claim.claim_ref else None,
     ).scaffold
-    assert "33.333333" in expanded
+    assert "33.333333" not in expanded
+    assert "33.333 percent" in expanded
     rounded = (
         expanded.replace("1/3", "1[^claim_1]/3[^claim_2]")
-        .replace("33.333333", "33.333[^claim_3]")
+        .replace("33.333 percent", "33.333[^claim_3] percent")
     )
 
     assert missing_scientific_claims_in_results(
         rounded,
         claims=[claim],
     ) == ()
+
+
+def test_claim_display_rounding_leaves_scaffold_provenance_and_model_numbers_intact():
+    claim = _claim()
+    canonical = "[^claim_1]: value=33.333333; field=estimate; evidence=source.123456"
+    source_link = "[source](https://example.org/10.123456/record)"
+    unbound = "A model-supplied value of 99.123456 must still face numeric binding."
+    scaffold = "\n".join((claim.placeholder, canonical, source_link, unbound))
+    expanded = expand_scientific_claim_tokens(scaffold, resolve_claim=_resolver)
+    assert canonical in expanded.scaffold
+    assert source_link in expanded.scaffold
+    assert unbound in expanded.scaffold
+    assert claim.render_reader_text() in expanded.scaffold
 
 
 def test_writer_neutral_count_examples_use_the_same_closed_claim_grammar():

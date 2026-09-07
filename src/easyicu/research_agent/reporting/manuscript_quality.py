@@ -301,6 +301,34 @@ def repair_registered_display_callouts(
     return repaired, tuple(repairs)
 
 
+def remove_empty_optional_subsections(manuscript: str) -> str:
+    """Drop only empty, non-required wrappers left by strict prose filtering.
+
+    Required headings stay visible and fail their existing completeness gate.
+    No sentence, citation or nonempty scientific content is removed here.
+    """
+
+    text = str(manuscript or "")
+    headings = list(re.finditer(r"^(#{2,3})[ \t]+([^\n]+?)[ \t]*$", text, re.M))
+    current_section = ""
+    removals = []
+    for index, heading in enumerate(headings):
+        name = heading.group(2)
+        if heading.group(1) == "##":
+            current_section = name
+            continue
+        if current_section not in _READER_FACING_SECTIONS:
+            continue
+        if name in _REQUIRED_SECTIONS.get(current_section, ()):
+            continue
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        if not text[heading.end():end].strip():
+            removals.append((heading.start(), end))
+    for start, end in reversed(removals):
+        text = text[:start] + text[end:]
+    return text
+
+
 def repair_reader_structure_from_existing_prose(
     manuscript: str,
 ) -> tuple[str, tuple[Mapping[str, str], ...]]:
