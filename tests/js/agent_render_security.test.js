@@ -137,7 +137,7 @@ const assembledPayload = {
   tables: [{ label: 'Table 1', caption: 'Baseline', columns: ['Variable', 'N'], rows: [['<svg onload=bad()>', '120']], notes: ['Unknown is not zero.'] }],
   references: [
     { key: 'first', number: 1, title: '<script>bad()</script>', authors: ['A Author'], year: '2020', url: 'javascript:bad()', bibliographic_notices: ['Correction: <img src=x onerror=bad()>'] },
-    { key: 'second', number: 2, title: 'Second source', authors: [], year: '2021', doi: '10.1234/test' },
+    { key: 'second', number: 2, title: 'Second source.', authors: [], year: '2021', doi: '10.1234/test' },
   ],
   figure_gallery: { figures: [{ label: 'Figure', data_url: safePng, caption: 'Bound caption.' }] },
   report_revision: { status: 'pass', revision_id: 'revision-1' },
@@ -150,6 +150,7 @@ assert.ok(assembled.indexOf('Table 1. Baseline') < assembled.indexOf('<h2>Discus
 assert.ok(assembled.includes('href="#gpi-reference-1"') && assembled.includes('href="#gpi-reference-2"'));
 assert.ok(assembled.includes('References') && assembled.includes('A Author'));
 assert.ok(assembled.includes('Some source records have no author metadata'));
+assert.ok(!assembled.includes('source.</a>.'), 'source title punctuation must not be duplicated');
 assert.ok(assembled.includes('Correction: &lt;img'));
 assert.ok(assembled.includes('revision-1'));
 assert.ok(!assembled.includes('href="javascript:'));

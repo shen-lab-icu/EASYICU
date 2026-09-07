@@ -542,8 +542,9 @@
       const authors = Array.isArray(ref.authors) ? ref.authors.join(', ') : '';
       const url = ref.doi ? `https://doi.org/${encodeURIComponent(ref.doi)}` : (/^https:\/\//i.test(String(ref.url || '')) ? ref.url : '');
       const title = url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener noreferrer">${esc(ref.title || '')}</a>` : esc(ref.title || '');
+      const titleStop = /[.!?。！？]$/.test(String(ref.title || '').trim()) ? '' : '.';
       const notices = Array.isArray(ref.bibliographic_notices) ? ref.bibliographic_notices : [];
-      return `<li id="gpi-reference-${Number.isInteger(ref.number) ? ref.number : 0}">${esc(authors)}${authors ? '. ' : ''}${title}. ${esc(ref.venue || '')}${ref.venue ? '. ' : ''}${esc(ref.year || '')}.${notices.map(note => `<p class="gpi-reference-notice">${esc(note)}</p>`).join('')}</li>`;
+      return `<li id="gpi-reference-${Number.isInteger(ref.number) ? ref.number : 0}">${esc(authors)}${authors ? '. ' : ''}${title}${titleStop} ${esc(ref.venue || '')}${ref.venue ? '. ' : ''}${esc(ref.year || '')}.${notices.map(note => `<p class="gpi-reference-notice">${esc(note)}</p>`).join('')}</li>`;
     }).join('')}</ol></section>` : '';
     const revision = p.report_revision && p.report_revision.status === 'pass'
       ? `<p class="gpi-reader-revision">${esc(t('Report revision', '报告修订'))}: ${esc(p.report_revision.revision_id || '')} · ${esc(t('Source analysis unchanged; not publication authorization.', '源分析不变；不代表发表授权。'))}</p>` : '';
