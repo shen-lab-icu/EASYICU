@@ -253,6 +253,20 @@ class FigureContract(BaseModel):
     source_data: List[str] = Field(default_factory=list)
     statistics_note: Optional[str] = None
     image_integrity_note: Optional[str] = None
+    reader_caption: Optional[str] = Field(
+        default=None, min_length=1, max_length=4000,
+        exclude_if=lambda value: value is None,
+        description="Source-bound plain-text legend, including panel marks and statistical limits.",
+    )
+
+    @field_validator("reader_caption")
+    @classmethod
+    def _reader_caption_plain_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            value = value.strip()
+            if not value or any(ord(character) < 32 for character in value):
+                raise ValueError("reader_caption must be nonempty plain text without control characters")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -514,6 +528,7 @@ def make_figure_contract(
     source_data: Optional[Sequence[str]] = None,
     statistics_note: Optional[str | Sequence[str]] = None,
     image_integrity_note: Optional[str] = None,
+    reader_caption: Optional[str] = None,
     title: Optional[str] = None,
     claim: Optional[str] = None,
     source_evidence: Optional[Sequence[str] | Mapping[str, str]] = None,
@@ -561,6 +576,7 @@ def make_figure_contract(
         "source_data": source_data,
         "statistics_note": statistics_note,
         "image_integrity_note": image_integrity_note,
+        "reader_caption": reader_caption,
         "title": title,
         "claim": claim,
         "source_evidence": source_evidence,
@@ -619,6 +635,7 @@ def make_figure_contract(
         source_data=source_data_value,
         statistics_note=stats_note_value,
         image_integrity_note=merged.get("image_integrity_note", image_integrity_note),
+        reader_caption=merged.get("reader_caption"),
     )
 
 

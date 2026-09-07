@@ -130,6 +130,7 @@ _MANUSCRIPT_ERROR_VALIDATORS = frozenset(
         "manuscript_language_guard",
         "manuscript_literature",
         "manuscript_quality",
+        "manuscript_figure_projection",
         "manuscript_result_sufficiency",
         "writer_agent",
     }

@@ -28,6 +28,7 @@ from .bibtex import (
     render_thebibliography_block,
     sanitise_bibtex_key,
 )
+from .manuscript_figures import ManuscriptFigure
 from ..literature import (
     CitationRecord,
     LiteratureBundle,
@@ -289,6 +290,7 @@ def scaffold_to_latex(
     venue_template: str = "article",
     figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
     supplementary_figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
+    figures: Sequence[ManuscriptFigure] = (),
     tables: Sequence[ManuscriptTable] = (),
     draft_watermark: bool = False,
     claim_base_url: Optional[str] = None,
@@ -305,6 +307,20 @@ def scaffold_to_latex(
     don't want a separate biber/bibtex run.
     """
     authors = list(authors or ["EasyICU research-agent"])
+    if figures and (figure_paths or supplementary_figure_paths):
+        raise ValueError("Use either bound figures or legacy figure paths, not both")
+    captions = {figure.relative_path: figure.caption for figure in figures}
+    if len(captions) != len(figures):
+        raise ValueError("A bound figure path must occur exactly once in the reader")
+    if figures:
+        if any(figure.placement not in {"main", "supplementary"} for figure in figures):
+            raise ValueError("Reader figure placement must be main or supplementary")
+        figure_paths = [(figure.evidence_id, figure.relative_path) for figure in figures
+                        if figure.placement == "main"]
+        supplementary_figure_paths = [
+            (figure.evidence_id, figure.relative_path) for figure in figures
+            if figure.placement == "supplementary"
+        ]
     claim_base_url = _validated_claim_base_url(claim_base_url)
 
     # Strip HTML comments (``<!-- ... -->``) — produced by the binder
@@ -486,7 +502,9 @@ def scaffold_to_latex(
                 + "}"
             )
             parts.append(
-                r"\caption{" + _escape_latex(fig_id.replace("_", " ").strip()) + "}"
+                r"\caption{" + _escape_latex(
+                    captions.get(fig_rel_path, fig_id.replace("_", " ").strip())
+                ) + "}"
             )
             label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
             parts.append(r"\label{fig:" + label_key + "}")
@@ -496,6 +514,7 @@ def scaffold_to_latex(
     if supplementary_figure_paths:
         parts.append(r"\clearpage")
         parts.append(r"\section*{Supplementary figures}")
+        parts.append(r"\setcounter{figure}{0}\renewcommand{\thefigure}{S\arabic{figure}}")
         parts.append("")
         for fig_id, fig_rel_path in supplementary_figure_paths:
             normalized_figure_path = str(fig_rel_path).replace("\\", "/")
@@ -517,7 +536,9 @@ def scaffold_to_latex(
                 + "}"
             )
             parts.append(
-                r"\caption{" + _escape_latex(fig_id.replace("_", " ").strip()) + "}"
+                r"\caption{" + _escape_latex(
+                    captions.get(fig_rel_path, fig_id.replace("_", " ").strip())
+                ) + "}"
             )
             label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
             parts.append(r"\label{fig:supp-" + label_key + "}")
