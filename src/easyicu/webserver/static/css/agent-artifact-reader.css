@@ -1,21 +1,13 @@
 /* Research-artifact reader hierarchy.
    Owner: screens-agent-render.js readable figure/table/ledger projections. */
 .ag-artifact-readable > .ag-figure-gallery {
-  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-columns:minmax(0,1fr);
   padding:0 14px 14px;
 }
 
 .ag-figure-gallery figure.is-primary {
   grid-column:1 / -1;
   background:#fff;
-}
-
-.ag-figure-gallery figure.is-primary img {
-  max-height:520px;
-}
-
-.ag-figure-gallery figure.is-supporting img {
-  max-height:240px;
 }
 
 .ag-result-reader {
