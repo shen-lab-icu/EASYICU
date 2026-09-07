@@ -34,6 +34,8 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 
 ## 从这里开始
 
+[安装与启动指南](docs/installation.md) 区分桌面安装包、Python wheel 和源码工作区。桌面安装包自带运行环境；下面的源码启动器需要 Python。
+
 > **调用任何 API 前的唯一铁律：** 所有提取 API 接收的都是**已转换（prepared）**的数据集，而不是原始下载包。如果你还没转换过这个数据库，请**先做转换**（Web 界面 *Validate Data Path → Convert & Setup*，或 `DataConverter(...).convert_all()` —— 见 [Python API](#-python-api)）。下文每个示例里的 `data_path` 指的都是*转换后的目录*。
 
 ### 快速查表:"我想…… → 运行……"
@@ -56,7 +58,7 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 
 | 阅读 | 用于 |
 |------|------|
-| [`src/easyicu/README.md`](src/easyicu/README.md) | 包级模块地图——~75 个模块如何分层(概念抽象 → 转换 → API → 评分)。代码贡献者从这里开始。 |
+| [`src/easyicu/README.md`](src/easyicu/README.md) | 包级模块地图——概念、转换、API、评分、Web 和 Research Agent 的职责。代码贡献者从这里开始。 |
 | [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | 当前维护的 FastAPI 原生 WebApp 路径与本地 route/API QA 命令。 |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | 证据绑定的 research-agent 层:四层设计、就绪检查、跨库复现协议。 |
 | [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | 驱动跨库提取的概念字典(`concept-dict.json` 与 SOFA-2 overlay)。 |
@@ -141,7 +143,7 @@ Stage27 之前的 git 历史或本地 Stage27 archive patch 恢复。
 - **准备完成的数据是统一契约**：原始 CSV / CSV.GZ / tar.gz 数据需先转换，再供 Web 界面和 Python API 共用。
 - **AI 助手默认关闭**：只有在用户显式启用后才会工作。
 - **始终保留人工确认**：队列、特征、数据转换与导出等关键操作仍需用户确认。
-- **仓库已包含自动化检查**：GitHub Actions 在 Python 3.10、3.11 和 3.12 上运行 `ruff check src tests` 与 `pytest -q`，覆盖基础仓库契约与公共 API；当前维护的 Web UI gate 是 FastAPI 原生路径。
+- **仓库已包含自动化检查**：Pull request 运行 Linux / Python 3.11 检查；完整矩阵由维护者对最终候选手动触发。当前维护的 Web UI gate 是 FastAPI 原生路径。
 
 ## 论文、引用与可复现
 
@@ -205,13 +207,7 @@ Stage27 之前的 git 历史或本地 Stage27 archive patch 恢复。
 
 ## 可视化与分析
 
-EasyICU Web 主界面包含 5 个顶级 tab：
-
-- **Tutorial（教程）** — 数据准备工作流向导（数据源 → 队列 → 概念 → 导出），作为最左侧顶部 tab，新用户进来就能找到，不必再去侧边栏；侧边栏的「📚 工作流帮助」也依然可用。
-- **Patient Review（患者审阅）** — 数据表浏览、带临床阈值的时间序列、单患者概览、数据质量审计（缺失 / 物理范围越界 / 时间完整性）。
-- **Cohort Statistics（队列统计）** — 分组对照表（含 p 值与 SMD）、覆盖度与入组流程审计、队列单页快照、SOFA-1 与 SOFA-2 敏感性分析。
-- **Cross-DB Benchmark（跨库对照）** — 多数据库间的标准化特征分布对比（独立出来是因为它需要 ≥ 2 个数据库的原始 schema）。
-- **Research Agent（研究智能体）** — 可选模块：以研究问题为入口的分析与证据绑定稿件框架生成，内置确定性的论文复现入口。
+从 **Guided Copilot** 提供研究问题并选择数据源，审阅 Agent 准备的完整计划后执行；**Project Monitor** 展示运行状态和证据。提取工作区提供数据准备、患者审阅、时间序列、队列统计和跨库对照。各视图复用同一份准备完成的数据和科学执行模块。
 
 Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物，并只在 Evidence Gate 通过后才生成可审稿件框架；它不是全自动论文写作或自主科学发现系统，也不是临床决策支持工具。
 
@@ -253,7 +249,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-仓库中的 GitHub Actions 会在 push 和 pull request 时对 Python 3.10、3.11 和 3.12 运行 `ruff check src tests` 与 `pytest -q`。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+Pull request 运行 Linux / Python 3.11 检查；完整 Python / 操作系统矩阵仅对明确的最终候选手动触发，push main 不会自动启动。`pytest -q` 默认使用开发阶段的测试过滤。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 💻 Python API
 
