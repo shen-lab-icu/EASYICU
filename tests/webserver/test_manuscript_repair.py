@@ -18,15 +18,29 @@ def test_report_only_limits_cap_and_never_expand_approved_budget():
     caps = {
         "max_provider_attempts_per_run": 6,
         "max_provider_attempts_per_batch": 6,
-        "max_total_tokens_per_run": 100_000,
-        "max_total_tokens_per_batch": 100_000,
         "max_wall_clock_seconds_per_task": 600,
     }
     narrowed = manuscript_repair._report_only_limits(approved)
     for field, maximum in caps.items():
         assert getattr(narrowed, field) == min(maximum, getattr(approved, field))
+    assert narrowed.max_total_tokens_per_run == approved.max_total_tokens_per_run
+    assert narrowed.max_total_tokens_per_batch == approved.max_total_tokens_per_batch
     smaller = replace(approved, **{field: 1 for field in caps})
     assert manuscript_repair._report_only_limits(smaller) == smaller
+
+
+def test_report_only_rejects_unfundable_budget_before_resolving_source(monkeypatch):
+    approved = manuscript_repair.provider_adapter.web_research_agent_hard_stop_limits("full_reviewed")
+    impossible = replace(approved, max_total_tokens_per_run=100_000, max_total_tokens_per_batch=100_000)
+    monkeypatch.setattr(manuscript_repair.provider_adapter, "web_research_agent_hard_stop_limits", lambda _: impossible)
+    monkeypatch.setattr(manuscript_repair.pipeline_owner, "_resolve_execution_resume_wrapper",
+                        lambda **_: pytest.fail("Invalid budget must fail before source/job creation"))
+    with pytest.raises(ValueError, match="cannot fund one minimum Provider"):
+        manuscript_repair.make_report_only_run_runner(
+            study_context={}, project_root=None, provider={}, provider_environment={},
+            credential_source="pi_verified", execution_resume_source_run_id="source",
+            budget_mode="full_reviewed", export_path=None,
+        )
 
 
 def _request(**overrides):
