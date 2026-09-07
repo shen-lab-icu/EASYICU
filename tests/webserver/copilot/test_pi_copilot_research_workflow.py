@@ -566,6 +566,7 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     assert seed["steps"][1]["table_one_spec"]["variables"][1]["name"] == "charlson"
     roster = agent_pipeline_runs._materialization_concept_roster(
         foundation_profile={
+            "available_concepts": ("death", "lact", "age", "charlson"),
             "outcome_concepts": ("death",), "required_feature_concepts": ("lact",),
             "static_concepts": ("age",),
         },

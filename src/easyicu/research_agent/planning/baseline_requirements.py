@@ -11,7 +11,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+from easyicu.concept_output_sources import resolve_composite_concept_output
 
 from ..schema import AnalysisPlan, ResearchContext, TableOneSpec
 
@@ -124,16 +124,13 @@ def _available_columns(
     value_sources = {
         variable.source_concept for variable in context.variables
         if variable.role.value not in _NON_VALUE_ROLES
+        and variable.source_concept is not None
     }
-    if source is not None and source not in value_sources:
+    if source is not None:
         # The concept owner declares composite output identities (not string
         # aliases). Accept a unique materialized family, never choose between
         # competing outputs such as two different comorbidity scores.
-        outputs = {
-            output for output, parent in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
-            if parent == source and output in value_sources
-        }
-        source = next(iter(outputs)) if len(outputs) == 1 else None
+        source = resolve_composite_concept_output(source, value_sources)
     matches = []
     for variable in context.variables:
         if requirement.source_concept is not None and variable.role.value in _NON_VALUE_ROLES:

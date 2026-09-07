@@ -68,6 +68,7 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
 
     assert profile == {
         "allowed_modules": ("demographics", "outcome"),
+        "available_concepts": ("age", "sex", "los_icu", "death"),
         "static_concepts": ("age", "sex", "los_icu"),
         "outcome_concepts": (),
         "required_feature_concepts": (),
@@ -251,6 +252,7 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
 
     assert profile == {
         "allowed_modules": ("demographics", "outcome", "sepsis3_sofa2"),
+        "available_concepts": ("age", "sex", "death", "sep3_sofa2"),
         "static_concepts": ("age", "sex"),
         "outcome_concepts": ("death",),
         "required_feature_concepts": ("sep3_sofa2",),

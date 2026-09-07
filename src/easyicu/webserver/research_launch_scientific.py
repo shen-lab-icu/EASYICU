@@ -436,23 +436,17 @@ def _source_concept_for_operational_column(
 ) -> Optional[str]:
     """Resolve a wide materialized column back to its exported source concept."""
 
-    if column in by_id:
-        return column
     # Some user-facing clinical concepts are published by a versioned
     # composite output whose loader/source name is intentionally different.
     # Materialization must follow that declarative owner mapping just as the
     # post-materialization resolver does; otherwise a reviewed ``sep3`` plan
     # silently omits its exposure because the package stores
     # ``sep3_sofa1``.  Ambiguous composite families remain fail-closed.
-    from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+    from easyicu.concept_output_sources import resolve_composite_concept_output
 
-    composite_sources = {
-        output_concept
-        for output_concept, public_source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
-        if public_source == column and output_concept in by_id
-    }
-    if len(composite_sources) == 1:
-        return next(iter(composite_sources))
+    resolved = resolve_composite_concept_output(column, by_id.keys())
+    if resolved is not None:
+        return resolved
     for suffix in _MATERIALIZED_FEATURE_SUFFIXES:
         if column.endswith(suffix):
             source_concept = column[: -len(suffix)]
@@ -859,6 +853,7 @@ def _data_foundation_profile(
 
     return {
         "allowed_modules": modules,
+        "available_concepts": tuple(by_id),
         "static_concepts": tuple(dict.fromkeys(static_concepts)),
         "outcome_concepts": tuple(outcome_concepts),
         "required_feature_concepts": tuple(required_feature_concepts),
