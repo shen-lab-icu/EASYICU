@@ -47,11 +47,13 @@ from .manuscript_quality import (
     expected_manuscript_display_labels,
     repair_reader_structure_from_existing_prose,
     repair_registered_display_callouts,
+    remove_empty_optional_subsections,
     render_reader_manuscript,
 )
 from .manuscript_sections import quality_repair_section_keys, quality_repair_section_errors
 from .manuscript_baseline import baseline_reporting_mentions
 from .manuscript_method_facts import place_manuscript_method_facts
+from .descriptive_report_facts import DescriptiveReportFact, place_descriptive_report_facts
 
 
 WRITER_ONLY_MIGRATION_SCHEMA = "easyicu.writer_only_manuscript_migration/1"
@@ -101,6 +103,7 @@ class PreparedWriterOnlyMigration:
     removed_unknown_literature_sentences: int
     plan_validation_status: str = "validated"
     plan_validation_error_sha256: str = ""
+    host_result_facts: tuple[DescriptiveReportFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -527,6 +530,7 @@ def writer_only_preflight_payload(
             prepared.removed_unknown_literature_sentences
         ),
         "expected_display_labels": list(prepared.expected_display_labels),
+        "host_result_fact_count": len(prepared.host_result_facts),
         "provider_calls": 0,
         "forbidden_roles": ["planner", "executor", "coder", "figure"],
         "claim_ceiling": "analysis_only",
@@ -552,9 +556,21 @@ def repair_writer_only(
             detail=", ".join(prepared.planned_section_keys),
         )
 
+    source_manuscript = prepared.source_manuscript
+    if prepared.host_result_facts:
+        # Compile the mechanical core before deciding which prose still needs
+        # a model. These facts are verified outputs, not hand-written answers.
+        source_manuscript, _ = _claim_policy_projection(
+            prepared.source_run_dir, source_manuscript,
+        )
+        source_manuscript = place_descriptive_report_facts(source_manuscript, prepared.host_result_facts)
+        source_manuscript, _ = repair_registered_display_callouts(
+            source_manuscript, expected_display_labels=prepared.expected_display_labels,
+        )
+        source_manuscript = remove_empty_optional_subsections(source_manuscript)
     try:
         manuscript, repaired_keys = writer.repair_existing(
-            prepared.source_manuscript,
+            source_manuscript,
             context=prepared.context,
             evidence_ids=prepared.evidence_ids,
             evidence_digest=prepared.evidence_digest,
@@ -631,9 +647,11 @@ def repair_writer_only(
             prepared.source_run_dir,
             manuscript,
         )
+        canonical = place_descriptive_report_facts(canonical, prepared.host_result_facts)
         canonical, _ = repair_registered_display_callouts(
             canonical, expected_display_labels=prepared.expected_display_labels,
         )
+        canonical = remove_empty_optional_subsections(canonical)
         canonical_quality = audit_manuscript_quality(
             canonical,
             expected_display_labels=prepared.expected_display_labels,
@@ -928,6 +946,7 @@ def publish_writer_only_result(
             bound_manuscript.encode("utf-8")
         ),
         "planned_section_keys": list(prepared.planned_section_keys),
+        "host_result_facts": [asdict(fact) for fact in prepared.host_result_facts],
         "repaired_section_keys": list(result.repaired_section_keys),
         "authority_repaired_section_keys": list(
             result.authority_repaired_section_keys

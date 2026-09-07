@@ -788,8 +788,12 @@ def expand_scientific_claim_tokens(
             missing.append(claim_ref)
             out.append(f"{structure_prefix}[scientific claim missing: {claim_ref}]")
             continue
+        # Format only this host-rendered reader sentence before numeric binding.
+        # Never round the scaffold wholesale: canonical footnotes, evidence IDs
+        # and source URLs are provenance, not display values.
+        reader_text, _ = round_reader_numeric_display(claim.render_reader_text())
         out.append(
-            f"{structure_prefix}{claim.render_reader_text()} "
+            f"{structure_prefix}{reader_text} "
             f"{{evidence:{claim.evidence_id}}}"
         )
     return ScientificClaimExpansion(
