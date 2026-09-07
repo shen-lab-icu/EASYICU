@@ -17,7 +17,9 @@ import tempfile
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESKTOP_ROOT = REPO_ROOT / "desktop"
-BUILD_ROOT = DESKTOP_ROOT / ".build"
+BUILD_ROOT = Path(
+    os.environ.get("EASYICU_DESKTOP_BUILD_DIR") or DESKTOP_ROOT / ".build"
+).expanduser().resolve()
 VENV_ROOT = BUILD_ROOT / "venv"
 PYTHON_LOCK = DESKTOP_ROOT / "requirements-macos-arm64-py311.lock"
 MIN_NODE = (22, 19, 0)
@@ -184,25 +186,30 @@ def _build_backend(python: Path) -> Path:
 def _build_tauri() -> None:
     _run(["npm", "ci"], cwd=DESKTOP_ROOT)
     _run(["npm", "run", "tauri", "--", "build", "--bundles", "app"], cwd=DESKTOP_ROOT)
-    bundle_root = DESKTOP_ROOT / "src-tauri" / "target" / "release" / "bundle"
+    target_root = Path(
+        os.environ.get("CARGO_TARGET_DIR") or DESKTOP_ROOT / "src-tauri" / "target"
+    ).expanduser().resolve()
+    bundle_root = target_root / "release" / "bundle"
     app = bundle_root / "macos" / "EasyICU.app"
     if not app.is_dir():
         raise RuntimeError(f"Tauri did not create {app}")
 
-    # Finder metadata copied into this generated bundle prevents codesigning.
-    # Act on symlinks themselves so cleanup stays within the build artifact.
-    _run(["xattr", "-crs", str(app)])
     identity = str(os.environ.get("APPLE_SIGNING_IDENTITY") or "-").strip() or "-"
-    _run(["codesign", "--force", "--deep", "--sign", identity, str(app)])
-    _run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)])
 
     dmg_dir = bundle_root / "dmg"
     dmg_dir.mkdir(parents=True, exist_ok=True)
     dmg = dmg_dir / "EasyICU_1.0.0_aarch64.dmg"
     dmg.unlink(missing_ok=True)
-    with tempfile.TemporaryDirectory(prefix="easyicu-dmg-", dir=BUILD_ROOT) as raw:
+    # File Provider can restore FinderInfo on bundles inside Documents even
+    # after xattr cleanup. Sign the DMG payload in the system temporary area.
+    with tempfile.TemporaryDirectory(prefix="easyicu-dmg-") as raw:
         staging = Path(raw)
-        shutil.copytree(app, staging / "EasyICU.app", symlinks=True)
+        staged_app = staging / "EasyICU.app"
+        shutil.copytree(app, staged_app, symlinks=True)
+        # Act on symlinks themselves so cleanup stays within this artifact.
+        _run(["xattr", "-crs", str(staged_app)])
+        _run(["codesign", "--force", "--deep", "--sign", identity, str(staged_app)])
+        _run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(staged_app)])
         os.symlink("/Applications", staging / "Applications")
         _run(
             [
@@ -266,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Frozen backend: {backend}")
     if not args.backend_only:
         _build_tauri()
-        print(f"App bundles: {DESKTOP_ROOT / 'src-tauri' / 'target' / 'release' / 'bundle'}")
+        print("Desktop build complete; distribute the signed DMG.")
     return 0
 
 
