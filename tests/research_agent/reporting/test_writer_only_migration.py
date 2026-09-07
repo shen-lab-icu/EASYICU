@@ -327,3 +327,78 @@ def test_abstract_conclusion_fallback_is_cited_and_noncausal() -> None:
     assert "The treatment improved survival" not in repaired
     assert "do not establish causation [@strobe_2007]" in repaired
     assert "validation in other cohorts" in repaired
+
+
+def test_second_authority_repair_is_validated_and_only_incomplete_owner_repeats(tmp_path, monkeypatch):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    software = "Analyses used versioned software and registered artifacts."
+    manuscript = _manuscript().replace(software, "Unsupported software statement.")
+    manuscript = manuscript.replace("## Discussion\n", "## Discussion\n\nUnsupported discussion statement.\n")
+    prepared = _prepared(tmp_path, manuscript)
+
+    def project(_run, text):
+        errors = {}
+        for key in ("methods", "discussion"):
+            statement = ("Unsupported software statement." if key == "methods"
+                         else "Unsupported discussion statement.")
+            if statement in text:
+                text = text.replace(statement, "")
+                errors[key] = (statement,)
+        return text, errors
+
+    monkeypatch.setattr(owner, "_claim_policy_projection", project)
+
+    class Writer:
+        calls = 0
+
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, *, section_errors, **kwargs):
+            self.calls += 1
+            assert set(section_errors) == {"methods"}
+            assert "Software and reproducibility" in section_errors["methods"][0]
+            assert "Unsupported discussion statement." not in text
+            replacement = software if self.calls == 2 else "Unsupported software statement."
+            return text.replace("### Software and reproducibility", "### Software and reproducibility\n\n" + replacement), ("methods",)
+
+    writer = Writer()
+    result = repair_writer_only(prepared, writer=writer)
+    assert writer.calls == 2
+    assert result.quality_audit.status == "pass"
+    assert result.authority_repaired_section_keys == ("methods",)
+    assert "discussion" in result.authority_filtered_section_keys
+    assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == manuscript
+
+
+@pytest.mark.parametrize("separator", [",", ", ", ";", "; "])
+def test_exact_registered_citation_groups_are_normalized_before_unknown_removal(tmp_path, monkeypatch, separator):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    authority = owner._ReadOnlyAuthority(
+        records=(SimpleNamespace(evidence_id="first"), SimpleNamespace(evidence_id="second")),
+        aliases={"alias": "second"}, claims_by_ref={},
+    )
+    monkeypatch.setattr(owner, "_read_only_authority", lambda _: authority)
+    text = "Analyses used registered methods {evidence:first" + separator + "evidence:alias}."
+    normalized, refs, count = owner._remove_unresolved_evidence_tokens(tmp_path, text)
+    assert normalized == "Analyses used registered methods {evidence:first} {evidence:alias}."
+    assert refs == () and count == 0
+    assert owner._normalize_registered_evidence_groups(normalized, authority) == normalized
+
+
+@pytest.mark.parametrize("token", [
+    "{evidence:first; evidence:foreign}", "{{evidence:first; evidence:second}}",
+    "{evidence:first; evidence:second; trust me}", "{evidence:first; claim:second}",
+])
+def test_unknown_or_malformed_group_cannot_gain_evidence_authority(token):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    authority = owner._ReadOnlyAuthority(
+        records=(SimpleNamespace(evidence_id="first"), SimpleNamespace(evidence_id="second")),
+        aliases={}, claims_by_ref={},
+    )
+    assert owner._normalize_registered_evidence_groups(token, authority) == token

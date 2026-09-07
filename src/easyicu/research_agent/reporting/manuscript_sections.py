@@ -154,6 +154,11 @@ MANUSCRIPT_SECTION_SPECS = (
             "  Introduce the named variable in every Variables paragraph; do not "
             "start one with an unanchored pronoun or 'the representation'. "
             "Recorded source definitions are not independent clinical validation.\n"
+            "  An observation window is not a landmark design. Describe a "
+            "landmark, exclusion, follow-up origin or time-varying analysis only "
+            "when the executed method boundary explicitly records it. A binary "
+            "hospitalization outcome remains a hospitalization outcome even when "
+            "its precomputed column was materialized in an early observation window.\n"
             "### Statistical analysis\n"
             "  Model family (logistic regression / Cox / clustering), adjustment "
             "set, sensitivity analyses (multiple-testing correction, subgroup "
@@ -190,7 +195,10 @@ MANUSCRIPT_SECTION_SPECS = (
             "  N, key demographics. When `table_one` is available, call the "
             "display `Table 1` in prose and cite {evidence:table_one}.\n"
             "### Primary outcome\n"
-            "  Incidence, cite {evidence:outcome_rate}.\n"
+            "  Report the overall outcome count and proportion from the digest, "
+            "with its exact owning evidence id, or use the supplied outcome "
+            "claim token. Do not invent an outcome_rate alias. This subsection "
+            "needs a supported outcome fact, not only a definition of the endpoint.\n"
             "### Primary association\n"
             "  Report the approved primary analysis, citing its registered "
             "evidence. Include effect sizes and confidence intervals only when "
@@ -339,7 +347,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "14"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "15"
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -513,6 +521,24 @@ def quality_repair_section_keys(
     )
 
 
+def quality_repair_section_errors(
+    manuscript: str,
+    *,
+    expected_display_labels: tuple[str, ...] = (),
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Use the same quality-to-owner mapping for adjacent evidence repair."""
+
+    return {
+        spec.key: (detail,)
+        for spec, detail in _quality_repair_specs(
+            manuscript,
+            expected_display_labels=expected_display_labels,
+            expected_baseline_mentions=expected_baseline_mentions,
+        )
+    }
+
+
 def _remaining_quality_errors(
     scientific: str,
     *,
@@ -663,6 +689,10 @@ def repair_existing_manuscript_sections(
             scientific,
             reader_display_labels=common.get("reader_display_labels", {}),
             manuscript_language=str(common.get("language") or "en"),
+        )
+        scientific, _display_repairs = repair_registered_display_callouts(
+            scientific,
+            expected_display_labels=display_labels,
         )
         sections = _existing_scientific_sections(scientific)
 
@@ -930,5 +960,6 @@ __all__ = [
     "quality_repair_section_keys",
     "repair_named_manuscript_sections",
     "repair_existing_manuscript_sections",
+    "quality_repair_section_errors",
     "render_manuscript_sections",
 ]

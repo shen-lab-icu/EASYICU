@@ -126,6 +126,38 @@ def test_exact_execution_progress_advances_only_analysis_not_plan():
     assert result.plan_execution_ready is False
 
 
+def test_report_only_progress_is_manuscript_work_without_promoting_analysis():
+    study, candidate, failed, review = case()
+    before = snapshot(study, candidate, failed, review)
+    result = snapshot(study, candidate, failed, review, {
+        "kind": "agent-run", "status": "running", "events": [
+            {"type": "progress", "step": "report_repair", "label": "Repairing Methods"},
+        ],
+    })
+    by_id = {row.id: row for row in result.stages}
+    assert result.current_stage == "manuscript"
+    assert result.next_action_code == "report_repair_running"
+    assert by_id["manuscript"].status == "running"
+    assert by_id["plan"].status != "running"
+    assert by_id["analysis"].status == next(
+        row.status for row in before.stages if row.id == "analysis"
+    )
+    assert result.plan_execution_ready is False
+    assert result.completed_required_stages == before.completed_required_stages
+
+
+@pytest.mark.parametrize("event", [None, {"step": []},
+    {"type": "progress", "step": "report_repair", "status": []},
+    {"type": "progress", "step": "report_repair", "status": "blocked"},
+    {"type": "other", "step": "report_repair"},
+    {"type": "progress", "step": "planning", "label": "report_repair"},
+])
+def test_report_progress_requires_exact_host_event_not_a_label(event):
+    from easyicu.webserver.pi_copilot.workflow_attempts import research_job_has_report_repair_progress
+
+    assert research_job_has_report_repair_progress({"events": [event]}) is False
+
+
 @pytest.mark.parametrize("event", [None, {"step": []},
     {"type": "progress", "step": "runner", "status": []},
     {"type": "progress", "step": "step", "status": "blocked"},

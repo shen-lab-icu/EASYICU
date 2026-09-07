@@ -516,6 +516,26 @@ def test_existing_manuscript_migration_retries_only_persistent_owner() -> None:
     assert "host-bound" not in repaired
 
 
+def test_regenerated_results_do_not_spend_another_call_repairing_host_callouts():
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace("Evidence-bound outcome prose.", "The result remained host-bound.")
+    calls = []
+
+    def call_section(**kwargs):
+        calls.append(kwargs["section_name"])
+        return _minimal_valid_section(kwargs["section_name"])
+
+    repaired, keys = repair_existing_manuscript_sections(
+        manuscript, call_section=call_section,
+        common={"evidence_ids": ("table_one", "publication_figure_contract")},
+    )
+    assert calls == ["Results"]
+    assert keys == ("results",)
+    assert "See Table 1 {evidence:table_one}." in repaired
+    assert "See Figure 1 {evidence:publication_figure_contract}." in repaired
+
+
 def test_adjustment_conflict_repairs_methods_owner_only() -> None:
     manuscript = "\n\n".join(
         _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS

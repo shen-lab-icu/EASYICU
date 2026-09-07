@@ -482,3 +482,21 @@ def test_host_claim_remains_present_after_deterministic_reader_rounding() -> Non
         rounded,
         claims=[claim],
     ) == ()
+
+
+def test_writer_neutral_count_examples_use_the_same_closed_claim_grammar():
+    manuscript = (
+        "## Results\n\n"
+        "The level 1 group included 60 stays (50% of the cohort) {evidence:summary}.\n\n"
+        "The observed mortality was 12 of 60 stays (20%) in the level 1 group {evidence:summary}."
+    )
+    result = filter_evidence_bound_scaffold(
+        manuscript, resolve_claim=lambda _: None, resolve_evidence=lambda ref: ref == "summary",
+    )
+    assert not result.filtered_sentences
+    # Syntax admission is not value/source verification; the separate strict
+    # binder must still validate every example value before a report is ready.
+    tampered = manuscript.replace("included", "caused a reduction in")
+    assert filter_evidence_bound_scaffold(
+        tampered, resolve_claim=lambda _: None, resolve_evidence=lambda ref: True,
+    ).filtered_sentences

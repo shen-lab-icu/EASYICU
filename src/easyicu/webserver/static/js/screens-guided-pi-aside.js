@@ -71,6 +71,7 @@
         analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
         research_planning_running: tr('The research task is running; no analysis execution progress is available yet', '科研任务运行中；尚无分析执行进度回执'),
         analysis_running: tr('The approved analysis is running', '已批准的分析正在执行'),
+        report_repair_running: tr('Revising the report from sealed evidence; analysis is not being rerun', '正在用封存证据修订报告；不会重跑分析'),
         planner_checkpoint_resume_available: tr('Continue planning from a preserved checkpoint after validating its binding', '校验绑定后，从保留的检查点继续生成计划'),
         validated_analysis_required: tr('Validated analysis is required first', '需要先完成并验证分析'),
         validated_analysis_complete: tr('Analysis, validation, and numeric checks are complete', '分析、验证与数值核验已完成'),

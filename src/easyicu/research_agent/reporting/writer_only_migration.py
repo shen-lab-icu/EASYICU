@@ -25,6 +25,7 @@ from ..authority.manuscript_claim_policy import (
     filter_evidence_bound_scaffold,
 )
 from ..authority.scientific_claim_registry import load_registered_scientific_claims
+from ..authority.manuscript_method_facts import load_manuscript_method_facts
 from ..literature import LiteratureBundle
 from ..research_context.typed import ResearchContextAuthority, parse_research_context_json
 from ..schema import AnalysisPlan, EvidenceRecord
@@ -48,12 +49,17 @@ from .manuscript_quality import (
     repair_registered_display_callouts,
     render_reader_manuscript,
 )
-from .manuscript_sections import quality_repair_section_keys
+from .manuscript_sections import quality_repair_section_keys, quality_repair_section_errors
 from .manuscript_baseline import baseline_reporting_mentions
+from .manuscript_method_facts import place_manuscript_method_facts
 
 
 WRITER_ONLY_MIGRATION_SCHEMA = "easyicu.writer_only_manuscript_migration/1"
 _EVIDENCE_TOKEN = re.compile(r"\{evidence:([^{}\s]+)\}")
+_EVIDENCE_GROUP = re.compile(
+    r"(?<!\{)\{evidence:([A-Za-z0-9][A-Za-z0-9_.-]*"
+    r"(?:\s*[,;]\s*(?:evidence:)?[A-Za-z0-9][A-Za-z0-9_.-]*)+)\}(?!\})"
+)
 _INPUT_NAMES = (
     "manuscript_scaffold.md",
     "research_context.json",
@@ -204,6 +210,28 @@ def _section_key_for_excerpt(manuscript: str, excerpt: str) -> Optional[str]:
     return None
 
 
+def _normalize_registered_evidence_groups(manuscript: str, authority: _ReadOnlyAuthority) -> str:
+    """Canonicalize only a closed list of exact registered citation ids."""
+
+    records_by_id = {record.evidence_id: record for record in authority.records}
+
+    def resolve_evidence(ref: str) -> bool:
+        evidence_id = authority.aliases.get(ref, ref)
+        return evidence_id in records_by_id
+
+    # The model may group citations using bibliography punctuation. Split only
+    # exact, registered identifiers; unknown or malformed groups stay rejected.
+    # This changes citation syntax, never the prose or the source of a value.
+    def normalize_group(match: re.Match[str]) -> str:
+        refs = [part.strip().removeprefix("evidence:")
+                for part in re.split(r"[,;]", match.group(1))]
+        if not all(resolve_evidence(ref) for ref in refs):
+            return match.group(0)
+        return " ".join(f"{{evidence:{ref}}}" for ref in dict.fromkeys(refs))
+
+    return _EVIDENCE_GROUP.sub(normalize_group, manuscript)
+
+
 def _claim_policy_projection(
     run_dir: Path,
     manuscript: str,
@@ -212,13 +240,17 @@ def _claim_policy_projection(
     records_by_id = {record.evidence_id: record for record in authority.records}
 
     def resolve_evidence(ref: str) -> bool:
-        evidence_id = authority.aliases.get(ref, ref)
-        return evidence_id in records_by_id
+        return authority.aliases.get(ref, ref) in records_by_id
 
+    manuscript = _normalize_registered_evidence_groups(manuscript, authority)
+    manuscript, _ = _normalize_claim_token_sentences(manuscript)
+    facts = load_manuscript_method_facts(root=run_dir, records=authority.records)
+    manuscript, _ = place_manuscript_method_facts(manuscript, facts)
     filtered = filter_evidence_bound_scaffold(
         manuscript,
         resolve_claim=authority.claims_by_ref.get,
         resolve_evidence=resolve_evidence,
+        method_facts=facts,
     )
     rejected = tuple(
         dict.fromkeys(
@@ -249,6 +281,7 @@ def _remove_unresolved_evidence_tokens(
     """Remove unresolved tokens before sentence-level authority filtering."""
 
     authority = _read_only_authority(run_dir)
+    manuscript = _normalize_registered_evidence_groups(manuscript, authority)
     records_by_id = {record.evidence_id for record in authority.records}
     removed: list[str] = []
 
@@ -585,23 +618,22 @@ def repair_writer_only(
     abstract_conclusion_boundary_repaired = False
     authority_repaired: list[str] = []
     authority_filtered: list[str] = []
-    for _attempt in range(2):
+    _, initial_errors = _claim_policy_projection(prepared.source_run_dir, manuscript)
+    if "abstract" in initial_errors:
+        manuscript, abstract_conclusion_boundary_repaired = _repair_abstract_conclusion_boundary(
+            manuscript, prepared.literature,
+        )
+    # Two model repair passes, each followed by a real validation. A successful
+    # final repair must not fall through a for/else and be reported exhausted.
+    # Deterministic normalization and callout placement consume no model pass.
+    for _attempt in range(3):
         canonical, section_errors = _claim_policy_projection(
             prepared.source_run_dir,
             manuscript,
         )
-        if not section_errors:
-            manuscript = canonical
-            break
-        if "abstract" in section_errors and not abstract_conclusion_boundary_repaired:
-            repaired_abstract, changed = _repair_abstract_conclusion_boundary(
-                manuscript,
-                prepared.literature,
-            )
-            if changed:
-                manuscript = repaired_abstract
-                abstract_conclusion_boundary_repaired = True
-                continue
+        canonical, _ = repair_registered_display_callouts(
+            canonical, expected_display_labels=prepared.expected_display_labels,
+        )
         canonical_quality = audit_manuscript_quality(
             canonical,
             expected_display_labels=prepared.expected_display_labels,
@@ -620,16 +652,48 @@ def repair_writer_only(
                 key for key in section_errors if key not in authority_filtered
             )
             break
+        if _attempt == 2:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_AUTHORITY_REPAIR_EXHAUSTED_PRIOR_PRESERVED",
+                detail=", ".join(sorted(section_errors)),
+            )
+        repair_errors = quality_repair_section_errors(
+            canonical,
+            expected_display_labels=prepared.expected_display_labels,
+            expected_baseline_mentions=baseline_reporting_mentions(
+                prepared.context, prepared.plan.display_labels if prepared.plan else None,
+            ),
+        )
+        for key in (
+            *canonical_literature.missing_required_citation_sections,
+            *canonical_literature.direct_comparator_sections_missing,
+            *(("methods",) if canonical_literature.methods_method_source_missing else ()),
+        ):
+            repair_errors[str(key).lower()] = (canonical_literature.message,)
+        if not repair_errors:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_REPAIR_OWNER_UNRESOLVED",
+                detail="The canonical report failed a gate with no section-owned repair.",
+            )
+        # Reject unsupported sentences once. Do not rewrite an otherwise valid
+        # section merely because its unsupported optional prose was removed.
+        repair_errors = {
+            key: (*details, *section_errors.get(key, ()))
+            for key, details in repair_errors.items()
+        }
+        authority_filtered.extend(
+            key for key in section_errors if key not in authority_filtered
+        )
         repair_sections = getattr(writer, "repair_sections", None)
         if not callable(repair_sections):
             raise WriterOnlyMigrationError(
                 code="WRITER_ONLY_AUTHORITY_REPAIR_UNAVAILABLE",
-                detail=", ".join(sorted(section_errors)),
+                detail=", ".join(sorted(repair_errors)),
             )
         try:
             manuscript, repaired_authority_keys = repair_sections(
-                manuscript,
-                section_errors=section_errors,
+                canonical,
+                section_errors=repair_errors,
                 context=prepared.context,
                 evidence_ids=prepared.evidence_ids,
                 evidence_digest=prepared.evidence_digest,
@@ -645,15 +709,6 @@ def repair_writer_only(
         for key in repaired_authority_keys:
             if key not in authority_repaired:
                 authority_repaired.append(key)
-    else:
-        _canonical, remaining_errors = _claim_policy_projection(
-            prepared.source_run_dir,
-            manuscript,
-        )
-        raise WriterOnlyMigrationError(
-            code="WRITER_ONLY_AUTHORITY_REPAIR_EXHAUSTED_PRIOR_PRESERVED",
-            detail=", ".join(sorted(remaining_errors)),
-        )
     quality = audit_manuscript_quality(
         manuscript,
         expected_display_labels=prepared.expected_display_labels,

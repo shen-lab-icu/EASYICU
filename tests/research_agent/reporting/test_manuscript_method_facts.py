@@ -119,6 +119,24 @@ def test_exact_registered_definition_passes_strict_not_a_free_result_assertion(
         )
 
 
+def test_report_only_projection_restores_same_source_facts_without_mutation(tmp_path, monkeypatch):
+    from easyicu.research_agent.reporting.writer_only_migration import _claim_policy_projection
+
+    store, _ = _source(tmp_path)
+    facts = store.manuscript_method_facts()
+    before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    monkeypatch.setattr(EvidenceStore, "__init__", lambda *a, **kw: pytest.fail("mutable store"))
+    projected, errors = _claim_policy_projection(tmp_path, "## Methods\n\n### Variables\n")
+    assert not errors
+    assert all(fact.scaffold in projected for fact in facts)
+    altered = projected.replace("2 points", "3 points")
+    repaired, errors = _claim_policy_projection(tmp_path, altered)
+    assert "methods" in errors
+    assert "3 points" not in repaired
+    assert facts[0].scaffold in repaired
+    assert before == {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+
 def test_exact_method_metadata_does_not_disable_numeric_binding(tmp_path):
     payload = _context().model_dump(mode="json")
     payload["variables"][0]["description"] = "A score increase of at least 300 points"

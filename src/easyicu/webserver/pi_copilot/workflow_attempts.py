@@ -87,3 +87,19 @@ def research_job_has_execution_progress(job: Mapping[str, Any]) -> bool:
         and event.get("status", "running") in {"running", "complete"}
         for event in events
     )
+
+
+def research_job_has_report_repair_progress(job: Mapping[str, Any]) -> bool:
+    """A report-only lifecycle event is neither planning nor new execution."""
+
+    events = job.get("events")
+    if not isinstance(events, list):
+        return False
+    return any(
+        isinstance(event, Mapping)
+        and event.get("type") == "progress"
+        and event.get("step") == "report_repair"
+        and isinstance(event.get("status", "running"), str)
+        and event.get("status", "running") in {"running", "complete"}
+        for event in events
+    )
