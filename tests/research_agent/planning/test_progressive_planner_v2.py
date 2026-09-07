@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import inspect
 from copy import deepcopy
-from pathlib import Path
 
 import pytest
 
@@ -28,6 +26,7 @@ from easyicu.research_agent.agents.progressive_planner import (
     _bound_method_layers,
     _complete_case_variable_roster,
     _continuous_planning_variable_names,
+    _available_ordered_trend_action,
     _foundation_shape_contract,
     _missing_method_layers_outside_step_roster,
     _outline_method_layer_deadlines,
@@ -36,6 +35,7 @@ from easyicu.research_agent.agents.progressive_planner import (
     _parse_step_materialization,
     _preserve_literature_roster_across_targeted_repair,
     _preserve_non_targeted_coordinates_across_literature_repair,
+    _requires_visualization_step,
     _sealed_cohort_predicate_binding_rows,
     _step_materialization_shape_contract,
     _validate_progressive_method_binding_scope,
@@ -51,42 +51,36 @@ from easyicu.research_agent.execution.runners.scientific_reporting_executor impo
     scientific_reporting_executor_owns_step,
 )
 from easyicu.research_agent.planning.progressive_compiler import (
+    _compile_adjusted_association,
+    _compile_model_terms,
+    _compile_ordered_stratified_contract,
     assert_immutable_prefix,
     compile_progressive_plan,
     progressive_output_roles_for_module,
-    required_reader_display_label_keys,
     validate_progressive_foundation,
 )
 from easyicu.research_agent.planning.dependence_authority import (
     bind_context_dependence_authority,
 )
 from easyicu.research_agent.planning.cohort_contract import concept_id_exists
-from easyicu.research_agent.planning.progressive_artifacts import (
-    ProgressiveCompileFailureReplay,
-    ProgressivePlannerCheckpointRecorder,
-    ProgressivePlanningArtifactError,
-    load_progressive_compile_failure_replay,
-    load_progressive_planner_checkpoint_chain,
-    persist_progressive_planner_checkpoint,
-    persist_progressive_planning_artifacts,
-    persist_progressive_planning_authority,
-)
 from easyicu.research_agent.planning.progressive_contract import (
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
+    ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
     ProgressiveOutlineStep,
     ProgressivePlanCompileError,
     ProgressivePlanFoundation,
     ProgressivePlanOutline,
     ProgressivePlanSkeleton,
-    ProgressivePlannerCheckpoint,
     ProgressivePredicateValue,
+    ProgressiveSkeletonStep,
     ProgressiveStepMaterialization,
+    progressive_module_ids_for_analysis_types,
 )
 from easyicu.research_agent.planning.progressive_host_materialization import (
     host_materialize_progressive_step,
+    normalize_progressive_action_contract,
     normalize_progressive_cohort_identity,
-    progressive_module_method_source_keys,
 )
 from easyicu.research_agent.planning.progressive_resume import (
     ProgressivePrefixState,
@@ -94,17 +88,12 @@ from easyicu.research_agent.planning.progressive_resume import (
     validate_progressive_materialization_coordinate,
 )
 from easyicu.research_agent.orchestration.progressive_planning import (
-    ProgressiveDesignCanaryDraft,
     run_progressive_planner,
 )
-from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
 from easyicu.research_agent.planning.preplan_know_how import (
     verify_know_how_decisions,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
-from easyicu.research_agent.authority.plan_lifecycle import (
-    build_normalized_plan_lineage,
-)
 from easyicu.research_agent.cohort.schema import (
     materialized_input_column_authority,
 )
@@ -118,6 +107,7 @@ from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
+    EndpointSpec,
     MissingnessProfile,
     ObservationSemantics,
     ResearchContext,
@@ -128,6 +118,14 @@ from easyicu.research_agent.reporting.article_contract import (
     build_article_analysis_contract,
     roles_covered_by_plan,
     validate_plan_against_article_contract,
+)
+
+from tests.research_agent.planning.progressive_planner_fixtures import (
+    _context as _context,
+    _foundation_payload as _foundation_payload,
+    _materialization_payloads as _materialization_payloads,
+    _outline_payload as _outline_payload,
+    _payload as _payload,
 )
 
 
@@ -141,54 +139,288 @@ def test_progressive_orchestration_consumes_one_atomic_attempt_result() -> None:
     assert "self.last_" not in agent_source
 
 
-def _context() -> ResearchContext:
-    return ResearchContext(
-        research_question="Estimate an exposure-outcome association with audit context.",
+def test_primary_contrast_uses_declared_ordinal_domain_without_patient_rows() -> None:
+    """A metadata-only plan may use an owner-declared clinical level set."""
+
+    variable = ConceptDescriptor(
+        name="aki_stage_max",
+        role=VariableRole.ORDINAL_SCORE,
+        dtype="float64",
+        valid_range=(0.0, 3.0),
+        observed_domain=None,
+        is_ordinal=True,
+        ordinal_levels=(0, 1, 2, 3),
+    )
+    step_payload = deepcopy(_payload()["steps"][4])
+    step_payload.update(
+        {
+            "raw_inputs": ["aki_stage_max", "outcome_flag"],
+            "primary_exposure": "aki_stage_max",
+            "model_terms": [
+                {
+                    "name": "aki_stage_max",
+                    "role": "exposure",
+                    "coding": "categorical",
+                    "reference_level_index": 0,
+                }
+            ],
+            "primary_contrast_level_index": 3,
+        }
+    )
+    step = ProgressiveSkeletonStep.model_validate(step_payload)
+
+    _terms, _covariates, levels, reference, contrast = _compile_model_terms(
+        variables={variable.name: variable},
+        step=step,
+        step_index=0,
+    )
+
+    assert levels == ["0", "1", "2", "3"]
+    assert reference == "0"
+    assert contrast == "3"
+
+
+def test_typed_ordinal_multi_outcome_context_exposes_optional_trend_action() -> None:
+    context = ResearchContext(
+        research_question=(
+            "Describe the gradient across an ordered stage for mortality and "
+            "length of stay."
+        ),
         cohort=CohortDescriptor(
             cohort_name="synthetic",
             database="synthetic",
             n_stays=120,
             id_columns=["stay_id"],
-            outcome_columns=["outcome_flag"],
+            outcome_columns=["death", "los_days"],
         ),
         variables=[
             ConceptDescriptor(
-                name="exposure_flag",
-                role=VariableRole.INTERVENTION,
+                name="stage",
+                role=VariableRole.ORDINAL_SCORE,
                 dtype="int64",
-                observed_domain={
-                    "n_unique": 2,
-                    "is_binary": True,
-                    "levels": [0, 1],
-                },
+                is_ordinal=True,
+                ordinal_levels=[0, 1, 2, 3],
             ),
             ConceptDescriptor(
-                name="outcome_flag",
+                name="death",
                 role=VariableRole.OUTCOME,
                 dtype="int64",
-                observed_domain={
-                    "n_unique": 2,
-                    "is_binary": True,
-                    "levels": [0, 1],
-                },
             ),
             ConceptDescriptor(
-                name="age_years",
+                name="los_days",
+                role=VariableRole.OUTCOME,
                 dtype="float64",
-                observed_domain={"n_unique": 83, "min": 18.0, "max": 100.0},
-            ),
-            ConceptDescriptor(
-                name="sex_code",
-                dtype="object",
-                observed_domain={
-                    "n_unique": 2,
-                    "is_binary": False,
-                    "levels": ["A", "B"],
-                },
             ),
         ],
-        primary_exposure="exposure_flag",
-        target_outcome="outcome_flag",
+        primary_exposure="stage",
+        target_outcome="death",
+        endpoint=EndpointSpec(
+            name="death",
+            kind="binary",
+            absence_semantics="no_absent_rows",
+            levels=[0, 1],
+        ),
+    )
+
+    assert _available_ordered_trend_action(
+        context,
+        ("association_study", "descriptive_epidemiology"),
+    ) == ("stage", "death", "los_days")
+
+
+def _metadata_only_ordinal_multi_outcome_context() -> ResearchContext:
+    return ResearchContext(
+        research_question="Assess an ordered stage against mortality and length of stay.",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_stays=0,
+            id_columns=["stay_id"],
+            outcome_columns=["los_days", "death"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="stage",
+                role=VariableRole.ORDINAL_SCORE,
+                dtype="float64",
+                is_ordinal=True,
+                ordinal_levels=[0, 1, 2, 3],
+            ),
+            ConceptDescriptor(
+                name="death",
+                role=VariableRole.OUTCOME,
+                dtype="float64",
+            ),
+            ConceptDescriptor(
+                name="los_days",
+                role=VariableRole.OUTCOME,
+                dtype="float64",
+            ),
+        ],
+        primary_exposure="stage",
+        target_outcome="death",
+        endpoint=EndpointSpec(
+            name="death",
+            kind="binary",
+            absence_semantics="no_absent_rows",
+            levels=[0, 1],
+        ),
+    )
+
+
+def _ordinal_primary_step(*, coding: str) -> ProgressiveSkeletonStep:
+    return ProgressiveSkeletonStep.model_validate(
+        {
+            "step_id": "primary_adjusted_model",
+            "planned_analysis_role": "primary",
+            "module_id": "adjusted_association",
+            "objective": "Estimate the adjusted stage and mortality association.",
+            "raw_inputs": ["stage", "death"],
+            "primary_exposure": "stage",
+            "outcome": "death",
+            "outcome_type": "binary",
+            "model_terms": [
+                {
+                    "name": "stage",
+                    "role": "exposure",
+                    "coding": coding,
+                    "reference_level_index": 0 if coding == "categorical" else None,
+                }
+            ],
+            "event_level_index": 1,
+            "primary_contrast_level_index": 3,
+            "confidence_level": 0.95,
+        }
+    )
+
+
+@pytest.mark.parametrize("coding", ["ordinal_linear", "categorical"])
+def test_additional_outcome_metadata_does_not_change_primary_model_coding(coding) -> None:
+    context = _metadata_only_ordinal_multi_outcome_context().model_copy(
+        update={"research_question": "Assess an ordered stage against mortality."}
+    )
+    step = _ordinal_primary_step(coding=coding)
+    without_extra_outcome = context.model_copy(
+        update={"cohort": context.cohort.model_copy(update={"outcome_columns": ["death"]})}
+    )
+    requirements = [
+        _compile_adjusted_association(
+            context=current,
+            variables={variable.name: variable for variable in current.variables},
+            step=step,
+            step_index=0,
+        )
+        for current in (without_extra_outcome, context)
+    ]
+
+    assert requirements[0] == requirements[1]
+    assert requirements[1][0].model_terms[0].coding == coding
+
+
+def test_ordered_trend_compiler_accepts_row_free_typed_metadata() -> None:
+    context = _metadata_only_ordinal_multi_outcome_context()
+    parent = _ordinal_primary_step(coding="categorical")
+    trend = ProgressiveSkeletonStep.model_validate(
+        {
+            "step_id": "ordinal_trend_secondary",
+            "planned_analysis_role": "secondary",
+            "module_id": "custom_analysis",
+            "objective": "Test ordered gradients for mortality and length of stay.",
+            "depends_on": [parent.step_id],
+            "raw_inputs": ["stage", "death", "los_days"],
+            "outputs": [
+                {
+                    "product_id": "table:ordinal_trend_results",
+                    "semantic_role": "custom",
+                }
+            ],
+            "scientific_action_id": "association.ordinal_trend",
+            "custom_method": "registered_ordered_stratified_analysis",
+        }
+    )
+    skeleton = ProgressivePlanSkeleton(
+        analysis_type="association_study",
+        cohort=ProgressiveCohortIntent(
+            name="synthetic",
+            selection_mode="all_input_rows",
+        ),
+        steps=[parent, trend],
+        rationale="Keep categorical stage effects separate from the ordered trend test.",
+    )
+
+    assert _compile_ordered_stratified_contract(
+        context=context,
+        skeleton=skeleton,
+        step=trend,
+        step_index=1,
+        variables={variable.name: variable for variable in context.variables},
+        output_pairs=[("table:ordinal_trend_results", "custom")],
+    )
+
+
+def test_host_closes_ordered_trend_materialization_inputs_from_typed_action() -> None:
+    context = _metadata_only_ordinal_multi_outcome_context()
+    parent = _ordinal_primary_step(coding="categorical")
+    outline_step = ProgressiveOutlineStep(
+        step_id="ordinal_trend_secondary",
+        planned_analysis_role="secondary",
+        module_id="custom_analysis",
+        objective="Test ordered gradients for mortality and length of stay.",
+        depends_on=[parent.step_id],
+        variable_names=["stage", "death", "los_days"],
+        scientific_action_id="association.ordinal_trend",
+    )
+    materialization = ProgressiveStepMaterialization(
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        foundation=None,
+        step=ProgressiveSkeletonStep(
+            step_id=outline_step.step_id,
+            planned_analysis_role="secondary",
+            module_id="custom_analysis",
+            objective=outline_step.objective,
+            depends_on=[parent.step_id],
+            raw_inputs=["stage", "death", "age", "sex"],
+            outputs=[
+                {
+                    "product_id": "table:ordinal_trend_results",
+                    "semantic_role": "custom",
+                }
+            ],
+            scientific_action_id="association.ordinal_trend",
+            custom_method="prespecified_ordinal_trend_association",
+        ),
+    )
+
+    normalized = normalize_progressive_action_contract(
+        materialization,
+        context=context,
+        outline_step=outline_step,
+        available_product_refs=[
+            (parent.step_id, "table:adjusted_association_estimates")
+        ],
+    )
+
+    assert normalized.step.raw_inputs == ["stage", "death", "los_days"]
+    assert [
+        (reference.producer_step_id, reference.product_id)
+        for reference in normalized.step.product_inputs
+    ] == [(parent.step_id, "table:adjusted_association_estimates")]
+    skeleton = ProgressivePlanSkeleton(
+        analysis_type="association_study",
+        cohort=ProgressiveCohortIntent(
+            name="synthetic",
+            selection_mode="all_input_rows",
+        ),
+        steps=[parent, normalized.step],
+        rationale="Keep categorical stage effects separate from the ordered trend test.",
+    )
+    assert _compile_ordered_stratified_contract(
+        context=context,
+        skeleton=skeleton,
+        step=normalized.step,
+        step_index=1,
+        variables={variable.name: variable for variable in context.variables},
+        output_pairs=[("table:ordinal_trend_results", "custom")],
     )
 
 
@@ -208,312 +440,6 @@ def test_progressive_predicate_value_materializes_its_declared_field(
     expected: object,
 ) -> None:
     assert ProgressivePredicateValue.model_validate(payload).materialize() == expected
-
-
-def _payload() -> dict:
-    return {
-        "schema_version": "easyicu.progressive_plan_skeleton/1",
-        "analysis_type": "association_study",
-        "cohort": {
-            "name": "primary",
-            "selection_mode": "all_input_rows",
-            "inclusion": [],
-            "exclusion": [],
-        },
-        "display_labels": [
-            {"key": "exposure_flag", "value": "Exposure status"},
-            {"key": "outcome_flag", "value": "In-hospital outcome"},
-            {"key": "age_years", "value": "Age in years"},
-            {"key": "sex_code", "value": "Recorded sex"},
-            {"key": "exposure_flag=0", "value": "Exposure absent"},
-            {"key": "exposure_flag=1", "value": "Exposure present"},
-        ],
-        "robustness_intents": [
-            {
-                "spec_id": "complete_case",
-                "axis": "missing",
-                "description": "Refit the declared model on complete observations.",
-                "missing_strategy": "complete_case",
-                "complete_case_variables": [
-                    "exposure_flag",
-                    "outcome_flag",
-                    "age_years",
-                    "sex_code",
-                ],
-            }
-        ],
-        "steps": [
-            {
-                "step_id": "01_cohort",
-                "planned_analysis_role": "auxiliary",
-                "module_id": "cohort_definition",
-                "objective": "Bind and account for the prespecified analysis universe.",
-                "depends_on": [],
-                "raw_inputs": [],
-                "product_inputs": [],
-                "outputs": [],
-                "scientific_action_id": None,
-                "custom_method": None,
-                "table_one_group_by": None,
-                "table_one_mode": None,
-                "table_one_variables": [],
-                "primary_exposure": None,
-                "outcome": None,
-                "outcome_type": None,
-                "model_terms": [],
-                "event_level_index": None,
-                "reference_exposure_level_index": None,
-                "comparison_exposure_level_index": None,
-                "primary_contrast_level_index": None,
-                "denominator_policy": None,
-                "missing_exposure_policy": None,
-                "missing_outcome_policy": None,
-                "confidence_level": None,
-                "sensitivity_spec_ids": [],
-                "literature_bindings": [],
-            },
-            {
-                "step_id": "02_table_one",
-                "planned_analysis_role": "auxiliary",
-                "module_id": "table_one",
-                "objective": "Describe baseline variables by the declared exposure groups.",
-                "depends_on": ["01_cohort"],
-                "raw_inputs": ["exposure_flag", "age_years", "sex_code"],
-                "product_inputs": [],
-                "outputs": [],
-                "scientific_action_id": None,
-                "custom_method": None,
-                "table_one_group_by": "exposure_flag",
-                "table_one_mode": "descriptive_smd_only",
-                "table_one_variables": [
-                    {"name": "age_years", "summary": "median_iqr"},
-                    {"name": "sex_code", "summary": "count_percent"},
-                ],
-                "primary_exposure": None,
-                "outcome": None,
-                "outcome_type": None,
-                "model_terms": [],
-                "event_level_index": None,
-                "reference_exposure_level_index": None,
-                "comparison_exposure_level_index": None,
-                "primary_contrast_level_index": None,
-                "denominator_policy": None,
-                "missing_exposure_policy": None,
-                "missing_outcome_policy": None,
-                "confidence_level": None,
-                "sensitivity_spec_ids": [],
-                "literature_bindings": [],
-            },
-            {
-                "step_id": "03_distribution",
-                "planned_analysis_role": "secondary",
-                "module_id": "exposure_outcome_distribution",
-                "objective": "Estimate prevalence and absolute outcome risk by exposure.",
-                "depends_on": ["01_cohort"],
-                "raw_inputs": ["exposure_flag", "outcome_flag"],
-                "product_inputs": [],
-                "outputs": [],
-                "scientific_action_id": None,
-                "custom_method": None,
-                "table_one_group_by": None,
-                "table_one_mode": None,
-                "table_one_variables": [],
-                "primary_exposure": "exposure_flag",
-                "outcome": "outcome_flag",
-                "outcome_type": None,
-                "model_terms": [],
-                "event_level_index": 1,
-                "reference_exposure_level_index": 0,
-                "comparison_exposure_level_index": 1,
-                "primary_contrast_level_index": None,
-                "denominator_policy": "all_declared_rows",
-                "missing_exposure_policy": "fail_closed",
-                "missing_outcome_policy": "fail_closed",
-                "confidence_level": 0.95,
-                "sensitivity_spec_ids": [],
-                "literature_bindings": [],
-            },
-            {
-                "step_id": "04_measurement",
-                "planned_analysis_role": "auxiliary",
-                "module_id": "measurement_audit",
-                "objective": "Audit missingness and observation-process coverage.",
-                "depends_on": ["01_cohort"],
-                "raw_inputs": [
-                    "exposure_flag",
-                    "outcome_flag",
-                    "age_years",
-                    "sex_code",
-                ],
-                "product_inputs": [],
-                "outputs": [
-                    {
-                        "product_id": "table:measurement_missingness",
-                        "semantic_role": "measurement_missingness",
-                    },
-                    {
-                        "product_id": "table:measurement_process",
-                        "semantic_role": "measurement_process",
-                    },
-                ],
-                "scientific_action_id": None,
-                "custom_method": None,
-                "table_one_group_by": None,
-                "table_one_mode": None,
-                "table_one_variables": [],
-                "primary_exposure": None,
-                "outcome": None,
-                "outcome_type": None,
-                "model_terms": [],
-                "event_level_index": None,
-                "reference_exposure_level_index": None,
-                "comparison_exposure_level_index": None,
-                "primary_contrast_level_index": None,
-                "denominator_policy": None,
-                "missing_exposure_policy": None,
-                "missing_outcome_policy": None,
-                "confidence_level": None,
-                "sensitivity_spec_ids": [],
-                "literature_bindings": [],
-            },
-            {
-                "step_id": "05_primary",
-                "planned_analysis_role": "primary",
-                "module_id": "adjusted_association",
-                "objective": "Estimate the prespecified adjusted association.",
-                "depends_on": ["01_cohort"],
-                "raw_inputs": [
-                    "exposure_flag",
-                    "outcome_flag",
-                    "age_years",
-                    "sex_code",
-                ],
-                "product_inputs": [],
-                "outputs": [],
-                "scientific_action_id": "association.adjusted_association",
-                "custom_method": None,
-                "table_one_group_by": None,
-                "table_one_mode": None,
-                "table_one_variables": [],
-                "primary_exposure": "exposure_flag",
-                "outcome": "outcome_flag",
-                "outcome_type": "binary",
-                "model_terms": [
-                    {
-                        "name": "exposure_flag",
-                        "role": "exposure",
-                        "coding": "binary",
-                        "reference_level_index": 0,
-                    },
-                    {
-                        "name": "age_years",
-                        "role": "covariate",
-                        "coding": "continuous",
-                        "reference_level_index": None,
-                    },
-                    {
-                        "name": "sex_code",
-                        "role": "covariate",
-                        "coding": "binary",
-                        "reference_level_index": 0,
-                    },
-                ],
-                "event_level_index": None,
-                "reference_exposure_level_index": None,
-                "comparison_exposure_level_index": None,
-                "primary_contrast_level_index": None,
-                "denominator_policy": None,
-                "missing_exposure_policy": None,
-                "missing_outcome_policy": None,
-                "confidence_level": None,
-                "sensitivity_spec_ids": [],
-                "literature_bindings": [],
-            },
-            {
-                "step_id": "06_sensitivity",
-                "planned_analysis_role": "sensitivity",
-                "module_id": "custom_analysis",
-                "objective": "Run the explicitly prespecified scientific sensitivity grid.",
-                "depends_on": ["05_primary"],
-                "raw_inputs": ["exposure_flag", "outcome_flag", "age_years"],
-                "product_inputs": [
-                    {
-                        "producer_step_id": "05_primary",
-                        "product_id": "table:adjusted_association_estimates",
-                    }
-                ],
-                "outputs": [
-                    {
-                        "product_id": "table:scientific_sensitivity",
-                        "semantic_role": "scientific_sensitivity",
-                    }
-                ],
-                "scientific_action_id": None,
-                "custom_method": "prespecified_scientific_sensitivity",
-                "table_one_group_by": None,
-                "table_one_mode": None,
-                "table_one_variables": [],
-                "primary_exposure": None,
-                "outcome": None,
-                "outcome_type": None,
-                "model_terms": [],
-                "event_level_index": None,
-                "reference_exposure_level_index": None,
-                "comparison_exposure_level_index": None,
-                "primary_contrast_level_index": None,
-                "denominator_policy": None,
-                "missing_exposure_policy": None,
-                "missing_outcome_policy": None,
-                "confidence_level": None,
-                "sensitivity_spec_ids": ["flexible_form"],
-                "literature_bindings": [],
-            },
-            {
-                "step_id": "07_figure",
-                "planned_analysis_role": "auxiliary",
-                "module_id": "visualization",
-                "objective": "Render the exact descriptive and adjusted result products.",
-                "depends_on": ["03_distribution", "05_primary"],
-                "raw_inputs": [],
-                "product_inputs": [
-                    {
-                        "producer_step_id": "03_distribution",
-                        "product_id": "table:exposure_outcome_distribution",
-                    },
-                    {
-                        "producer_step_id": "05_primary",
-                        "product_id": "table:adjusted_association_estimates",
-                    },
-                ],
-                "outputs": [
-                    {
-                        "product_id": "figure:primary_results",
-                        "semantic_role": "figure",
-                    }
-                ],
-                "scientific_action_id": None,
-                "custom_method": None,
-                "table_one_group_by": None,
-                "table_one_mode": None,
-                "table_one_variables": [],
-                "primary_exposure": None,
-                "outcome": None,
-                "outcome_type": None,
-                "model_terms": [],
-                "event_level_index": None,
-                "reference_exposure_level_index": None,
-                "comparison_exposure_level_index": None,
-                "primary_contrast_level_index": None,
-                "denominator_policy": None,
-                "missing_exposure_policy": None,
-                "missing_outcome_policy": None,
-                "confidence_level": None,
-                "sensitivity_spec_ids": [],
-                "literature_bindings": [],
-            },
-        ],
-        "rationale": "Separate descriptive denominators from the adjusted association.",
-    }
 
 
 def _prediction_payload() -> dict:
@@ -745,94 +671,6 @@ def _skeleton() -> ProgressivePlanSkeleton:
     return ProgressivePlanSkeleton.model_validate(_payload())
 
 
-def _outline_payload(payload: dict | None = None) -> dict:
-    source = payload or _payload()
-    analysis_type = source["analysis_type"]
-    return {
-        "schema_version": "easyicu.progressive_plan_outline/1",
-        "analysis_type": analysis_type,
-        "cohort_objective": "Use the sealed cohort and preserve its denominator.",
-        "design_selection": {
-            "schema_version": "easyicu.research_design_selection/1",
-            "claim_ceiling": "analysis_only",
-            "candidates": [
-                {
-                    "design_id": "selected_primary_design",
-                    "analysis_type": analysis_type,
-                    "estimand": "Adjusted exposure contrast for outcome_flag.",
-                    "time_zero": "Start of the sealed synthetic cohort episode.",
-                    "observation_window": "The prespecified episode observation window.",
-                    "primary_method": "Host-owned primary analysis method",
-                    "required_variables": ["exposure_flag", "outcome_flag"],
-                    "assumptions": ["The declared adjustment set is adequate."],
-                    "literature_citation_keys": [],
-                    "novelty_positioning": "Tests the question in the sealed cohort context.",
-                    "figure_role": "Show the primary estimate with its uncertainty.",
-                    "supports": "The prespecified primary association estimate.",
-                    "cannot_prove": "A causal effect without stronger identification.",
-                    "reviewable_plan": [
-                        "Use the sealed cohort with one row per declared analysis unit.",
-                        "Use the declared exposure and its prespecified baseline timing and aggregation.",
-                        "Use outcome_flag through the declared episode follow-up.",
-                        "Use the host-owned adjusted association model and prespecified covariates.",
-                        "Quantify missingness and apply the prespecified missing-data strategy.",
-                        "Check denominator, events, coverage, missingness, and alternative specifications.",
-                    ],
-                    "disposition": "selected",
-                    "decision_reason": (
-                        "Directly binds exposure_flag and outcome_flag to the "
-                        "prespecified primary question."
-                    ),
-                },
-                {
-                    "design_id": "rejected_alternative_design",
-                    "analysis_type": analysis_type,
-                    "estimand": "Unadjusted exposure contrast for outcome_flag.",
-                    "time_zero": "Start of the sealed synthetic cohort episode.",
-                    "observation_window": "The prespecified episode observation window.",
-                    "primary_method": "Unadjusted descriptive contrast",
-                    "required_variables": ["exposure_flag", "outcome_flag"],
-                    "assumptions": ["Crude group differences are interpretable."],
-                    "literature_citation_keys": [],
-                    "novelty_positioning": "Provides a less adjusted comparator design.",
-                    "figure_role": "Show only the crude group contrast.",
-                    "supports": "A descriptive difference between exposure groups.",
-                    "cannot_prove": "An adjusted or causal exposure effect.",
-                    "disposition": "rejected",
-                    "decision_reason": (
-                        "Reject because exposure_flag confounding is not addressed "
-                        "for the outcome_flag question."
-                    ),
-                },
-            ],
-        },
-        "steps": [
-            {
-                "step_id": step["step_id"],
-                "planned_analysis_role": step["planned_analysis_role"],
-                "module_id": step["module_id"],
-                "objective": step["objective"],
-                "depends_on": list(step["depends_on"]),
-                "variable_names": [
-                    "exposure_flag",
-                    "outcome_flag",
-                    "age_years",
-                    "sex_code",
-                ],
-                "literature_citation_keys": list(
-                    dict.fromkeys(
-                        binding["citation_key"]
-                        for binding in step["literature_bindings"]
-                    )
-                ),
-                "scientific_action_id": step["scientific_action_id"],
-            }
-            for step in source["steps"]
-        ],
-        "rationale": source["rationale"],
-    }
-
-
 def _outline_with_repeated_robustness() -> dict:
     payload = _outline_payload()
     for sequence, suffix, objective in (
@@ -973,6 +811,42 @@ def test_metadata_only_descriptive_fallback_owns_baseline_article_role() -> None
     )
 
 
+def test_metadata_only_descriptive_fallback_survives_family_module_gate() -> None:
+    payload = _payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    payload["robustness_intents"] = []
+    payload["steps"] = payload["steps"][:4]
+    payload["steps"][1].update(
+        module_id="custom_analysis",
+        custom_method="continuous_baseline_summary",
+        outputs=[
+            {
+                "product_id": "artifact:baseline_context",
+                "semantic_role": "custom",
+            }
+        ],
+        table_one_group_by=None,
+        table_one_mode=None,
+        table_one_variables=[],
+    )
+    payload["steps"][2]["planned_analysis_role"] = "primary"
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=_context().model_copy(
+            update={
+                "user_preferences": UserPreferences(
+                    inferred_analysis_family="descriptive_epidemiology",
+                )
+            }
+        ),
+    )
+
+    baseline = plan.steps[1]
+    assert baseline.method == "descriptive_cohort_summary"
+    assert baseline.expected_outputs == ["table:cohort_summary"]
+
+
 def test_compiler_projects_provisional_ungrouped_baseline_to_reportable_table() -> None:
     """The metadata-only fallback must survive the fresh article gate."""
 
@@ -1065,6 +939,35 @@ def test_article_contract_credits_canonical_measurement_process_audit_product() 
     assert "data_quality" not in missing_roles
 
 
+def test_article_contract_credits_typed_measurement_audit_with_precise_products() -> None:
+    payload = _payload()
+    measurement_payload = payload["steps"][3]
+    measurement_payload["outputs"] = [
+        {
+            "product_id": "table:data_quality_measurement_process",
+            "semantic_role": "measurement_process",
+        },
+        {
+            "product_id": "table:data_quality_measurement_missingness",
+            "semantic_role": "measurement_missingness",
+        },
+    ]
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=_context(),
+    )
+    measurement = next(
+        step for step in plan.steps if step.measurement_audit_spec is not None
+    )
+    assert measurement.measurement_audit_spec is not None
+
+    contract = build_article_analysis_contract(
+        _context(), analysis_type=plan.analysis_type
+    )
+
+    assert "data_quality" in roles_covered_by_plan(plan, contract)
+
+
 def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases() -> None:
     payload = _payload()
     baseline = payload["steps"][1]
@@ -1089,39 +992,6 @@ def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases() -> None:
 
     assert plan.steps[1].method == "descriptive_cohort_summary"
     assert plan.steps[1].expected_outputs == ["table:cohort_summary"]
-
-
-def _materialization_payloads(payload: dict | None = None) -> list[dict]:
-    source = payload or _payload()
-    outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
-    responses = []
-    for outline_step, step in zip(outline.steps, source["steps"], strict=True):
-        responses.append(
-            {
-                "schema_version": "easyicu.progressive_step_materialization/1",
-                "outline_step_sha256": canonical_sha256(
-                    outline_step.model_dump(mode="json")
-                ),
-                "foundation": None,
-                "step": step,
-            }
-        )
-    return responses
-
-
-def _foundation_payload(payload: dict | None = None) -> dict:
-    source = payload or _payload()
-    outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
-    return {
-        "schema_version": "easyicu.progressive_plan_foundation/1",
-        "outline_sha256": canonical_sha256(outline.model_dump(mode="json")),
-        "foundation": {
-            "cohort": source["cohort"],
-            "display_labels": source["display_labels"],
-            "robustness_intents": source["robustness_intents"],
-            "know_how_decisions": source.get("know_how_decisions", []),
-        },
-    }
 
 
 def test_host_materializes_only_mechanical_outline_coordinates() -> None:
@@ -1804,6 +1674,30 @@ def test_required_method_layer_is_repaired_at_last_capable_sealed_step() -> None
     assert "dependence" in _bound_method_layers(materializations)
 
 
+def test_scientific_measurement_audit_seals_missing_data_method_source() -> None:
+    payload = _outline_payload()
+    payload["steps"] = [payload["steps"][0], payload["steps"][3]]
+    payload["steps"][1]["planned_analysis_role"] = "primary"
+    payload["steps"][1]["literature_citation_keys"] = ["strobe_2007"]
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    bound = _bind_required_outline_method_sources(
+        outline,
+        allowed_literature_citation_keys=(
+            "strobe_2007",
+            "sterne_missing_data_2009",
+        ),
+        context_required_method_layers=("dependence", "reporting_standard"),
+        continuous_domain_variables=(),
+    )
+
+    measurement = bound.steps[1]
+    assert measurement.literature_citation_keys == [
+        "strobe_2007",
+        "sterne_missing_data_2009",
+    ]
+
+
 def test_metadata_only_numeric_exposure_enters_method_layer_preflight() -> None:
     context = _context().model_copy(
         update={
@@ -2067,6 +1961,23 @@ def test_foundation_parser_collapses_only_exact_duplicate_know_how_decisions() -
     )
 
     assert len(parsed.foundation.know_how_decisions) == 1
+
+
+def test_foundation_parser_binds_host_outline_digest_without_rewriting_choices() -> (
+    None
+):
+    payload = _foundation_payload()
+    payload["outline_sha256"] = "f" * 64
+    payload["foundation"]["cohort"]["name"] = "model_selected_cohort"
+
+    parsed = _parse_foundation_materialization(
+        json.dumps(payload),
+        host_cohort=None,
+        outline_sha256="a" * 64,
+    )
+
+    assert parsed.outline_sha256 == "a" * 64
+    assert parsed.foundation.cohort.name == "model_selected_cohort"
 
 
 def test_foundation_parser_rejects_conflicting_duplicate_know_how_decisions() -> None:
@@ -2893,6 +2804,14 @@ def test_current_adjusted_step_requires_model_contract_fields() -> None:
     assert step["model_terms"]["minItems"] == 1
 
 
+def test_progressive_covariate_requires_agent_authored_clinical_rationale() -> None:
+    payload = deepcopy(_payload()["steps"][4])
+    payload["model_terms"][1].pop("clinical_rationale")
+
+    with pytest.raises(ValueError, match="Agent-authored clinical_rationale"):
+        ProgressiveSkeletonStep.model_validate(payload)
+
+
 def test_adjusted_prompt_projects_exact_model_term_authority() -> None:
     context = _context().model_copy(
         update={
@@ -2949,11 +2868,12 @@ def test_adjusted_prompt_projects_exact_model_term_authority() -> None:
     )
 
     assert "Host model-term planning authority (binding)" in prompt
-    assert '"name":"age_years","semantic_role":"other"' in prompt
-    assert '"name":"sex_code","semantic_role":"other"' in prompt
+    assert '"name":"age_years","semantic_role":"demographic"' in prompt
+    assert '"name":"sex_code","semantic_role":"demographic"' in prompt
     assert '"allowed_codings":["binary"]' in prompt
     assert (
-        '"name":"ventilation_status","reason":"time_zero_authority_missing"' in prompt
+        '"name":"ventilation_status","reason":"planner_baseline_authority_missing"'
+        in prompt
     )
     assert (
         '"name":"outcome_flag"'
@@ -3076,6 +2996,16 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     requirement = primary.model_requirements[0]
     assert requirement.method_family == "statsmodels_logit_mle"
     assert requirement.covariates == ["age_years", "sex_code"]
+    assert requirement.covariate_rationales == {
+        "age_years": (
+            "Age can confound the association because it precedes exposure "
+            "ascertainment and relates to outcome risk."
+        ),
+        "sex_code": (
+            "Sex can confound the association because it is fixed before exposure "
+            "ascertainment and relates to risk."
+        ),
+    }
     assert requirement.exposure_levels == ["0", "1"]
     assert requirement.exposure_reference_level == "0"
     assert requirement.primary_contrast_level == "1"
@@ -3196,6 +3126,7 @@ def test_compiler_uses_declared_integer_range_for_metadata_only_ordinal_score() 
             "role": "covariate",
             "coding": "ordinal_linear",
             "reference_level_index": None,
+            "clinical_rationale": "Prespecified baseline severity may confound the exposure-outcome association.",
         }
     )
     context = _context().model_copy(
@@ -3653,6 +3584,74 @@ def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
     ]
 
 
+def test_outline_binds_optional_ordered_trend_only_when_selected() -> None:
+    payload = _outline_payload()
+    variables = (
+        "exposure_flag",
+        "outcome_flag",
+        "age_years",
+        "sex_code",
+        "los_days",
+    )
+    requirement = ("exposure_flag", "outcome_flag", "los_days")
+
+    outline = ProgressivePlanOutline.model_validate(payload)
+    before = outline.model_dump(mode="json")
+    ProgressivePlannerAgent._validate_outline_authority(
+        outline,
+        analysis_types=("association_study",),
+        variable_names=variables,
+        allowed_literature_citation_keys=(),
+        available_ordered_trend=requirement,
+    )
+    assert outline.model_dump(mode="json") == before
+    assert not any(step.scientific_action_id == "association.ordinal_trend" for step in outline.steps)
+
+    primary = next(
+        step
+        for step in payload["steps"]
+        if step["planned_analysis_role"] == "primary"
+    )
+    payload["steps"].append(
+        {
+            "step_id": "ordered_trend_audit",
+            "planned_analysis_role": "secondary",
+            "module_id": "custom_analysis",
+            "objective": (
+                "Audit ordered outcome gradients on the primary analysis lineage."
+            ),
+            "depends_on": [primary["step_id"]],
+            "variable_names": list(requirement),
+            "literature_citation_keys": [],
+            "scientific_action_id": "association.ordinal_trend",
+        }
+    )
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=variables,
+        allowed_literature_citation_keys=(),
+        available_ordered_trend=requirement,
+        ordered_domain_variables=("exposure_flag",),
+        primary_exposure="exposure_flag",
+    )
+
+
+    # Selecting the action still binds its exact input/owner contract.
+    payload["steps"][-1]["variable_names"] = ["exposure_flag", "outcome_flag", "age_years"]
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=variables,
+            allowed_literature_citation_keys=(),
+            available_ordered_trend=requirement,
+            ordered_domain_variables=("exposure_flag",),
+            primary_exposure="exposure_flag",
+        )
+    assert caught.value.reason_code == "progressive_outline_ordered_trend_owner_invalid"
+
+
 def test_outline_rejects_categorical_distribution_for_continuous_exposure() -> None:
     payload = _outline_payload()
     distribution = next(
@@ -4081,6 +4080,7 @@ def test_retrieved_data_cards_use_concept_declared_domain_without_claiming_obser
                 ConceptDescriptor(
                     name="sex_declared",
                     source_concept="sex",
+                    role=VariableRole.DEMOGRAPHIC,
                     dtype="object",
                     observed_domain=None,
                 ),
@@ -4096,7 +4096,7 @@ def test_retrieved_data_cards_use_concept_declared_domain_without_claiming_obser
     assert cards == [
         {
             "name": "sex_declared",
-            "role": "other",
+            "role": "demographic",
             "dtype": "object",
             "source_concept": "sex",
             "derived_from_concepts": [],
@@ -4467,6 +4467,25 @@ def test_outline_prompt_projects_explicit_figure_obligation() -> None:
     assert "Host-resolved presentation obligation" in prompt
     assert "Include at least one visualization outline step" in prompt
     assert "do not delegate the figure to a report step" in prompt
+
+
+def test_descriptive_figure_is_owned_by_post_extraction_renderer() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                inferred_analysis_family="descriptive_epidemiology",
+                must_have_outputs="Required outputs: one publication figure.",
+            )
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[1].content
+
+    assert _requires_visualization_step(context) is False
+    assert "Host-resolved presentation obligation" not in prompt
+    assert "visualization" not in progressive_module_ids_for_analysis_types(
+        ("descriptive_epidemiology",)
+    )
 
 
 @pytest.mark.parametrize(
@@ -5086,6 +5105,7 @@ def test_compiler_uses_concept_declared_levels_for_metadata_only_model_term() ->
                 ConceptDescriptor(
                     name="sex_declared",
                     source_concept="sex",
+                    role=VariableRole.DEMOGRAPHIC,
                     dtype="object",
                     observed_domain=None,
                 ),
@@ -5101,6 +5121,7 @@ def test_compiler_uses_concept_declared_levels_for_metadata_only_model_term() ->
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Baseline sex may affect both the exposure and the risk of the outcome.",
         }
     )
 
@@ -5126,6 +5147,7 @@ def test_compiler_rejects_continuous_coding_for_declared_factor() -> None:
                 ConceptDescriptor(
                     name="admission_type_declared",
                     source_concept="adm",
+                    role=VariableRole.DEMOGRAPHIC,
                     dtype="float64",
                     observed_domain=None,
                 ),
@@ -5141,6 +5163,7 @@ def test_compiler_rejects_continuous_coding_for_declared_factor() -> None:
             "role": "covariate",
             "coding": "continuous",
             "reference_level_index": None,
+            "clinical_rationale": "Admission type may affect baseline exposure and the outcome risk.",
         }
     )
 
@@ -5165,6 +5188,7 @@ def test_compiler_reports_outcome_covariate_at_the_model_owner() -> None:
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Deliberately invalid adjustment proposal; the compiler must reject outcome leakage.",
         }
     )
 
@@ -5202,6 +5226,7 @@ def test_compiler_rejects_a_different_outcome_as_baseline_covariate() -> None:
             "role": "covariate",
             "coding": "continuous",
             "reference_level_index": None,
+            "clinical_rationale": "Deliberately invalid outcome adjustment; the compiler must reject its semantic role.",
         }
     )
 
@@ -5246,6 +5271,7 @@ def test_compiler_rejects_dynamic_covariate_without_time_zero_authority() -> Non
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Candidate severity adjustment without a declared pre-time-zero measurement window.",
         }
     )
 
@@ -5295,6 +5321,7 @@ def test_compiler_rejects_navigation_coordinate_as_a_model_term() -> None:
             "role": "covariate",
             "coding": "continuous",
             "reference_level_index": None,
+            "clinical_rationale": "Deliberately invalid identifier adjustment; the compiler must reject navigation fields.",
         }
     )
 
@@ -5431,6 +5458,27 @@ def test_compiler_host_binds_unique_missing_data_card_to_its_owner() -> None:
             ),
             "divergence": None,
         }
+    ]
+
+
+def test_compiler_binds_missing_data_card_for_scientific_audit_without_replay() -> None:
+    payload = _payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    payload["robustness_intents"] = []
+    payload["steps"] = [payload["steps"][0], payload["steps"][3]]
+    payload["steps"][1]["planned_analysis_role"] = "primary"
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=_context(),
+        allowed_literature_citation_keys=["sterne_missing_data_2009"],
+    )
+
+    measurement = next(step for step in plan.steps if step.step_id == "04_measurement")
+    assert measurement.literature_citation_keys == ["sterne_missing_data_2009"]
+    assert measurement.literature_design_bindings[0].design_elements == [
+        "missing_data",
+        "robustness",
     ]
 
 
@@ -5596,6 +5644,7 @@ def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
     encoded = request.canonical_payload_json
 
     assert len(encoded.encode("utf-8")) < 12_000
+    assert "CandidateLiteratureDesignDecision" not in schema["$defs"]
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
     branches = schema["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
     standard = next(
@@ -5726,13 +5775,12 @@ def test_outline_authority_failure_is_retried_before_foundation() -> None:
     assert "progressive_outline_variable_unavailable" in (llm.calls[1][0][-1].content)
 
 
-def test_foundation_outline_digest_mismatch_is_retried() -> None:
+def test_foundation_outline_digest_is_bound_without_spending_a_retry() -> None:
     invalid_foundation = _foundation_payload()
     invalid_foundation["outline_sha256"] = "0" * 64
     responses = [
         _outline_payload(),
         invalid_foundation,
-        _foundation_payload(),
         *_materialization_payloads(),
     ]
     llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
@@ -5741,15 +5789,12 @@ def test_foundation_outline_digest_mismatch_is_retried() -> None:
     plan = ProgressivePlannerAgent(llm).run(_context())
 
     assert len(plan.steps) == 7
-    assert len(llm.calls) == 10
+    assert len(llm.calls) == 9
     assert llm.calls[1][1]["structured_output"].name == (
         "easyicu_progressive_plan_foundation_v1"
     )
     assert llm.calls[2][1]["structured_output"].name == (
-        "easyicu_progressive_plan_foundation_v1"
-    )
-    assert "progressive_foundation_outline_digest_mismatch" in (
-        llm.calls[2][0][-1].content
+        "easyicu_progressive_step_materialization_v1"
     )
 
 
@@ -6232,6 +6277,7 @@ def test_agent_repairs_two_independent_current_step_findings() -> None:
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Deliberately invalid adjustment proposal; the compiler must reject outcome leakage.",
         }
     )
     responses = [
@@ -6316,9 +6362,18 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
 
     primary = next(step for step in plan.steps if step.step_id == "05_primary")
     assert primary.model_requirements[0].covariates == ["age_years", "sex_code"]
-    assert "progressive_adjustment_authority_mismatch" in (llm.calls[7][0][-1].content)
-    assert '"required_covariates":["age_years","sex_code"]' in (
-        llm.calls[7][0][-1].content
+    repair_prompts = [
+        messages[-1].content
+        for messages, _kwargs in llm.calls
+        if "HOST COMPILER OBSERVATION" in messages[-1].content
+    ]
+    assert any(
+        "progressive_adjustment_authority_mismatch" in prompt
+        for prompt in repair_prompts
+    )
+    assert any(
+        '"required_covariates":["age_years","sex_code"]' in prompt
+        for prompt in repair_prompts
     )
     assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
 
@@ -6464,6 +6519,7 @@ def test_agent_repairs_outcome_covariate_at_the_current_model_step() -> None:
             "role": "covariate",
             "coding": "binary",
             "reference_level_index": 0,
+            "clinical_rationale": "Deliberately invalid adjustment proposal; the compiler must reject outcome leakage.",
         }
     )
     responses = [
@@ -6569,661 +6625,6 @@ def test_agent_stops_after_two_host_compile_repairs_and_keeps_attempts() -> None
     assert failure_facts.prompt_metrics["compile_revision_count"] == 2
     assert len(failure_facts.compile_failure_attempts) == 3
     assert failure_facts.complete_for_persistence is False
-
-
-class _RecordingEvidence:
-    def __init__(self) -> None:
-        self.records: dict[str, dict[str, object]] = {}
-
-    def get(self, evidence_id_or_alias: str) -> object | None:
-        return self.records.get(evidence_id_or_alias)
-
-    def register_file(self, **kwargs: object) -> object:
-        evidence_id = str(kwargs["evidence_id"])
-        source_path = Path(str(kwargs["source_path"]))
-        self.records[evidence_id] = {
-            **dict(kwargs),
-            "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
-        }
-        return self.records[evidence_id]
-
-
-def test_progressive_compile_failure_persists_for_zero_provider_replay(
-    tmp_path: Path,
-) -> None:
-    materializations = _materialization_payloads()
-    invalid_distribution = json.loads(json.dumps(materializations[2]))
-    invalid_distribution["step"]["comparison_exposure_level_index"] = 0
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in materializations[:2]],
-            json.dumps(invalid_distribution),
-            json.dumps(invalid_distribution),
-            json.dumps(invalid_distribution),
-        ]
-    )
-    llm.supports_strict_json_schema = True
-    evidence = _RecordingEvidence()
-    cohort_path = tmp_path / "cohort.parquet"
-    cohort_path.write_bytes(b"synthetic replay cohort")
-
-    with pytest.raises(ProgressivePlanCompileError):
-        run_progressive_planner(
-            planner=ProgressivePlannerAgent(llm),
-            context=_context(),
-            run_dir=tmp_path,
-            evidence=evidence,
-            prompt_pack_version="test-v1",
-            resume_checkpoint_path=None,
-            resume_checkpoint_sha256=None,
-            cohort_path=cohort_path,
-            llm_signature="mock:test",
-            planner_kwargs={},
-            know_how_binding=PlannerKnowHowBinding(),
-            planning_contract_context="",
-            finding_sink=lambda _finding: None,
-        )
-
-    replay_path = tmp_path / "progressive_compile_failure_replay.json"
-    replay = load_progressive_compile_failure_replay(
-        replay_path=replay_path,
-        expected_artifact_sha256=str(
-            evidence.records["progressive_compile_failure_replay"]["sha256"]
-        ),
-    )
-    assert isinstance(replay, ProgressiveCompileFailureReplay)
-    assert replay.prefix_checkpoint_sequence == 3
-    assert len(replay.attempts) == 3
-    assert evidence.records["progressive_compile_failure_replay"]["inputs"] == [
-        "research_context",
-        "progressive_planner_checkpoint_003",
-    ]
-
-    checkpoint = ProgressivePlannerCheckpoint.model_validate_json(
-        (tmp_path / "progressive_planner_checkpoint_003.json").read_bytes()
-    )
-    assert checkpoint.foundation is not None
-    state = ProgressivePrefixState()
-    for materialization in checkpoint.materializations:
-        state = compile_progressive_prefix(
-            state,
-            materialization,
-            outline=checkpoint.outline,
-            foundation=checkpoint.foundation.foundation,
-            context=_context(),
-            allowed_literature_citation_keys=(),
-            allowed_know_how_decisions=None,
-            reporting_method_source_keys=(),
-        )
-    with pytest.raises(ProgressivePlanCompileError) as replayed:
-        compile_progressive_prefix(
-            state,
-            replay.attempts[0].materialization,
-            outline=checkpoint.outline,
-            foundation=checkpoint.foundation.foundation,
-            context=_context(),
-            allowed_literature_citation_keys=(),
-            allowed_know_how_decisions=None,
-            reporting_method_source_keys=(),
-        )
-    assert replayed.value.reason_code == (
-        replay.attempts[0].compiler_finding.reason_code
-    )
-
-    replay_path.write_text("{}", encoding="utf-8")
-    with pytest.raises(ProgressivePlanningArtifactError) as tampered:
-        load_progressive_compile_failure_replay(
-            replay_path=replay_path,
-            expected_artifact_sha256=str(
-                evidence.records["progressive_compile_failure_replay"]["sha256"]
-            ),
-        )
-    assert tampered.value.reason_code == ("progressive_compile_replay_digest_mismatch")
-
-
-def test_progressive_checkpoints_persist_as_a_digest_verified_chain(
-    tmp_path: Path,
-) -> None:
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in _materialization_payloads()],
-        ]
-    )
-    llm.supports_strict_json_schema = True
-    agent = ProgressivePlannerAgent(llm)
-    evidence = _RecordingEvidence()
-    paths = []
-
-    def checkpoint_callback(checkpoint) -> None:
-        paths.append(
-            persist_progressive_planner_checkpoint(
-                run_dir=tmp_path,
-                evidence=evidence,
-                checkpoint=checkpoint,
-                prompt_pack_version="test",
-            )
-        )
-
-    agent.run(_context(), checkpoint_callback=checkpoint_callback)
-
-    assert [path.name for path in paths] == [
-        f"progressive_planner_checkpoint_{index:03d}.json" for index in range(9)
-    ]
-    assert set(evidence.records) == {
-        f"progressive_planner_checkpoint_{index:03d}" for index in range(9)
-    }
-    assert evidence.records["progressive_planner_checkpoint_008"]["inputs"] == [
-        "research_context",
-        "progressive_planner_checkpoint_007",
-    ]
-
-    loaded = load_progressive_planner_checkpoint_chain(
-        last_checkpoint_path=paths[-1],
-        expected_artifact_sha256=hashlib.sha256(paths[-1].read_bytes()).hexdigest(),
-    )
-    assert [item.sequence for item in loaded] == list(range(9))
-    assert (
-        loaded[-1].checkpoint_sha256
-        == json.loads(paths[-1].read_text(encoding="utf-8"))["checkpoint_sha256"]
-    )
-
-
-def test_progressive_design_canary_stops_after_one_validated_outline(
-    tmp_path: Path,
-) -> None:
-    llm = ScriptedMockLLMClient([json.dumps(_outline_payload())])
-    llm.supports_strict_json_schema = True
-    evidence = _RecordingEvidence()
-    cohort_path = tmp_path / "cohort.parquet"
-    cohort_path.write_bytes(b"design canary cohort")
-
-    result = run_progressive_planner(
-        planner=ProgressivePlannerAgent(llm),
-        context=_context(),
-        run_dir=tmp_path,
-        evidence=evidence,
-        prompt_pack_version="test-v1",
-        resume_checkpoint_path=None,
-        resume_checkpoint_sha256=None,
-        cohort_path=cohort_path,
-        llm_signature="mock:test",
-        planner_kwargs={},
-        know_how_binding=PlannerKnowHowBinding(),
-        planning_contract_context="",
-        finding_sink=lambda _finding: None,
-        stop_after_outline=True,
-    )
-
-    assert isinstance(result, ProgressiveDesignCanaryDraft)
-    assert result.checkpoint.stage == "outline"
-    assert result.outline.design_selection is not None
-    assert len(llm.calls) == 1
-    assert not (tmp_path / "progressive_plan_foundation.json").exists()
-
-
-def test_progressive_resume_loader_rejects_incomplete_source_chain(
-    tmp_path: Path,
-) -> None:
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in _materialization_payloads()],
-        ]
-    )
-    agent = ProgressivePlannerAgent(llm)
-    checkpoints = []
-    agent.run(_context(), checkpoint_callback=checkpoints.append)
-    terminal = tmp_path / "progressive_planner_checkpoint_004.json"
-    terminal.write_text(checkpoints[4].model_dump_json(indent=2), encoding="utf-8")
-
-    with pytest.raises(ProgressivePlanningArtifactError) as caught:
-        load_progressive_planner_checkpoint_chain(
-            last_checkpoint_path=terminal,
-            expected_artifact_sha256=hashlib.sha256(terminal.read_bytes()).hexdigest(),
-        )
-
-    assert caught.value.reason_code == "progressive_resume_checkpoint_missing"
-
-
-def test_resume_checkpoint_recorder_imports_only_after_validation(
-    tmp_path: Path,
-) -> None:
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in _materialization_payloads()],
-        ]
-    )
-    agent = ProgressivePlannerAgent(llm)
-    checkpoints = []
-    agent.run(_context(), checkpoint_callback=checkpoints.append)
-    evidence = _RecordingEvidence()
-    recorder = ProgressivePlannerCheckpointRecorder(
-        run_dir=tmp_path,
-        evidence=evidence,
-        prompt_pack_version="test",
-        source_chain=tuple(checkpoints[:5]),
-    )
-
-    recorder.record(checkpoints[5])
-
-    assert evidence.records == {}
-    assert list(tmp_path.glob("progressive_planner_checkpoint_*.json")) == []
-
-    receipt = recorder.persist_validated_resume()
-
-    assert receipt.source_sequence == 4
-    assert receipt.reused_materialization_count == 3
-    assert receipt.new_checkpoint_count == 1
-    assert set(evidence.records) == {
-        f"progressive_planner_checkpoint_{index:03d}" for index in range(6)
-    }
-    with pytest.raises(ProgressivePlanningArtifactError) as caught:
-        recorder.record(checkpoints[6])
-    assert caught.value.reason_code == ("progressive_resume_checkpoint_recorder_closed")
-
-
-def test_progressive_orchestrator_resumes_and_imports_validated_chain(
-    tmp_path: Path,
-) -> None:
-    cohort_path = tmp_path / "cohort.parquet"
-    cohort_path.write_bytes(b"development cohort authority")
-    dependency_context = {
-        "cohort_file_sha256": hashlib.sha256(cohort_path.read_bytes()).hexdigest(),
-        "llm_signature": "mock:test",
-        "prompt_version": "test-v1",
-    }
-    materializations = _materialization_payloads()
-    source_agent = ProgressivePlannerAgent(
-        ScriptedMockLLMClient(
-            [
-                json.dumps(_outline_payload()),
-                json.dumps(_foundation_payload()),
-                *[json.dumps(item) for item in materializations],
-            ]
-        )
-    )
-    source_agent.llm.supports_strict_json_schema = True
-    source_checkpoints = []
-    source_agent.run(
-        _context(),
-        checkpoint_callback=source_checkpoints.append,
-        resume_dependency_context=dependency_context,
-    )
-    source_dir = tmp_path / "source"
-    source_dir.mkdir()
-    source_evidence = _RecordingEvidence()
-    source_paths = [
-        persist_progressive_planner_checkpoint(
-            run_dir=source_dir,
-            evidence=source_evidence,
-            checkpoint=checkpoint,
-            prompt_pack_version="test-v1",
-        )
-        for checkpoint in source_checkpoints[:5]
-    ]
-    resumed_llm = ScriptedMockLLMClient(
-        [json.dumps(item) for item in materializations[3:]]
-    )
-    resumed_llm.supports_strict_json_schema = True
-    findings = []
-    current_evidence = _RecordingEvidence()
-    current_dir = tmp_path / "current"
-    current_dir.mkdir()
-
-    result = run_progressive_planner(
-        planner=ProgressivePlannerAgent(resumed_llm),
-        context=_context(),
-        run_dir=current_dir,
-        evidence=current_evidence,
-        prompt_pack_version="test-v1",
-        resume_checkpoint_path=source_paths[-1],
-        resume_checkpoint_sha256=hashlib.sha256(
-            source_paths[-1].read_bytes()
-        ).hexdigest(),
-        cohort_path=cohort_path,
-        llm_signature="mock:test",
-        planner_kwargs={},
-        know_how_binding=PlannerKnowHowBinding(),
-        planning_contract_context="",
-        finding_sink=findings.append,
-    )
-
-    assert result.generation_mode == "llm_progressive_v2_dev_resume"
-    assert len(result.plan.steps) == 7
-    assert result.facts.resume_validated is True
-    assert result.facts.complete_for_persistence is True
-    assert len(result.facts.materializations) == 7
-    assert len(resumed_llm.calls) == 4
-    assert findings[0].detail["reason_code"] == (
-        "progressive_development_checkpoint_resumed"
-    )
-    assert {
-        key
-        for key in current_evidence.records
-        if key.startswith("progressive_planner_checkpoint_")
-    } == {f"progressive_planner_checkpoint_{index:03d}" for index in range(9)}
-
-
-def test_progressive_orchestrator_persists_validated_resume_on_interrupt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cohort_path = tmp_path / "cohort.parquet"
-    cohort_path.write_bytes(b"development cohort authority")
-    dependencies = {
-        "cohort_file_sha256": hashlib.sha256(cohort_path.read_bytes()).hexdigest(),
-        "llm_signature": "mock:test",
-        "prompt_version": "test-v1",
-    }
-    source_agent = ProgressivePlannerAgent(
-        ScriptedMockLLMClient(
-            [
-                json.dumps(_outline_payload()),
-                json.dumps(_foundation_payload()),
-                *[json.dumps(item) for item in _materialization_payloads()],
-            ]
-        )
-    )
-    checkpoints = []
-    source_agent.run(
-        _context(),
-        checkpoint_callback=checkpoints.append,
-        resume_dependency_context=dependencies,
-    )
-    source_dir = tmp_path / "source"
-    source_dir.mkdir()
-    source_evidence = _RecordingEvidence()
-    paths = [
-        persist_progressive_planner_checkpoint(
-            run_dir=source_dir,
-            evidence=source_evidence,
-            checkpoint=checkpoint,
-            prompt_pack_version="test-v1",
-        )
-        for checkpoint in checkpoints[:2]
-    ]
-    current_dir = tmp_path / "current"
-    current_dir.mkdir()
-    evidence = _RecordingEvidence()
-    planner = ProgressivePlannerAgent(ScriptedMockLLMClient([]))
-
-    def interrupted(*_args, **_kwargs):
-        planner._attempt.resume_validated = True
-        raise KeyboardInterrupt("operator stop")
-
-    monkeypatch.setattr(planner, "_run_output", interrupted)
-    with pytest.raises(KeyboardInterrupt, match="operator stop"):
-        run_progressive_planner(
-            planner=planner,
-            context=_context(),
-            run_dir=current_dir,
-            evidence=evidence,
-            prompt_pack_version="test-v1",
-            resume_checkpoint_path=paths[-1],
-            resume_checkpoint_sha256=hashlib.sha256(paths[-1].read_bytes()).hexdigest(),
-            cohort_path=cohort_path,
-            llm_signature="mock:test",
-            planner_kwargs={},
-            know_how_binding=PlannerKnowHowBinding(),
-            planning_contract_context="",
-            finding_sink=lambda _finding: None,
-        )
-
-    assert (current_dir / "progressive_planner_checkpoint_001.json").exists()
-
-
-def test_progressive_checkpoint_rejects_mutated_predecessor(tmp_path: Path) -> None:
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in _materialization_payloads()],
-        ]
-    )
-    agent = ProgressivePlannerAgent(llm)
-    checkpoints = []
-    agent.run(_context(), checkpoint_callback=checkpoints.append)
-    evidence = _RecordingEvidence()
-    first_path = persist_progressive_planner_checkpoint(
-        run_dir=tmp_path,
-        evidence=evidence,
-        checkpoint=checkpoints[0],
-        prompt_pack_version="test",
-    )
-    first_path.write_text("{}\n", encoding="utf-8")
-
-    with pytest.raises(ProgressivePlanningArtifactError) as caught:
-        persist_progressive_planner_checkpoint(
-            run_dir=tmp_path,
-            evidence=evidence,
-            checkpoint=checkpoints[1],
-            prompt_pack_version="test",
-        )
-
-    assert caught.value.reason_code == ("progressive_source_artifact_digest_mismatch")
-
-
-def test_progressive_artifacts_bind_each_schema_authority(
-    tmp_path: Path,
-) -> None:
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in _materialization_payloads()],
-        ]
-    )
-    llm.supports_strict_json_schema = True
-    agent = ProgressivePlannerAgent(llm)
-    plan = agent.run(_context())
-    assert agent.last_result.facts.outline is not None
-    assert agent.last_result.facts.foundation is not None
-    assert agent.last_result.facts.skeleton is not None
-    assert agent.last_result.facts.compile_receipt is not None
-    evidence = _RecordingEvidence()
-
-    paths = persist_progressive_planning_artifacts(
-        run_dir=tmp_path,
-        evidence=evidence,
-        outline=agent.last_result.facts.outline,
-        foundation=agent.last_result.facts.foundation,
-        materializations=agent.last_result.facts.materializations,
-        skeleton=agent.last_result.facts.skeleton,
-        compile_receipt=agent.last_result.facts.compile_receipt,
-        prompt_metrics=agent.last_result.facts.prompt_metrics,
-        prompt_pack_version="test",
-    )
-
-    ledger = json.loads(paths.materializations.read_text(encoding="utf-8"))
-    requests = [call[1]["structured_output"] for call in llm.calls]
-    assert ledger["outline_structured_output_authority_sha256"] == (
-        requests[0].authority_sha256
-    )
-    assert ledger["foundation_structured_output_authority_sha256"] == (
-        requests[1].authority_sha256
-    )
-    assert [
-        item["structured_output_authority_sha256"]
-        for item in ledger["materializations"]
-    ] == [request.authority_sha256 for request in requests[2:]]
-    assert [item["step_id"] for item in ledger["materializations"]] == [
-        item.step.step_id for item in agent.last_result.facts.materializations
-    ]
-    assert set(evidence.records) == {
-        "progressive_plan_outline",
-        "progressive_plan_foundation",
-        "progressive_step_materializations",
-        "progressive_plan_skeleton",
-        "progressive_plan_compile_receipt",
-    }
-    assert evidence.records["progressive_plan_skeleton"]["inputs"] == [
-        "progressive_plan_outline",
-        "progressive_plan_foundation",
-        "progressive_step_materializations",
-        "research_context",
-    ]
-
-    metrics_path = tmp_path / "planner_prompt_metrics.json"
-    metrics_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "easyicu.planner_prompt_metrics/1",
-                **agent.last_result.facts.prompt_metrics,
-            },
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    evidence.register_file(
-        evidence_id="planner_prompt_metrics",
-        source_path=metrics_path,
-    )
-    plan_path = tmp_path / "analysis_plan.json"
-    plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
-    evidence.register_file(evidence_id="analysis_plan", source_path=plan_path)
-    normalized = build_normalized_plan_lineage(
-        proposed_plan=plan,
-        proposed_source="llm_progressive_v2",
-        pre_normalization_plan=plan,
-        normalized_plan=plan,
-        resume_scientific_semantics_changed=False,
-        host_scientific_semantics_changed=False,
-    )
-    lifecycle_path = tmp_path / "plan_lifecycle_revision_0.json"
-    lifecycle_path.write_text(
-        normalized.model_dump_json(indent=2),
-        encoding="utf-8",
-    )
-    evidence.register_file(
-        evidence_id="plan_lifecycle_revision_0",
-        source_path=lifecycle_path,
-    )
-
-    authority = persist_progressive_planning_authority(
-        run_dir=tmp_path,
-        evidence=evidence,
-        proposed_plan_sha256=normalized.proposed.plan_sha256,
-        normalized_plan_sha256=normalized.plan_sha256,
-        normalized_plan_authority_sha256=normalized.authority_sha256,
-        normalized_plan_evidence_id="plan_lifecycle_revision_0",
-        normalized_plan_filename="plan_lifecycle_revision_0.json",
-        prompt_pack_version="test",
-    )
-
-    assert authority.strict_transport_bound is True
-    assert authority.compiled_analysis_plan_sha256 == normalized.proposed.plan_sha256
-    assert authority.normalized_plan_authority_sha256 == normalized.authority_sha256
-    assert [item.step_id for item in authority.ordered_steps] == [
-        item.step_id for item in agent.last_result.facts.outline.steps
-    ]
-    assert evidence.records["progressive_planning_authority"]["inputs"][-1] == (
-        "plan_lifecycle_revision_0"
-    )
-
-
-def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
-    tmp_path: Path,
-) -> None:
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in _materialization_payloads()],
-        ]
-    )
-    llm.supports_strict_json_schema = True
-    agent = ProgressivePlannerAgent(llm)
-    agent.run(_context())
-    assert agent.last_result.facts.outline is not None
-    assert agent.last_result.facts.foundation is not None
-    assert agent.last_result.facts.skeleton is not None
-    assert agent.last_result.facts.compile_receipt is not None
-    drifted_metrics = dict(agent.last_result.facts.prompt_metrics)
-    drifted_metrics["step_materialization_schema_sha256"] = ["0" * 64]
-
-    with pytest.raises(ProgressivePlanningArtifactError) as caught:
-        persist_progressive_planning_artifacts(
-            run_dir=tmp_path,
-            evidence=_RecordingEvidence(),
-            outline=agent.last_result.facts.outline,
-            foundation=agent.last_result.facts.foundation,
-            materializations=agent.last_result.facts.materializations,
-            skeleton=agent.last_result.facts.skeleton,
-            compile_receipt=agent.last_result.facts.compile_receipt,
-            prompt_metrics=drifted_metrics,
-            prompt_pack_version="test",
-        )
-
-    assert caught.value.reason_code == (
-        "progressive_step_schema_authority_count_mismatch"
-    )
-
-
-def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
-    tmp_path: Path,
-) -> None:
-    llm = ScriptedMockLLMClient(
-        [
-            json.dumps(_outline_payload()),
-            json.dumps(_foundation_payload()),
-            *[json.dumps(item) for item in _materialization_payloads()],
-        ]
-    )
-    llm.supports_strict_json_schema = True
-    agent = ProgressivePlannerAgent(llm)
-    agent.run(_context())
-    assert agent.last_result.facts.outline is not None
-    assert agent.last_result.facts.foundation is not None
-    assert agent.last_result.facts.skeleton is not None
-    assert agent.last_result.facts.compile_receipt is not None
-    evidence = _RecordingEvidence()
-    paths = persist_progressive_planning_artifacts(
-        run_dir=tmp_path,
-        evidence=evidence,
-        outline=agent.last_result.facts.outline,
-        foundation=agent.last_result.facts.foundation,
-        materializations=agent.last_result.facts.materializations,
-        skeleton=agent.last_result.facts.skeleton,
-        compile_receipt=agent.last_result.facts.compile_receipt,
-        prompt_metrics=agent.last_result.facts.prompt_metrics,
-        prompt_pack_version="test",
-    )
-    original_ledger = paths.materializations.read_bytes()
-    changed_step = agent.last_result.facts.materializations[0].step.model_copy(
-        update={"objective": "A different unreviewed objective."}
-    )
-    changed_materializations = [
-        agent.last_result.facts.materializations[0].model_copy(
-            update={"step": changed_step}
-        ),
-        *agent.last_result.facts.materializations[1:],
-    ]
-
-    with pytest.raises(ProgressivePlanningArtifactError) as caught:
-        persist_progressive_planning_artifacts(
-            run_dir=tmp_path,
-            evidence=evidence,
-            outline=agent.last_result.facts.outline,
-            foundation=agent.last_result.facts.foundation,
-            materializations=changed_materializations,
-            skeleton=agent.last_result.facts.skeleton,
-            compile_receipt=agent.last_result.facts.compile_receipt,
-            prompt_metrics=agent.last_result.facts.prompt_metrics,
-            prompt_pack_version="test",
-        )
-
-    assert caught.value.reason_code == (
-        "progressive_existing_evidence_identity_mismatch"
-    )
-    assert paths.materializations.read_bytes() == original_ledger
 
 
 def test_agent_repairs_current_step_coordinate_drift_without_full_rewrite() -> None:

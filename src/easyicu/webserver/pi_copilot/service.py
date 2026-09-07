@@ -29,6 +29,7 @@ from easyicu.webserver import (
     primary_cohort,
     provider_gate,
     settings,
+    source_identity_authority,
     sources,
     study_contexts,
 )
@@ -104,6 +105,7 @@ ALLOWED_TURN_ACTIONS = frozenset(
     }
 )
 HOST_ACTION_JOB_KINDS = {
+    "auto_generate_plan": frozenset({"agent-run"}),
     "generate_plan": frozenset({"agent-run"}),
     "auto_revise_plan": frozenset({"agent-run"}),
     "prepare_analysis_data": frozenset({"agent-run"}),
@@ -897,15 +899,20 @@ class PiCopilotService:
                 confirmation_mode=None,
             )
         source = cls._session_source_reference(context)
+        if source is not None:
+            return PiSessionDataSourceAuthorization(
+                status="confirmed",
+                reason=None,
+                confirmation_mode="agent_default_study_required",
+                extraction_scope="study_required",
+                source=source,
+                confirmed_at=utc_now(),
+            )
         return PiSessionDataSourceAuthorization(
             status="pending",
-            reason=(
-                "project_source_confirmation_required"
-                if source is not None
-                else "local_data_selection_required"
-            ),
+            reason="local_data_selection_required",
             confirmation_mode=None,
-            source=source,
+            source=None,
         )
 
     def _latest_run_id(
@@ -1281,6 +1288,25 @@ class PiCopilotService:
             clean_project,
             record.binding.study_context_id,
         )
+        authorization = record.data_source_authorization
+        if (
+            record.agent_mode == "research"
+            and authorization.status == "pending"
+            and authorization.reason == "project_source_confirmation_required"
+            and not self._stale_details(record).get("stale")
+        ):
+            context = study_contexts.get_context(record.binding.study_context_id)
+            source = self._session_source_reference(context or {})
+            if source is not None:
+                record.data_source_authorization = PiSessionDataSourceAuthorization(
+                    status="confirmed",
+                    reason=None,
+                    confirmation_mode="agent_default_study_required",
+                    extraction_scope="study_required",
+                    source=source,
+                    confirmed_at=utc_now(),
+                )
+                self._save_record(record)
         return record
 
     def create_session(
@@ -3002,6 +3028,157 @@ class PiCopilotService:
             },
             "next_action": next_action,
             "remaining_decision_codes": sorted(remaining_decisions),
+        }
+
+    def apply_agent_plan_configuration(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        expected_revision: int,
+        run_id: str,
+    ) -> Dict[str, Any]:
+        """Persist executable coordinates already selected by the Agent plan."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        stale = self._stale_details(record)
+        if stale.get("stale"):
+            raise PiCopilotError(
+                "pi_session_authority_stale",
+                "The StudyContext or reviewed plan changed before Agent configuration compilation.",
+                status_code=409,
+                details=stale,
+            )
+        context_id = str(record.binding.study_context_id or "").strip()
+        context = study_contexts.get_context(context_id) if context_id else None
+        if context is None:
+            raise PiCopilotError(
+                "agent_plan_configuration_study_context_required",
+                "Agent configuration compilation requires a bound StudyContext.",
+                status_code=409,
+            )
+        if context.get("active_job_id"):
+            raise PiCopilotError(
+                "study_context_active_job_conflict",
+                "Agent configuration cannot change while an EasyICU job is active.",
+                status_code=409,
+            )
+        current_revision = int(context.get("revision") or 0)
+        if int(expected_revision) != current_revision:
+            raise PiCopilotError(
+                "agent_plan_configuration_revision_conflict",
+                "The displayed Agent plan is stale; reload the current review.",
+                status_code=409,
+                details={
+                    "expected_revision": int(expected_revision),
+                    "current_revision": current_revision,
+                },
+            )
+        bound_run_id = str(record.binding.run_id or "").strip()
+        if not bound_run_id or not hmac.compare_digest(
+            bound_run_id, str(run_id or "").strip()
+        ):
+            raise PiCopilotError(
+                "agent_plan_configuration_run_mismatch",
+                "The displayed Agent plan does not belong to the bound review run.",
+                status_code=409,
+            )
+        rows = list_bound_run_history(
+            study_context_id=context_id,
+            project_root=research_pipeline_project_root(context_id),
+            limit=50,
+        )
+        row = next(
+            (item for item in rows if str(item.get("run_id") or "") == bound_run_id),
+            None,
+        )
+        if row is None:
+            raise PiCopilotError(
+                "agent_plan_configuration_run_not_found",
+                "The reviewed Agent plan is no longer available for this project.",
+                status_code=409,
+            )
+        review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
+        payloads = review.get("artifact_payloads")
+        payloads = payloads if isinstance(payloads, Mapping) else {}
+        scientific_review = payloads.get("scientific_plan_review.json")
+        facts = (
+            scientific_review.get("facts")
+            if isinstance(scientific_review, Mapping)
+            else None
+        )
+        buckets = facts.get("remediation_buckets") if isinstance(facts, Mapping) else None
+        runtime_codes = (
+            buckets.get("runtime_capability")
+            if isinstance(buckets, Mapping)
+            else None
+        )
+        runtime_codes = runtime_codes if isinstance(runtime_codes, list) else []
+        agent_plan = payloads.get("agent_plan.json")
+        if not isinstance(agent_plan, Mapping):
+            raise PiCopilotError(
+                "agent_plan_configuration_plan_missing",
+                "The reviewed Agent plan payload is unavailable.",
+                status_code=409,
+            )
+        source = context.get("data_source")
+        source = source if isinstance(source, Mapping) else {}
+        try:
+            grouping = source_identity_authority.resolve_patient_grouping_authority(
+                export_path=str(source.get("path") or ""),
+                database=str(source.get("database") or ""),
+            )
+        except source_identity_authority.PatientGroupingAuthorityError:
+            grouping = None
+        try:
+            plan_review_progress.validate_choice_source(context, row)
+            compiled = plan_decisions.compile_agent_plan_configuration(
+                study=context,
+                agent_plan=agent_plan,
+                runtime_finding_codes=runtime_codes,
+                patient_cluster_available=grouping is not None,
+            )
+            updated = study_contexts.upsert_context(
+                {"id": context_id, **compiled.patch},
+                expected_revision=current_revision,
+                require_revision=True,
+                lifecycle_write=False,
+            )
+            plan_review_progress.record_choice(
+                before=context,
+                after=updated,
+                run=row,
+                decision_code="agent_plan_configuration",
+                option_id="typed_runtime_projection",
+            )
+        except plan_decisions.PlanDecisionError as exc:
+            raise PiCopilotError(
+                exc.code,
+                str(exc),
+                status_code=409,
+                details=exc.details,
+            ) from exc
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(
+                    exc.detail.get("error")
+                    or "agent_plan_configuration_update_blocked"
+                ),
+                "The StudyContext owner rejected the Agent plan projection.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        record.binding = self._binding_for_context(updated, run_id=bound_run_id)
+        self._save_record(record)
+        return {
+            "ok": True,
+            "status": "compiled",
+            "code": "agent_plan_configuration_compiled",
+            "study_context_id": context_id,
+            "study_context_revision": int(updated.get("revision") or 0),
+            "source_run_id": bound_run_id,
+            "runtime_finding_codes": list(compiled.runtime_finding_codes),
+            "next_action": "fresh_plan",
         }
 
     def _assert_project_initialized(self, project_id: str) -> str:

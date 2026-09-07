@@ -552,7 +552,11 @@ def read_run_record(project_dir: str) -> RunRecordReadResult:
     gate = (payloads.get("quality_gate.json") or {}).get("gate") or {}
     signoff = payloads.get("human_signoff.json")
 
-    artifacts = _run_artifacts(run_dir)
+    artifacts = loaded["artifacts"]
+    if artifacts != _run_artifacts(run_dir):
+        return RunRecordReadError(ok=False, error="run_record_changed_during_read", directory=directory)
+    if run_context.get("run_id") and ledger.get("run_id") and run_context["run_id"] != ledger["run_id"]:
+        return RunRecordReadError(ok=False, error="run_record_identity_conflict", directory=directory)
     signoff_integrity = run_artifact_disclosure.signoff_integrity(signoff, artifacts)
     readiness = _readiness_from_gate(
         gate,
@@ -634,7 +638,7 @@ def create_human_signoff(
             "reason": gate.reason,
             "reportable": False,
             "draft_unlocked": False,
-            "checks": [dict(check) for check in gate.checks],
+            "checks": gate.to_dict().get("checks", []),
         },
         "artifact_names": [
             item.name
@@ -1348,12 +1352,16 @@ def _artifact_media_type(name: str) -> str:
 
 def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
     payloads: Dict[str, Dict[str, Any]] = {}
-    for name in _RUN_ARTIFACT_NAMES:
+    artifacts: List[Dict[str, Any]] = []
+    for name in [*_RUN_ARTIFACT_NAMES, *_RUN_DOCUMENT_SPECS]:
         path, raw, path_error = _read_safe_artifact_bytes(run_dir, name)
         if path_error == "artifact_not_found":
             continue
         if path is None or raw is None:
             return {"ok": False, "error": path_error, "artifact": name}
+        artifacts.append(_artifact_from_raw(path, run_dir, raw))
+        if name not in _RUN_ARTIFACT_NAMES:
+            continue
         try:
             payload = json.loads(raw.decode("utf-8"))
         except UnicodeDecodeError:
@@ -1373,7 +1381,7 @@ def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
             payloads[name] = payload
         else:
             return {"ok": False, "error": "artifact_json_not_object", "artifact": name}
-    return {"ok": True, "payloads": payloads}
+    return {"ok": True, "payloads": payloads, "artifacts": artifacts}
 
 
 def _readiness_from_gate(
@@ -1432,6 +1440,7 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
     gate = review.gate
     artifacts = review.artifacts
     artifact_payloads = review.artifact_payloads
+    agent_plan = artifact_payloads.get("agent_plan.json")
     source_manifest = artifact_payloads.get("source_run_manifest.json") or {}
     pending_reviews = source_manifest.get("pending_reviews") or []
     pending_reason_codes = sorted(
@@ -1468,6 +1477,12 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "scientific_plan_review_score": source_manifest.get(
             "scientific_plan_review_score"
         ),
+        "plan_revision_source_run_id": source_manifest.get(
+            "plan_revision_source_run_id"
+        ),
+        "plan_revision_nonconvergent": source_manifest.get(
+            "plan_revision_nonconvergent"
+        ),
         "readiness_status": readiness.status,
         "signed": review.signed,
         "signoff_stale": review.signoff_stale,
@@ -1476,6 +1491,11 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "draft_unlocked": False,
         "artifact_count": len(artifacts),
         "artifact_names": [artifact.name for artifact in artifacts],
+        # Blocked projections intentionally write an empty diagnostic
+        # agent_plan.json. File presence alone is therefore not plan authority.
+        "plan_available": bool(
+            isinstance(agent_plan, Mapping) and agent_plan
+        ),
         "updated_at_epoch": updated,
         "updated_at": datetime.fromtimestamp(updated, timezone.utc)
         .isoformat()

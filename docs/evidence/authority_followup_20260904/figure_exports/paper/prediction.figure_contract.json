@@ -1,0 +1,97 @@
+{
+  "figure_id": "prediction",
+  "core_claim": "Engineering fixture demonstrates identical numerical projections across presentation settings.",
+  "archetype": "quantitative_grid",
+  "panels": [
+    {
+      "panel_id": "A",
+      "title": "Calibration",
+      "role": "calibration",
+      "claim": "Predicted versus observed risk shows whether the model's probabilities are usable, not only discriminative.",
+      "evidence_ids": [
+        "calibration_curve"
+      ],
+      "review_risk": "A high AUROC with poor calibration can still mislead clinical thresholds.",
+      "metadata": {
+        "presentation": {
+          "layout": "row",
+          "width_mm": 183.0,
+          "height_mm": 105.0,
+          "font_size": 7.5,
+          "font_family": "sans-serif",
+          "palette": "grayscale",
+          "legend_location": "outside bottom"
+        },
+        "chart_type": "calibration_curve",
+        "placement": "main",
+        "display_purpose": "scientific_result",
+        "display_policy_reason_code": "SCIENTIFIC_RESULT_DISPLAY"
+      }
+    },
+    {
+      "panel_id": "B",
+      "title": "Discrimination (ROC)",
+      "role": "model_performance",
+      "claim": "The ROC curve summarises discrimination on the held-out split with its AUROC.",
+      "evidence_ids": [
+        "roc_curve"
+      ],
+      "review_risk": "AUROC is imbalance-insensitive; read it with calibration and precision-recall.",
+      "metadata": {
+        "presentation": {
+          "layout": "row",
+          "width_mm": 183.0,
+          "height_mm": 105.0,
+          "font_size": 7.5,
+          "font_family": "sans-serif",
+          "palette": "grayscale",
+          "legend_location": "outside bottom"
+        },
+        "chart_type": "roc_curve",
+        "placement": "main",
+        "display_purpose": "scientific_result",
+        "display_policy_reason_code": "SCIENTIFIC_RESULT_DISPLAY"
+      }
+    },
+    {
+      "panel_id": "C",
+      "title": "Held-out performance",
+      "role": "validation",
+      "claim": "Discrimination and error metrics are reported on the patient-level held-out split.",
+      "evidence_ids": [
+        "model_performance"
+      ],
+      "review_risk": "Development-split metrics are optimistic; only held-out/external numbers validate the model.",
+      "metadata": {
+        "presentation": {
+          "layout": "row",
+          "width_mm": 183.0,
+          "height_mm": 105.0,
+          "font_size": 7.5,
+          "font_family": "sans-serif",
+          "palette": "grayscale",
+          "legend_location": "outside bottom"
+        },
+        "chart_type": "validation_panel",
+        "placement": "main",
+        "display_purpose": "scientific_result",
+        "display_policy_reason_code": "SCIENTIFIC_RESULT_DISPLAY"
+      }
+    }
+  ],
+  "export_formats": [
+    "svg",
+    "pdf",
+    "png",
+    "tiff"
+  ],
+  "width_mm": 183.0,
+  "height_mm": 105.0,
+  "source_data": [
+    "prediction_calibration_curve.csv",
+    "prediction_roc_curve.csv",
+    "prediction_performance.csv"
+  ],
+  "statistics_note": "Synthetic precomputed points and metrics; no estimation, inference or clinical claim.",
+  "image_integrity_note": null
+}

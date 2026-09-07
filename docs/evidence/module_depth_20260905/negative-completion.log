@@ -1,0 +1,9 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_readiness_publication_ready_accepts_complete_display_suite ________
+tests/research_agent/integration/test_pipeline.py:7418: in test_readiness_publication_ready_accepts_complete_display_suite
+    assert initial_gates["paper_authorized"] is False
+E   assert True is False
+=========================== short test summary info ============================
+FAILED tests/research_agent/integration/test_pipeline.py::test_readiness_publication_ready_accepts_complete_display_suite
+1 failed, 278 deselected in 1.81s

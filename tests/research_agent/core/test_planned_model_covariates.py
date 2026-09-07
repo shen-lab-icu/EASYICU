@@ -62,6 +62,16 @@ def test_null_and_empty_are_different_declarations() -> None:
     assert _requirement(covariates=[]).covariates == []
 
 
+def test_schema_reexports_the_model_contract_owner_without_a_second_type() -> None:
+    from easyicu.research_agent.contracts.model_terms import (
+        PlannedModelRequirement as OwnedRequirement,
+    )
+
+    assert PlannedModelRequirement is OwnedRequirement
+    restored = OwnedRequirement.model_validate_json(_requirement().model_dump_json())
+    assert restored == _requirement()
+
+
 def test_a_declared_adjustment_set_is_kept_exactly_and_in_order() -> None:
     requirement = _requirement(covariates=["age", "sex", "charlson_max"])
 

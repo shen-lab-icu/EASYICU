@@ -42,22 +42,28 @@ from .contracts.claim_ceiling import DescriptiveClaimContract
 from .contracts.closed_levels import (
     validate_closed_scalar_levels,
 )
-from .contracts.dependence import PlannedDependenceRequirement
+from .contracts.dependence import PlannedDependenceRequirement  # noqa: F401 - compatibility export
 from .contracts.endpoint import EndpointAbsenceSemantics, EndpointKind, EndpointSpec
 from .contracts.exposure_outcome_distribution import (
     ExposureOutcomeDistributionSpec,
 )
 from .contracts.family_primary import FamilyPrimaryResultRequirement
 from .contracts.figure_plan import PlannedFigurePanelSpec
-from .contracts.model_terms import ModelTermSpec, validate_model_term_roster
+from .contracts.model_terms import (  # noqa: F401 - compatibility identities
+    ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
+    ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
+    ModelTermSpec,
+    PlannedModelRequirement,
+    validate_model_term_roster,
+)
 from .contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND as PLANNED_MODEL_REQUIREMENTS_OUTPUT,
-    ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
-    ASSOCIATION_LOGIT_ESTIMATOR,
-    ASSOCIATION_OLS_ESTIMATOR,
+    ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,  # noqa: F401 - compatibility export
+    ASSOCIATION_LOGIT_ESTIMATOR,  # noqa: F401 - compatibility export
+    ASSOCIATION_OLS_ESTIMATOR,  # noqa: F401 - compatibility export
     PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
-    canonical_association_method as _canonical_association_method,
+    canonical_association_method as _canonical_association_method,  # noqa: F401 - compatibility export
     normalise_model_contract_token as _normalise_model_contract_token,
 )
 from .contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
@@ -608,6 +614,14 @@ class CohortDescriptor(BaseModel):
     id_columns: List[str] = Field(default_factory=list)
     time_columns: List[str] = Field(default_factory=list)
     outcome_columns: List[str] = Field(default_factory=list)
+    requested_outcome_columns: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Explicit analysis endpoint roster supplied by the study input owner. "
+            "None means undeclared; available or inferred outcome columns do not "
+            "authorize additional analyses. target_outcome remains the primary."
+        ),
+    )
     provenance: Dict[str, Any] = Field(
         default_factory=dict,
         description="Deterministic cohort-definition provenance including source path, criteria, and resolver metadata.",
@@ -637,8 +651,17 @@ class UserPreferences(BaseModel):
         default="planner_selectable",
         description=(
             "Whether covariates remain a Planner-owned choice or are the exact "
-            "user-approved adjustment roster. With 'exact', an empty covariates "
-            "list authorizes only an unadjusted model."
+            "locked adjustment roster. With 'exact', covariate_authority records "
+            "whether the user fixed it or it came from an Agent Plan; an empty "
+            "roster authorizes only an unadjusted model."
+        ),
+    )
+    covariate_authority: Optional[Literal["user", "agent_plan"]] = Field(
+        default=None,
+        description=(
+            "Owner of an exact adjustment roster. None is retained only for "
+            "backward-compatible contexts; new exact rosters must identify "
+            "whether they were user-authored or compiled from an Agent Plan."
         ),
     )
     covariate_rationales: Dict[str, str] = Field(
@@ -708,11 +731,14 @@ class UserPreferences(BaseModel):
                 "covariate decision keys must belong to covariates"
             )
         if self.covariate_selection != "exact" and (
-            rationale_keys or temporal_keys or operational_keys
+            rationale_keys
+            or temporal_keys
+            or operational_keys
+            or self.covariate_authority is not None
         ):
             raise ValueError(
-                "covariate rationales, temporal roles, and operationalizations require "
-                "covariate_selection='exact'"
+                "covariate authority, rationales, temporal roles, and "
+                "operationalizations require covariate_selection='exact'"
             )
         if any(
             not str(value or "").strip()
@@ -854,282 +880,6 @@ class HypothesisBlueprint(BaseModel):
 # ---------------------------------------------------------------------------
 # Plans, evidence, manifests
 # ---------------------------------------------------------------------------
-
-
-# The v1 planner-owned roster is intentionally narrower than EasyICU's full
-# modeling capability.  These are the adjusted-association families whose
-# execution contract is currently checked by PrimaryModelContractValidator.
-# Survival, prediction, mixed-effects, and clustering methods keep their own
-# family-specific plans/contracts until an equally typed validator exists.
-ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES = frozenset(
-    {
-        ASSOCIATION_LOGIT_ESTIMATOR,
-        ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
-    }
-)
-ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES = frozenset(
-    {
-        ASSOCIATION_OLS_ESTIMATOR,
-        "statsmodels_quantreg",
-        "statsmodels_quantreg_median_vcov_robust",
-    }
-)
-# PLANNED_MODEL_REQUIREMENTS_STEP_METHOD / _OUTPUT_KIND are imported from
-# contracts.model_tokens above and re-exported here unchanged, so the ownership
-# predicate in contracts.association_execution reads the same two strings this
-# schema validates against.
-
-
-class PlannedModelRequirement(BaseModel):
-    """Planner-owned obligation for a supported adjusted-association model.
-
-    The planner chooses these scientific commitments.  Execution validators
-    only reconcile the emitted model contracts against this typed roster; they
-    must not infer required models from step prose or benchmark vocabulary.
-    This v1 schema does not represent survival, prediction, mixed-effects, or
-    clustering contracts.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    requirement_id: str
-    outcome: str
-    outcome_type: Literal["binary", "continuous"]
-    method_family: str
-    exposure_source: str
-    analysis_role: Literal["primary", "secondary", "sensitivity"]
-    analysis_set: Literal["source_aware", "complete_case"]
-    required_for_step_success: bool = True
-    covariates: Optional[List[str]] = Field(
-        default=None,
-        description=(
-            "The exact adjustment set, or null when the planner did not declare "
-            "one. An empty list is a declaration of an unadjusted model, which "
-            "is not the same statement as null."
-        ),
-    )
-    model_terms: Optional[List[ModelTermSpec]] = Field(
-        default=None,
-        description=(
-            "The exact exposure and covariate coding contract. Legacy plans "
-            "without this field remain readable but cannot authorize a "
-            "deterministic host fit."
-        ),
-    )
-    exposure_levels: Optional[List[str]] = Field(
-        default=None,
-        description=(
-            "The closed, ordered level set of a categorical or ordinal exposure, "
-            "or null for a binary or continuous one. Declaring it commits the "
-            "model to one contrast per non-reference level."
-        ),
-    )
-    exposure_reference_level: Optional[str] = Field(
-        default=None,
-        description="Which declared level every contrast is taken against.",
-    )
-    primary_contrast_level: Optional[str] = Field(
-        default=None,
-        description=(
-            "Which contrast is the headline estimate the manuscript reports. "
-            "With more than two levels this cannot be inferred: the highest "
-            "level against the reference and a per-level trend are different "
-            "scientific claims, and choosing between them is the planner's."
-        ),
-    )
-    dependence: Optional[PlannedDependenceRequirement] = Field(
-        default=None,
-        description=(
-            "Exact repeated-unit covariance contract bound from StudyContext "
-            "authority. Null means model-based covariance; execution must not "
-            "infer clustering from intent text or identifier-like column names."
-        ),
-    )
-
-    @field_validator(
-        "requirement_id",
-        "outcome",
-        "exposure_source",
-    )
-    @classmethod
-    def _nonblank_text(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("planned model requirement fields must be non-empty")
-        return text
-
-    @field_validator("method_family", mode="before")
-    @classmethod
-    def _canonical_method_family(cls, value: object) -> str:
-        method = _canonical_association_method(value)
-        if not method:
-            raise ValueError("planned model requirement fields must be non-empty")
-        return method
-
-    @field_validator("covariates")
-    @classmethod
-    def _exact_unique_covariate_names(
-        cls, value: Optional[List[str]]
-    ) -> Optional[List[str]]:
-        """An adjustment set is a roster of exact columns or it is not declared.
-
-        ``None`` stays ``None``: "the planner did not say" must remain
-        distinguishable from "the planner said none", because a host that reads
-        the first as the second would fit an unadjusted model and label it the
-        pre-specified adjusted one.
-        """
-
-        if value is None:
-            return None
-        names = [str(item or "").strip() for item in value]
-        if any(not name for name in names):
-            raise ValueError("covariates must not contain blank names")
-        if len(names) != len(set(names)):
-            raise ValueError("covariates must not repeat a name")
-        return names
-
-    @model_validator(mode="after")
-    def _method_family_matches_supported_outcome(self) -> "PlannedModelRequirement":
-        supported = (
-            ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES
-            if self.outcome_type == "binary"
-            else ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES
-        )
-        method_family = _normalise_model_contract_token(self.method_family)
-        if method_family not in supported:
-            raise ValueError(
-                "model_requirements currently support only binary logistic "
-                "or continuous linear/quantile adjusted-association families; "
-                f"outcome_type={self.outcome_type!r} is incompatible with "
-                f"method_family={self.method_family!r}"
-            )
-        if (
-            self.analysis_role in {"primary", "secondary"}
-            and not self.required_for_step_success
-        ):
-            raise ValueError(
-                "primary and secondary model_requirements must be required "
-                "for step success; only a sensitivity requirement may be optional"
-            )
-        if self.covariates is not None:
-            # Two adjustment sets that are wrong on their face, and wrong in a
-            # way the contract can see without knowing the case.  Conditioning
-            # on the outcome, or on the exposure whose effect is being
-            # estimated, does not produce a weaker version of the declared
-            # estimand -- it produces a different quantity that would still be
-            # reported under the declared one's name.
-            if self.outcome in self.covariates:
-                raise ValueError(
-                    "covariates must not contain the outcome "
-                    f"{self.outcome!r}; conditioning on the outcome does not "
-                    "estimate the declared association"
-                )
-            if self.exposure_source in self.covariates:
-                raise ValueError(
-                    "covariates must not contain the exposure "
-                    f"{self.exposure_source!r}; adjusting for the exposure "
-                    "removes the association the requirement declares"
-                )
-        if self.model_terms is not None:
-            exposure_term, adjustment_terms = validate_model_term_roster(
-                terms=self.model_terms,
-                exposure=self.exposure_source,
-                covariates=self.covariates,
-            )
-            term_covariates = [item.name for item in adjustment_terms]
-            if self.covariates is None:
-                self.covariates = term_covariates
-            if exposure_term.transform == "treatment_contrast":
-                levels = list(exposure_term.levels or ())
-                reference = exposure_term.reference_level
-                if (
-                    self.exposure_levels is not None
-                    and list(self.exposure_levels) != levels
-                ):
-                    raise ValueError(
-                        "exposure_levels must match the exposure ModelTermSpec"
-                    )
-                if (
-                    self.exposure_reference_level is not None
-                    and self.exposure_reference_level != reference
-                ):
-                    raise ValueError(
-                        "exposure_reference_level must match the exposure ModelTermSpec"
-                    )
-                self.exposure_levels = levels
-                self.exposure_reference_level = reference
-                if exposure_term.coding == "binary":
-                    only_contrast = exposure_term.contrast_levels[0]
-                    if (
-                        self.primary_contrast_level is not None
-                        and self.primary_contrast_level != only_contrast
-                    ):
-                        raise ValueError(
-                            "a binary exposure's primary contrast is its one "
-                            "non-reference level"
-                        )
-                    self.primary_contrast_level = only_contrast
-                elif self.primary_contrast_level is None:
-                    raise ValueError(
-                        "a categorical exposure ModelTermSpec requires "
-                        "primary_contrast_level on the model requirement"
-                    )
-            elif any(
-                value is not None
-                for value in (
-                    self.exposure_levels,
-                    self.exposure_reference_level,
-                    self.primary_contrast_level,
-                )
-            ):
-                raise ValueError(
-                    "identity/ordinal-linear exposure coding cannot also declare "
-                    "treatment-contrast fields"
-                )
-        self._check_declared_exposure_levels()
-        return self
-
-    def _check_declared_exposure_levels(self) -> None:
-        """Refuse a partial categorical-exposure contrast declaration."""
-
-        declared = {
-            "exposure_levels": self.exposure_levels,
-            "exposure_reference_level": self.exposure_reference_level,
-            "primary_contrast_level": self.primary_contrast_level,
-        }
-        present = {name for name, value in declared.items() if value is not None}
-        if not present:
-            return
-        missing = sorted(set(declared) - present)
-        if missing:
-            raise ValueError(
-                "a categorical exposure is declared by "
-                + ", ".join(sorted(declared))
-                + " together; this requirement is missing "
-                + ", ".join(repr(name) for name in missing)
-                + ", so the host cannot tell which contrast the manuscript reports"
-            )
-        levels = [str(value or "").strip() for value in self.exposure_levels or []]
-        if any(not level for level in levels):
-            raise ValueError("exposure_levels must not contain a blank level")
-        if len(levels) != len(set(levels)):
-            raise ValueError("exposure_levels must not repeat a level")
-        if len(levels) < 2:
-            raise ValueError("exposure_levels needs at least two levels")
-        reference = str(self.exposure_reference_level or "").strip()
-        primary = str(self.primary_contrast_level or "").strip()
-        if reference not in levels:
-            raise ValueError(
-                f"exposure_reference_level {reference!r} is not one of the "
-                "declared exposure_levels"
-            )
-        if primary not in levels:
-            raise ValueError(
-                f"primary_contrast_level {primary!r} is not one of the "
-                "declared exposure_levels"
-            )
-        if primary == reference:
-            raise ValueError("primary_contrast_level must not be the reference level")
 
 
 _DEFAULT_STABILITY_BASE_SEED = 1729
@@ -2295,8 +2045,16 @@ class AnalysisStep(BaseModel):
                         _normalise_model_contract_token(output_name),
                     )
                 )
+            model_requirement_methods = {
+                PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
+                # The signed landmark route preserves the same explicit
+                # adjusted-association requirement and changes only the
+                # cohort/executor authority. It must survive a plan
+                # serialize/rehydrate boundary after host binding.
+                "signed_landmark_categorical_association",
+            }
             if (
-                method != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD
+                method not in model_requirement_methods
                 or (
                     PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
                     PLANNED_MODEL_REQUIREMENTS_OUTPUT,
@@ -2305,7 +2063,8 @@ class AnalysisStep(BaseModel):
             ):
                 raise ValueError(
                     "model_requirements are currently supported only on "
-                    "method='adjusted_association_models' steps that declare "
+                    "the adjusted-association or signed categorical-landmark "
+                    "methods when they declare "
                     "expected output 'table:adjusted_association_estimates'; "
                     "other analysis families must use their family-specific "
                     "planning and validation contracts"

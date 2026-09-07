@@ -15,6 +15,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .product_identity import is_canonical_typed_product_token
 
 
+class FigurePresentationSpec(BaseModel):
+    """Bounded display choices; no statistical or source transformations."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    layout: Literal["row", "column", "grid"] = "row"
+    width_mm: float = Field(default=183, ge=80, le=500, allow_inf_nan=False)
+    height_mm: float = Field(default=85, ge=50, le=500, allow_inf_nan=False)
+    font_size: float = Field(default=7.5, ge=5, le=28, allow_inf_nan=False)
+    font_family: Literal["sans-serif", "serif", "monospace"] = "sans-serif"
+    palette: Literal["clinical", "colorblind", "grayscale"] = "clinical"
+    legend_location: Literal[
+        "best",
+        "upper right",
+        "upper left",
+        "lower right",
+        "lower left",
+        "outside bottom",
+    ] = "best"
+
+
 class PlannedFigurePanelSpec(BaseModel):
     """Planner-owned article role and chart grammar for one figure panel."""
 
@@ -29,6 +49,10 @@ class PlannedFigurePanelSpec(BaseModel):
     chart_type: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     placement: Literal["main", "supplementary"] = "main"
     source_products: List[str] = Field(min_length=1, max_length=16)
+    presentation: FigurePresentationSpec | None = Field(
+        default=None,
+        description="Optional display parameters shared by all panels of this output. Only renderers declaring support may consume these settings; they never change data or scientific coordinates.",
+    )
 
     @field_validator("source_products")
     @classmethod

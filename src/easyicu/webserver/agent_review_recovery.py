@@ -177,7 +177,9 @@ _LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: Dict[str, threading.RLock] = {}
 _INDEX_SCHEMA = "easyicu.web-review-recovery-index/2"
 _SEED_FILENAME = "web_review_recovery_seed.json"
-_DEFAULT_MAX_ROOTS = 32
+# One project can legitimately own one pending review, so the root registry
+# must cover the same bounded population as the 128-record recovery index.
+_DEFAULT_MAX_ROOTS = 128
 _DEFAULT_MAX_CANDIDATES = 256
 _MAX_RUN_DIRS_PER_CANDIDATE = 16
 

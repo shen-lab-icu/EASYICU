@@ -1,0 +1,22 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_____ test_article_audits_report_corrupt_current_figure_contracts[display] _____
+tests/research_agent/core/test_display_suite.py:112: in test_article_audits_report_corrupt_current_figure_contracts
+    assert any("figure_contract_invalid_json" in error and path.name in error for error in errors)
+E   assert False
+E    +  where False = any(<generator object test_article_audits_report_corrupt_current_figure_contracts.<locals>.<genexpr> at 0x11ea92340>)
+_____ test_article_audits_report_corrupt_current_figure_contracts[article] _____
+tests/research_agent/core/test_display_suite.py:112: in test_article_audits_report_corrupt_current_figure_contracts
+    assert any("figure_contract_invalid_json" in error and path.name in error for error in errors)
+E   assert False
+E    +  where False = any(<generator object test_article_audits_report_corrupt_current_figure_contracts.<locals>.<genexpr> at 0x11ea92420>)
+____ test_article_audits_report_corrupt_current_figure_contracts[strategy] _____
+tests/research_agent/core/test_display_suite.py:112: in test_article_audits_report_corrupt_current_figure_contracts
+    assert any("figure_contract_invalid_json" in error and path.name in error for error in errors)
+E   assert False
+E    +  where False = any(<generator object test_article_audits_report_corrupt_current_figure_contracts.<locals>.<genexpr> at 0x11ea92880>)
+=========================== short test summary info ============================
+FAILED tests/research_agent/core/test_display_suite.py::test_article_audits_report_corrupt_current_figure_contracts[display]
+FAILED tests/research_agent/core/test_display_suite.py::test_article_audits_report_corrupt_current_figure_contracts[article]
+FAILED tests/research_agent/core/test_display_suite.py::test_article_audits_report_corrupt_current_figure_contracts[strategy]
+3 failed, 3 deselected in 1.38s

@@ -8,7 +8,7 @@ it at recorded plans and it reports, over the same corpus every time, how many
 steps a deterministic owner claims and which declared products no owner can
 emit.
 
-It asks ``select_standard_executor`` itself.  It must never re-implement an
+It asks ``resolve_standard_executor`` itself, without generating code.  It must never re-implement an
 ownership predicate: the selector applies gates *after* a contract matches
 (a receipt obligation an owner cannot discharge, a typed input scope it does
 not support), so a second copy of the predicates eventually reports an owner
@@ -28,7 +28,7 @@ The truth for a given run is between them.  Reporting only the flattering bound
 would be answering in the permissive direction for a fact this tool lacks.
 
 **It measures one of the two paths, and the other one is invisible here.**
-``select_standard_executor`` is where an owner *claims a step up front*.  There
+``resolve_standard_executor`` is where an owner *claims a step up front*.  There
 is a second mechanism in ``execution/phase.py``: ``_deterministic_*_code``
 substitutes (absolute-risk context, robustness/sensitivity, missingness audit,
 plus a generic fallback) that the host swaps in *after* something has already
@@ -92,7 +92,7 @@ from easyicu.research_agent.authority.plausibility import (  # noqa: E402
     FlagOnlyPlausibilityScope,
 )
 from easyicu.research_agent.execution.runners.selection import (  # noqa: E402
-    select_standard_executor,
+    resolve_standard_executor,
 )
 from easyicu.research_agent.planning.cohort_contract import (  # noqa: E402
     cohort_concept_id_scope,
@@ -300,22 +300,20 @@ def measure_plan(
             ("upper", None),
             ("lower", _receipt_scope(step.step_id)),
         ):
-            candidates: list = []
             try:
-                selection = select_standard_executor(
+                decision = resolve_standard_executor(
                     step,
                     plan=plan,
                     plausibility_scope=scope,
-                    trace=candidates,
                 )
             except Exception as error:  # noqa: BLE001 - report, never assume
                 answers[label] = None
                 if ledger is not None:
                     ledger.raised.append((step.step_id, f"{type(error).__name__}"))
                 continue
-            answers[label] = selection.analysis_kind if selection is not None else None
+            answers[label] = decision.claimed_by
             if label == "upper":
-                trace = candidates
+                trace = list(decision.candidates)
         rows.append(
             StepOwnership(
                 key=key,

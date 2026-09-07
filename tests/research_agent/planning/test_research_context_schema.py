@@ -169,7 +169,15 @@ def test_literal_v1_payload_roundtrips_without_rewrite():
     # The payload above is deliberately frozen at its archived shape and must
     # not be edited when a field is added. "Without rewrite" means every key the
     # archive carried keeps its exact value.
-    assert {key: dumped[key] for key in payload} == payload
+    dumped_archive = {key: dumped[key] for key in payload}
+    assert dumped["cohort"]["requested_outcome_columns"] is None
+    assert set(dumped["cohort"]) - set(payload["cohort"]) == {
+        "requested_outcome_columns"
+    }
+    dumped_archive["cohort"] = {
+        key: dumped["cohort"][key] for key in payload["cohort"]
+    }
+    assert dumped_archive == payload
 
     # A purely additive optional field may appear. It must appear as None: a
     # field that materialised a *value* while reading an archive would mean the

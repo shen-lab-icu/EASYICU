@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 from ..contracts.capability_ids import (
     CAPABILITY_FAMILIES,
+    LANDMARK_CATEGORICAL_ANALYSIS_KIND,
+    LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
     LANDMARK_SPLINE_ANALYSIS_KIND,
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
     PHENOTYPING_ANALYSIS_KIND,
@@ -49,7 +51,10 @@ from ..trajectory.runtime_validation import (
     signed_trajectory_plan_claimed,
     signed_trajectory_plan_contract_errors,
 )
-from ..contracts.association_execution import association_execution_verdict
+from ..contracts.association_execution import (
+    association_execution_verdict,
+    landmark_categorical_association_execution_verdict,
+)
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
     EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
@@ -385,6 +390,55 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ),
     ScientificCapability(
         family="association",
+        label="Association — digest-bound categorical landmark",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed adjusted categorical association in a signed "
+            "fixed-landmark population"
+        ),
+        primary_runner="adjusted_association_estimates",
+        primary_runner_module=(
+            "execution.runners.landmark_categorical_association_executor"
+        ),
+        figure="deterministic",
+        figure_renderer="base_association_skill",
+        data_contract=(
+            "typed cohort input",
+            "signed binary outcome, event-time and observation-duration columns",
+            "signed categorical exposure levels, reference and primary contrast",
+            "signed adjustment set and dependence contract",
+        ),
+        fail_closed=(
+            "The runtime owner rejects authority-digest drift, incomplete landmark "
+            "opportunity, invalid categorical levels, estimator drift, rank loss, "
+            "non-convergence, or a plan that changes the signed estimand."
+        ),
+        notes=(
+            "The caller-reviewed authority owns temporal eligibility and exact model "
+            "coordinates; the host wrapper builds the landmark cohort and delegates "
+            "the sealed model fit to the adjusted-association adapter."
+        ),
+        capability_id=LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
+        result_contract=(
+            "LandmarkCategoricalAssociationRuntimeAuthority + "
+            "easyicu.landmark_categorical_association_runtime_receipt/1"
+        ),
+        required_diagnostics=(
+            "landmark eligibility and observation opportunity",
+            "model-term coding receipt",
+            "primary model contract",
+            "effect/interval reconciliation",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner=(
+            "execution.runners.landmark_categorical_association_executor"
+        ),
+        scientific_validator_contract=(
+            "easyicu.landmark_categorical_association_runtime_receipt/1"
+        ),
+    ),
+    ScientificCapability(
+        family="association",
         label="Association — digest-bound landmark spline",
         primary_analysis="deterministic",
         primary_estimand=(
@@ -692,6 +746,7 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
 def _assert_capability_vocabulary_matches_registry() -> None:
     """Keep stable persisted ids synchronized with executable registrations."""
 
+    validate_capability_contracts(CAPABILITY_REGISTRY)
     registered = {
         capability.capability_id: capability.family
         for capability in CAPABILITY_REGISTRY
@@ -705,6 +760,35 @@ def _assert_capability_vocabulary_matches_registry() -> None:
             "family_mismatches="
             f"{sorted(key for key in registered.keys() & CAPABILITY_FAMILIES.keys() if registered[key] != CAPABILITY_FAMILIES[key])!r}"
         )
+
+
+def validate_capability_contracts(capabilities: Tuple[ScientificCapability, ...]) -> None:
+    """Compile-time admission contract for the existing capability vocabulary.
+
+    Declared inputs/products/diagnostics and an explicit claim ceiling are
+    mandatory. Execution still validates the family-specific typed plan; this
+    admission check does not turn catalogue text into execution authorization.
+    """
+    seen: set[str] = set()
+    for capability in capabilities:
+        identity = capability.capability_id
+        if not identity or identity in seen:
+            raise ValueError(f"capability_identity_missing_or_duplicate: {identity!r}")
+        seen.add(identity)
+        if not capability.data_contract or not capability.result_contract or not capability.required_diagnostics:
+            raise ValueError(f"capability_contract_incomplete: {identity}")
+        if not capability.fail_closed or capability.primary_analysis not in {"deterministic", "llm_coded"}:
+            raise ValueError(f"capability_execution_contract_invalid: {identity}")
+        if capability.scientific_validation not in {"reportable", "analysis_only"}:
+            raise ValueError(f"capability_claim_ceiling_invalid: {identity}")
+        if capability.scientific_validation == "reportable" and not (
+            capability.scientific_validator_owner and capability.scientific_validator_contract
+        ):
+            raise ValueError(f"capability_validator_required: {identity}")
+        if capability.primary_analysis == "deterministic" and not (
+            capability.primary_runner_module or capability.scientific_validator_owner
+        ):
+            raise ValueError(f"capability_executor_owner_required: {identity}")
 
 
 _assert_capability_vocabulary_matches_registry()
@@ -864,7 +948,14 @@ def get_capability(
             else "association_adjusted_v1"
         )
         return next((c for c in matches if c.capability_id == wanted), None)
-    return matches[0]
+    defaults = {
+        "time_to_event": "survival_time_to_event_v1",
+        "causal_emulation": "causal_target_trial_v1",
+        "prediction": "prediction_risk_model_v1",
+        "phenotyping": "phenotyping_cluster_v1",
+        "descriptive": "descriptive_measurement_v1",
+    }
+    return next((c for c in matches if c.capability_id == defaults.get(family)), None)
 
 
 def get_capability_by_id(
@@ -1224,6 +1315,38 @@ def resolve_primary_capability(
             owner_claimed=claimed, owner_reason="runtime authority verifies the exact input and counting-process contract",
             **({} if claimed else {"failure_reason": "scientific_capability_step_incompatible",
                                    "detail": "Time-varying execution requires its signed owner contract."}))
+
+    if declared == LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID:
+        landmark_capability = get_capability_by_id(declared)
+        verdict = landmark_categorical_association_execution_verdict(primary)
+        if verdict.claimed:
+            return _verdict_for(
+                landmark_capability,
+                analysis_family=canonical,
+                owner_claimed=True,
+                owner_reason=(
+                    "the primary declares the signed categorical-landmark model "
+                    "contract; runtime authority separately verifies its "
+                    "digest-bound temporal and model coordinates"
+                ),
+            )
+        failure_reason = (
+            "primary_owner_declaration_incomplete"
+            if verdict.missing_declarations
+            else "primary_capability_owner_mismatch"
+        )
+        return _verdict_for(
+            landmark_capability,
+            analysis_family=canonical,
+            owner_claimed=False,
+            owner_reason=verdict.reason,
+            failure_reason=failure_reason,
+            detail=(
+                "The digest-bound categorical-landmark capability requires the "
+                f"exact {LANDMARK_CATEGORICAL_ANALYSIS_KIND!r} model contract: "
+                f"{verdict.reason}"
+            ),
+        )
 
     if declared == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
         landmark_capability = get_capability_by_id(declared)

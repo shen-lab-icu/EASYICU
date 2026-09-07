@@ -137,6 +137,31 @@ def test_closed_plan_grants_only_the_compiled_sensitivity_effect_authority() -> 
     assert effect_output_authorized(plan.steps[1]) is True
 
 
+def test_sensitivity_can_inherit_the_signed_landmark_categorical_parent() -> None:
+    parent = _primary().model_copy(
+        update={"method": "signed_landmark_categorical_association"}
+    )
+    child = _sensitivity()
+
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Does ordinal exposure associate with outcome?",
+            "analysis_type": "association_study",
+            "steps": [
+                parent.model_dump(mode="json"),
+                child.model_dump(mode="json"),
+            ],
+        }
+    )
+
+    verdict = association_binary_sensitivity_plan_verdict(
+        plan.steps[1],
+        plan_steps=plan.steps,
+    )
+    assert verdict.claimed is True
+    assert verdict.contract is not None
+
+
 def test_capability_fails_closed_without_its_exact_parent_or_output_shape() -> None:
     with pytest.raises(ValidationError, match="parent_ambiguous"):
         AnalysisPlan(

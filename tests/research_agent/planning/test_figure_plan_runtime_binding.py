@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent.contracts.figure_plan import PlannedFigurePanelSpec
 from easyicu.research_agent.execution.figure_plan_binding import (
     validate_planned_figure_contract_bindings,
@@ -182,3 +184,27 @@ def test_single_step_validator_runs_before_run_level_article_audit(
 
     assert len(findings) == 1
     assert findings[0].detail["reason"] == "runtime_panel_contract_mismatch"
+
+
+@pytest.mark.parametrize("level", ["step", "final"])
+def test_supplementary_placement_does_not_waive_chart_or_source_binding(
+    tmp_path, level
+):
+    run_dir, records = _runtime(
+        tmp_path, chart_type="horizontal_bar", source_products=["table:other_source"]
+    )
+    plan = _plan()
+    plan.steps[0].figure_panels = [
+        plan.steps[0].figure_panels[0].model_copy(update={"placement": "supplementary"})
+    ]
+    if level == "step":
+        findings = validate_step_planned_figure_contract_binding(
+            step=plan.steps[0],
+            out_dir=run_dir / "steps" / STEP_ID / "outputs",
+            step_summary=records[0]["step_summary"],
+        )
+    else:
+        findings = validate_planned_figure_contract_bindings(
+            plan=plan, run_dir=run_dir, per_step_records=records
+        )
+    assert [f.detail["reason"] for f in findings] == ["runtime_panel_contract_mismatch"]

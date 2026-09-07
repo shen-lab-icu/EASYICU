@@ -69,6 +69,7 @@ _CONTEXT_FIELDS = {
     "primary_exposure",
     "covariates",
     "covariate_selection",
+    "covariate_authority",
     "covariate_rationales",
     "covariate_temporal_roles",
     "covariate_operationalizations",
@@ -189,6 +190,7 @@ _ANALYSIS_DESIGN_FIELDS = frozenset(
     {"analysis_family", "analysis_unit", "variance_estimator", "cluster_unit"}
 )
 _COVARIATE_SELECTIONS = frozenset({"planner_selectable", "exact"})
+_COVARIATE_AUTHORITIES = frozenset({"user", "agent_plan"})
 _COVARIATE_TEMPORAL_ROLES = frozenset(
     {"baseline_static", "at_or_before_time_zero"}
 )
@@ -276,6 +278,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
     "primary_exposure",
     "covariates",
     "covariate_selection",
+    "covariate_authority",
     "covariate_rationales",
     "covariate_temporal_roles",
     "covariate_operationalizations",
@@ -1175,6 +1178,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "primary_exposure": "",
         "covariates": [],
         "covariate_selection": "planner_selectable",
+        "covariate_authority": None,
         "covariate_rationales": {},
         "covariate_temporal_roles": {},
         "covariate_operationalizations": {},
@@ -1246,6 +1250,22 @@ def _sanitize_patch(
                 }
             )
         patch["covariate_selection"] = selection
+    if "covariate_authority" in raw:
+        raw_authority = raw.get("covariate_authority")
+        authority = (
+            _identifier(raw_authority, field="covariate_authority")
+            if raw_authority is not None
+            else None
+        )
+        if authority is not None and authority not in _COVARIATE_AUTHORITIES:
+            raise StudyContextError(
+                {
+                    "error": "study_covariate_authority_invalid",
+                    "field": "covariate_authority",
+                    "allowed": sorted(_COVARIATE_AUTHORITIES),
+                }
+            )
+        patch["covariate_authority"] = authority
     if "covariate_rationales" in raw:
         patch["covariate_rationales"] = normalize_covariate_rationales(
             raw.get("covariate_rationales")
@@ -1527,11 +1547,14 @@ def _validate_covariate_decision_contract(context: Dict[str, Any]) -> None:
             }
         )
     if context.get("covariate_selection") != "exact" and (
-        rationale_keys or temporal_keys or operational_keys
+        rationale_keys
+        or temporal_keys
+        or operational_keys
+        or context.get("covariate_authority") is not None
     ):
         raise StudyContextError(
             {
-                "error": "study_covariate_decision_requires_exact_roster",
+                "error": "study_covariate_authority_requires_exact_roster",
                 "field": "covariate_selection",
             }
         )
@@ -2048,6 +2071,7 @@ def build_agent_context_binding(
                 "primary_exposure",
                 "covariates",
                 "covariate_selection",
+                "covariate_authority",
                 "covariate_rationales",
                 "covariate_temporal_roles",
                 "covariate_operationalizations",
@@ -2300,6 +2324,7 @@ def restore_turn_configuration_snapshot(
         "primary_exposure": "",
         "covariates": [],
         "covariate_selection": "planner_selectable",
+        "covariate_authority": None,
         "covariate_rationales": {},
         "covariate_temporal_roles": {},
         "covariate_operationalizations": {},

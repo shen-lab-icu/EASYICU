@@ -7,6 +7,7 @@ every rejected follow-up row. It never substitutes ICU length of stay.
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -16,8 +17,51 @@ import pandas as pd
 
 from ..authority.filesystem import AnchoredDirectory
 from ..canonical_json import canonical_json_bytes, sha256_bytes, sha256_file
+from ..contracts.dependence import (
+    PlannedDependenceRequirement,
+    PatientGroupResolutionError,
+    resolve_patient_groups,
+)
 from .foundation import AcquisitionResult
 from .hospital_mortality_followup import HospitalMortalityFollowup
+
+
+def _cohort_sha256(frame: pd.DataFrame) -> str:
+    return hashlib.sha256(
+        pd.util.hash_pandas_object(
+            frame.reset_index(drop=True), index=False
+        ).values.tobytes()
+    ).hexdigest()
+
+
+def _verified_patient_count(
+    frame: pd.DataFrame,
+    *,
+    replacement_row_identity: object,
+) -> int | None:
+    if not isinstance(replacement_row_identity, Mapping):
+        return None
+    source = replacement_row_identity.get("output_identity_column")
+    derivation = replacement_row_identity.get("patient_group_derivation")
+    if (
+        not isinstance(source, str)
+        or source not in frame.columns
+        or derivation
+        != {"algorithm": "prefix_before_:s", "delimiter": ":s"}
+    ):
+        return None
+    try:
+        groups = resolve_patient_groups(
+            frame[source].tolist(),
+            requirement=PlannedDependenceRequirement(
+                group_source=source,
+                group_derivation="prefix_before_delimiter",
+                delimiter=":s",
+            ),
+        )
+    except PatientGroupResolutionError as exc:
+        raise ValueError("hospital_followup_patient_grouping_invalid") from exc
+    return groups.cluster_count
 
 
 def materialize_hospital_followup_acquisition(
@@ -76,15 +120,35 @@ def materialize_hospital_followup_acquisition(
         "implementation_sha256": sha256_file(Path(__file__)),
     }
     output = path.parent / "hospital_followup_cohort.parquet"
-    output_provenance = path.parent / "hospital_followup_cohort.provenance.json"
+    # The ResearchContext intake owner discovers legacy materialization receipts
+    # through the canonical ``<stem>_provenance.json`` sibling selector.  Keep
+    # this derived cohort inside that contract instead of writing a visually
+    # similar sidecar that downstream planning cannot see.
+    output_provenance = path.parent / "hospital_followup_cohort_provenance.json"
     if output.exists() or output_provenance.exists():
         raise ValueError("hospital_followup_artifact_exists")
     selected.to_parquet(output, index=False)
+    replacement_row_identity = provenance.get("replacement_row_identity")
+    if isinstance(replacement_row_identity, Mapping):
+        replacement_row_identity = dict(replacement_row_identity)
+        replacement_row_identity["mapped_cohort_rows"] = len(selected)
     provenance.update(
         {
             "n_rows": len(selected),
-            "n_patients": len(selected),
+            "n_patients": _verified_patient_count(
+                selected,
+                replacement_row_identity=replacement_row_identity,
+            ),
+            "n_stays_after_inclusion_exclusion": len(selected),
             "columns": list(selected),
+            "cohort_sha256": _cohort_sha256(selected),
+            "cohort_file_sha256": sha256_file(output),
+            "cohort_file_size": output.stat().st_size,
+            **(
+                {"replacement_row_identity": replacement_row_identity}
+                if replacement_row_identity is not None
+                else {}
+            ),
             "hospital_followup_materialization": receipt,
         }
     )

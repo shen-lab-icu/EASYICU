@@ -8,6 +8,12 @@ from .time_varying_exposure import TIME_VARYING_EXPOSURE_CAPABILITY
 
 LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: Final = "association_landmark_spline_v1"
 LANDMARK_SPLINE_ANALYSIS_KIND: Final = "signed_landmark_spline_association"
+LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID: Final = (
+    "association_landmark_categorical_v1"
+)
+LANDMARK_CATEGORICAL_ANALYSIS_KIND: Final = (
+    "signed_landmark_categorical_association"
+)
 PHENOTYPING_CLUSTER_CAPABILITY_ID: Final = "phenotyping_cluster_v1"
 PHENOTYPING_ANALYSIS_KIND: Final = "cross_sectional_phenotyping"
 SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID: Final = (
@@ -24,6 +30,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID: "causal_emulation",
     "association_ordinal_trend_v1": "association",
     "association_adjusted_v1": "association",
+    LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID: "association",
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: "association",
     TIME_VARYING_EXPOSURE_CAPABILITY: "association",
     "association_freeform_v1": "association",
@@ -44,6 +51,8 @@ def capability_family(capability_id: str | None) -> str | None:
 
 __all__ = [
     "CAPABILITY_FAMILIES",
+    "LANDMARK_CATEGORICAL_ANALYSIS_KIND",
+    "LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID",
     "LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID",
     "LANDMARK_SPLINE_ANALYSIS_KIND",
     "PHENOTYPING_CLUSTER_CAPABILITY_ID",

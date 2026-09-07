@@ -137,6 +137,14 @@ class PiPlanDecisionSelectionRequest(BaseModel):
     run_id: RunIdText
 
 
+class PiAgentPlanConfigurationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    expected_revision: int = Field(ge=1)
+    run_id: RunIdText
+
+
 class PiIdeaSourceRequest(BaseModel):
     """One bounded source seed already parsed by the existing Idea owner."""
 
@@ -242,6 +250,7 @@ class PiHostActionRequest(BaseModel):
 
     project_id: ShortText
     action_code: Literal[
+        "auto_generate_plan",
         "generate_plan",
         "auto_revise_plan",
         "prepare_analysis_data",
@@ -765,6 +774,22 @@ def post_pi_copilot_plan_decision_selection(
             project_id=body.project_id,
             decision_code=body.decision_code,
             option_id=body.option_id,
+            expected_revision=body.expected_revision,
+            run_id=body.run_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/agent-plan-configuration")
+def post_pi_copilot_agent_plan_configuration(
+    session_id: ShortText,
+    body: PiAgentPlanConfigurationRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().apply_agent_plan_configuration(
+            session_id,
+            project_id=body.project_id,
             expected_revision=body.expected_revision,
             run_id=body.run_id,
         )

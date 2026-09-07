@@ -45,6 +45,10 @@ from ..planning.method_literature import (
     method_binding_support,
     reporting_method_source_keys_for_guidelines,
 )
+from ..planning.ordinal_multi_outcome import (
+    is_numeric_metadata_dtype,
+    resolve_ordinal_multi_outcome_contract,
+)
 from ..planning.planner_output_contract import (
     validate_fresh_planner_typed_product_specs,
 )
@@ -75,6 +79,7 @@ from ..planning.progressive_contract import (
 )
 from ..planning.progressive_host_materialization import (
     host_materialize_progressive_step,
+    normalize_progressive_action_contract,
     normalize_progressive_cohort_identity,
     progressive_module_method_source_keys,
 )
@@ -110,6 +115,8 @@ from ..reporting.article_contract import (
 from ..research_context.outbound import format_outbound_safe_context
 from ..schema import AnalysisPlan, ResearchContext
 from .progressive_payload import (
+    parse_progressive_model as _parse_model,
+    parse_progressive_foundation_materialization as _parse_foundation_materialization,
     parse_progressive_step_materialization as _parse_step_materialization,
     product_refs_for_materialization_coordinate,
     progressive_foundation_structured_output_request,
@@ -401,6 +408,12 @@ def _required_outline_method_layers(
     """Project the method layers knowable before step materialization."""
 
     required = set(context_required_method_layers)
+    if any(
+        step.module_id == "measurement_audit"
+        and step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+        for step in outline.steps
+    ):
+        required.add("missing_data")
     adjusted_steps = [
         step for step in outline.steps if step.module_id == "adjusted_association"
     ]
@@ -605,12 +618,6 @@ def _bound_method_layers(
     return layers
 
 
-_NUMERIC_METADATA_DTYPE = re.compile(
-    r"^(?:u?int\d*|float\d*|double|number|decimal(?:\d+)?)$",
-    re.IGNORECASE,
-)
-
-
 def _continuous_planning_variable_names(
     context: ResearchContext,
 ) -> tuple[str, ...]:
@@ -635,9 +642,25 @@ def _continuous_planning_variable_names(
         if str(variable.role.value) in excluded_roles:
             continue
         dtype = str(variable.dtype or "").strip()
-        if domain.get("is_binary") is False or _NUMERIC_METADATA_DTYPE.fullmatch(dtype):
+        if domain.get("is_binary") is False or is_numeric_metadata_dtype(dtype):
             names.append(variable.name)
     return tuple(names)
+
+
+def _available_ordered_trend_action(
+    context: ResearchContext,
+    analysis_types: Sequence[str],
+) -> tuple[str, str, str] | None:
+    """Expose an applicable action without prescribing a scientific choice.
+
+    Outcome columns describe available data. They do not authorize a secondary
+    endpoint or change primary model coding; the outline must select both.
+    """
+
+    if "association_study" not in set(analysis_types):
+        return None
+    contract = resolve_ordinal_multi_outcome_contract(context)
+    return contract.variables if contract is not None else None
 
 
 def _missing_method_layers_outside_step_roster(
@@ -698,6 +721,15 @@ def _requires_visualization_step(context: ResearchContext) -> bool:
     """Return whether the run-bound output request explicitly requires a figure."""
 
     preferences = context.user_preferences
+    if (
+        str(getattr(preferences, "inferred_analysis_family", None) or "")
+        == "descriptive_epidemiology"
+    ):
+        # Descriptive publication figures are intentionally compiled after
+        # extraction from the exact typed result/audit products.  Requiring a
+        # free-standing visualization outline step here would contradict the
+        # family module contract and create a second owner for the same figure.
+        return False
     text = str(getattr(preferences, "must_have_outputs", None) or "")
     return bool(_EXPLICIT_FIGURE_OUTPUT.search(text))
 
@@ -1024,154 +1056,6 @@ def _action_catalog(
                 }
             )
     return tuple(action_ids), rows
-
-
-def _canonical_outline_step_id(value: object) -> str | None:
-    """Return one authority-free internal coordinate or ``None``.
-
-    Outline step ids are local DAG handles, not scientific content.  Some
-    schema-imperfect providers render the requested lowercase id with spaces,
-    punctuation, or a numbered-list prefix.  Canonicalize only that spelling;
-    callers still reject empty/oversized ids, collisions, unknown dependencies,
-    and every change to module, action, variables, objective, or role.
-    """
-
-    if not isinstance(value, str):
-        return None
-    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().casefold())
-    normalized = re.sub(r"_+", "_", normalized).strip("_")
-    if not normalized or len(normalized) > 80:
-        return None
-    return normalized
-
-
-def _canonicalize_outline_coordinates(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Repair only bijective internal id spelling in an outline payload."""
-
-    canonical = dict(payload)
-    raw_steps = canonical.get("steps")
-    if not isinstance(raw_steps, list) or not all(
-        isinstance(step, Mapping) for step in raw_steps
-    ):
-        return canonical
-
-    steps = [dict(step) for step in raw_steps]
-    raw_ids: list[str] = []
-    normalized_ids: list[str] = []
-    for step in steps:
-        if "step_id" not in step and "step" in step:
-            step["step_id"] = step.pop("step")
-        raw_id = step.get("step_id")
-        normalized_id = _canonical_outline_step_id(raw_id)
-        if not isinstance(raw_id, str) or normalized_id is None:
-            return canonical
-        raw_ids.append(raw_id)
-        normalized_ids.append(normalized_id)
-
-    # A many-to-one rewrite would change DAG identity.  Leave it untouched so
-    # the strict Pydantic contract reports the original invalid coordinates.
-    if len(set(normalized_ids)) != len(normalized_ids):
-        return canonical
-    id_map = dict(zip(raw_ids, normalized_ids, strict=True))
-    normalized_set = set(normalized_ids)
-    for step, normalized_id in zip(steps, normalized_ids, strict=True):
-        step["step_id"] = normalized_id
-        dependencies = step.get("depends_on")
-        if not isinstance(dependencies, list):
-            return canonical
-        normalized_dependencies: list[Any] = []
-        for dependency in dependencies:
-            if dependency in id_map:
-                normalized_dependencies.append(id_map[dependency])
-                continue
-            normalized_dependency = _canonical_outline_step_id(dependency)
-            normalized_dependencies.append(
-                normalized_dependency
-                if normalized_dependency in normalized_set
-                else dependency
-            )
-        step["depends_on"] = normalized_dependencies
-    canonical["steps"] = steps
-    return canonical
-
-
-def _parse_model(raw: str, model: type[Any]) -> Any:
-    payload = json.loads(str(raw or "").strip())
-    if not isinstance(payload, dict):
-        raise ValueError("progressive Planner response root must be an object")
-    if model is ProgressivePlanOutline:
-        payload = _canonicalize_outline_coordinates(payload)
-    return model.model_validate(payload)
-
-
-def _parse_foundation_materialization(
-    raw: str,
-    *,
-    host_cohort: ProgressiveCohortIntent | None,
-    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
-) -> ProgressiveFoundationMaterialization:
-    payload = json.loads(str(raw or "").strip())
-    if not isinstance(payload, dict):
-        raise ValueError("progressive Planner response root must be an object")
-    foundation = payload.get("foundation")
-    if isinstance(foundation, dict):
-        decisions = foundation.get("know_how_decisions")
-        if isinstance(decisions, list):
-            # An exact duplicate carries no additional scientific choice and is
-            # a common structured-generation artifact. Collapse only bytewise-
-            # equivalent JSON objects; two different decisions for the same
-            # card/claim coordinate still reach the model validator and fail
-            # closed as a real conflict.
-            unique_decisions: list[Any] = []
-            seen_decisions: set[str] = set()
-            for decision in decisions:
-                if isinstance(decision, dict) and allowed_know_how_decisions:
-                    card = allowed_know_how_decisions.get(
-                        str(decision.get("card_id") or "")
-                    )
-                    expected_citations = (
-                        (card.get("claims") or {}).get(decision.get("claim_id"))
-                        if isinstance(card, Mapping)
-                        else None
-                    )
-                    observed_citations = decision.get("citation_ids")
-                    # Citation order is presentation, not scientific authority.
-                    # Canonicalize a permutation of the exact authority set;
-                    # missing, added, or repeated citations remain untouched and
-                    # fail in verify_know_how_decisions downstream.
-                    if (
-                        isinstance(observed_citations, list)
-                        and expected_citations is not None
-                        and len(observed_citations) == len(expected_citations)
-                        and set(observed_citations) == set(expected_citations)
-                    ):
-                        decision = dict(decision)
-                        decision["citation_ids"] = list(expected_citations)
-                coordinate = json.dumps(
-                    decision,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                if coordinate in seen_decisions:
-                    continue
-                seen_decisions.add(coordinate)
-                unique_decisions.append(decision)
-            if unique_decisions != decisions:
-                payload = dict(payload)
-                foundation = dict(foundation)
-                foundation["know_how_decisions"] = unique_decisions
-                payload["foundation"] = foundation
-    if host_cohort is not None:
-        foundation = payload.get("foundation")
-        if not isinstance(foundation, dict):
-            raise ValueError("progressive Planner foundation must be an object")
-        payload = dict(payload)
-        payload["foundation"] = {
-            **foundation,
-            "cohort": host_cohort.model_dump(mode="json"),
-        }
-    return ProgressiveFoundationMaterialization.model_validate(payload)
 
 
 def _primary_or_first_step_index(plan: AnalysisPlan) -> int:
@@ -1567,6 +1451,7 @@ class ProgressivePlannerAgent:
                             "n_stays",
                             "id_columns",
                             "outcome_columns",
+                            "requested_outcome_columns",
                         },
                     ),
                 },
@@ -1689,6 +1574,24 @@ class ProgressivePlannerAgent:
                 )
                 + ". This is a pre-result plan proposal for later plan approval, "
                 "not a claim that nonlinearity has already been tested."
+            )
+        ordered_trend = _available_ordered_trend_action(context, analysis_types)
+        if ordered_trend is not None:
+            exposure, binary_outcome, continuous_outcome = ordered_trend
+            blocks.append(
+                "Available ordered multi-outcome action (optional):\nThe typed "
+                "metadata supports association.ordinal_trend for "
+                + json.dumps(
+                    [exposure, binary_outcome, continuous_outcome],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + ". Select it only when the proposed study addresses both "
+                "outcomes. A column's availability does not request its analysis "
+                "or prescribe the primary exposure coding. If selected, declare "
+                "one secondary custom_analysis step depending directly on the "
+                "primary adjusted_association step with these three variables; "
+                "the complete plan remains subject to scientific and human review."
             )
         singleton_host_modules = {
             module_id: [product_id for product_id, _role in products]
@@ -1822,6 +1725,7 @@ class ProgressivePlannerAgent:
         allowed_literature_citation_keys: Sequence[str],
         required_custom_products: Sequence[str] = (),
         required_visualization_step: bool = False,
+        available_ordered_trend: tuple[str, str, str] | None = None,
         closed_domain_variables: Sequence[str] | None = None,
         ordered_domain_variables: Sequence[str] | None = None,
         continuous_domain_variables: Sequence[str] | None = None,
@@ -2045,6 +1949,47 @@ class ProgressivePlannerAgent:
                 path="steps",
                 findings=({"required_products": list(required_custom_products)},),
             )
+        if available_ordered_trend is not None:
+            ordered_steps = [
+                step
+                for step in outline.steps
+                if step.scientific_action_id == "association.ordinal_trend"
+            ]
+            adjusted_primaries = [
+                step.step_id
+                for step in outline.steps
+                if step.module_id == "adjusted_association"
+                and step.planned_analysis_role == "primary"
+            ]
+            expected_variables = set(available_ordered_trend)
+            ordered_step_valid = bool(
+                len(ordered_steps) == 1
+                and len(adjusted_primaries) == 1
+                and ordered_steps[0].module_id == "custom_analysis"
+                and ordered_steps[0].planned_analysis_role == "secondary"
+                and set(ordered_steps[0].variable_names) == expected_variables
+                and adjusted_primaries[0] in set(ordered_steps[0].depends_on)
+            )
+            if ordered_steps and not ordered_step_valid:
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_ordered_trend_owner_invalid",
+                    "the selected ordinal multi-outcome action requires one "
+                    "secondary association.ordinal_trend owner on the primary "
+                    "adjusted-association lineage",
+                    path="steps",
+                    findings=(
+                        {
+                            "scientific_action_id": (
+                                "association.ordinal_trend"
+                            ),
+                            "required_variables": list(available_ordered_trend),
+                            "primary_step_ids": adjusted_primaries,
+                            "candidate_step_ids": [
+                                step.step_id for step in ordered_steps
+                            ],
+                        },
+                    ),
+                )
         primary_step_ids = {
             step.step_id
             for step in outline.steps
@@ -2182,7 +2127,13 @@ class ProgressivePlannerAgent:
                 findings=({"step_ids": detached_secondary_custom},),
             )
         for index, step in enumerate(outline.steps):
-            if step.module_id not in allowed_modules:
+            provisional_baseline = (
+                outline.analysis_type == "descriptive_epidemiology"
+                and step.module_id == "custom_analysis"
+                and step.planned_analysis_role == "auxiliary"
+                and step.scientific_action_id is None
+            )
+            if step.module_id not in allowed_modules and not provisional_baseline:
                 raise ProgressivePlanCompileError(
                     "progressive_outline_module_unavailable",
                     f"outline module {step.module_id!r} is unavailable for "
@@ -3243,6 +3194,12 @@ class ProgressivePlannerAgent:
                     materialization,
                     context=context,
                 )
+                materialization = normalize_progressive_action_contract(
+                    materialization,
+                    context=context,
+                    outline_step=outline_step,
+                    available_product_refs=visible_product_refs,
+                )
                 self.capture_efficiency_metrics()
                 prior_materialization = (
                     self._attempt.compile_failure_attempts[-1].materialization
@@ -3543,13 +3500,19 @@ class ProgressivePlannerAgent:
         ordered_domain_variables = tuple(
             variable.name
             for variable in context.variables
-            if len(
-                observed_levels_for(
-                    name=variable.name,
-                    variables=context_variable_map,
+            if (
+                len(
+                    observed_levels_for(
+                        name=variable.name,
+                        variables=context_variable_map,
+                    )
+                )
+                >= 3
+                or (
+                    variable.is_ordinal
+                    and len(variable.ordinal_levels or ()) >= 3
                 )
             )
-            >= 3
         )
         continuous_domain_variables = _continuous_planning_variable_names(context)
         resolved_planning_contract_context = bind_literature_citation_authority(
@@ -3560,6 +3523,10 @@ class ProgressivePlannerAgent:
         )
         required_custom_products = _required_separate_analysis_products(context)
         required_visualization_step = _requires_visualization_step(context)
+        available_ordered_trend = _available_ordered_trend_action(
+            context,
+            analysis_types,
+        )
         if resume_checkpoint is not None:
             validate_progressive_resume_runtime_dependencies(resume_dependency_context)
         scientific_authority = {
@@ -3579,6 +3546,7 @@ class ProgressivePlannerAgent:
                 required_primary_cohort_selection_mode
             ),
             "required_visualization_step": required_visualization_step,
+            "available_ordered_trend": list(available_ordered_trend or ()),
             "host_cohort": (
                 host_cohort.model_dump(mode="json") if host_cohort is not None else None
             ),
@@ -3727,6 +3695,7 @@ class ProgressivePlannerAgent:
                     allowed_literature_citation_keys=allowed_citations,
                     required_custom_products=required_custom_products,
                     required_visualization_step=required_visualization_step,
+                    available_ordered_trend=available_ordered_trend,
                     closed_domain_variables=closed_domain_variables,
                     ordered_domain_variables=ordered_domain_variables,
                     continuous_domain_variables=continuous_domain_variables,
@@ -3776,6 +3745,7 @@ class ProgressivePlannerAgent:
             allowed_literature_citation_keys=allowed_citations,
             required_custom_products=required_custom_products,
             required_visualization_step=required_visualization_step,
+            available_ordered_trend=available_ordered_trend,
             closed_domain_variables=closed_domain_variables,
             ordered_domain_variables=ordered_domain_variables,
             continuous_domain_variables=continuous_domain_variables,
@@ -3921,6 +3891,7 @@ class ProgressivePlannerAgent:
                 parsed = _parse_foundation_materialization(
                     raw,
                     host_cohort=host_cohort,
+                    outline_sha256=outline_sha256,
                     allowed_know_how_decisions=allowed_know_how_decisions,
                 )
                 if parsed.outline_sha256 != outline_sha256:

@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from easyicu.research_agent.agents import plan_payload as payload_owner
 from easyicu.research_agent.agents.plan_payload import (
     PlannerStructuredOutputSchemaError,
     decode_planner_transport_payload,
@@ -16,7 +17,11 @@ from easyicu.research_agent.contracts.product_identity import (
     CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN,
 )
 from easyicu.research_agent.agents.core import PlannerAgent
-from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+from easyicu.research_agent.schema import (
+    CohortDescriptor,
+    PlannedModelRequirement,
+    ResearchContext,
+)
 
 
 def _walk_schema(node):
@@ -72,8 +77,12 @@ def test_planner_transport_schema_is_closed_compact_and_deterministic():
 
     consumption = schema["$defs"]["ArtifactConsumptionContract"]
     branches = {
-        branch["properties"]["mode"]["const"]: branch
+        mode: branch
         for branch in consumption["anyOf"]
+        for mode in (
+            branch["properties"]["mode"].get("enum")
+            or [branch["properties"]["mode"]["const"]]
+        )
     }
     assert set(branches) == {"all_rows", "single_row", "one_per_role"}
     for mode in ("all_rows", "single_row"):
@@ -94,6 +103,108 @@ def test_planner_transport_schema_is_closed_compact_and_deterministic():
     first["json_schema"]["schema"]["properties"].clear()
     second = request.to_openai_response_format()
     assert second["json_schema"]["schema"]["properties"]
+
+
+def test_shared_transport_shapes_preserve_every_scientific_constraint(monkeypatch):
+    shared = payload_owner._planner_transport_schema(("strobe_2007",))
+    monkeypatch.setattr(payload_owner, "_share_planner_transport_shapes", lambda value: value)
+    expanded_source = payload_owner._planner_transport_schema(("strobe_2007",))
+
+    def expand(node, definitions):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                assert set(node) == {"$ref"}
+                return expand(definitions[node["$ref"].removeprefix("#/$defs/")], definitions)
+            return {
+                key: expand(value, definitions)
+                for key, value in node.items()
+                if key != "$defs"
+            }
+        if isinstance(node, list):
+            return [expand(value, definitions) for value in node]
+        return node
+
+    assert expand(shared, shared["$defs"]) == expand(
+        expanded_source, expanded_source["$defs"]
+    )
+    assert "presentation" in shared["$defs"]["PlannedFigurePanelSpec"]["properties"]
+    assert len(json.dumps(shared)) < len(json.dumps(expanded_source))
+
+
+def _wire_model_requirement():
+    return {
+        "requirement_id": "age_adjusted",
+        "outcome": "death",
+        "outcome_type": "binary",
+        "method_family": "statsmodels_logit_mle",
+        "exposure_source": "stage",
+        "analysis_role": "primary",
+        "analysis_set": "source_aware",
+        "covariates": ["age"],
+        "covariate_rationales": [
+            {"key": "age", "value": "Baseline age may influence exposure and outcome."}
+        ],
+        "covariate_temporal_roles": [{"key": "age", "value": "baseline_static"}],
+    }
+
+
+def test_covariate_decisions_use_closed_wire_rows_and_preserve_authority():
+    schema = json.loads(planner_structured_output_request().schema_json)
+    properties = schema["$defs"]["PlannedModelRequirement"]["properties"]
+    for field in ("covariate_rationales", "covariate_temporal_roles"):
+        assert properties[field]["type"] == "array"
+        row = properties[field]["items"]
+        assert set(row["required"]) == {"key", "value"}
+        assert row["additionalProperties"] is False
+    assert properties["covariate_temporal_roles"]["items"]["properties"]["value"][
+        "enum"
+    ] == ["baseline_static", "at_or_before_time_zero"]
+
+    source = {"steps": [{"model_requirements": [_wire_model_requirement()]}]}
+    decoded = decode_planner_transport_payload(source)
+    requirement = PlannedModelRequirement.model_validate(
+        decoded["steps"][0]["model_requirements"][0]
+    )
+    assert requirement.covariate_rationales == {
+        "age": "Baseline age may influence exposure and outcome."
+    }
+    assert requirement.covariate_temporal_roles == {"age": "baseline_static"}
+    assert isinstance(source["steps"][0]["model_requirements"][0]["covariate_rationales"], list)
+
+
+@pytest.mark.parametrize("field", ["covariate_rationales", "covariate_temporal_roles"])
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"key": "age", "value": "first"}, {"key": " age ", "value": "second"}],
+        [{"key": "age", "value": "first", "override": True}],
+        [{"key": "", "value": "first"}],
+        [{"key": ["age"], "value": "first"}],
+    ],
+)
+def test_covariate_wire_rows_reject_ambiguous_or_malformed_decisions(field, rows):
+    requirement = _wire_model_requirement()
+    requirement[field] = rows
+    with pytest.raises(PlannerStructuredOutputSchemaError):
+        decode_planner_transport_payload({"steps": [{"model_requirements": [requirement]}]})
+
+
+@pytest.mark.parametrize(
+    ("field", "rows"),
+    [
+        ("covariate_rationales", [{"key": "age", "value": "short"}]),
+        ("covariate_temporal_roles", [{"key": "age", "value": "after_time_zero"}]),
+        ("covariate_temporal_roles", [{"key": "sex", "value": "baseline_static"}]),
+    ],
+)
+def test_decoded_covariate_decisions_still_require_the_scientific_contract(field, rows):
+    requirement = _wire_model_requirement()
+    requirement[field] = rows
+    decoded = decode_planner_transport_payload(
+        {"steps": [{"model_requirements": [requirement]}]}
+    )
+    with pytest.raises(ValueError):
+        PlannedModelRequirement.model_validate(decoded["steps"][0]["model_requirements"][0])
 
 
 def test_run_bound_literature_schema_closes_source_element_pairs():

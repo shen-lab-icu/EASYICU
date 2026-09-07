@@ -141,6 +141,7 @@ def _figure_role_facts(
         "typed_panel_count": sum(len(step.figure_panels) for step in figure_steps),
         "chart_types": chart_types,
         "minimum_distinct_chart_types": strategy.minimum_distinct_chart_types,
+        "chart_diversity_is_advisory": True,
         "distinct_chart_types_complete": (
             len(chart_types) >= strategy.minimum_distinct_chart_types
         ),

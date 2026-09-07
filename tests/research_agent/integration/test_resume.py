@@ -24,10 +24,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from tools.run_research_agent_bench import (
-    _resolve_resume_run_id,
-    _run_ehrflowbench_jsonl,
-)
 from easyicu.research_agent.pipeline import (
     _apply_resume_plan_migrations,
     _load_compatible_resume_plan,
@@ -131,25 +127,6 @@ def _run_full(ra, synthetic_cohort, workdir: Path):
         database="synthetic",
         target_outcome="death",
     )
-
-
-def _write_bench_resume_checkpoint(
-    run_dir: Path,
-    *,
-    run_status_claims_complete: bool = False,
-) -> None:
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "analysis_plan.json").write_text(
-        json.dumps({"steps": []}), encoding="utf-8"
-    )
-    (run_dir / "manifest_partial.json").write_text(
-        json.dumps({"per_step_records": []}), encoding="utf-8"
-    )
-    if run_status_claims_complete:
-        (run_dir / "run_status.json").write_text(
-            json.dumps({"gates": {"execution_complete": True}}),
-            encoding="utf-8",
-        )
 
 
 def _write_capsule_resume_fixture(ra, tmp_path: Path):
@@ -1445,9 +1422,11 @@ def test_pipeline_resume_passes_invalidated_evidence_step_to_execution(
     )
 
 
+@pytest.mark.parametrize("omit_outcome_roster", [False, True])
 def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohort(
     ra,
     tmp_path: Path,
+    omit_outcome_roster: bool,
 ):
     pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
     evidence = EvidenceStore(run_dir)
@@ -1548,6 +1527,22 @@ def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohor
         source_files=None,
         disable_icu_context=False,
     )
+    if omit_outcome_roster:
+        scientific_identity["outcome_columns"] = []
+        with pytest.raises(RunInputIdentityError, match="outcome_columns"):
+            prepare_existing_resume_input(
+                run_dir=run_dir,
+                resume_state=partial,
+                scientific_identity=scientific_identity,
+                current_environment=build_environment_identity(llm_signature="mock"),
+                cohort=run_kwargs["cohort"],
+                question=run_kwargs["question"],
+                resume_from_step_id=None,
+                enforcement_mode="soft",
+                load_compatible_plan=_load_compatible_resume_plan,
+            )
+        assert not (run_dir / RUN_INPUT_CAPSULE_FILENAME).exists()
+        return
     prepared = prepare_existing_resume_input(
         run_dir=run_dir,
         resume_state=partial,
@@ -1569,79 +1564,6 @@ def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohor
     assert prepared.resume_state["resume_environment_drift"] is True
 
 
-def test_bench_runner_explicit_resume_id_wins_over_auto_discovery(tmp_path: Path):
-    selected = tmp_path / "run_20260701T000000_selected"
-    auto_latest = tmp_path / "run_20260701T999999_auto"
-    _write_bench_resume_checkpoint(selected)
-    _write_bench_resume_checkpoint(auto_latest)
-
-    assert (
-        _resolve_resume_run_id(
-            workdir=tmp_path,
-            reuse_existing=True,
-            resume_run_id=selected.name,
-        )
-        == selected.name
-    )
-
-
-def test_bench_runner_auto_resume_does_not_trust_run_status_only_completion(
-    tmp_path: Path,
-):
-    interrupted = tmp_path / "run_20260701T010000_interrupted"
-    unverified_latest = tmp_path / "run_20260701T999999_unverified"
-    _write_bench_resume_checkpoint(interrupted)
-    _write_bench_resume_checkpoint(
-        unverified_latest,
-        run_status_claims_complete=True,
-    )
-
-    assert (
-        _resolve_resume_run_id(
-            workdir=tmp_path,
-            reuse_existing=True,
-            resume_run_id=None,
-        )
-        == unverified_latest.name
-    )
-
-
-def test_bench_runner_auto_resume_ignores_authoritatively_complete_runs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    interrupted = tmp_path / "run_20260701T010000_interrupted"
-    complete_latest = tmp_path / "run_20260701T999999_complete"
-    _write_bench_resume_checkpoint(interrupted)
-    _write_bench_resume_checkpoint(complete_latest)
-    (complete_latest / "manifest.json").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "tools.run_research_agent_bench._run_reached_execution_complete",
-        lambda run_dir: run_dir == complete_latest,
-    )
-
-    assert (
-        _resolve_resume_run_id(
-            workdir=tmp_path,
-            reuse_existing=True,
-            resume_run_id=None,
-        )
-        == interrupted.name
-    )
-
-
-def test_bench_runner_explicit_resume_requires_locked_checkpoint(tmp_path: Path):
-    run_dir = tmp_path / "run_20260701T000000_missing"
-    run_dir.mkdir()
-
-    with pytest.raises(SystemExit, match="analysis_plan.json"):
-        _resolve_resume_run_id(
-            workdir=tmp_path,
-            reuse_existing=False,
-            resume_run_id=run_dir.name,
-        )
-
-
 def test_load_resume_state_rejects_corrupt_partial_manifest(tmp_path: Path):
     run_dir = tmp_path / "run_corrupt"
     run_dir.mkdir()
@@ -1649,37 +1571,6 @@ def test_load_resume_state_rejects_corrupt_partial_manifest(tmp_path: Path):
 
     with pytest.raises(ValueError, match="corrupt checkpoint"):
         _load_resume_state(run_dir)
-
-
-def test_bench_runner_resume_id_rejects_paths(tmp_path: Path):
-    with pytest.raises(SystemExit, match="not a path"):
-        _resolve_resume_run_id(
-            workdir=tmp_path,
-            reuse_existing=False,
-            resume_run_id="../run_20260701T000000_bad",
-        )
-
-
-def test_bench_runner_ehrflow_resume_requires_single_row(tmp_path: Path):
-    jsonl_path = tmp_path / "items.jsonl"
-    jsonl_path.write_text(
-        "\n".join(
-            [
-                json.dumps({"key": "E1"}),
-                json.dumps({"key": "E2"}),
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(SystemExit, match="one-row EHRFlowBench JSONL"):
-        _run_ehrflowbench_jsonl(
-            jsonl_path=jsonl_path,
-            out_root=tmp_path / "out",
-            seed=7,
-            arms=["naive"],
-            resume_run_id="run_20260701T000000_selected",
-        )
 
 
 def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):

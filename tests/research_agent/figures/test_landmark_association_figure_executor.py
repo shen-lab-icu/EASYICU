@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -181,6 +182,16 @@ def test_renderer_exports_two_claim_led_panels_and_four_source_tables(
     )
     assert summary["status"] == "ok"
     assert len(summary["source_data_files"]) == 4
+    supplementary = summary["supplementary_output_files"]["figure:display_suite"]
+    assert (tmp_path / "outputs" / supplementary).is_file()
+    supplementary_contract_path = (
+        tmp_path / "outputs" / "display_suite_supplementary.figure_contract.json"
+    )
+    supplementary_contract = json.loads(supplementary_contract_path.read_text())
+    assert [panel["panel_id"] for panel in supplementary_contract["panels"]] == [
+        "robustness_summary",
+        "measurement_process",
+    ]
     source = pd.read_csv(tmp_path / "outputs" / summary["source_data_files"][0])
     assert source["source_row_index"].tolist() == [0, 1, 2]
     assert source["source_table"].nunique() == 1
@@ -228,6 +239,17 @@ def test_renderer_exports_two_claim_led_panels_and_four_source_tables(
             step_summary=summary,
         )
         == []
+    )
+
+    supplementary_contract["panels"][1]["metadata"]["chart_type"] = "table"
+    supplementary_contract_path.write_text(json.dumps(supplementary_contract))
+    findings = validate_step_planned_figure_contract_binding(
+        step=step, out_dir=tmp_path / "outputs", step_summary=summary
+    )
+    assert [f.detail["reason"] for f in findings] == ["runtime_panel_contract_mismatch"]
+    supplementary_contract_path.unlink()
+    assert validate_step_planned_figure_contract_binding(
+        step=step, out_dir=tmp_path / "outputs", step_summary=summary
     )
 
 

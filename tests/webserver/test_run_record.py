@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -93,3 +94,89 @@ def test_run_directory_rejects_paths_disguised_as_artifact_names(tmp_path: Path)
 
     with pytest.raises(ValueError, match="run_artifact_name_invalid"):
         directory.artifact("../quality_gate.json")
+
+
+def test_run_record_nested_state_is_immutable_and_projections_are_detached(tmp_path):
+    record = _record(tmp_path)
+    with pytest.raises(TypeError):
+        record.gate.checks[0]["passed"] = True
+    with pytest.raises(TypeError):
+        record.artifact_payloads["quality_gate.json"]["gate"]["status"] = "reportable"
+    wire = record.to_dict()
+    wire["gate"]["checks"][0]["passed"] = True
+    wire["artifact_payloads"]["quality_gate.json"]["gate"]["status"] = "reportable"
+    assert record.gate.checks[0]["passed"] is False
+    assert record.artifact_payloads["quality_gate.json"]["gate"]["status"] == "analysis_only"
+    json.dumps(record.to_dict())
+
+
+def _write_review_files(tmp_path):
+    for name, payload in {
+        "run_context.json": {"run_id": "run_a"},
+        "evidence_ledger.json": {"run_id": "run_a"},
+        "quality_gate.json": {"gate": {"status": "analysis_only", "checks": []}},
+    }.items():
+        (tmp_path / name).write_text(json.dumps(payload))
+
+
+def test_review_refuses_mixed_run_identities(tmp_path):
+    from easyicu.webserver.agent_runs import read_run_record
+    _write_review_files(tmp_path)
+    (tmp_path / "evidence_ledger.json").write_text(json.dumps({"run_id": "run_b"}))
+    record = read_run_record(str(tmp_path))
+    assert isinstance(record, RunRecordReadError)
+    assert record.error == "run_record_identity_conflict"
+
+
+def test_review_refuses_content_changed_between_payload_and_inventory(tmp_path, monkeypatch):
+    from easyicu.webserver import agent_runs
+    _write_review_files(tmp_path)
+    inventory = agent_runs._run_artifacts
+    def changed_inventory(path):
+        (path / "quality_gate.json").write_text(json.dumps({"gate": {"status": "new"}}))
+        return inventory(path)
+    monkeypatch.setattr(agent_runs, "_run_artifacts", changed_inventory)
+    record = agent_runs.read_run_record(str(tmp_path))
+    assert isinstance(record, RunRecordReadError)
+    assert record.error == "run_record_changed_during_read"
+
+
+def test_signoff_serializes_nested_frozen_gate_checks(tmp_path):
+    from easyicu.webserver import agent_runs
+
+    _write_review_files(tmp_path)
+    (tmp_path / "quality_gate.json").write_text(json.dumps({"gate": {
+        "status": "analysis_only", "checks": [
+            {"id": "source", "passed": True, "details": {"artifacts": ["table"]}},
+            {"id": "human_signoff", "passed": False},
+        ],
+    }}))
+    result = agent_runs.create_human_signoff(
+        str(tmp_path), reviewer="test reviewer",
+        confirmations=sorted(agent_runs._SIGNOFF_CONFIRMATIONS),
+    )
+    assert result["ok"] is True
+    assert result["signoff"]["gate_before_signoff"]["checks"][0]["details"] == {"artifacts": ["table"]}
+    json.dumps(result)
+
+
+def test_pending_plan_projection_is_detached_json():
+    from types import SimpleNamespace
+    from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+    from easyicu.webserver.agent_pipeline_runs import _pending_plan_authority
+
+    authority = PlanReviewAuthority.create(plan=AnalysisPlan(
+        research_question="A clinical question", steps=[AnalysisStep(
+            step_id="summary", intent="Describe", method="descriptive",
+            inputs=[], expected_outputs=["table:summary"],
+        )],
+    ))
+    pending = SimpleNamespace(requests=[SimpleNamespace(payload={
+        "plan_review_authority": authority.model_dump(mode="json"),
+    })])
+    wire = _pending_plan_authority(pending)
+    json.dumps(wire)
+    assert isinstance(wire["steps"], list)
+    wire["steps"][0]["method"] = "changed"
+    assert authority.plan_payload["steps"][0]["method"] == "descriptive"

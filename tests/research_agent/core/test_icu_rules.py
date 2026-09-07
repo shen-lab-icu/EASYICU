@@ -55,6 +55,30 @@ def test_classify_kdigo_stage_is_ordinal_score(ra):
     assert hint.aggregation_default.value == "max_or_last"
 
 
+def test_classify_wide_export_aki_stage_is_kdigo_ordinal(ra):
+    for name in (
+        "aki_stage",
+        "aki_stage_max",
+        "aki_stage_creat",
+        "aki_stage_uo",
+        "aki_stage_rrt",
+    ):
+        hint = ra.ICU_RULES.classify_variable(name, "float64", [])
+        assert hint.role.value == "ordinal_score"
+        assert hint.kind == ra.VariableKind.ORDINAL
+        assert hint.valid_range == (0.0, 3.0)
+        assert hint.is_ordinal is True
+        assert hint.ordinal_levels == (0, 1, 2, 3)
+
+
+def test_concurrent_support_indicators_are_not_baseline_covariates(ra):
+    for name in ("mech_vent", "vaso_ind"):
+        hint = ra.ICU_RULES.classify_variable(name, "int64", [0, 1])
+        assert hint.role.value == "intervention"
+        assert hint.kind == ra.VariableKind.BINARY
+        assert hint.aggregation_default.value == "max_or_last"
+
+
 def test_longest_prefix_match(ra):
     """``sofa2_resp_24h`` should match the ``sofa2_resp`` hint, not ``sofa2``."""
     icu = ra.ICU_RULES

@@ -29,7 +29,7 @@ def _node_binary() -> str | None:
 
 def test_study_context_owner_is_wired_before_route_modules() -> None:
     index = _read("index.html")
-    assert "js/study-context.js?v=20260824-extraction-roundtrip1" in index
+    assert "js/study-context.js?v=20260904-covariate-owner1" in index
     assert index.index("js/api.js?") < index.index("js/study-context.js?")
     assert index.index("js/study-context.js?") < index.index("js/screens-extraction.js?")
     assert index.index("js/screens-extraction.js?") < index.index(

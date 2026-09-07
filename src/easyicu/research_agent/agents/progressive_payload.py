@@ -12,6 +12,7 @@ from ..planning.method_literature import METHOD_CARDS
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..planning.progressive_contract import (
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
+    ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
     ProgressiveModuleId,
     ProgressiveOutlineStep,
@@ -36,6 +37,162 @@ class ProgressiveTransportSchemaError(ValueError):
 _TYPED_PRODUCT_TOKEN = re.compile(
     r"\b(?:artifact|dataset|model|statistic|table):[a-z][a-z0-9_]*\b"
 )
+
+
+def _canonical_outline_step_id(value: object) -> str | None:
+    """Return one authority-free internal coordinate or ``None``.
+
+    Outline step ids are local DAG handles, not scientific content.  Some
+    schema-imperfect providers render the requested lowercase id with spaces,
+    punctuation, or a numbered-list prefix.  Canonicalize only that spelling;
+    callers still reject empty/oversized ids, collisions, unknown dependencies,
+    and every change to module, action, variables, objective, or role.
+    """
+
+    if not isinstance(value, str):
+        return None
+    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().casefold())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized or len(normalized) > 80:
+        return None
+    return normalized
+
+
+def _canonicalize_outline_coordinates(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Repair only bijective internal id spelling in an outline payload."""
+
+    canonical = dict(payload)
+    raw_steps = canonical.get("steps")
+    if not isinstance(raw_steps, list) or not all(
+        isinstance(step, Mapping) for step in raw_steps
+    ):
+        return canonical
+
+    steps = [dict(step) for step in raw_steps]
+    raw_ids: list[str] = []
+    normalized_ids: list[str] = []
+    for step in steps:
+        if "step_id" not in step and "step" in step:
+            step["step_id"] = step.pop("step")
+        raw_id = step.get("step_id")
+        normalized_id = _canonical_outline_step_id(raw_id)
+        if not isinstance(raw_id, str) or normalized_id is None:
+            return canonical
+        raw_ids.append(raw_id)
+        normalized_ids.append(normalized_id)
+
+    # A many-to-one rewrite would change DAG identity.  Leave it untouched so
+    # the strict Pydantic contract reports the original invalid coordinates.
+    if len(set(normalized_ids)) != len(normalized_ids):
+        return canonical
+    id_map = dict(zip(raw_ids, normalized_ids, strict=True))
+    normalized_set = set(normalized_ids)
+    for step, normalized_id in zip(steps, normalized_ids, strict=True):
+        step["step_id"] = normalized_id
+        dependencies = step.get("depends_on")
+        if not isinstance(dependencies, list):
+            return canonical
+        normalized_dependencies: list[Any] = []
+        for dependency in dependencies:
+            if dependency in id_map:
+                normalized_dependencies.append(id_map[dependency])
+                continue
+            normalized_dependency = _canonical_outline_step_id(dependency)
+            normalized_dependencies.append(
+                normalized_dependency
+                if normalized_dependency in normalized_set
+                else dependency
+            )
+        step["depends_on"] = normalized_dependencies
+    canonical["steps"] = steps
+    return canonical
+
+
+def parse_progressive_model(raw: str, model: type[Any]) -> Any:
+    payload = json.loads(str(raw or "").strip())
+    if not isinstance(payload, dict):
+        raise ValueError("progressive Planner response root must be an object")
+    if model is ProgressivePlanOutline:
+        payload = _canonicalize_outline_coordinates(payload)
+    return model.model_validate(payload)
+
+
+def parse_progressive_foundation_materialization(
+    raw: str,
+    *,
+    host_cohort: ProgressiveCohortIntent | None,
+    outline_sha256: str | None = None,
+    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
+) -> ProgressiveFoundationMaterialization:
+    payload = json.loads(str(raw or "").strip())
+    if not isinstance(payload, dict):
+        raise ValueError("progressive Planner response root must be an object")
+    if outline_sha256 is not None:
+        # The digest is a host-computed transport coordinate, not a scientific
+        # choice. Bind it here just as the step parser binds
+        # ``outline_step_sha256``; the model remains responsible for every
+        # cohort, label, robustness, and know-how decision in the foundation.
+        payload = dict(payload)
+        payload["outline_sha256"] = outline_sha256
+    foundation = payload.get("foundation")
+    if isinstance(foundation, dict):
+        decisions = foundation.get("know_how_decisions")
+        if isinstance(decisions, list):
+            # An exact duplicate carries no additional scientific choice and is
+            # a common structured-generation artifact. Collapse only bytewise-
+            # equivalent JSON objects; two different decisions for the same
+            # card/claim coordinate still reach the model validator and fail
+            # closed as a real conflict.
+            unique_decisions: list[Any] = []
+            seen_decisions: set[str] = set()
+            for decision in decisions:
+                if isinstance(decision, dict) and allowed_know_how_decisions:
+                    card = allowed_know_how_decisions.get(
+                        str(decision.get("card_id") or "")
+                    )
+                    expected_citations = (
+                        (card.get("claims") or {}).get(decision.get("claim_id"))
+                        if isinstance(card, Mapping)
+                        else None
+                    )
+                    observed_citations = decision.get("citation_ids")
+                    # Citation order is presentation, not scientific authority.
+                    # Canonicalize a permutation of the exact authority set;
+                    # missing, added, or repeated citations remain untouched and
+                    # fail in verify_know_how_decisions downstream.
+                    if (
+                        isinstance(observed_citations, list)
+                        and expected_citations is not None
+                        and len(observed_citations) == len(expected_citations)
+                        and set(observed_citations) == set(expected_citations)
+                    ):
+                        decision = dict(decision)
+                        decision["citation_ids"] = list(expected_citations)
+                coordinate = json.dumps(
+                    decision,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if coordinate in seen_decisions:
+                    continue
+                seen_decisions.add(coordinate)
+                unique_decisions.append(decision)
+            if unique_decisions != decisions:
+                payload = dict(payload)
+                foundation = dict(foundation)
+                foundation["know_how_decisions"] = unique_decisions
+                payload["foundation"] = foundation
+    if host_cohort is not None:
+        foundation = payload.get("foundation")
+        if not isinstance(foundation, dict):
+            raise ValueError("progressive Planner foundation must be an object")
+        payload = dict(payload)
+        payload["foundation"] = {
+            **foundation,
+            "cohort": host_cohort.model_dump(mode="json"),
+        }
+    return ProgressiveFoundationMaterialization.model_validate(payload)
 
 
 def parse_progressive_step_materialization(
@@ -764,6 +921,7 @@ def _bind_initial_authorities(
     properties.pop("design_selection", None)
     definitions.pop("ResearchDesignSelection", None)
     definitions.pop("ResearchDesignCandidate", None)
+    definitions.pop("CandidateLiteratureDesignDecision", None)
     properties["analysis_type"] = _string_enum(analysis_types)
     robustness = definitions.get("ProgressiveRobustnessIntent")
     predicate = definitions.get("ProgressiveCohortPredicate")
@@ -1277,6 +1435,8 @@ def progressive_structured_output_request(
 __all__ = [
     "ProgressiveTransportSchemaError",
     "parse_progressive_step_materialization",
+    "parse_progressive_model",
+    "parse_progressive_foundation_materialization",
     "product_refs_for_materialization_coordinate",
     "progressive_foundation_structured_output_request",
     "progressive_outline_structured_output_request",

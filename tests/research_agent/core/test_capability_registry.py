@@ -17,7 +17,10 @@ import importlib
 import inspect
 from pathlib import Path
 import textwrap
+from dataclasses import replace
 from typing import get_args
+
+import pytest
 
 from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.execution.runners import selection
@@ -31,6 +34,7 @@ from easyicu.research_agent.reporting.readiness import (
 )
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 from easyicu.research_agent.contracts.capability_ids import (
+    LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
     LANDMARK_SPLINE_ANALYSIS_KIND,
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
     PHENOTYPING_ANALYSIS_KIND,
@@ -68,6 +72,31 @@ _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
         "cross_sectional_phenotyping_executor_code",
     ),
 }
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"data_contract": ()}, "capability_contract_incomplete"),
+    ({"result_contract": ""}, "capability_contract_incomplete"),
+    ({"required_diagnostics": ()}, "capability_contract_incomplete"),
+    ({"scientific_validation": "unlimited"}, "capability_claim_ceiling_invalid"),
+    ({"scientific_validation": "reportable", "scientific_validator_owner": None}, "capability_validator_required"),
+])
+def test_capability_admission_rejects_incomplete_contracts(changes, reason):
+    declared = cr.get_capability_by_id("association_adjusted_v1")
+    with pytest.raises(ValueError, match=reason):
+        cr.validate_capability_contracts((replace(declared, **changes),))
+
+
+def test_capability_admission_refuses_duplicate_ids_before_dict_projection():
+    declared = cr.CAPABILITY_REGISTRY[0]
+    with pytest.raises(ValueError, match="capability_identity_missing_or_duplicate"):
+        cr.validate_capability_contracts((declared, declared))
+
+
+def test_family_defaults_do_not_depend_on_declaration_order(monkeypatch):
+    before = {family: cr.get_capability(family) for family in get_args(StudyDesignFamily)}
+    monkeypatch.setattr(cr, "CAPABILITY_REGISTRY", tuple(reversed(cr.CAPABILITY_REGISTRY)))
+    assert {family: cr.get_capability(family) for family in before} == before
 
 
 def test_landmark_spline_and_freeform_have_distinct_validation_ceilings():
@@ -147,6 +176,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
     assert reportable == {
         "survival_time_to_event_v1",
         "association_adjusted_v1",
+        LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
         LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
         PHENOTYPING_CLUSTER_CAPABILITY_ID,
         "descriptive_exposure_outcome_distribution_v1",
@@ -186,6 +216,7 @@ def test_partition_helpers_are_consistent():
     assert det == {
         "Association — source-bound time-updated Cox",
         "Association — exact single-model adjusted",
+        "Association — digest-bound categorical landmark",
         "Association — digest-bound landmark spline",
         "Descriptive — typed exposure/outcome absolute risks",
         "Prediction / risk modelling",
@@ -385,7 +416,10 @@ def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
         + "\n"
         + inspect.getsource(pipeline_execute._step_settle_initial_code)
     )
-    assert "select_standard_executor(" in execute_source
+    assert "select_standard_executor(" not in execute_source
+    assert execute_source.index("resolve_standard_executor(") < execute_source.index(
+        "executor_decision.render_selection()"
+    )
     assert 'step_record["deterministic_standard_analysis"] = (' in execute_source
 
     # Every documented runner must define its registry-declared entrypoint

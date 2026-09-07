@@ -50,3 +50,55 @@ def test_unknown_identifier_is_not_guessed_to_be_patient_identity() -> None:
 
     assert result.analysis_unit == "row"
     assert result.n_patients is None
+
+
+def test_verified_composite_identity_counts_patients_without_relabeling_stays() -> None:
+    frame = pd.DataFrame(
+        {"patient_stay_id": ["p10:s1", "p10:s2", "p20:s3"]}
+    )
+
+    result = resolve_cohort_granularity(
+        frame=frame,
+        id_columns=["patient_stay_id"],
+        replacement_row_identity={
+            "output_identity_column": "patient_stay_id",
+            "patient_group_derivation": {
+                "algorithm": "prefix_before_:s",
+                "delimiter": ":s",
+            },
+        },
+    )
+
+    assert result.analysis_unit == "icu_stay"
+    assert result.patient_id_columns == ()
+    assert result.patient_grouping_source == "patient_stay_id"
+    assert result.n_patients == 2
+    assert result.provenance()["patient_identity_available"] is True
+    assert (
+        result.provenance()["n_patients_source"]
+        == "patient_stay_id:prefix_before_:s"
+    )
+
+
+def test_metadata_only_grouping_authorizes_design_without_claiming_a_count() -> None:
+    frame = pd.DataFrame({"patient_stay_id": pd.Series(dtype="string")})
+
+    result = resolve_cohort_granularity(
+        frame=frame,
+        id_columns=["patient_stay_id"],
+        replacement_row_identity={
+            "output_identity_column": "patient_stay_id",
+            "patient_group_derivation": {
+                "algorithm": "prefix_before_:s",
+                "delimiter": ":s",
+            },
+        },
+    )
+
+    assert result.patient_grouping_source == "patient_stay_id"
+    assert result.n_patients is None
+    assert result.provenance()["patient_identity_available"] is False
+    assert (
+        result.provenance()["n_patients_source"]
+        == "patient_stay_id:prefix_before_:s"
+    )

@@ -56,6 +56,7 @@ class AdjustmentSetAuthority:
 
     selection: Literal["planner_selectable", "exact"]
     covariates: tuple[str, ...]
+    authority: Optional[Literal["user", "agent_plan"]] = None
     rationales: tuple[tuple[str, str], ...] = ()
     temporal_roles: tuple[tuple[str, str], ...] = ()
     operationalizations: tuple[tuple[str, str], ...] = ()
@@ -84,9 +85,11 @@ class AdjustmentSetAuthority:
         operationalizations = (
             getattr(preferences, "covariate_operationalizations", {}) or {}
         )
+        authority = getattr(preferences, "covariate_authority", None)
         return cls(
             selection=selection,
             covariates=covariates,
+            authority=authority,
             rationales=tuple((name, str(rationales[name])) for name in covariates if name in rationales),
             temporal_roles=tuple(
                 (name, str(temporal_roles[name]))
@@ -201,6 +204,11 @@ def adjusted_model_term_planning_authority(
         role = str(getattr(variable.role, "value", variable.role) or "")
         if role in _MODEL_TERM_INELIGIBLE_ROLES:
             excluded.append({"name": name, "reason": f"semantic_role:{role}"})
+            continue
+        if adjustment.selection != "exact" and role != "demographic":
+            excluded.append(
+                {"name": name, "reason": "planner_baseline_authority_missing"}
+            )
             continue
         if role in _MODEL_TERM_DYNAMIC_ROLES and name not in authorized_time_zero:
             excluded.append({"name": name, "reason": "time_zero_authority_missing"})

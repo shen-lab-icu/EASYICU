@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from easyicu.webserver import study_contexts
@@ -77,6 +78,56 @@ def test_newer_nontransparent_failure_still_blocks_older_checkpoint(
         rows=rows,
         project_root=tmp_path,
     ) == ""
+
+
+def test_preanalysis_schema_failure_preserves_planner_checkpoint(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "study" / "run_schema-revalidation"
+    pipeline_run = project_dir / "pipeline" / "run_pipeline"
+    pipeline_run.mkdir(parents=True)
+    (pipeline_run / "progressive_planner_checkpoint_010.json").write_text("{}")
+    (project_dir / "source_run_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.web-research-pipeline-projection/1",
+                "status": "failed",
+                "failure_code": "research_pipeline_schema_validation_failed",
+                "analysis_started": False,
+            }
+        )
+    )
+    row = {
+        "gate_reason": "research_pipeline_schema_validation_failed",
+        "project_dir": str(project_dir),
+    }
+
+    assert run_authority._development_planner_checkpoint_available(row) is True
+
+
+def test_analysis_schema_failure_does_not_preserve_planner_checkpoint(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "study" / "run_execution-schema-failure"
+    pipeline_run = project_dir / "pipeline" / "run_pipeline"
+    pipeline_run.mkdir(parents=True)
+    (pipeline_run / "progressive_planner_checkpoint_010.json").write_text("{}")
+    (project_dir / "source_run_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.web-research-pipeline-projection/1",
+                "status": "failed",
+                "failure_code": "research_pipeline_schema_validation_failed",
+                "analysis_started": True,
+            }
+        )
+    )
+    row = {
+        "gate_reason": "research_pipeline_schema_validation_failed",
+        "project_dir": str(project_dir),
+    }
+
+    assert run_authority._development_planner_checkpoint_available(row) is False
 
 
 def test_failed_preparation_keeps_unchanged_candidate_plan_authoritative() -> None:
@@ -183,6 +234,37 @@ def test_consecutive_failed_preparations_keep_candidate_plan_authoritative() -> 
         run_authority.workflow_authoritative_run([*failed_attempts, candidate])
         is candidate
     )
+
+
+def test_session_binding_uses_same_candidate_owner_as_workflow(
+    monkeypatch,
+) -> None:
+    digest = "a" * 64
+    failed_attempt = {
+        "run_id": "run_failed-revision",
+        "run_type": "full",
+        "run_status": "failed",
+        "scientific_configuration_sha256": digest,
+        "artifact_names": ["source_run_manifest.json"],
+    }
+    candidate = {
+        "run_id": "run_reviewable-candidate",
+        "run_type": "full",
+        "run_status": "human_review_pending",
+        "gate_reason": "human_plan_review_required",
+        "scientific_configuration_sha256": digest,
+        "pending_review_reason_codes": ["plan_scientific_changes_required"],
+        "artifact_names": ["agent_plan.json", "scientific_plan_review.json"],
+    }
+    monkeypatch.setattr(
+        run_authority,
+        "list_bound_run_history",
+        lambda **_: [failed_attempt, candidate],
+    )
+
+    assert run_authority.latest_bound_run_id(
+        study_context_id="study-a",
+    ) == "run_reviewable-candidate"
 
 
 def test_checkpoint_seeding_is_wider_than_the_plan_resume_offer() -> None:

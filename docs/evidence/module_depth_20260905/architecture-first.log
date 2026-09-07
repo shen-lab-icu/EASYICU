@@ -1,0 +1,204 @@
+
+=== arch_measure ratchet ===
+tool baseline v1.8.0 sha 94d98442cfe1  |  current v1.8.0 sha 94d98442cfe1
+
+metric                                                 baseline    current    delta
+------------------------------------------------------------------------------------
+execution/phase.py::_execute_one_step.lines                  66         66       +0
+execution/phase.py::_execute_one_step.direct_nested_funcs          0          0       +0
+execution/phase.py::_execute_one_step.total_nested_funcs          0          0       +0
+execution/phase.py::_execute_one_step.own_bound_names          2          2       +0
+execution/phase.py::_execute_one_step.own_nonlocal_count          1          1       +0
+execution/phase.py::_execute_one_step.callable_closure_captured_names          0          0       +0
+execution/phase.py::run_execute_phase.lines                 928        928       +0
+execution/phase.py::run_execute_phase.direct_nested_funcs          3          3       +0
+execution/phase.py::run_execute_phase.total_nested_funcs          5          5       +0
+execution/phase.py::run_execute_phase.own_bound_names        134        134       +0
+execution/phase.py::run_execute_phase.own_nonlocal_count          0          0       +0
+execution/phase.py::run_execute_phase.callable_closure_captured_names         69         69       +0
+execution/phase.py::_execute_step.lines                     660        660       +0
+execution/phase.py::_execute_step.direct_nested_funcs          0          0       +0
+execution/phase.py::_execute_step.total_nested_funcs          0          0       +0
+execution/phase.py::_execute_step.own_bound_names           135        135       +0
+execution/phase.py::_execute_step.own_nonlocal_count          0          0       +0
+execution/phase.py::_execute_step.callable_closure_captured_names          0          0       +0
+execution/phase.py::_prepare_execute_phase_authority.lines        147        147       +0
+execution/phase.py::_prepare_execute_phase_authority.direct_nested_funcs          0          0       +0
+execution/phase.py::_prepare_execute_phase_authority.total_nested_funcs          0          0       +0
+execution/phase.py::_prepare_execute_phase_authority.own_bound_names         32         32       +0
+execution/phase.py::_prepare_execute_phase_authority.own_nonlocal_count          0          0       +0
+execution/phase.py::_prepare_execute_phase_authority.callable_closure_captured_names          0          0       +0
+audits/figures.py::_compare_source_to_upstream.lines        873        873       +0
+audits/figures.py::_compare_source_to_upstream.direct_nested_funcs         12         12       +0
+audits/figures.py::_compare_source_to_upstream.total_nested_funcs         12         12       +0
+audits/figures.py::_compare_source_to_upstream.own_bound_names        128        128       +0
+audits/figures.py::_compare_source_to_upstream.own_nonlocal_count          0          0       +0
+audits/figures.py::_compare_source_to_upstream.callable_closure_captured_names         15         15       +0
+pipeline.py::run.lines                                      790        790       +0
+pipeline.py::run.direct_nested_funcs                         13         13       +0
+pipeline.py::run.total_nested_funcs                          13         13       +0
+pipeline.py::run.own_bound_names                            107        107       +0
+pipeline.py::run.own_nonlocal_count                           0          0       +0
+pipeline.py::run.callable_closure_captured_names             43         43       +0
+pipeline.py::_generate_or_resume_plan.lines                 440        440       +0
+pipeline.py::_generate_or_resume_plan.direct_nested_funcs          0          0       +0
+pipeline.py::_generate_or_resume_plan.total_nested_funcs          0          0       +0
+pipeline.py::_generate_or_resume_plan.own_bound_names         55         55       +0
+pipeline.py::_generate_or_resume_plan.own_nonlocal_count          0          0       +0
+pipeline.py::_generate_or_resume_plan.callable_closure_captured_names          0          0       +0
+pipeline.py::_run_plan_phase.lines                          618        618       +0
+pipeline.py::_run_plan_phase.direct_nested_funcs              0          0       +0
+pipeline.py::_run_plan_phase.total_nested_funcs               5          5       +0
+pipeline.py::_run_plan_phase.own_bound_names                 83         83       +0
+pipeline.py::_run_plan_phase.own_nonlocal_count               0          0       +0
+pipeline.py::_run_plan_phase.callable_closure_captured_names          3          3       +0
+
+execution/phase.py.loc                                     5636       5636       +0
+execution/phase.py.intra_package_import_edges               100        100       +0
+execution/phase_support.py.loc                             3745       3745       +0
+execution/phase_support.py.intra_package_import_edges         58         58       +0
+execution/run_coordination.py.loc                           217        217       +0
+execution/run_coordination.py.intra_package_import_edges          1          1       +0
+pipeline.py.loc                                            7062       7062       +0
+pipeline.py.intra_package_import_edges                      127        127       +0
+reporting/publication_bundles.py.loc                       2794       2794       +0
+reporting/publication_bundles.py.intra_package_import_edges          8          8       +0
+reporting/readiness.py.loc                                 3009       3009       +0
+reporting/readiness.py.intra_package_import_edges            40         40       +0
+authority/typed_binding.py.loc                             2301       2301       +0
+authority/typed_binding.py.intra_package_import_edges         15         15       +0
+authority/evidence_record_resolution.py.loc                 127        127       +0
+authority/evidence_record_resolution.py.intra_package_import_edges          1          1       +0
+authority/plan_authority.py.loc                             386        386       +0
+authority/plan_authority.py.intra_package_import_edges         12         12       +0
+authority/typed_input_receipt.py.loc                       1058       1058       +0
+authority/typed_input_receipt.py.intra_package_import_edges          4          4       +0
+authority/typed_input_sdk.py.loc                            180        180       +0
+authority/typed_input_sdk.py.intra_package_import_edges          1          1       +0
+authority/development_projection.py.loc                     190        190       +0
+authority/development_projection.py.intra_package_import_edges          4          4       +0
+gates/preflight.py.loc                                     6228       6228       +0
+gates/preflight.py.intra_package_import_edges                15         15       +0
+gates/preflight_statics.py.loc                              478        478       +0
+gates/preflight_statics.py.intra_package_import_edges          3          3       +0
+gates/preflight_provenance.py.loc                           357        357       +0
+gates/preflight_provenance.py.intra_package_import_edges          2          2       +0
+gates/typed_input.py.loc                                    507        507       +0
+gates/typed_input.py.intra_package_import_edges               2          2       +0
+repairs/source.py.loc                                      5601       5601       +0
+repairs/source.py.intra_package_import_edges                 36         36       +0
+repairs/typed_input.py.loc                                  957        957       +0
+repairs/typed_input.py.intra_package_import_edges             3          3       +0
+audits/validators.py.loc                                   2806       2806       +0
+audits/validators.py.intra_package_import_edges              23         23       +0
+audits/cohort.py.loc                                        132        132       +0
+audits/cohort.py.intra_package_import_edges                   2          2       +0
+audits/cross_step.py.loc                                   4317       4317       +0
+audits/cross_step.py.intra_package_import_edges               5          5       +0
+audits/statistical.py.loc                                   683        683       +0
+audits/statistical.py.intra_package_import_edges              3          3       +0
+audits/figures.py.loc                                      5626       5626       +0
+audits/figures.py.intra_package_import_edges                  5          5       +0
+audits/clinical.py.loc                                      164        164       +0
+audits/clinical.py.intra_package_import_edges                 1          1       +0
+audits/publication.py.loc                                   210        210       +0
+audits/publication.py.intra_package_import_edges              2          2       +0
+audits/_v_support.py.loc                                    209        209       +0
+audits/_v_support.py.intra_package_import_edges               1          1       +0
+plan_utils.py.loc                                            81         81       +0
+plan_utils.py.intra_package_import_edges                     13         13       +0
+planning/final_article_design.py.loc                         90         90       +0
+planning/final_article_design.py.intra_package_import_edges          4          4       +0
+planning/figure_step_contract.py.loc                        167        167       +0
+planning/figure_step_contract.py.intra_package_import_edges          3          3       +0
+planning/robustness_plan_mutation.py.loc                     60         60       +0
+planning/robustness_plan_mutation.py.intra_package_import_edges          1          1       +0
+agents/core.py.loc                                          158        158       +0
+agents/core.py.intra_package_import_edges                    13         14       +1
+agents/_support.py.loc                                      643        643       +0
+agents/_support.py.intra_package_import_edges                13         13       +0
+agents/planner.py.loc                                      2024       2024       +0
+agents/planner.py.intra_package_import_edges                 27         27       +0
+agents/replanner.py.loc                                     202        202       +0
+agents/replanner.py.intra_package_import_edges               12         12       +0
+agents/replanner_context.py.loc                             110        110       +0
+agents/replanner_context.py.intra_package_import_edges          1          1       +0
+agents/runtime_suffix_replanner.py.loc                      273        273       +0
+agents/runtime_suffix_replanner.py.intra_package_import_edges         13         13       +0
+agents/roles.py.loc                                         595        511      -84
+agents/roles.py.intra_package_import_edges                    8          7       -1
+agents/coder.py.loc                                        1627       1627       +0
+agents/coder.py.intra_package_import_edges                   27         27       +0
+agents/coder_output_contract.py.loc                          90         90       +0
+agents/coder_output_contract.py.intra_package_import_edges          3          3       +0
+agents/reporting.py.loc                                     454        453       -1
+agents/reporting.py.intra_package_import_edges               10         10       +0
+schema.py.loc                                              3277       3277       +0
+schema.py.intra_package_import_edges                         19         19       +0
+contracts/declared_product.py.loc                          2245       2245       +0
+contracts/declared_product.py.intra_package_import_edges         10         10       +0
+contracts/association_result_findings.py.loc                 32         32       +0
+contracts/association_result_findings.py.intra_package_import_edges          2          2       +0
+contracts/capability_declaration.py.loc                      50         50       +0
+contracts/capability_declaration.py.intra_package_import_edges          2          2       +0
+numeric_scalars.py.loc                                       31         30       -1
+numeric_scalars.py.intra_package_import_edges                 0          0       +0
+figures/skill.py.loc                                       3772       3772       +0
+figures/skill.py.intra_package_import_edges                  14         14       +0
+figures/promotion_contract.py.loc                           116        116       +0
+figures/promotion_contract.py.intra_package_import_edges          1          1       +0
+authority/evidence_store.py.loc                            3423       3423       +0
+authority/evidence_store.py.intra_package_import_edges          8          8       +0
+orchestration/resume_plan_migration.py.loc                  975        975       +0
+orchestration/resume_plan_migration.py.intra_package_import_edges         12         12       +0
+discovery/idea_mining.py.loc                               3654       3654       +0
+discovery/idea_mining.py.intra_package_import_edges          16         16       +0
+execution/runner.py.loc                                    3498       3498       +0
+execution/runner.py.intra_package_import_edges                9          9       +0
+execution/runners/deterministic_robustness.py.loc          3341       3341       +0
+execution/runners/deterministic_robustness.py.intra_package_import_edges         17         17       +0
+agents/progressive_planner.py.loc                          4160       4148      -12
+agents/progressive_planner.py.intra_package_import_edges         34         36       +2
+
+package top-12 files by LOC (informational; * = not gated):
+      7062  pipeline.py
+      6228  gates/preflight.py
+      5636  execution/phase.py
+      5626  audits/figures.py
+      5601  repairs/source.py
+      4317  audits/cross_step.py
+      4148  agents/progressive_planner.py
+      3772  figures/skill.py
+      3745  execution/phase_support.py
+      3654  discovery/idea_mining.py
+      3498  execution/runner.py
+      3423  authority/evidence_store.py
+
+OK: no lower-is-better metric regressed vs baseline.
+  -> ok (0.5s)
+
+=== module-graph ratchet ===
+  -> ok (3.8s)
+
+=== import-linter boundaries ===
+  MISSING TOOL: lint-imports is not installed (pip install -e ".[dev]")
+
+=== ruff ===
+All checks passed!
+  -> ok (0.1s)
+
+=== size and budget guards ===
+........................................................................ [ 50%]
+............................F.........................................   [100%]
+=================================== FAILURES ===================================
+_______ test_stability_standard_executor_supersedes_stale_resume_capsule _______
+tests/research_agent/gates/test_execution_phase_contract.py:1075: in test_stability_standard_executor_supersedes_stale_resume_capsule
+    assignment = source[source.index("standard_executor = select_standard_executor(") :]
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ValueError: substring not found
+=========================== short test summary info ============================
+FAILED tests/research_agent/gates/test_execution_phase_contract.py::test_stability_standard_executor_supersedes_stale_resume_capsule
+1 failed, 141 passed in 25.88s
+  -> FAILED (26.5s)
+
+FAIL: 2 gate(s) red: import-linter boundaries, size and budget guards

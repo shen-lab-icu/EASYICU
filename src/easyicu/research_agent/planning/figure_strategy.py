@@ -9,7 +9,6 @@ keyed by study-design family rather than a benchmark variable or database.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set
@@ -20,7 +19,7 @@ from ..contracts.figure_plan import (
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
 )
-from ..figures.contracts import figure_contract_paths, panel_chart_type, panel_text
+from ..figures.contracts import FigureContractInventory, panel_chart_type, panel_text
 from ..schema import ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
 from .study_design_playbook import StudyDesignFamily
@@ -79,7 +78,10 @@ class ArticleFigureStrategy(BaseModel):
     analysis_family: StudyDesignFamily
     archetype: str
     hero_role: str
-    minimum_distinct_chart_types: int = 3
+    minimum_distinct_chart_types: int = Field(
+        default=3,
+        description="Advisory design target; never a scientific or publication gate.",
+    )
     role_strategies: List[FigureRoleStrategy] = Field(default_factory=list)
     anti_patterns: List[str] = Field(default_factory=list)
     prompt_rules: List[str] = Field(default_factory=list)
@@ -526,7 +528,7 @@ def render_article_figure_strategy_for_prompt(strategy: ArticleFigureStrategy) -
         f"- analysis_family: {strategy.analysis_family}",
         f"- archetype: {strategy.archetype}",
         f"- hero_role: {strategy.hero_role}",
-        f"- minimum_distinct_chart_types: {strategy.minimum_distinct_chart_types}",
+        f"- advisory_chart_diversity_target: {strategy.minimum_distinct_chart_types} (choose only forms that help the question; this is not a publication requirement)",
         "- required_visual_roles:",
     ]
     for role in strategy.role_strategies:
@@ -544,19 +546,6 @@ def render_article_figure_strategy_for_prompt(strategy: ArticleFigureStrategy) -
 
 def _normalise(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
-
-
-# Shared with display_suite / review_artifacts via figures.contracts so the
-# audits cannot disagree about which contracts exist.
-_contract_paths = figure_contract_paths
-
-
-def _is_primary_publication_contract(path: Path, run_dir: Path) -> bool:
-    try:
-        path.resolve().relative_to((run_dir / "publication_figures").resolve())
-    except ValueError:
-        return False
-    return path.name.endswith(".figure_contract.json")
 
 
 _panel_text = panel_text
@@ -603,11 +592,8 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
     if not role.acceptable_chart_types:
         return True
     if chart_type == "unspecified":
-        # The panel already matched this role by name/required text but its
-        # chart family could not even be inferred. Do not hard-fail the whole
-        # publication gate on a formatting guess: chartless suites are still
-        # caught by the distinct-chart-family minimum below.
-        return True
+        # Missing chart coordinates are a contract defect, not low diversity.
+        return False
     accepted = {item.replace(" ", "_") for item in role.acceptable_chart_types}
     # Deterministic renderers predate the article-strategy vocabulary and a
     # few of their precise chart names carry harmless geometry suffixes.  Keep
@@ -685,53 +671,22 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
     return bool(family_aliases.get(chart_type, set()) & accepted)
 
 
-def _read_panels(
-    run_dir: Path,
-    *,
-    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
-    panels: List[Dict[str, Any]] = []
-    for path in _contract_paths(
-        run_dir,
-        per_step_records=per_step_records,
-    ):
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(raw, dict):
-            continue
-        raw_panels = raw.get("panels")
-        if not isinstance(raw_panels, list):
-            continue
-        for panel in raw_panels:
-            if not isinstance(panel, dict):
-                continue
-            item = dict(panel)
-            item["_contract_path"] = str(path)
-            item["_figure_id"] = str(raw.get("figure_id") or path.stem)
-            item["_chart_type"] = _panel_chart_type(item)
-            item["_role"] = _panel_role(item)
-            item["_primary_publication_contract"] = _is_primary_publication_contract(
-                path,
-                run_dir,
-            )
-            panels.append(item)
-    return panels
-
-
 def summarize_article_figure_strategy_coverage(
     *,
     context: ResearchContext,
     run_dir: Path,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
     analysis_family: StudyDesignFamily | None = None,
+    figure_contracts: FigureContractInventory | None = None,
 ) -> Dict[str, Any]:
     strategy = build_article_figure_strategy(
         context,
         analysis_family=analysis_family,
     )
-    panels = _read_panels(run_dir, per_step_records=per_step_records)
+    contracts = FigureContractInventory.load(
+        run_dir, per_step_records=per_step_records, current=figure_contracts,
+    )
+    panels = contracts.panel_projections()
     primary_panels = [
         panel for panel in panels if panel.get("_primary_publication_contract")
     ]
@@ -808,7 +763,7 @@ def summarize_article_figure_strategy_coverage(
         for role in strategy.role_strategies
         if role.required and role.placement == "main"
     }
-    errors = list(role_errors)
+    errors = [*contracts.error_messages(), *role_errors]
     primary_minimum_required_role_count = min(
         len(required_main_roles),
         _PRIMARY_PUBLICATION_MIN_ROLES.get(
@@ -835,16 +790,17 @@ def summarize_article_figure_strategy_coverage(
             "Supporting or scratch figures can supplement the article package, "
             "but they cannot make a sparse main figure article-grade."
         )
+    design_advice = []
     if len(nonempty_chart_types) < strategy.minimum_distinct_chart_types:
-        errors.append(
+        design_advice.append(
             "Figure strategy uses fewer distinct chart families than expected "
             f"for {strategy.analysis_family}: {len(nonempty_chart_types)} < "
             f"{strategy.minimum_distinct_chart_types}."
         )
     if chart_types and set(chart_types) <= _GENERIC_CHART_TYPES:
-        errors.append(
+        design_advice.append(
             "Figure strategy is limited to generic bar/forest/heatmap panels; "
-            "top-journal article figures need a role-specific visual grammar."
+            "consider other forms only when they communicate the planned scientific information more clearly."
         )
     if strategy.hero_role not in covered_roles:
         errors.append(
@@ -875,6 +831,7 @@ def summarize_article_figure_strategy_coverage(
         "article_figure_strategy_minimum_distinct_chart_types": strategy.minimum_distinct_chart_types,
         "article_figure_strategy_role_panels": role_panel_ids,
         "article_figure_strategy_errors": errors,
+        "article_figure_strategy_design_advice": design_advice,
         "article_figure_strategy": strategy.model_dump(mode="json"),
     }
 
