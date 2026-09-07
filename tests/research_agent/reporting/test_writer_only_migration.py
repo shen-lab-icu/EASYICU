@@ -321,12 +321,25 @@ def test_abstract_conclusion_fallback_is_cited_and_noncausal() -> None:
         "**Conclusions:** The treatment improved survival {evidence:unsupported}.",
     )
 
-    repaired, changed = _repair_abstract_conclusion_boundary(raw, _literature())
+    repaired, changed = _repair_abstract_conclusion_boundary(
+        raw, _literature(), rejected_sentences=("The treatment improved survival {evidence:unsupported}.",),
+    )
 
     assert changed is True
     assert "The treatment improved survival" not in repaired
     assert "do not establish causation [@strobe_2007]" in repaired
     assert "validation in other cohorts" in repaired
+
+
+def test_abstract_result_rejection_does_not_rewrite_valid_conclusion():
+    raw = _manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "**Conclusions:** Independent validation is required.",
+    )
+    repaired, changed = _repair_abstract_conclusion_boundary(
+        raw, _literature(), rejected_sentences=("A rejected abstract result.",),
+    )
+    assert not changed and repaired == raw
 
 
 def test_second_authority_repair_is_validated_and_only_incomplete_owner_repeats(tmp_path, monkeypatch):

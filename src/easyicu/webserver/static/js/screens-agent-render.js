@@ -484,7 +484,7 @@
     const claimMap = new Map(claims.map(row => [String(row && row.claim_id || ''), row || {}]));
     const readableText = value => {
       const source = String(value || '')
-        .replace(/\s*\[(?!@)[A-Za-z_][A-Za-z0-9_.-]*\]/g, '')
+        .replace(/\s*\[(?!@)(?:[A-Za-z_][A-Za-z0-9_.-]*|\d+_[A-Za-z0-9_.-]+)\]/g, '')
         .replace(/\s+([,.;:)])/g, '$1');
       const tokens = source.split(/(\*\*[^*]+\*\*|\[@[^\]]+\])/g).filter(Boolean);
       return tokens.map(token => {

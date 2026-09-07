@@ -131,7 +131,7 @@ const assembledPayload = {
   schema_version: 'easyicu.manuscript-provenance/1',
   article_blocks: [
     { kind: 'heading', level: 2, segments: [{ kind: 'text', text: 'Results' }] },
-    { kind: 'paragraph', segments: [{ kind: 'text', text: 'See Table 1. Sources [@first; @second].' }] },
+    { kind: 'paragraph', segments: [{ kind: 'text', text: 'See Table 1. Sources [@first; @second]. [00_probe] Preserve [95% CI].' }] },
     { kind: 'heading', level: 2, segments: [{ kind: 'text', text: 'Discussion' }] },
   ],
   tables: [{ label: 'Table 1', caption: 'Baseline', columns: ['Variable', 'N'], rows: [['<svg onload=bad()>', '120']], notes: ['Unknown is not zero.'] }],
@@ -149,6 +149,8 @@ assert.equal((assembled.match(/Bound caption\./g) || []).length, 1);
 assert.ok(assembled.indexOf('Table 1. Baseline') < assembled.indexOf('<h2>Discussion</h2>'));
 assert.ok(assembled.includes('href="#gpi-reference-1"') && assembled.includes('href="#gpi-reference-2"'));
 assert.ok(assembled.includes('References') && assembled.includes('A Author'));
+assert.ok(!assembled.includes('[00_probe]'), 'numeric-prefixed internal step labels are not article prose');
+assert.ok(assembled.includes('[95% CI]'), 'scientific bracketed labels must remain visible');
 assert.ok(assembled.includes('Some source records have no author metadata'));
 assert.ok(!assembled.includes('source.</a>.'), 'source title punctuation must not be duplicated');
 assert.ok(assembled.includes('Correction: &lt;img'));

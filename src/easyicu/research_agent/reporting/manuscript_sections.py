@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import re
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .administrative_authority import (
     ManuscriptAdministrativeAuthority,
@@ -454,6 +454,7 @@ def _quality_repair_specs(
     *,
     expected_display_labels: tuple[str, ...] = (),
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    expected_primary_result_facts: Sequence = (),
 ) -> tuple[tuple[ManuscriptSectionSpec, str], ...]:
     """Map deterministic manuscript findings to their section owners."""
 
@@ -474,6 +475,7 @@ def _quality_repair_specs(
     messages: dict[str, list[str]] = {}
     for finding in audit_manuscript_quality(
         scientific,
+        expected_primary_result_facts=expected_primary_result_facts,
         expected_display_labels=expected_display_labels,
         expected_baseline_mentions=expected_baseline_mentions,
         require_administrative_sections=False,
@@ -526,6 +528,7 @@ def quality_repair_section_errors(
     *,
     expected_display_labels: tuple[str, ...] = (),
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    expected_primary_result_facts: Sequence = (),
 ) -> dict[str, tuple[str, ...]]:
     """Use the same quality-to-owner mapping for adjacent evidence repair."""
 
@@ -533,6 +536,7 @@ def quality_repair_section_errors(
         spec.key: (detail,)
         for spec, detail in _quality_repair_specs(
             manuscript,
+            expected_primary_result_facts=expected_primary_result_facts,
             expected_display_labels=expected_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
         )

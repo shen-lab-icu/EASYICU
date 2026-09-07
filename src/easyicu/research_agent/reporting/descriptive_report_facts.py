@@ -160,6 +160,109 @@ def compile_counts_only_report_facts(
     return tuple(facts)
 
 
+def verified_descriptive_source_records(projected, evidence):
+    """Recover the exact primary result contract from its sealed summary."""
+    from .writer_evidence import _verified_evidence_json
+
+    records = []
+    for row in projected:
+        summary = row.get("step_summary", {})
+        if not (
+            isinstance(summary, dict) and "descriptive_estimates" in summary
+            and summary.get("analysis_role") == "primary"
+            and summary.get("interval_method") == "none_counts_only"
+        ):
+            continue
+        source = _verified_evidence_json(
+            evidence, str(row.get("step_summary_evidence_id") or ""),
+            exact_evidence_id=True, expected_kind="statistic",
+        )
+        records.append({**row, "step_summary": source})
+    return records
+
+
+def compile_primary_counts_only_report_facts(records, *, evidence, reader_display_labels):
+    """Shared full-run/report-only admission; loose wrapper counts are not facts."""
+    from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
+    from ..authority.scientific_claim_registry import load_registered_scientific_claims
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        records, evidence_store=evidence,
+    )
+    return compile_counts_only_report_facts(
+        verified_descriptive_source_records(projected, evidence), evidence=evidence,
+        reader_display_labels=reader_display_labels,
+        scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
+    )
+
+
+def _primary_result_regions(manuscript: str):
+    """Locate existing reader sections; never manufacture a missing section."""
+    for section in ("Abstract", "Results", "Discussion", "Conclusion"):
+        match = re.search(rf"^## {section}[ \t]*\n(?P<body>.*?)(?=^##\s|\Z)", manuscript, re.M | re.S)
+        if match is None:
+            continue
+        start, end = match.span("body")
+        if section == "Abstract":
+            block = re.search(r"^\*\*Results:\*\*(?P<body>.*?)(?=^\*\*[^*\n]+:\*\*|\Z)", match["body"], re.M | re.S)
+            if block is None:
+                continue
+            start, end = start + block.start("body"), start + block.end("body")
+        yield section, start, end
+
+
+def _fact_present(body: str, fact: DescriptiveReportFact) -> bool:
+    # This checks visibility, not numerical authority; STRICT binding follows.
+    visible = re.sub(r"<!--.*?-->|```.*?```", "", body, flags=re.S)
+    if fact.replaces_claim_ref and re.search(
+        rf"^[ \t]*\{{claim:{re.escape(fact.replaces_claim_ref)}\}}[.!?]?[ \t]*$", visible, re.M,
+    ):
+        return True
+    visible = re.sub(r"^\[\^claim_\d+\]:.*$", "", visible, flags=re.M)
+    visible = re.sub(r"\[\^claim_\d+\]|\{evidence:[^}\n]+\}|\[[^\]]+\]\(evidence/[^\n)]*\)", "", visible)
+    return " ".join(fact.text.split()) in " ".join(visible.split())
+
+
+def missing_primary_result_facts(manuscript: str, facts: Sequence[DescriptiveReportFact]):
+    """Check every admitted primary metric/level, not merely any result number."""
+    if not facts:
+        return {}
+    regions = {section: manuscript[start:end] for section, start, end in _primary_result_regions(manuscript)}
+    return {
+        section: missing for section in ("Abstract", "Results", "Discussion", "Conclusion")
+        if (missing := tuple(fact for fact in facts if not _fact_present(regions.get(section, ""), fact)))
+    }
+
+
+def place_primary_result_summaries(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:
+    """Carry verified primary counts into summaries after scientific filtering.
+
+    These are the same observed counts, not new effects, uncertainty estimates,
+    literature comparisons or a substitute for interpretive review.
+    """
+    if not facts:
+        return manuscript
+    owned = {fact.scaffold for fact in facts}
+    for section, start, end in reversed(tuple(_primary_result_regions(manuscript))):
+        if section == "Results":  # The existing subsection owner handles Results.
+            continue
+        body = manuscript[start:end]
+        seen: set[str] = set()
+        lines = []
+        for line in body.splitlines():
+            if line.strip() in owned:
+                if line.strip() in seen:
+                    continue
+                seen.add(line.strip())
+            lines.append(line)
+        body = "\n".join(lines) + ("\n" if body.endswith("\n") else "")
+        missing = [fact.scaffold for fact in facts if not _fact_present(body, fact)]
+        if missing:
+            body = "\n\n" + "\n\n".join(missing) + "\n\n" + body.lstrip()
+        manuscript = manuscript[:start] + body + manuscript[end:]
+    return manuscript
+
+
 def render_descriptive_report_claims(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:
     """Project admitted claim tokens only after the scientific grammar gate.
 
@@ -175,7 +278,7 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
                 rf"^[ \t]*\{{claim:{re.escape(fact.replaces_claim_ref)}\}}[.!?]?[ \t]*$",
                 lambda _match: fact.scaffold, manuscript, flags=re.M,
             )
-    return place_descriptive_report_facts(manuscript, facts)
+    return place_primary_result_summaries(place_descriptive_report_facts(manuscript, facts), facts)
 
 
 def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:

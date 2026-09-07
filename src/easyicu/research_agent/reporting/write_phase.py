@@ -24,6 +24,9 @@ from ..agents.core import CriticAgent, ManuscriptAgent
 from ..audits.manuscript_claims import audit_manuscript_numeric_claims
 from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
 from .bibtex import render_bibtex
+from .descriptive_report_facts import (
+    compile_primary_counts_only_report_facts, render_descriptive_report_claims, missing_primary_result_facts,
+)
 from ..review.causal_audit import run_causal_audit
 from ..contracts.runtime import (
     ValidationFinding,
@@ -553,11 +556,13 @@ def _persist_manuscript_quality_artifacts(
     findings: List[ValidationFinding],
     expected_display_labels: Sequence[str] = (),
     expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
+    expected_primary_result_facts: Sequence = (),
 ) -> tuple[ManuscriptQualityFinding, ...]:
     """Persist a non-authoritative reader view and its deterministic audit."""
 
     audit = audit_manuscript_quality(
         bound,
+        expected_primary_result_facts=expected_primary_result_facts,
         expected_display_labels=expected_display_labels,
         expected_baseline_mentions=expected_baseline_mentions,
     )
@@ -1811,6 +1816,22 @@ def _repair_bound_display_language(
     return repaired
 
 
+def _manifest_caveat_finding(bound: str) -> ValidationFinding | None:
+    """Keep unresolved manifest caveats visible at the publication boundary."""
+    counts = _manifest_comment_counts(bound)
+    if not sum(counts.values()):
+        return None
+    return ValidationFinding(
+        validator="evidence_bound_writer", severity="error",
+        message=(
+            "Bound manuscript cites evidence records with unresolved "
+            f"manifest caveats: {counts['error']} error "
+            f"and {counts['warning']} warning comment(s)."
+        ),
+        detail={"manifest_comment_counts": counts},
+    )
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -1831,6 +1852,9 @@ def _bind_and_review_manuscript(
     plan: AnalysisPlan | None = None,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
+    primary_result_facts = compile_primary_counts_only_report_facts(
+        per_step_records, evidence=evidence, reader_display_labels=reader_display_labels,
+    )
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
         scaffold,
         literature,
@@ -1917,6 +1941,9 @@ def _bind_and_review_manuscript(
                 generation_mode="system",
             )
 
+    # The model grammar has already passed. Project only envelope-verified host
+    # facts here, then apply the unchanged evidence and per-value binding gates.
+    evidence_bound_scaffold = render_descriptive_report_claims(evidence_bound_scaffold, primary_result_facts)
     bound_unfiltered = evidence.bind_manuscript(
         evidence_bound_scaffold,
         per_step_records=per_step_records,
@@ -2001,9 +2028,11 @@ def _bind_and_review_manuscript(
             )
         )
     authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
+    missing_facts = missing_primary_result_facts(bound, primary_result_facts).get("Results", ())
+    projected_claim_refs = {fact.replaces_claim_ref for fact in primary_result_facts if fact not in missing_facts}
     missing_result_claims = missing_scientific_claims_in_results(
         bound,
-        claims=authoritative_claims,
+        claims=[claim for claim in authoritative_claims if claim.claim_ref not in projected_claim_refs],
     )
     if missing_result_claims:
         findings.append(
@@ -2035,21 +2064,9 @@ def _bind_and_review_manuscript(
                 detail=language_guard_detail,
             )
         )
-    manifest_comment_counts = _manifest_comment_counts(bound)
-    manifest_comment_total = sum(manifest_comment_counts.values())
-    if manifest_comment_total:
-        findings.append(
-            ValidationFinding(
-                validator="evidence_bound_writer",
-                severity="error",
-                message=(
-                    "Bound manuscript cites evidence records with unresolved "
-                    f"manifest caveats: {manifest_comment_counts['error']} error "
-                    f"and {manifest_comment_counts['warning']} warning comment(s)."
-                ),
-                detail={"manifest_comment_counts": manifest_comment_counts},
-            )
-        )
+    caveat_finding = _manifest_caveat_finding(bound)
+    if caveat_finding is not None:
+        findings.append(caveat_finding)
     manuscript_output_blockers: List[str] = []
     if writer_error_message:
         manuscript_output_blockers.append(
@@ -2191,6 +2208,7 @@ def _bind_and_review_manuscript(
 
     manuscript_quality_errors = _persist_manuscript_quality_artifacts(
         bound=bound,
+        expected_primary_result_facts=primary_result_facts,
         bound_evidence_id=bound_evidence_id,
         run_dir=run_dir,
         evidence=evidence,
@@ -2229,7 +2247,8 @@ def _bind_and_review_manuscript(
                 ],
             }
         )
-    if manifest_comment_total:
+    if caveat_finding is not None:
+        manifest_comment_counts = caveat_finding.detail["manifest_comment_counts"]
         manuscript_critique = manuscript_critique.model_copy(
             update={
                 "status": "blocked",

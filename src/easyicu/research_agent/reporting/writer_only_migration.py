@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 import uuid
 
 from ..authority.evidence_snapshot import load_current_evidence_snapshot
@@ -53,7 +53,9 @@ from .manuscript_quality import (
 from .manuscript_sections import quality_repair_section_keys, quality_repair_section_errors
 from .manuscript_baseline import baseline_reporting_mentions
 from .manuscript_method_facts import place_manuscript_method_facts
-from .descriptive_report_facts import DescriptiveReportFact, place_descriptive_report_facts
+from .descriptive_report_facts import (
+    DescriptiveReportFact, place_descriptive_report_facts, place_primary_result_summaries,
+)
 
 
 WRITER_ONLY_MIGRATION_SCHEMA = "easyicu.writer_only_manuscript_migration/1"
@@ -325,8 +327,10 @@ def _normalize_claim_token_sentences(manuscript: str) -> tuple[str, int]:
 def _repair_abstract_conclusion_boundary(
     manuscript: str,
     literature: LiteratureBundle,
+    *,
+    rejected_sentences: Sequence[str],
 ) -> tuple[str, bool]:
-    """Replace an unbound abstract conclusion with a cited neutral boundary."""
+    """Repair only a rejected conclusion, never unrelated abstract findings."""
 
     available = {record.key for record in literature.citations}
     causal_key = next(
@@ -345,6 +349,9 @@ def _repair_abstract_conclusion_boundary(
         flags=re.M | re.S,
     )
     if abstract_match is None or "**Conclusions:**" not in abstract_match.group(2):
+        return manuscript, False
+    conclusion = abstract_match.group(2).split("**Conclusions:**", 1)[1]
+    if not any(excerpt and excerpt in conclusion for excerpt in rejected_sentences):
         return manuscript, False
     replacement = (
         "**Conclusions:** Because this was an observational analysis, the "
@@ -564,6 +571,7 @@ def repair_writer_only(
             prepared.source_run_dir, source_manuscript,
         )
         source_manuscript = place_descriptive_report_facts(source_manuscript, prepared.host_result_facts)
+        source_manuscript = place_primary_result_summaries(source_manuscript, prepared.host_result_facts)
         source_manuscript, _ = repair_registered_display_callouts(
             source_manuscript, expected_display_labels=prepared.expected_display_labels,
         )
@@ -637,7 +645,7 @@ def repair_writer_only(
     _, initial_errors = _claim_policy_projection(prepared.source_run_dir, manuscript)
     if "abstract" in initial_errors:
         manuscript, abstract_conclusion_boundary_repaired = _repair_abstract_conclusion_boundary(
-            manuscript, prepared.literature,
+            manuscript, prepared.literature, rejected_sentences=initial_errors["abstract"],
         )
     # Two model repair passes, each followed by a real validation. A successful
     # final repair must not fall through a for/else and be reported exhausted.
@@ -648,12 +656,14 @@ def repair_writer_only(
             manuscript,
         )
         canonical = place_descriptive_report_facts(canonical, prepared.host_result_facts)
+        canonical = place_primary_result_summaries(canonical, prepared.host_result_facts)
         canonical, _ = repair_registered_display_callouts(
             canonical, expected_display_labels=prepared.expected_display_labels,
         )
         canonical = remove_empty_optional_subsections(canonical)
         canonical_quality = audit_manuscript_quality(
             canonical,
+            expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
             expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
         )
@@ -677,6 +687,7 @@ def repair_writer_only(
             )
         repair_errors = quality_repair_section_errors(
             canonical,
+            expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
             expected_baseline_mentions=baseline_reporting_mentions(
                 prepared.context, prepared.plan.display_labels if prepared.plan else None,
@@ -729,6 +740,7 @@ def repair_writer_only(
                 authority_repaired.append(key)
     quality = audit_manuscript_quality(
         manuscript,
+        expected_primary_result_facts=prepared.host_result_facts,
         expected_display_labels=prepared.expected_display_labels,
         expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
     )
