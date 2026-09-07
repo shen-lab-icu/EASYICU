@@ -23,10 +23,12 @@
     const rebind = host.rebind;
     const refreshSession = host.refreshSession;
     const archiveChildJob = host.archiveChildJob;
+    let workflowStep = '';
 
     function closeChildSource() {
       if (host.childSource()) { host.childSource().close(); host.setChildSource(null); }
       host.setChildJobId('');
+      workflowStep = '';
     }
     function runningJobTitle(code) {
       const value = String(code || '').toLowerCase();
@@ -179,6 +181,12 @@
         at: Date.now(), code: step,
         owner: String(event.run_id || '').slice(0, 160),
       });
+      if (workflowStep !== step) {
+        workflowStep = step;
+        Promise.resolve(loadWorkflow()).then(() => {
+          if (host.childJobId() === jobId) render();
+        }).catch(() => null);
+      }
       render();
     }
     function watchChildJob(jobId, code) {

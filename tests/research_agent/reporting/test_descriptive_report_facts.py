@@ -6,6 +6,7 @@ import pytest
 from easyicu.research_agent.reporting.descriptive_report_facts import (
     compile_counts_only_report_facts,
     place_descriptive_report_facts,
+    render_descriptive_report_claims,
 )
 from easyicu.research_agent.reporting.manuscript_quality import remove_empty_optional_subsections
 
@@ -111,6 +112,37 @@ def test_numeric_fact_adapter_does_not_claim_other_analysis_families():
     records, evidence = _inputs()
     records[0]["step_summary"]["interpretation_class"] = "logistic_regression"
     assert compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={}) == ()
+
+
+def test_legacy_claim_is_replaced_once_by_its_source_fact_not_duplicate_numbers():
+    from easyicu.research_agent.authority.scientific_claims import (
+        bind_scientific_claim_drafts, derive_scientific_claim_drafts,
+    )
+    records, evidence = _inputs()
+    claims = bind_scientific_claim_drafts(
+        [draft.model_dump(mode="json") for draft in derive_scientific_claim_drafts(records[0]["step_summary"])],
+        step_id="distribution", evidence_id="summary",
+    )
+    facts = compile_counts_only_report_facts(
+        records, evidence=evidence, reader_display_labels={"exposure=0": "Reference category"},
+        scientific_claims=claims,
+    )
+    fact = facts[2]
+    assert fact.replaces_claim_ref == "distribution.observed_absolute_risk_level_0"
+    token = "{claim:" + fact.replaces_claim_ref + "}"
+    text = (
+        f"## Abstract\n\n**Results:**\n{token}\n\n## Results\n\n"
+        f"### Cohort characteristics\n\n### Primary outcome\n\n{fact.scaffold}\n\n{token}\n\n"
+        "{claim:other.observed_absolute_risk_level_0}\n\n## Conclusion\n\n" + token
+    )
+    assert token in place_descriptive_report_facts(text, facts)
+    rendered = render_descriptive_report_claims(text, facts)
+    results = rendered.split("## Results")[1].split("## Conclusion")[0]
+    assert results.count(fact.scaffold) == 1
+    assert "{claim:other.observed_absolute_risk_level_0}" in rendered
+    assert token not in rendered
+    assert rendered.count(fact.scaffold) == 3  # abstract, results, conclusion
+    assert render_descriptive_report_claims(rendered, facts) == rendered
 
 
 def test_descriptive_source_contract_is_restored_from_sealed_json_not_mutable_projection(tmp_path):

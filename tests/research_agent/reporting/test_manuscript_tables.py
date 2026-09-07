@@ -55,6 +55,15 @@ def test_reader_table_uses_planned_summary_and_preserves_missingness(tmp_path):
     assert (tmp_path / record.relative_path).read_bytes() == before
 
 
+def test_reader_group_labels_are_exact_authorized_coordinates(tmp_path):
+    from easyicu.research_agent.reporting.manuscript_tables import build_manuscript_tables
+
+    plan, record, _ = _source(tmp_path)
+    plan = plan.model_copy(update={"display_labels": {"exposure=0": "Reference category", "exposure=1": "Comparison category"}})
+    table = build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)[0]
+    assert {row[1] for row in table.rows} == {"Overall", "Reference category", "Comparison category"}
+
+
 @pytest.mark.parametrize("mutation", ["wrong_owner", "drift", "missing", "schema", "contract"])
 def test_reader_table_fails_closed_at_its_source_boundary(tmp_path, mutation):
     from easyicu.research_agent.reporting.manuscript_tables import (

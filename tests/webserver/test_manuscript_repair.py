@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,24 @@ from pydantic import ValidationError
 
 from easyicu.webserver.research_run_submission import ResearchRunSubmissionRequest
 from easyicu.webserver import manuscript_repair
+
+
+def test_report_only_limits_cap_and_never_expand_approved_budget():
+    approved = manuscript_repair.provider_adapter.web_research_agent_hard_stop_limits(
+        "full_reviewed"
+    )
+    caps = {
+        "max_provider_attempts_per_run": 6,
+        "max_provider_attempts_per_batch": 6,
+        "max_total_tokens_per_run": 100_000,
+        "max_total_tokens_per_batch": 100_000,
+        "max_wall_clock_seconds_per_task": 600,
+    }
+    narrowed = manuscript_repair._report_only_limits(approved)
+    for field, maximum in caps.items():
+        assert getattr(narrowed, field) == min(maximum, getattr(approved, field))
+    smaller = replace(approved, **{field: 1 for field in caps})
+    assert manuscript_repair._report_only_limits(smaller) == smaller
 
 
 def _request(**overrides):
@@ -81,6 +100,12 @@ def test_revision_projection_does_not_promote_or_rewrite_original_analysis(tmp_p
         "revision_id": "revision",
         "status": "pass",
         "publication_authorized": False,
+        "output_sha256": "a" * 64,
+    }
+    provenance = {
+        "schema_version": "easyicu.manuscript-provenance/1",
+        "manuscript_sha256": "a" * 64, "claim_ceiling": "analysis_only",
+        "publication_authorized": False, "article_blocks": [], "claims": [],
     }
     result = manuscript_repair._project_revision(
         SimpleNamespace(wrapper_dir=wrapper, pipeline_run_id="run-original"),
@@ -88,6 +113,7 @@ def test_revision_projection_does_not_promote_or_rewrite_original_analysis(tmp_p
         "## Methods\nA revised report.",
         revision,
         {"provider": "fake"},
+        provenance=provenance,
     )
     assert result["gate"] == gate
     assert (original / "run_status.json").read_bytes() == old
@@ -97,6 +123,9 @@ def test_revision_projection_does_not_promote_or_rewrite_original_analysis(tmp_p
         {"manuscript_draft.json": draft}
     )
     assert public["manuscript_draft.json"]["report_revision"] == revision
+    assert public["manuscript_draft.json"]["reader"]["manuscript_sha256"] == "a" * 64
+    assert draft["claims"] == []
+    assert json.loads((wrapper / "manuscript_provenance.json").read_text())["report_revision"] == revision
     ledger = json.loads((wrapper / "evidence_ledger.json").read_text())
     assert ledger["artifacts"][0]["sha256"] != artifact["sha256"]
 
@@ -110,3 +139,30 @@ def test_source_drift_is_detected_even_when_original_input_names_are_unchanged(
     before = manuscript_repair._source_fingerprint(source)
     (source / "registered_result.json").write_text('{"n":121}')
     assert manuscript_repair._source_fingerprint(source) != before
+
+
+@pytest.mark.parametrize("mutation", ["digest", "ceiling", "authorization"])
+def test_revision_reader_mismatch_is_rejected_before_any_wrapper_write(tmp_path, mutation):
+    wrapper = tmp_path / "wrapper"
+    wrapper.mkdir()
+    sentinel = wrapper / "manuscript_draft.json"
+    sentinel.write_text('{"markdown_preview":"Prior manuscript"}')
+    before = sentinel.read_bytes()
+    provenance = {
+        "schema_version": "easyicu.manuscript-provenance/1",
+        "manuscript_sha256": "a" * 64, "claim_ceiling": "analysis_only",
+        "publication_authorized": False,
+    }
+    if mutation == "digest":
+        provenance["manuscript_sha256"] = "b" * 64
+    elif mutation == "ceiling":
+        provenance["claim_ceiling"] = "reportable"
+    else:
+        provenance["publication_authorized"] = True
+    with pytest.raises(manuscript_repair.WriterOnlyMigrationError, match="READER_BINDING_FAILED"):
+        manuscript_repair._project_revision(
+            SimpleNamespace(wrapper_dir=wrapper), {"id": "study"}, "New text",
+            {"output_sha256": "a" * 64}, {}, provenance=provenance,
+        )
+    assert sentinel.read_bytes() == before
+    assert list(wrapper.iterdir()) == [sentinel]

@@ -143,7 +143,7 @@ def build_manuscript_tables(
                         f"{_number(row['median'])} [{_number(row['q25'])}, {_number(row['q75'])}]"
                     )
                 cells = (
-                    label, row["group"], _count(row["denominator_n"]),
+                    label, plan.display_labels.get(f"{spec.group_by}={row['group']}", row["group"]), _count(row["denominator_n"]),
                     "; ".join(summary_parts),
                     _count_percent(row["missing_n"], row["missing_pct"]),
                     _number(row["standardized_mean_difference"], 3),

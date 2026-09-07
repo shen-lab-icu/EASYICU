@@ -22,8 +22,11 @@ from ..authority.runtime_artifacts import (
     current_step_records,
 )
 from ..schema import EvidenceRecord
+from ..schema import AnalysisPlan
+from ..literature import LiteratureBundle
+from .manuscript_reader import build_manuscript_reader
 from .writer_evidence import _executed_method_boundary_rows, _verified_evidence_json
-from .descriptive_report_facts import compile_counts_only_report_facts
+from .descriptive_report_facts import compile_counts_only_report_facts, render_descriptive_report_claims
 from .writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
@@ -186,6 +189,7 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
         host_result_facts=compile_counts_only_report_facts(
             verified_descriptive_source_records(projected, evidence),
             evidence=evidence, reader_display_labels=prepared.plan.display_labels,
+            scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
         ),
     )
 
@@ -198,11 +202,17 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
 
     evidence = ReadOnlyReportEvidence(run_dir)
     records = json.loads((run_dir / "manifest.json").read_text())["per_step_records"]
-    RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
         records,
         evidence_store=evidence,
     )
     claims = load_registered_scientific_claims(root=run_dir, records=evidence.records())
+    plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
+    facts = compile_counts_only_report_facts(
+        verified_descriptive_source_records(projected, evidence), evidence=evidence,
+        reader_display_labels=plan.display_labels, scientific_claims=claims,
+    )
+    manuscript = render_descriptive_report_claims(manuscript, facts)
     expanded = expand_scientific_claim_tokens(
         manuscript,
         resolve_claim={claim.claim_ref: claim for claim in claims}.get,
@@ -230,4 +240,20 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
     return bound, len(bindings)
 
 
-__all__ = ["prepare_registered_report_repair", "bind_registered_report_numbers"]
+def build_registered_report_reader(run_dir: Path, manuscript: str) -> dict:
+    """Build the current report reader from unchanged registered source inputs."""
+
+    evidence = ReadOnlyReportEvidence(run_dir)
+    plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
+    literature = LiteratureBundle.model_validate_json(evidence.verify_input(
+        "preplan_literature_bundle.json", "preplan_literature_bundle",
+    ))
+    records = json.loads((run_dir / "manifest.json").read_text())["per_step_records"]
+    RegisteredOutputEnvelopeConsumer().authoritative_writer_records(records, evidence_store=evidence)
+    return build_manuscript_reader(
+        manuscript=manuscript, evidence=evidence, plan=plan, literature=literature,
+        evidence_records=evidence.current_verified_records(records),
+    )
+
+
+__all__ = ["prepare_registered_report_repair", "bind_registered_report_numbers", "build_registered_report_reader"]

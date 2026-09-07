@@ -72,8 +72,8 @@ from .manuscript_baseline import baseline_reporting_mentions
 from .administrative_authority import load_manuscript_administrative_authority
 from .manuscript_provenance import (
     ManuscriptProvenanceError,
-    build_manuscript_provenance,
 )
+from .manuscript_reader import build_manuscript_reader
 from .manuscript_projection import project_owner_issued_manuscript_claims
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_keys
@@ -626,14 +626,18 @@ def _persist_manuscript_provenance_artifact(
     run_dir: Path,
     evidence: Any,
     findings: List[ValidationFinding],
+    plan: AnalysisPlan | None = None,
+    literature: LiteratureBundle | None = None,
+    evidence_records: Sequence[Any] | None = None,
 ) -> None:
     """Persist the path-free number -> JSON -> code/data reader contract."""
 
     try:
-        payload = build_manuscript_provenance(
+        payload = build_manuscript_reader(
             manuscript=bound,
             evidence=evidence,
             binding_map=numeric_binding_map,
+            plan=plan, literature=literature, evidence_records=evidence_records,
         )
     except ManuscriptProvenanceError as exc:
         findings.append(
@@ -1824,6 +1828,7 @@ def _bind_and_review_manuscript(
     reader_display_labels: Mapping[str, str],
     manuscript_language: str,
     context: ResearchContext | None = None,
+    plan: AnalysisPlan | None = None,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
@@ -2202,6 +2207,8 @@ def _bind_and_review_manuscript(
             run_dir=run_dir,
             evidence=evidence,
             findings=findings,
+            plan=plan, literature=literature,
+            evidence_records=evidence.current_verified_records(per_step_records),
         )
 
     manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(
@@ -3244,6 +3251,7 @@ def run_write_phase(
         reader_display_labels=dict(execute_result.plan.display_labels or {}),
         manuscript_language=run_language,
         context=context,
+        plan=execute_result.plan,
     )
     bound_path = binding.bound_path
     manuscript_critique = binding.manuscript_critique

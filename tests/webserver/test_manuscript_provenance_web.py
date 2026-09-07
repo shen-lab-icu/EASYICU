@@ -2,8 +2,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 from easyicu.webserver import agent_pipeline_runs, agent_runs
+
+
+@pytest.mark.parametrize("script, owner", [
+    ("report_progress_refresh.test.js", "screens-guided-pi-childjob.js"),
+    ("manuscript_reader_navigation.test.js", "screens-guided-pi-preview.js"),
+])
+def test_manuscript_reader_browser_owner_contracts(script, owner):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for browser owner contracts")
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [node, str(root / "tests/js" / script),
+         str(root / "src/easyicu/webserver/static/js" / owner)],
+        check=True, capture_output=True, text=True, timeout=15,
+    )
+    assert json.loads(result.stdout)["ok"] is True
 
 
 def _payload(manuscript: bytes) -> dict:
