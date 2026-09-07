@@ -2098,6 +2098,7 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
         relative = _clean_text(row.get("relative_path"), 300)
         item: Dict[str, Any] = {
             "label": _clean_text(row.get("label") or row.get("figure_id"), 240),
+            "caption": _clean_text(row.get("caption"), 4000),
             "name": Path(relative).name if relative else "figure",
             "relative_path": relative,
             "status": _clean_text(row.get("status"), 120) or "available",

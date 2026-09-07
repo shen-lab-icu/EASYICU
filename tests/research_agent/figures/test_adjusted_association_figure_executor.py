@@ -462,7 +462,8 @@ def test_the_entrypoint_names_the_declared_product_and_step():
 # --------------------------------------------------------------------------
 
 
-def test_it_renders_the_real_row_and_reports_what_it_drew(tmp_path):
+@pytest.mark.parametrize("presentation", [None, {"width_mm": 183, "height_mm": 85}])
+def test_it_renders_the_real_row_and_reports_what_it_drew(tmp_path, presentation):
     run_dir, manifest = _write_bound_table(tmp_path, [_REAL_ROW])
     summary = run_adjusted_association_figure(
         out_dir=tmp_path / "out",
@@ -470,6 +471,12 @@ def test_it_renders_the_real_row_and_reports_what_it_drew(tmp_path):
         resolved_inputs=manifest,
         step_id="08_adjusted_effect_figure",
         figure_product="adjusted_effect",
+        panel_specs=[dict(
+            panel_id="A", figure_output="figure:adjusted_effect",
+            article_role="primary_estimand", chart_type="forest",
+            source_products=[ADJUSTED_ASSOCIATION_FIGURE_INPUT],
+            presentation=presentation,
+        )],
     )
     assert summary["status"] == "ok"
     assert summary["exposure"] == "lact_max"
@@ -485,6 +492,10 @@ def test_it_renders_the_real_row_and_reports_what_it_drew(tmp_path):
         (tmp_path / "out" / "adjusted_effect.figure_contract.json").read_text()
     )
     assert "age" in json.dumps(contract) and "sex" in json.dumps(contract)
+    assert "Adjusted for age, sex." in contract["reader_caption"]
+    assert "Adjusted for age, sex." not in (
+        tmp_path / "out" / "adjusted_effect.svg"
+    ).read_text(encoding="utf-8")
 
 
 def test_an_unadjusted_model_says_so_rather_than_going_quiet(tmp_path):
@@ -505,6 +516,10 @@ def test_an_unadjusted_model_says_so_rather_than_going_quiet(tmp_path):
         (tmp_path / "out" / "adjusted_effect.figure_contract.json").read_text()
     )
     assert contract["core_claim"].startswith("The unadjusted odds ratio")
+    assert "Unadjusted: the model declared no covariates." in contract["reader_caption"]
+    assert "Unadjusted: the model declared no covariates." not in (
+        tmp_path / "out" / "adjusted_effect.svg"
+    ).read_text(encoding="utf-8")
     assert contract["panels"][0]["title"] == "Unadjusted effect estimate"
     assert (
         contract["panels"][0]["metadata"]["chart_type"]

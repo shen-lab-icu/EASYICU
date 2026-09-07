@@ -1341,20 +1341,12 @@ def run_missingness_measurement_figure(
     colorbar.set_label("Share of the cohort (%)", fontsize=6.2)
     colorbar.ax.tick_params(labelsize=5.8)
     add_panel_label(ax_b, "B", x=-0.30, y=1.02)
-    fig.subplots_adjust(left=0.20, right=0.94, bottom=0.30, top=0.88, wspace=0.72)
+    fig.subplots_adjust(left=0.20, right=0.94, bottom=0.22, top=0.88, wspace=0.72)
     cohort_sizes = {int(entry["denominator"]) for entry in per_variable.values()}
     denominator_note = (
         f"N = {next(iter(cohort_sizes)):,} stays. " if len(cohort_sizes) == 1
         else "Variable-specific cohort denominators are preserved. "
     )
-    fig.text(
-        0.02, 0.025,
-        denominator_note + "Source completeness is not event prevalence.\n"
-        "Repeated records are not independent measurements. "
-        "N/A: event or event-time field. Unknown: repetition source not established.",
-        fontsize=6.0, ha="left", va="bottom", color=palette["neutral"],
-    )
-
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(

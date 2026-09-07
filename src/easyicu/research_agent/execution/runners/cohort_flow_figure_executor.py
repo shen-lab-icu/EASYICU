@@ -413,10 +413,9 @@ def run_cohort_flow_figure(
         # text, so a manuscript figure slot shipped a caption card. The stage
         # is real and countable, so it is drawn on the same axis the
         # multi-stage ledger uses; what changes is only how many stages there
-        # are, and the note underneath says which of the two one-row cases
-        # this is.
+        # are. The source-bound reader caption explains which one-row case
+        # applies, without adding a prose footer to the plotting canvas.
         denominator = int(frame.iloc[0]["n_remaining"])
-        unfiltered = unfiltered_universe
         # A lone bar drawn at the multi-stage height fills the panel; keep it
         # at the thickness a stage has when the ledger has several.
         bar = ax.barh(
@@ -439,19 +438,6 @@ def run_cohort_flow_figure(
             textcoords="offset points",
             va="center",
             fontsize=7,
-        )
-        ax.annotate(
-            "No eligibility filter was applied: every bound input row is the\n"
-            "analysis cohort."
-            if unfiltered
-            else "Upstream eligibility and attrition are not recorded in the\n"
-            "bound ledger.",
-            xy=(0.0, -0.24),
-            xycoords="axes fraction",
-            va="top",
-            ha="left",
-            fontsize=7,
-            color=PALETTE_CLINICAL["neutral"],
         )
     fig.tight_layout()
     contract = make_figure_contract(

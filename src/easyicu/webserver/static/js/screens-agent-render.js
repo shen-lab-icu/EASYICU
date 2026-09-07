@@ -307,7 +307,7 @@
         ${visible.map(({ row, source }, index) => `
           <figure class="${index === 0 || row.tier === 'primary_publication' || row.status === 'canonical_main' ? 'is-primary' : 'is-supporting'}">
             <img src="${escAttr(source)}" alt="${escAttr(row.label || row.relative_path || 'figure')}" />
-            <figcaption><strong>${esc(row.label || 'figure')}</strong><span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
+            <figcaption><strong>${esc(row.label || 'figure')}</strong>${row.caption ? `<p class="ag-figure-caption">${esc(row.caption)}</p>` : ''}<span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
           </figure>`).join('')}
       </div>`;
   }

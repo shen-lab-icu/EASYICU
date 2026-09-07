@@ -445,9 +445,12 @@ Code contract:
   write the full notes as a separate table.
 - Do not draw figure captions, long footnotes, provenance sentences,
   or "this step did not..." process notes as free text inside the
-  saved plotting canvas. Put that text in FigureContract metadata,
-  step_summary, or source-data notes so it cannot be clipped by
-  `tight_layout`, `bbox_inches`, or journal cropping.
+  saved plotting canvas, including below the axes. Put reader-relevant
+  definitions, denominators, model adjustment and limitations in the
+  FigureContract `reader_caption`; keep audit details in step_summary or
+  source-data notes. Retain axis labels, legends and source-backed numeric
+  annotations; do not replace a prose footer with a smaller font or a
+  figure-wide x-axis label.
 - Save a machine-readable summary to step_summary.json containing
   every numeric statistic that downstream agents may quote.
 - Machine-summary units must match field names: values under keys containing

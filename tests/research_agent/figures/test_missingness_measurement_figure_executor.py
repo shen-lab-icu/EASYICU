@@ -554,6 +554,12 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
     assert "percentage of the whole cohort" in contract["reader_caption"]
     assert "Source completeness is not event prevalence" in contract["reader_caption"]
     assert "Unknown denotes unestablished" in contract["reader_caption"]
+    svg = (out_dir / f"{PRODUCT}.svg").read_text(encoding="utf-8")
+    assert "Source completeness is not event prevalence" not in svg
+    assert "Repeated records are not independent measurements" not in svg
+    assert "N/A: event or event-time field" not in svg
+    # Cell status labels remain visible; only the prose footer moves out.
+    assert "Unknown" in svg
     assert [panel["metadata"]["chart_type"] for panel in contract["panels"]] == [
         "availability_panel",
         "coverage_heatmap",
