@@ -99,7 +99,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
     assert "js/screens-guided-pi-replay.js?v=20260901-project-restore1" in index
-    assert "js/screens-guided-pi-resources.js?v=20260904-system-plan1" in index
+    assert "js/screens-guided-pi-resources.js?v=20260907-preparation-state1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260904-empty-gallery1" in index
     assert "js/screens-guided-pi-activity.js?v=20260901-plan-retries2" in index
     assert (
@@ -6374,7 +6374,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20260906-preparation-history1" in index
+    assert "screens-guided-pi-transcript.js?v=20260907-preparation-state1" in index
     assert "screens-guided-pi.js?v=20260906-plan-change1" in index
 
 

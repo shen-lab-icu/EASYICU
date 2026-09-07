@@ -3297,6 +3297,9 @@ def _write_projection(
         "project_dir": str(wrapper_dir),
         "gate": gate,
         "provider": source_manifest["provider"],
+        "research_input_state": project_research_input_state(
+            source_manifest.get("research_input_state")
+        ),
         "artifacts": artifacts,
         "human_review_pending": pending is not None,
         "pending_reviews": pending_requests,

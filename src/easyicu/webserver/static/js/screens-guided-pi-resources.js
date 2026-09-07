@@ -120,8 +120,9 @@
         .includes(String(row && row.hostActionCode || ''))) return '';
       const grouped = groupForMessage(row, limit);
       const hasLiterature = grouped.topicLiterature.length || grouped.methodLiterature.length;
-      const hasDataWorkbench = ['prepare_analysis_data', 'review_prepared_data']
-        .includes(String(row && row.hostActionCode || ''));
+      const actionCode = String(row && row.hostActionCode || '');
+      const hasDataWorkbench = actionCode === 'review_prepared_data'
+        || (actionCode === 'prepare_analysis_data' && row.preparedDataAvailable === true);
       if (!grouped.primary.length && !hasLiterature && !hasDataWorkbench) return '';
       const zh = window.EU_LANG === 'zh';
       const list = resources => `<div class="gpi-resource-list">${resources.map(resource => button(resource)).join('')}</div>`;

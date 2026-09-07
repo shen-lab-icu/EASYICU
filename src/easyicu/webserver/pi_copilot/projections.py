@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..research_input_progress import project_research_input_state
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
 from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
@@ -523,6 +524,9 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "error_code": _safe_error_code(snapshot.get("error")),
             "progress": progress,
             "run_id": run_id,
+            "research_input_state": project_research_input_state(
+                result.get("research_input_state")
+            ),
             "artifact_refs": artifact_refs,
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
