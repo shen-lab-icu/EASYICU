@@ -131,7 +131,11 @@ def load(source: SimpleNamespace):
     )
 
 
-def test_prepared_repair_reuses_bound_scope_without_consuming_review(source) -> None:
+@pytest.mark.parametrize("nonconvergent", [False, True])
+def test_prepared_repair_reuses_bound_scope_without_consuming_review(source, nonconvergent) -> None:
+    if nonconvergent:
+        source.manifest["plan_revision_nonconvergent"] = True
+    original_manifest = dict(source.manifest)
     before = source.capsule.read_bytes()
     result = load(source)
     assert result.run_dir == source.run_dir
@@ -157,6 +161,7 @@ def test_prepared_repair_reuses_bound_scope_without_consuming_review(source) -> 
     assert source.checkpoint.approved_decisions == []
     assert source.checkpoint.execution_start_receipt is None
     assert source.capsule.read_bytes() == before
+    assert source.manifest == original_manifest
 
 
 @pytest.mark.parametrize("state", ["metadata_only", "unavailable", None])

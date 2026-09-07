@@ -32,6 +32,20 @@
   ]);
   const BARE_CONTINUATION = /^(?:(?:请|麻烦)?\s*(?:继续|开始|往下做|接着做)(?:一下|吧|做|执行|推进)?|(?:please\s+)?(?:continue|proceed|go\s+ahead))(?:[。.!！]?)$/i;
 
+  // Shared by the read-only card and the action boundary. A stopped automatic
+  // loop is not approval, nor permission to discard the reviewed source.
+  function canRetryStoppedPlan(workflow) {
+    const summary = (workflow || {}).plan_review_summary || {};
+    const repairs = (summary.remediation_buckets || {}).agent_plan_revision;
+    return (workflow || {}).next_action_code === 'agent_plan_revision_nonconvergent'
+      && Boolean(String(summary.run_id || '').trim())
+      && Array.isArray(summary.authorization_questions)
+      && summary.authorization_questions.length === 0
+      && Array.isArray(summary.automatic_revision_blockers)
+      && summary.automatic_revision_blockers.length === 0
+      && Array.isArray(repairs) && repairs.length > 0;
+  }
+
   function create(host) {
     const tr = host.tr;
     const regeneration = host.regeneration;
@@ -70,7 +84,9 @@
         String(session.session_id || ''),
         String(binding.study_context_id || ''),
         revisionCoordinate,
-        String(binding.run_id || ''),
+        String(reasonCode === 'agent_plan_revision_nonconvergent'
+          ? ((host.workflow() || {}).plan_review_summary || {}).run_id || ''
+          : binding.run_id || ''),
         String(reasonCode || ''),
       ].join(':');
     }
@@ -104,7 +120,9 @@
         && !retryExecution
         && !executionUpgrade;
       return {
-        text: retryExecution
+        text: reasonCode === 'agent_plan_revision_nonconvergent'
+          ? tr('Replan once after repair', '修复后重新规划一次')
+          : retryExecution
           ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
           : executionUpgrade
             ? tr('Confirm the plan and prepare analysis data', '确认方案并准备分析数据')
@@ -125,6 +143,8 @@
     async function startFormalPlanGeneration(reasonCode, options = {}) {
       if (unavailable()) return false;
       const automatic = Boolean(options && options.automatic);
+      const retryingStoppedPlan = reasonCode === 'agent_plan_revision_nonconvergent';
+      if (retryingStoppedPlan && (automatic || !canRetryStoppedPlan(host.workflow()))) return false;
       // A newly generated candidate is not a reviewed plan. The existing
       // confirmation action owns this transition; job completion cannot
       // manufacture approval to prepare its data package.
@@ -136,7 +156,8 @@
       const binding = session.binding || {};
       const provider = session.research_provider || {};
       const studyContextId = String(binding.study_context_id || '').trim();
-      const revisingScientificPlan = reasonCode === 'plan_scientific_changes_required';
+      const revisingScientificPlan = reasonCode === 'plan_scientific_changes_required'
+        || retryingStoppedPlan;
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
       const retryingFailedPlan = reasonCode === 'failed_pipeline_requires_fresh_plan';
       const staleScientificPolicy = reasonCode === 'scientific_plan_review_policy_stale';
@@ -145,9 +166,11 @@
       // the digest-verified scientific review: non-approvable reviews produce
       // a bounded repair contract, while approvable metadata-only plans grant
       // only their exact materialization roster.
-      const revisionSourceRunId = revisingScientificPlan || executionUpgrade
-        ? String(binding.run_id || '').trim()
-        : '';
+      const revisionSourceRunId = retryingStoppedPlan
+        ? String(host.workflow().plan_review_summary.run_id).trim()
+        : revisingScientificPlan || executionUpgrade
+          ? String(binding.run_id || '').trim()
+          : '';
       // A user- or agent-initiated transition consumes only this exact
       // session/revision/run coordinate. A page can host several studies, so a
       // process-wide boolean would incorrectly suppress later conversations.
@@ -156,8 +179,10 @@
         'plan_scientific_changes_required',
         'plan_execution_upgrade_required',
         'scientific_plan_review_policy_stale',
+        'agent_plan_revision_nonconvergent',
       ].includes(String(reasonCode || ''));
       const guardKey = transitionKey(reasonCode);
+      if (retryingStoppedPlan && startedTransitions.has(guardKey)) return false;
       if (guardedTransition) startedTransitions.add(guardKey);
       const api = host.api();
       if (
@@ -495,6 +520,10 @@
 
     async function confirmWorkflow(confirmation) {
       if (!confirmation) return;
+      if (confirmation.code === 'agent_plan_revision_nonconvergent') {
+        if (confirmation.retryPlanRevision) await startFormalPlanGeneration(confirmation.code);
+        return;
+      }
       if (confirmation.code === 'operator_plan_approval_required') {
         await submitReview('approved');
         return;
@@ -597,5 +626,5 @@
     });
   }
 
-  window.EasyICU.guidedPi.declare('planActions', { create });
+  window.EasyICU.guidedPi.declare('planActions', { create, canRetryStoppedPlan });
 })();
