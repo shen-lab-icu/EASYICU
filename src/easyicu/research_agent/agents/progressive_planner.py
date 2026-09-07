@@ -32,6 +32,10 @@ from ..planning.design_selection import (
     ResearchDesignSelectionError,
     validate_research_design_selection,
 )
+from ..planning.baseline_requirements import (
+    baseline_outline_coverage,
+    baseline_requirement_projection,
+)
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
     method_layers_for_source_keys,
@@ -1044,8 +1048,33 @@ def select_progressive_variables(
     limit = max(1, int(max_variables))
     variable_by_name = {variable.name: variable for variable in context.variables}
     source_counts: dict[str, int] = {}
-    selected: list[str] = []
+    baseline = baseline_requirement_projection(context)
+    baseline_columns = {
+        name for table in baseline["tables"]
+        for coordinate in [table["group_by"], *table["variables"]]
+        for name in coordinate["available_columns"]
+    }
+    # These are available representations of accepted content, not a host
+    # choice of aggregation. Exposing first/min/mean/max in review feedback but
+    # pruning them from the schema makes valid repairs impossible. Keep every
+    # offered clinical alternative, plus the exact study anchors, before the
+    # relevance/source-family quota allocates optional retrieval space.
+    required = (baseline_columns | exact) & variable_by_name.keys() if baseline["tables"] else set()
+    if len(required) > limit:
+        raise ProgressivePlanCompileError(
+            "progressive_required_variables_exceed_budget",
+            f"Accepted baseline representations and study anchors require {len(required)} "
+            f"columns; retrieval limit={limit}. No required column was silently pruned.",
+            path="variables",
+        )
+    selected = [variable.name for variable in context.variables if variable.name in required]
+    # Required clinical alternatives do not consume the optional family quota;
+    # that quota must still expose measurement-process inputs for the audit.
     for _score, _position, name in scored:
+        if len(selected) >= limit:
+            break
+        if name in required:
+            continue
         variable = variable_by_name[name]
         source = str(variable.source_concept or name).casefold()
         if source in primary_concepts:
@@ -1622,6 +1651,15 @@ class ProgressivePlannerAgent:
                 "role."
             ),
         ]
+        baseline = baseline_requirement_projection(contract_context)
+        if baseline["tables"]:
+            blocks.append(
+                "Accepted baseline content (host-bound; preserve every row in one table_one):\n"
+                + json.dumps(baseline, ensure_ascii=False, separators=(",", ":"))
+                + "\nChoose a clinical representation from available_columns for each row and "
+                "the scientific grouping. Required concept labels are not physical column names; "
+                "choose the aggregation scientifically, never substitute measurement metadata."
+            )
         if literature_design_evidence_cards:
             blocks.append(
                 render_literature_design_cards_for_prompt(
@@ -1889,8 +1927,6 @@ class ProgressivePlannerAgent:
                     findings=({"required_outcomes": sorted(required_cluster_outcomes), "primary_step_ids": primary_clusters},),
                 )
         if article_context is not None:
-            from ..planning.baseline_requirements import baseline_outline_coverage
-
             baseline = baseline_outline_coverage(
                 article_context,
                 [step.model_dump(mode="json") for step in outline.steps],
