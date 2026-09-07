@@ -229,6 +229,7 @@ def persist_or_validate_scientific_plan_review(
         ) from exc
     if reuse_existing_review:
         binding_fields = (
+            "schema_version",
             "context_sha256",
             "plan_sha256",
             "literature_sha256",

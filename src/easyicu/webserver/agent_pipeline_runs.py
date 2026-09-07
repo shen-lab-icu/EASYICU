@@ -47,9 +47,14 @@ from easyicu.research_agent.planning.cohort_contract import (
     coerce_cohort_definition,
 )
 from easyicu.research_agent.planning.scientific_review import (
+    CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION,
     PlanScientificReview,
     plan_revision_blocker_codes,
     render_agent_plan_revision_contract,
+)
+from easyicu.research_agent.planning.baseline_requirements import (
+    AcceptedBaselineRequirements,
+    candidate_baseline_requirements,
 )
 from easyicu.research_agent.schema import TimeWindow
 from easyicu.research_agent.reporting.system_validation_report import (
@@ -364,6 +369,8 @@ def _load_pending_scientific_review(
         ):
             return {}
         review = PlanScientificReview.model_validate_json(raw)
+        if review.schema_version != CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION:
+            return {}
     except (FileNotFoundError, OSError, ValueError):
         return {}
     return review.model_dump(mode="json")
@@ -409,7 +416,10 @@ def _pending_review_reason_code(
         return explicit_reason
     if not plan_recommendation_complete:
         return "plan_scientific_changes_required"
-    if not scientific_plan_review:
+    if (
+        not scientific_plan_review
+        or scientific_plan_review.get("schema_version") != CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
+    ):
         return "scientific_plan_review_policy_stale"
     if scientific_plan_review.get("approval_allowed") is not True:
         return "plan_scientific_changes_required"
@@ -3631,6 +3641,7 @@ class _CandidatePlanMaterializationAuthority:
     contract: str
     primary_cohort_selection_mode: CohortSelectionMode
     primary_exposure_aggregation: Optional[str] = None
+    baseline_requirements: Optional[AcceptedBaselineRequirements] = None
 
 
 def _candidate_plan_contract(
@@ -3665,6 +3676,7 @@ def _candidate_plan_contract(
                     for value in list(raw.get("expected_outputs") or ())[:32]
                     if _clean_text(value, 160)
                 ],
+                "table_one_spec": raw.get("table_one_spec"),
             }
         )
     seed = {
@@ -3915,6 +3927,19 @@ def _load_candidate_plan_materialization_authority(
             "The candidate plan has no valid population authority matching the stated scope.",
             details={"field": "cohort", "cause": str(exc)},
         ) from exc
+    try:
+        baseline_requirements = candidate_baseline_requirements(
+            plan=plan,
+            source_plan_sha256=parsed_review.plan_sha256,
+            selected_concepts=tuple(selected_concepts),
+            catalog_columns=tuple(catalog_columns),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The accepted baseline content does not match the verified planning catalog.",
+            details={"field": "table_one_spec", "cause": str(exc)},
+        ) from exc
     return _CandidatePlanMaterializationAuthority(
         primary_exposure=primary_exposure,
         target_outcome=target_outcome,
@@ -3922,6 +3947,7 @@ def _load_candidate_plan_materialization_authority(
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
         primary_cohort_selection_mode=candidate_cohort.selection_mode,
         primary_exposure_aggregation=aggregation or None,
+        baseline_requirements=baseline_requirements,
     )
 
 
@@ -4330,6 +4356,7 @@ def _materialization_concept_roster(
     *,
     foundation_profile: Mapping[str, Any],
     development_resume_acquisition: Optional[_DevelopmentResumeAcquisition],
+    baseline_requirements: Optional[AcceptedBaselineRequirements] = None,
 ) -> Dict[str, tuple[str, ...]]:
     """Resolve the patient-level roster for a reviewed execution.
 
@@ -4347,7 +4374,7 @@ def _materialization_concept_roster(
         )
         else None
     )
-    return {
+    roster = {
         "outcome_concepts": tuple(
             materialized.outcome_concepts
             if materialized is not None
@@ -4364,6 +4391,24 @@ def _materialization_concept_roster(
             else foundation_profile["static_concepts"]
         ),
     }
+    if baseline_requirements is not None:
+        already_classified = set(roster["static_concepts"]) | set(roster["outcome_concepts"])
+        baseline_concepts = {
+            coordinate.source_concept
+            for table in baseline_requirements.tables
+            for coordinate in (table.group_by, *table.variables)
+            if coordinate.source_concept is not None
+            and coordinate.source_concept not in already_classified
+        }
+        if materialized is not None and baseline_concepts - set(roster["required_feature_concepts"]):
+            raise ResearchPipelineRunError(
+                "accepted_baseline_resume_materialization_mismatch",
+                "The frozen resume roster cannot be widened to satisfy a different accepted baseline.",
+            )
+        roster["required_feature_concepts"] = tuple(dict.fromkeys((
+            *roster["required_feature_concepts"], *sorted(baseline_concepts),
+        )))
+    return roster
 
 
 def make_research_pipeline_run_runner(
@@ -4482,6 +4527,7 @@ def make_research_pipeline_run_runner(
         candidate_outcome_concepts = explicit_outcome_concepts(question)
         candidate_exposure_aggregation: Optional[str] = None
         candidate_authority: Optional[_CandidatePlanMaterializationAuthority] = None
+        bound_baseline_requirements: Optional[AcceptedBaselineRequirements] = None
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if source_run_id:
             candidate_authority = _load_candidate_plan_materialization_authority(
@@ -4501,6 +4547,7 @@ def make_research_pipeline_run_runner(
                 primary_exposure = candidate_authority.primary_exposure
                 candidate_outcome_concepts = candidate_authority.outcome_concepts
                 candidate_exposure_aggregation = candidate_authority.primary_exposure_aggregation
+                bound_baseline_requirements = candidate_authority.baseline_requirements
                 foundation_profile = _data_foundation_profile(
                     export_path=export_path,
                     study=candidate_planning_study,
@@ -4519,6 +4566,9 @@ def make_research_pipeline_run_runner(
                     project_root=project_root,
                     source_run_id=source_run_id,
                 )
+                inherited_baseline = source_review.facts.get("accepted_baseline_requirements")
+                if inherited_baseline is not None:
+                    bound_baseline_requirements = AcceptedBaselineRequirements.model_validate(inherited_baseline)
                 source_agent_plan_revision_codes = _agent_plan_revision_codes(
                     source_review
                 )
@@ -4643,6 +4693,7 @@ def make_research_pipeline_run_runner(
                 materialization_roster = _materialization_concept_roster(
                     foundation_profile=foundation_profile,
                     development_resume_acquisition=development_resume_acquisition,
+                    baseline_requirements=bound_baseline_requirements,
                 )
                 acquisition = acquire_universe_for_question(
                     export_dir=Path(export_path).expanduser(),
@@ -5024,6 +5075,11 @@ def make_research_pipeline_run_runner(
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
                 bound_plan_revision_contract=(bound_plan_revision_contract or None),
+                bound_baseline_requirements=(
+                    bound_baseline_requirements.model_dump(mode="json")
+                    if bound_baseline_requirements is not None
+                    else None
+                ),
                 # Live PubMed is frozen by the selected additive profile, not
                 # passed as an ad-hoc override. When an accepted Idea handoff
                 # already supplies a digest-bound receipt, the no-search

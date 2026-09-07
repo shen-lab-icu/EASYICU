@@ -258,7 +258,7 @@ def _allow_current_scientific_review(monkeypatch: pytest.MonkeyPatch) -> None:
         agent_pipeline_runs,
         "_load_pending_scientific_review",
         lambda *_args, **_kwargs: {
-            "schema_version": "easyicu.plan_scientific_review/10",
+            "schema_version": "easyicu.plan_scientific_review/11",
             "approval_allowed": True,
         },
     )
@@ -451,12 +451,12 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     )
     pipeline_input = project_dir / "pipeline_input"
     pipeline_input.mkdir()
-    pd.DataFrame(columns=["lact", "death", "age"]).to_parquet(
+    pd.DataFrame(columns=["lact", "death", "age", "charlson"]).to_parquet(
         pipeline_input / "planner_catalog.parquet",
         index=False,
     )
     (pipeline_input / "planner_catalog_receipt.json").write_text(
-        json.dumps({"selected_concepts": ["lact", "death", "age"]}),
+        json.dumps({"selected_concepts": ["lact", "death", "age", "charlson"]}),
         encoding="utf-8",
     )
     review = PlanScientificReview(
@@ -504,7 +504,22 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
                             "planned_analysis_role": "primary",
                             "inputs": ["lact", "death", "age"],
                             "expected_outputs": ["table:estimate"],
-                        }
+                        },
+                        {
+                            "step_id": "baseline_candidate",
+                            "method": "descriptive",
+                            "planned_analysis_role": "auxiliary",
+                            "inputs": ["lact", "age", "charlson"],
+                            "expected_outputs": ["table:table_one"],
+                            "table_one_spec": {
+                                "group_by": "lact", "group_levels": [0, 1],
+                                "variables": [
+                                    {"name": name, "variable_kind": "continuous",
+                                     "summary": "median_iqr", "test": "mann_whitney_or_kruskal"}
+                                    for name in ("age", "charlson")
+                                ],
+                            },
+                        },
                     ],
                 },
             },
@@ -543,6 +558,24 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     assert authority.primary_exposure == "lact"
     assert authority.target_outcome == "death"
     assert authority.primary_cohort_selection_mode == candidate_cohort["selection_mode"]
+    assert authority.baseline_requirements is not None
+    table = authority.baseline_requirements.tables[0]
+    assert [item.name for item in table.variables] == ["age", "charlson"]
+    assert table.variables[1].source_concept == "charlson"
+    seed = json.loads(authority.contract.split("- candidate_plan_seed_json: ", 1)[1])
+    assert seed["steps"][1]["table_one_spec"]["variables"][1]["name"] == "charlson"
+    roster = agent_pipeline_runs._materialization_concept_roster(
+        foundation_profile={
+            "outcome_concepts": ("death",), "required_feature_concepts": ("lact",),
+            "static_concepts": ("age",),
+        },
+        development_resume_acquisition=None,
+        baseline_requirements=authority.baseline_requirements,
+    )
+    assert roster == {
+        "outcome_concepts": ("death",), "required_feature_concepts": ("lact", "charlson"),
+        "static_concepts": ("age",),
+    }
     assert "source_plan_sha256: " + "b" * 64 in authority.contract
     assert "primary_model" in authority.contract
 
@@ -6907,6 +6940,33 @@ def test_pending_plan_without_current_review_projects_stale_policy_reason(
     assert history["runs"][0]["scientific_configuration_sha256"] == (
         study_context_owner.scientific_configuration_sha256(_complete_study())
     )
+
+
+@pytest.mark.parametrize("version", [10, 11])
+def test_digest_valid_archived_review_is_not_current_approval_policy(tmp_path, monkeypatch, version) -> None:
+    review = PlanScientificReview(
+        status="analysis_only", approval_allowed=True, top_journal_candidate=False,
+        score=81, context_sha256="a" * 64, plan_sha256="b" * 64,
+        dimension_scores={"content_completeness": 100},
+        literature_sha256="c" * 64, figure_strategy_sha256="d" * 64,
+        generated_at="2026-09-07T00:00:00Z",
+    ).model_dump(mode="json")
+    review["schema_version"] = f"easyicu.plan_scientific_review/{version}"
+    raw = json.dumps(review).encode()
+    path = tmp_path / "scientific_plan_review.json"
+    path.write_bytes(raw)
+    monkeypatch.setattr(agent_pipeline_runs, "_pending_bound_evidence_sha256", lambda *_: hashlib.sha256(raw).hexdigest())
+    request = SimpleNamespace(payload={"reason": "operator_plan_approval_required"})
+    pending = SimpleNamespace(requests=[request])
+    allowed = agent_pipeline_runs._pending_plan_approval_allowed(
+        run_dir=tmp_path, pending=pending, plan_recommendation_complete=True,
+    )
+    assert allowed is (version == 11)
+    reason = agent_pipeline_runs._pending_review_reason_code(
+        request=request, plan_recommendation_complete=True, scientific_plan_review=review,
+    )
+    assert reason == ("operator_plan_approval_required" if version == 11 else "scientific_plan_review_policy_stale")
+    assert path.read_bytes() == raw
 
 
 def test_nonconvergent_projection_persists_stop_reason(
