@@ -32,7 +32,7 @@ from easyicu.webserver.pi_copilot.run_authority import (
     resumable_planner_checkpoint_job_id,
 )
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
-from easyicu.webserver.research_launch_resume import _development_resume_budget_mode
+from easyicu.webserver.research_launch_resume import _development_resume_launch_scope
 
 
 _DEVELOPMENT_REVIEWED_EXECUTION_ENV = "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
@@ -397,11 +397,12 @@ def submit_research_run(
         ):
             _reject({"error": "planner_checkpoint_not_available"})
         if development_resume_source_job_id:
-            budget_mode = _development_resume_budget_mode(
+            resume_scope = _development_resume_launch_scope(
                 project_root=project_root,
                 study=study_context,
                 source_job_id=development_resume_source_job_id,
             )
+            budget_mode = resume_scope.budget_mode
             if budget_mode == "full_reviewed" and prepared_manifest is None:
                 dataio.validate_research_pipeline_source(path, database=database)
             runner_kwargs["budget_mode"] = budget_mode
