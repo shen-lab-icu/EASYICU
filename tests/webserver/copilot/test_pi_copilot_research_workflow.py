@@ -8303,7 +8303,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     if runner_image is not None:
         runner_kwargs["runner_image"] = runner_image
     expected_resume_path = None
-    if budget_mode is None and runner_image_environment is None:
+    if budget_mode == "full_reviewed" and runner_image_environment is None and runner_image is None:
         expected_resume_path = (
             tmp_path
             / "projects"
@@ -8328,6 +8328,13 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         monkeypatch.setenv(
             "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID",
             "prior-canary",
+        )
+        monkeypatch.setattr(
+            research_pipeline_run_preparation,
+            "_development_resume_launch_scope",
+            lambda **kwargs: research_launch_resume._DevelopmentResumeLaunchScope(
+                "full_reviewed", "Exact sealed candidate plan constraint",
+            ),
         )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
@@ -8433,6 +8440,10 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     # smaller routine-E1 iteration envelope must not interrupt a valid
     # progressive plan after an arbitrary number of calls.
     assert calls["config"].development_planner_efficiency_max_calls is None
+    assert calls["config"].bound_plan_revision_contract == (
+        "Exact sealed candidate plan constraint" if expected_resume_path else None
+    )
+    assert calls["config"].require_human_plan_review is True
     assert (
         calls["config"].development_planner_efficiency_max_reported_tokens is None
     )
@@ -8528,6 +8539,11 @@ def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
         lambda **_kwargs: [object()],
     )
     _assume_execution_runtime_ready(monkeypatch)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_development_resume_launch_scope",
+        lambda **kwargs: research_launch_resume._DevelopmentResumeLaunchScope("full_reviewed", None),
+    )
 
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
@@ -9234,8 +9250,8 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     )
     monkeypatch.setattr(
         research_run_submission,
-        "_development_resume_budget_mode",
-        lambda **_kwargs: "planner_canary",
+        "_development_resume_launch_scope",
+        lambda **_kwargs: SimpleNamespace(budget_mode="planner_canary", plan_contract=None),
     )
     monkeypatch.setattr(
         agent_route.PiProviderConfigStore,

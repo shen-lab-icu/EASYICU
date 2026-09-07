@@ -24,14 +24,15 @@ def sealed_source(tmp_path, monkeypatch):
     checkpoint.write_text("fixture: chain validation is the separate existing owner")
     monkeypatch.setattr(owner, "_development_progressive_resume_binding", lambda **k: (checkpoint, "a" * 64))
 
-    def save(mode):
+    def save(mode, contract=None):
         seed = recovery.WebReviewRecoverySeed.create(
             wrapper_dir=str(wrapper.resolve()), study=study,
             scientific_configuration_sha256=study_contexts.scientific_configuration_sha256(study),
             provider_meta={}, provider_public={}, credential_source="pi_verified",
             budget_mode=mode,
             prepared_package_binding={"binding_sha256": "b" * 64} if mode == "full_reviewed" else None,
-            pipeline_config={}, pipeline_config_sha256="c" * 64, acquisition_projection={},
+            pipeline_config={"bound_plan_revision_contract": contract},
+            pipeline_config_sha256="c" * 64, acquisition_projection={},
             hard_stop_ledger_path="", hard_stop_task_id="web-prior",
             hard_stop_declaration_sha256="d" * 64, created_at=1.0,
         )
@@ -41,10 +42,10 @@ def sealed_source(tmp_path, monkeypatch):
         return path
 
     def read(current=None):
-        return owner._development_resume_budget_mode(
+        return owner._development_resume_launch_scope(
             project_root=str(tmp_path), study=study if current is None else current,
             source_job_id="prior",
-        )
+        ).budget_mode
     return study, save, read
 
 
@@ -133,6 +134,42 @@ def test_legacy_unsigned_package_binding_cannot_restore_full_scope(sealed_source
     path.write_text(json.dumps(raw))
     with pytest.raises(owner.ResearchPipelineRunError, match="launch scope"):
         read()
+
+
+@pytest.mark.parametrize("contract", [None, "", "  Exact sealed plan constraint\n保持原方案。\n"])
+def test_launch_scope_preserves_original_contract_bytes(sealed_source, tmp_path, contract):
+    study, save, _ = sealed_source
+    path = save("full_reviewed", contract)
+    before = path.read_bytes()
+    scope = owner._development_resume_launch_scope(
+        project_root=str(tmp_path), study=study, source_job_id="prior",
+    )
+    assert scope.plan_contract == contract
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("contract", [[], {}, 7, "x" * (2 * 1024 * 1024 + 1)])
+def test_untyped_or_oversize_contract_is_not_prompt_authority(sealed_source, contract):
+    _, save, read = sealed_source
+    save("full_reviewed", contract)
+    with pytest.raises(owner.ResearchPipelineRunError, match="plan contract"):
+        read()
+
+
+@pytest.mark.parametrize("sealed,current,expected", [
+    ("original", "", "original"), ("original", None, "original"),
+    ("original", "original", "original"), (None, None, None),
+])
+def test_resume_reuses_only_the_sealed_plan_constraint(sealed, current, expected):
+    scope = owner._DevelopmentResumeLaunchScope("full_reviewed", sealed)
+    assert owner._development_resume_plan_contract(scope=scope, current_contract=current) == expected
+
+
+@pytest.mark.parametrize("sealed,current", [(None, "new"), ("original", "changed")])
+def test_resume_cannot_replace_the_original_plan_constraint(sealed, current):
+    scope = owner._DevelopmentResumeLaunchScope("full_reviewed", sealed)
+    with pytest.raises(owner.ResearchPipelineRunError, match="sealed plan contract"):
+        owner._development_resume_plan_contract(scope=scope, current_contract=current)
 
 
 @pytest.fixture

@@ -4525,6 +4525,13 @@ def make_research_pipeline_run_runner(
                 bound_plan_revision_contract = render_agent_plan_revision_contract(
                     source_review
                 )
+        if execution.development_resume_scope is not None:
+            from easyicu.webserver.research_launch_resume import _development_resume_plan_contract
+
+            bound_plan_revision_contract = _development_resume_plan_contract(
+                scope=execution.development_resume_scope,
+                current_contract=bound_plan_revision_contract,
+            )
         _progress(job, step="provider", label="Research Agent provider authorized")
         request_timeout, request_hard_timeout = _provider_request_timeouts_for_budget(
             selected_budget_mode

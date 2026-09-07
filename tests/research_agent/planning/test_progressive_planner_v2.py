@@ -6208,7 +6208,8 @@ def test_agent_resumes_only_the_unmaterialized_suffix() -> None:
     )
 
 
-def test_agent_rejects_resume_authority_drift_before_provider_call() -> None:
+@pytest.mark.parametrize("changed_field", ["question", "plan_contract"])
+def test_agent_rejects_resume_authority_drift_before_provider_call(changed_field) -> None:
     dependency_context = {
         "cohort_file_sha256": "b" * 64,
         "llm_signature": "codex:gpt-test",
@@ -6228,9 +6229,11 @@ def test_agent_rejects_resume_authority_drift_before_provider_call() -> None:
         _context(),
         checkpoint_callback=checkpoints.append,
         resume_dependency_context=dependency_context,
+        planning_contract_context="Preserve the accepted candidate plan.",
     )
-    changed_context = _context().model_copy(
-        update={"research_question": "Estimate a different scientific target."}
+    changed_context = (
+        _context().model_copy(update={"research_question": "Estimate a different scientific target."})
+        if changed_field == "question" else _context()
     )
     resumed_llm = ScriptedMockLLMClient([])
     resumed_llm.supports_strict_json_schema = True
@@ -6240,6 +6243,9 @@ def test_agent_rejects_resume_authority_drift_before_provider_call() -> None:
             changed_context,
             resume_checkpoint=checkpoints[4],
             resume_dependency_context=dependency_context,
+            planning_contract_context=(
+                "" if changed_field == "plan_contract" else "Preserve the accepted candidate plan."
+            ),
         )
 
     assert caught.value.reason_code == (

@@ -35,6 +35,8 @@ from easyicu.webserver.research_launch_resume import (
     _development_progressive_resume_binding,
     _development_resume_acquisition_profile,
     _development_resume_literature_bundle,
+    _development_resume_launch_scope,
+    _DevelopmentResumeLaunchScope,
 )
 from easyicu.webserver.research_launch_runtime import (
     _require_execution_runtime,
@@ -137,6 +139,7 @@ class PreparedLaunchExecution:
     execution_resume_source_run_id: str
     runner_image: str
     plan_change_request: Optional[PlanChangeRequest] = None
+    development_resume_scope: Optional[_DevelopmentResumeLaunchScope] = None
 
 
 @dataclass(frozen=True)
@@ -431,6 +434,18 @@ def _prepare_launch_execution(
         if development_resume_binding is not None
         else None
     )
+    development_resume_scope = (
+        _development_resume_launch_scope(
+            project_root=project_root, study=scientific.study,
+            source_job_id=selected_resume_source,
+        )
+        if development_resume_binding is not None else None
+    )
+    if development_resume_scope is not None and development_resume_scope.budget_mode != budget_mode:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_mismatch",
+            "The Planner continuation must retain its sealed launch scope.",
+        )
 
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(capability_settings)
@@ -516,6 +531,7 @@ def _prepare_launch_execution(
             ),
             runner_image=selected_runner_image,
             plan_change_request=request.plan_change_request,
+            development_resume_scope=development_resume_scope,
         ),
     )
 
