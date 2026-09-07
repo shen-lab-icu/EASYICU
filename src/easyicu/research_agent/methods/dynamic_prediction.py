@@ -125,7 +125,11 @@ def build_landmark_feature_matrix(
     working["value_num"] = pd.to_numeric(working["value_num"], errors="coerce")
     if working[TIME_COL].isna().any() or (~np.isfinite(working[TIME_COL])).any():
         raise ValueError("selected trajectory rows require finite charttime values")
-    working = working.sort_values([ID_COL, TIME_COL, "concept"])
+    if "last" in requested_aggregations:
+        ties = working.groupby([ID_COL, TIME_COL, "concept"])["value_num"].nunique()
+        if ties.gt(1).any():
+            raise ValueError("conflicting measurements at identical stay/time/concept require an explicit tie rule")
+    working = working.sort_values([ID_COL, TIME_COL, "concept"], kind="stable")
 
     feature_names = [
         f"{concept}__{aggregation}"
@@ -205,9 +209,12 @@ def attach_landmark_outcomes(
         raise ValueError("outcomes must contain exactly one row per stay_id")
     horizons = _positive_finite(horizon_hours, label="horizon_hours")
     outcome_rows = outcomes[[ID_COL, event_time_col, followup_end_col]].copy()
+    raw_event_present = outcome_rows[event_time_col].notna()
     outcome_rows[event_time_col] = pd.to_numeric(
         outcome_rows[event_time_col], errors="coerce"
     )
+    if (raw_event_present & outcome_rows[event_time_col].isna()).any():
+        raise ValueError("non-missing event times must be numeric")
     outcome_rows[followup_end_col] = pd.to_numeric(
         outcome_rows[followup_end_col], errors="coerce"
     )

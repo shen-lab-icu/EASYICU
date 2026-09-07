@@ -140,6 +140,18 @@ def _structural_components(
     return v10, v01, auc
 
 
+def _validated_inputs(y_true, *scores):
+    labels = np.asarray(y_true, dtype=float)
+    arrays = [np.asarray(score, dtype=float) for score in scores]
+    if labels.ndim != 1 or any(a.ndim != 1 or a.size != labels.size for a in arrays):
+        raise ValueError("labels and scores must be 1D with matching length")
+    if not np.isfinite(labels).all() or any(not np.isfinite(a).all() for a in arrays):
+        raise ValueError("labels and scores must be finite; missing values require explicit handling")
+    if not np.isin(labels, [0, 1]).all():
+        raise ValueError("labels must be binary 0/1")
+    return labels, arrays
+
+
 def delong_auc_variance(
     y_true: Sequence[int], y_score: Sequence[float]
 ) -> Tuple[float, float]:
@@ -148,8 +160,7 @@ def delong_auc_variance(
     Parameters
     ----------
     y_true:
-        Binary labels; anything ``> 0`` (or truthy) is treated as the positive
-        class, everything else as negative.
+        Binary 0/1 labels. Missing or non-binary labels are rejected.
     y_score:
         Real-valued scores where larger means "more positive".
 
@@ -160,10 +171,7 @@ def delong_auc_variance(
     ``(m-1)`` / ``(n-1)`` sample corrections.
     """
 
-    y_true = np.asarray(y_true)
-    y_score = np.asarray(y_score, dtype=float)
-    if y_true.shape[0] != y_score.shape[0]:
-        raise ValueError("y_true and y_score length mismatch")
+    y_true, (y_score,) = _validated_inputs(y_true, y_score)
     positive = y_true > 0
     pos = y_score[positive]
     neg = y_score[~positive]
@@ -238,11 +246,7 @@ def delong_test(
 
     from scipy.stats import norm
 
-    y_true = np.asarray(y_true)
-    score_a = np.asarray(score_a, dtype=float)
-    score_b = np.asarray(score_b, dtype=float)
-    if not (y_true.shape[0] == score_a.shape[0] == score_b.shape[0]):
-        raise ValueError("y_true, score_a and score_b must share length")
+    y_true, (score_a, score_b) = _validated_inputs(y_true, score_a, score_b)
     positive = y_true > 0
     m = int(positive.sum())
     n = int((~positive).sum())

@@ -229,8 +229,13 @@ class PatientFilter:
         admissions = self._read_table('admissions')
         
         # 合并
-        df = icustays.merge(patients, on='subject_id', how='left')
-        df = df.merge(admissions, on=['subject_id', 'hadm_id'], how='left')
+        from .io.identity import require_unique_keys
+
+        require_unique_keys(icustays, ['stay_id'], table='icustays')
+        require_unique_keys(patients, ['subject_id'], table='patients')
+        require_unique_keys(admissions, ['subject_id', 'hadm_id'], table='admissions')
+        df = icustays.merge(patients, on='subject_id', how='left', validate='many_to_one')
+        df = df.merge(admissions, on=['subject_id', 'hadm_id'], how='left', validate='many_to_one')
         
         # 计算年龄（入ICU时的年龄）
         if 'anchor_age' in df.columns:
@@ -489,8 +494,13 @@ class PatientFilter:
         admissions = self._read_table('admissions')
         
         # 合并 - MIMIC-III 使用 icustay_id
-        df = icustays.merge(patients, on='subject_id', how='left')
-        df = df.merge(admissions, on=['subject_id', 'hadm_id'], how='left')
+        from .io.identity import require_unique_keys
+
+        require_unique_keys(icustays, ['icustay_id'], table='icustays')
+        require_unique_keys(patients, ['subject_id'], table='patients')
+        require_unique_keys(admissions, ['subject_id', 'hadm_id'], table='admissions')
+        df = icustays.merge(patients, on='subject_id', how='left', validate='many_to_one')
+        df = df.merge(admissions, on=['subject_id', 'hadm_id'], how='left', validate='many_to_one')
         
         # 计算年龄（入ICU时的年龄）
         if 'dob' in df.columns and 'intime' in df.columns:
@@ -636,7 +646,7 @@ class PatientFilter:
             # 尝试目录格式（分片parquet）
             dir_path = search_dir / table_name
             if dir_path.is_dir():
-                parquet_files = list(dir_path.glob('*.parquet'))
+                parquet_files = sorted(dir_path.glob('*.parquet'))
                 if parquet_files:
                     dfs = [pd.read_parquet(f) for f in parquet_files]
                     return pd.concat(dfs, ignore_index=True)
@@ -644,9 +654,9 @@ class PatientFilter:
             # 尝试分桶目录
             bucket_dir = search_dir / f"{table_name}_bucket"
             if bucket_dir.is_dir():
-                parquet_files = list(bucket_dir.rglob('*.parquet'))
+                parquet_files = sorted(bucket_dir.rglob('*.parquet'))
                 if parquet_files:
-                    dfs = [pd.read_parquet(f) for f in parquet_files[:50]]  # 限制读取量
+                    dfs = [pd.read_parquet(f) for f in parquet_files]
                     return pd.concat(dfs, ignore_index=True)
         
         # 最后尝试: rglob 搜索任意深度
@@ -777,11 +787,8 @@ class PatientFilter:
         
         # Sepsis筛选（需要额外处理）
         if has_sepsis is not None:
-            sepsis_ids = self._get_sepsis_patients()
-            if has_sepsis:
-                mask &= df['patient_id'].isin(sepsis_ids)
-            else:
-                mask &= ~df['patient_id'].isin(sepsis_ids)
+            positive_ids, negative_ids = self._get_sepsis_status_ids()
+            mask &= df['patient_id'].isin(positive_ids if has_sepsis else negative_ids)
         
         # 应用筛选
         result = df[mask].copy()
@@ -799,6 +806,10 @@ class PatientFilter:
             return result['patient_id'].tolist()
     
     def _get_sepsis_patients(self) -> set:
+        """Compatibility projection: observed Sepsis-3 positives only."""
+        return self._get_sepsis_status_ids()[0]
+
+    def _get_sepsis_status_ids(self) -> tuple[set, set]:
         """获取 Sepsis 患者 ID 集合。
 
         使用 EasyICU 的 Sepsis-3 定义（疑似感染 susp_inf + SOFA），而非 ICD
@@ -817,7 +828,7 @@ class PatientFilter:
             ) from e
 
         if not isinstance(sep3, pd.DataFrame) or sep3.empty:
-            return set()
+            return set(), set()
 
         id_candidates = ['stay_id', 'icustay_id', 'patientunitstayid',
                          'admissionid', 'patientid', 'CaseID']
@@ -832,16 +843,22 @@ class PatientFilter:
         value_candidates = ['sep3', 'sep3_sofa2', 'sep3_sofa1']
         value_col = next((c for c in value_candidates if c in sep3.columns), None)
         if value_col is None:
-            # 概念结果无显式标签列：出现在结果中即视为 Sepsis-3 阳性
-            return set(sep3[id_col].dropna().unique())
+            raise PatientFilterCriterionError(
+                'patient_filter_sepsis_label_unavailable', 'has_sepsis',
+                'Sepsis-3 requires explicit labels; row presence is not a diagnosis.',
+            )
 
+        text = sep3[value_col].astype('string').str.strip().str.lower()
         vals = pd.to_numeric(sep3[value_col], errors='coerce')
-        if vals.notna().any():
-            mask = vals > 0
-        else:
-            mask = sep3[value_col].astype(str).str.strip().str.lower().isin(
-                {'1', 'true', 't', 'yes', 'y'})
-        return set(sep3.loc[mask.fillna(False), id_col].dropna().unique())
+        positive = vals.eq(1) | text.isin({'true', 't', 'yes', 'y'})
+        negative = vals.eq(0) | text.isin({'false', 'f', 'no', 'n'})
+        # Any observed positive establishes positivity. A negative stay needs
+        # only explicit negatives throughout the returned derivation; absent,
+        # unparseable, or mixed negative/unknown rows never establish absence.
+        positive_ids = set(sep3.loc[positive.fillna(False), id_col].dropna())
+        all_negative = negative.fillna(False).groupby(sep3[id_col]).all()
+        negative_ids = set(all_negative.index[all_negative]) - positive_ids
+        return positive_ids, negative_ids
     
     def get_filter_summary(self) -> Dict[str, Any]:
         """获取筛选结果摘要"""

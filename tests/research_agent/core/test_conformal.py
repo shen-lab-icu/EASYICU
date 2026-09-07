@@ -19,7 +19,7 @@ from easyicu.research_agent.methods.conformal import (
 
 def _well_calibrated_split(n, prevalence, rng):
     """Draw (prob_pos, label) with labels ~ Bernoulli(prob_pos)."""
-    true_p = rng.beta(2, 2, size=n) * 0.6 + prevalence * 0.2
+    true_p = rng.beta(prevalence * 10, (1 - prevalence) * 10, size=n)
     labels = (rng.random(n) < true_p).astype(int)
     # Model probabilities = true probabilities (well calibrated) + mild noise.
     probs = np.clip(true_p + rng.normal(0, 0.03, size=n), 0.01, 0.99)
@@ -42,6 +42,8 @@ def test_mondrian_covers_minority_class_under_imbalance():
     # under-coverage.
     cal_p, cal_y = _well_calibrated_split(6000, 0.08, rng)
     te_p, te_y = _well_calibrated_split(6000, 0.08, rng)
+    assert 0.06 < cal_y.mean() < 0.10
+    assert 0.06 < te_y.mean() < 0.10
     res = conformal_evaluate(cal_p, cal_y, te_p, te_y, alpha=0.1, mondrian=True)
     # Class-conditional guarantee: BOTH classes covered near/above target.
     assert res.per_class_coverage[1] >= 0.85
