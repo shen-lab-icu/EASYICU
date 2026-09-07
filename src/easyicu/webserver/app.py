@@ -126,6 +126,9 @@ def _acquire_web_deployment_lease() -> None:
 
 @app.on_event("shutdown")
 def _release_web_deployment_lease() -> None:
+    from easyicu.webserver.jobs import MANAGER
+
+    MANAGER.cancel_all("server_shutdown")
     shutdown_pi_copilot_service()
     shutdown_codex_auth()
     release_single_process_lease()

@@ -234,6 +234,7 @@ def _write_csv_export(root: Path, database: str = "miiv") -> Path:
             {
                 "database": database,
                 "generated": "2026-06-23T12:00:00",
+                "format": "csv",
                 "files": manifest_files,
             },
             indent=2,

@@ -466,8 +466,18 @@ async def jobs_events(job_id: str) -> StreamingResponse:
             # Read the event slice and status under the Job's per-instance lock.
             events, status = job.events_since(sent)
             for ev in events:
+                if ev.get("type") == "end" and ev.get("result_omitted"):
+                    # Bound retained progress memory, not the terminal wire
+                    # contract. Existing clients consume the full end result.
+                    terminal = job.snapshot()
+                    ev = {
+                        "type": "end", "seq": ev["seq"],
+                        "status": terminal["status"],
+                        "result": terminal["result"], "error": terminal["error"],
+                    }
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
-            sent += len(events)
+            if events:
+                sent = events[-1]["seq"] + 1
             if status != "running":
                 break
             await asyncio.sleep(0.15)

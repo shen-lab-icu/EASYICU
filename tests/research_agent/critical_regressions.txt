@@ -7,3 +7,6 @@ tests/research_agent/reporting/test_findings_prose_admission.py
 tests/research_agent/figures/test_distribution_confidence_projection.py
 tests/research_agent/figures/test_typed_distribution_panels.py
 tests/governance/test_research_agent_critical_ci.py
+tests/research_agent/core/test_method_input_integrity.py
+tests/research_agent/core/test_dynamic_input_integrity.py
+tests/research_agent/execution/test_checkpoint_lock_portability.py

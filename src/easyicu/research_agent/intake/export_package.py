@@ -1752,6 +1752,70 @@ def _open_export_package_impl(
     )
 
 
+def inspect_export_layout(export_dir: Union[str, Path]) -> dict[str, Any]:
+    """Metadata-only scan, NOT sealed execution or scientific authority.
+
+    Reuse intake's manifest selection, inventory and path rules, but inspect
+    only headers/Parquet footers. Do not copy/hash whole patient tables merely
+    to populate a folder-picker readiness badge. Execution must still use
+    ``open_export_package`` with its complete content-bound checks.
+    """
+    root = Path(export_dir)
+    manifest_path, kind = _select_manifest(root)
+    manifest, _ = _read_json(manifest_path, label="export manifest")
+    database = str(manifest.get("database") or "").strip()
+    if not database:
+        raise ExportPackageError("manifest database is required")
+    raw_format = manifest.get("format" if kind == "native" else "export_format")
+    declared_format = _normalize_format(raw_format)
+    if (kind == "native" or raw_format) and declared_format is None:
+        raise ExportPackageError("manifest format is invalid", code="manifest_format_invalid")
+    if kind == "native" and manifest.get("schema_version") not in {None, NATIVE_MANIFEST_SCHEMA_V2}:
+        raise ExportPackageError("manifest schema is invalid", code="manifest_schema_invalid")
+    if manifest.get("schema_version") == NATIVE_MANIFEST_SCHEMA_V2 and not isinstance(manifest.get("column_metadata"), dict):
+        raise ExportPackageError("native v2 requires column metadata", code="column_metadata_inventory_invalid")
+    if "column_metadata" in manifest:
+        try:
+            reference = SidecarRef.from_dict(manifest["column_metadata"])
+        except MetadataSidecarError as exc:
+            raise ExportPackageError(str(exc), code=_column_metadata_error_code(exc)) from exc
+        if reference.file != f"column_metadata.sha256-{reference.sha256}.json":
+            raise ExportPackageError("column metadata filename mismatch", code="column_metadata_digest_mismatch")
+        _safe_manifest_file(root, reference.file, label="column metadata sidecar")
+    entries = _manifest_file_entries(manifest, manifest_kind=kind)
+    seen = set()
+    for entry in entries:
+        path = _safe_manifest_file(root, entry.get("file"), label="export member")
+        if path in seen:
+            raise ExportPackageError("duplicate export member", code="manifest_duplicate_file")
+        seen.add(path)
+        fmt = _FORMAT_BY_SUFFIX.get(path.suffix.lower())
+        if fmt is None or (declared_format and fmt != declared_format):
+            raise ExportPackageError("export file format mismatch", code="manifest_format_mismatch")
+        rows = entry.get("rows")
+        if rows is not None and (isinstance(rows, bool) or not isinstance(rows, int) or rows < 0):
+            raise ExportPackageError("invalid row count", code="manifest_row_count_invalid")
+        if fmt == "parquet":
+            with pq.ParquetFile(path) as parquet:
+                columns = _validated_columns(parquet.schema.names, path=path)
+                if rows is not None and rows != parquet.metadata.num_rows:
+                    raise ExportPackageError("row count mismatch", code="manifest_row_count_mismatch")
+        elif fmt == "csv":
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                columns = _validated_columns(next(csv.reader(handle), ()), path=path)
+        else:
+            from openpyxl import load_workbook
+            book = load_workbook(path, read_only=True, data_only=True)
+            try:
+                if len(book.worksheets) != 1:
+                    raise ExportPackageError("Excel export requires one sheet")
+                columns = _validated_columns(next(book.active.iter_rows(max_row=1, values_only=True), ()), path=path)
+            finally:
+                book.close()
+        _identity_column(columns, database, path=path)
+    return {"database": database, "files": len(entries), "readiness_scope": "layout_only"}
+
+
 def open_export_package(export_dir: Union[str, Path]) -> ExportPackage:
     """Parse and retain one verified native-first EasyICU export package."""
 
@@ -1958,6 +2022,7 @@ __all__ = [
     "ExportPackage",
     "ExportPackageError",
     "index_export_package",
+    "inspect_export_layout",
     "is_export_package",
     "open_export_package",
     "read_exported_concept",

@@ -1760,6 +1760,10 @@ class DataConverter:
                         f"Source changed during conversion: {csv_path}",
                     )
                 result["source_content_receipt"] = current_receipt
+                result["data_quality_status"] = (
+                    "partial" if result.get("bad_rows_skipped", 0) else "clean"
+                )
+                result["ready_for_analysis"] = result["data_quality_status"] == "clean"
             
         except Exception as e:
             result['status'] = ConversionStatus.FAILED
@@ -3565,6 +3569,9 @@ class DataConverter:
             "error": result.get("error"),
             "row_count": result.get("row_count"),
             "bad_rows_skipped": result.get("bad_rows_skipped", 0),
+            "data_quality_status": result.get("data_quality_status") or (
+                "partial" if result.get("bad_rows_skipped", 0) else "clean"
+            ),
             "shards": result.get("shards"),
             "partition_col": result.get("partition_col"),
             "partition_breaks": result.get("partition_breaks"),

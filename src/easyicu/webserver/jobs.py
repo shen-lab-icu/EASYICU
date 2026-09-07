@@ -3,8 +3,9 @@
 The native UI needs an explicit job model for long tasks. A job runs on a
 daemon thread, appends progress events to an in-memory history, and flips to a
 terminal status. The SSE endpoint in ``app.py`` replays the history then tails
-live events, so a subscriber that connects late (or reconnects) still sees
-every event.
+live events. History is bounded by event count and serialized bytes; a late
+subscriber receives an explicit gap marker plus the retained tail. Durable run
+artifacts, not this transient progress history, own scientific evidence.
 
 This is the reusable foundation: the convert job (3b) is the first user; the
 extract/export job (3c) and the research-agent run (Stage 5) drive the same
@@ -17,6 +18,7 @@ machine. State is intentionally in-memory — a job does not outlive the process
 from __future__ import annotations
 
 import re
+import json
 import logging
 import threading
 import time
@@ -94,7 +96,10 @@ class JobCapacityError(RuntimeError):
 class Job:
     """A single long task: progress event history + terminal status/result."""
 
-    def __init__(self, job_id: str, kind: str) -> None:
+    def __init__(self, job_id: str, kind: str, *, max_events: int = 1000,
+                 max_history_bytes: int = 512 * 1024, max_event_bytes: int = 32 * 1024) -> None:
+        if max_events < 1 or min(max_history_bytes, max_event_bytes) < 512:
+            raise ValueError("job history requires positive count and byte budgets >= 512")
         self._lock = threading.RLock()
         self.id = job_id
         self.kind = kind
@@ -102,6 +107,12 @@ class Job:
         self.created = time.time()
         self.finished: Optional[float] = None
         self.events: List[Dict[str, Any]] = []
+        self._max_events = max_events
+        self._max_history_bytes = max_history_bytes
+        self._max_event_bytes = min(max_event_bytes, max_history_bytes)
+        self._event_sizes: List[int] = []
+        self._history_bytes = 0
+        self._next_seq = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
         self.cancel_requested = False
@@ -116,8 +127,31 @@ class Job:
 
     def _append_event_locked(self, event: Dict[str, Any]) -> None:
         payload = dict(event)
-        payload["seq"] = len(self.events)
+        payload["seq"] = self._next_seq
+        self._next_seq += 1
+        encoded = json.dumps(payload, ensure_ascii=False, default=str)
+        size = len(encoded.encode("utf-8"))
+        if size > self._max_event_bytes:
+            terminal = event.get("type") == "end"
+            payload = {
+                "type": "end" if terminal else "progress",
+                "seq": payload["seq"],
+                "step": "event_payload_omitted",
+                "payload_omitted": True,
+                "reason_code": "job_event_size_limit",
+            }
+            if terminal:
+                payload.update(status=event["status"], result=None, result_omitted=True)
+            encoded = json.dumps(payload)
+            size = len(encoded.encode("utf-8"))
+        # Own a detached JSON payload: later caller mutations cannot evade limits.
+        payload = json.loads(encoded)
         self.events.append(payload)
+        self._event_sizes.append(size)
+        self._history_bytes += size
+        while len(self.events) > self._max_events or self._history_bytes > self._max_history_bytes:
+            self.events.pop(0)
+            self._history_bytes -= self._event_sizes.pop(0)
 
     def emit(self, event: Dict[str, Any]) -> bool:
         """Append one non-terminal event while the job is still running."""
@@ -234,7 +268,15 @@ class Job:
         """Return a consistent event slice and status for the SSE tailer."""
         with self._lock:
             start = max(0, int(offset))
-            return [dict(event) for event in self.events[start:]], self.status
+            first = self.events[0]["seq"] if self.events else self._next_seq
+            events = []
+            if start < first:
+                events.append({"type": "progress", "seq": first - 1,
+                    "step": "history_truncated", "history_truncated": True,
+                    "dropped_events": first - start,
+                    "label": "Earlier progress events expired; durable artifacts remain authoritative."})
+            events.extend(dict(event) for event in self.events if event["seq"] >= start)
+            return events, self.status
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -245,6 +287,9 @@ class Job:
                 "created": self.created,
                 "finished": self.finished,
                 "events": [dict(event) for event in self.events],
+                "events_dropped": self._next_seq - len(self.events),
+                "next_event_seq": self._next_seq,
+                "event_history_bytes": self._history_bytes,
                 "result": self.result,
                 "error": self.error,
                 "cancel_requested": self.cancel_requested,
@@ -348,6 +393,13 @@ class JobManager:
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def cancel_all(self, reason: str = "server_shutdown") -> None:
+        """Ask each runner's interrupt owner to clean up its own resources."""
+        with self._lock:
+            jobs = list(self._jobs.values())
+        for job in jobs:
+            job.request_cancel(reason)
 
 
 MANAGER = JobManager()
