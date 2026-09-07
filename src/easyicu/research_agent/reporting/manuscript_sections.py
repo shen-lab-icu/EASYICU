@@ -144,6 +144,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "verified precomputed representation and analysis window. A "
             "precomputed maximum, minimum, mean, or first value must not be "
             "reinterpreted using the source concept's default aggregation rule.\n"
+            "  Introduce the named variable in every Variables paragraph; do not "
+            "start one with an unanchored pronoun or 'the representation'. "
+            "Recorded source definitions are not independent clinical validation.\n"
             "### Statistical analysis\n"
             "  Model family (logistic regression / Cox / clustering), adjustment "
             "set, sensitivity analyses (multiple-testing correction, subgroup "
@@ -322,7 +325,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "12"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "13"
 
 
 def manuscript_writer_contract_sha256() -> str:

@@ -105,6 +105,10 @@ from .manuscript_state import (
 )
 from .manuscript_state import ManuscriptState, render_not_generated
 from .manuscript_repair_pass import ManuscriptRepairPass
+from .manuscript_method_facts import (
+    audit_bound_source_method_facts,
+    project_source_method_facts,
+)
 from .writer_evidence_repair import decide_writer_evidence_repairs
 from ..replication.notebook import (
     NotebookStep,
@@ -1806,6 +1810,11 @@ def _draft_manuscript(
                     detail=repair_result.finding_detail(),
                 )
             )
+    scaffold, method_finding = project_source_method_facts(
+        scaffold, evidence=evidence, per_step_records=per_step_records,
+    )
+    if method_finding is not None:
+        findings.append(method_finding)
     authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
     claim_placement = place_scientific_claim_tokens_in_results(
         scaffold,
@@ -2070,6 +2079,11 @@ def _bind_and_review_manuscript(
                 detail={"removed_sentences": removed_numeric_sentences},
             )
         )
+    method_finding = audit_bound_source_method_facts(
+        bound, evidence=evidence, per_step_records=per_step_records,
+    )
+    if method_finding is not None:
+        findings.append(method_finding)
     bound = _repair_bound_display_language(
         bound,
         reader_display_labels=reader_display_labels,

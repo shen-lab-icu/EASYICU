@@ -14,6 +14,7 @@ from typing import Callable, Optional, Sequence
 
 from .reader_numeric_display import round_reader_numeric_display
 from .scientific_claims import ScientificClaim
+from .manuscript_method_facts import ManuscriptMethodFact, is_method_fact_candidate
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
 EvidenceResolver = Callable[[str], bool]
@@ -433,6 +434,7 @@ def filter_evidence_bound_scaffold(
     *,
     resolve_claim: ClaimResolver,
     resolve_evidence: EvidenceResolver | None = None,
+    method_facts: Sequence[ManuscriptMethodFact] = (),
 ) -> ScaffoldPolicyResult:
     """Filter unsupported result prose while preserving Markdown structure."""
 
@@ -440,9 +442,26 @@ def filter_evidence_bound_scaffold(
     unsupported_scientific_claims: list[str] = []
     filtered_claims: list[str] = []
     filtered_lines: list[str] = []
+    method_lines = {fact.scaffold for fact in method_facts}
+    section = subsection = ""
     for raw_line in scaffold.splitlines():
         line = raw_line.rstrip()
         stripped = line.strip()
+        if re.fullmatch(r"##\s+.+", stripped):
+            section, subsection = stripped, ""
+        elif re.fullmatch(r"###\s+.+", stripped):
+            subsection = stripped
+        if (
+            section == "## Methods" and subsection == "### Variables"
+            and line in method_lines
+        ):
+            filtered_lines.append(line)
+            continue
+        if is_method_fact_candidate(line):
+            unsupported_scientific_claims.append(stripped)
+            filtered_claims.append(stripped)
+            filtered_lines.append("")
+            continue
         if stripped.startswith(("```", "~~~")) or not stripped:
             filtered_lines.append(line)
             continue
