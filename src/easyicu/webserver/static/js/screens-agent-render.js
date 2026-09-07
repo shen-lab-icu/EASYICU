@@ -536,7 +536,9 @@
       }
       return `${figureInsert}<p>${content}</p>`;
     }).join('');
-    const referenceList = references.length ? `<section class="gpi-reader-references"><h2>${esc(t('References', '参考文献'))}</h2><ol>${references.map(ref => {
+    const incompleteBibliography = references.some(ref => !Array.isArray(ref.authors) || !ref.authors.length)
+      ? `<p class="gpi-reference-notice">${esc(t('Some source records have no author metadata. The bibliography requires verification.', '部分来源记录缺少作者信息，参考文献仍需核验。'))}</p>` : '';
+    const referenceList = references.length ? `<section class="gpi-reader-references"><h2>${esc(t('References', '参考文献'))}</h2>${incompleteBibliography}<ol>${references.map(ref => {
       const authors = Array.isArray(ref.authors) ? ref.authors.join(', ') : '';
       const url = ref.doi ? `https://doi.org/${encodeURIComponent(ref.doi)}` : (/^https:\/\//i.test(String(ref.url || '')) ? ref.url : '');
       const title = url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener noreferrer">${esc(ref.title || '')}</a>` : esc(ref.title || '');

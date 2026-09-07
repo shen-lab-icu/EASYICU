@@ -158,6 +158,10 @@
 
 .gpi-reader-table { margin:24px 0; min-width:0; }
 .gpi-reader-table .ag-artifact-table { font-size:14px; }
+.gpi-reader-table .ag-artifact-table th { font-size:14px; }
+.gpi-reader-table .ag-artifact-table td { overflow-wrap:normal; word-break:normal; }
+.gpi-reader-table .ag-artifact-table td:nth-child(3),
+.gpi-reader-table .ag-artifact-table td:nth-child(6) { white-space:nowrap; }
 .gpi-reader-table details { padding:10px 0; font-size:14px; overflow-wrap:anywhere; }
 .gpi-reader-references { font-size:14px; line-height:1.7; overflow-wrap:anywhere; }
 .gpi-reader-references li { margin:0 0 14px; scroll-margin-top:24px; }

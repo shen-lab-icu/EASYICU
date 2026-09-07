@@ -716,7 +716,7 @@
         const number = String(referenceLink.dataset.gpiReference || '');
         if (/^[1-9][0-9]*$/.test(number)) {
           const reference = host.querySelector('#gpi-reference-' + number);
-          if (reference) reference.scrollIntoView({ block: 'nearest' });
+          if (reference) reference.scrollIntoView({ block: 'start' });
         }
         return;
       }
