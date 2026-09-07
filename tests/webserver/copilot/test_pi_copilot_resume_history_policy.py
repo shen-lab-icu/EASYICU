@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from easyicu.webserver import study_contexts
 from easyicu.webserver.pi_copilot import contracts, run_authority
 
@@ -130,7 +132,8 @@ def test_analysis_schema_failure_does_not_preserve_planner_checkpoint(
     assert run_authority._development_planner_checkpoint_available(row) is False
 
 
-def test_failed_preparation_keeps_unchanged_candidate_plan_authoritative() -> None:
+@pytest.mark.parametrize("review_reason", ["operator_plan_approval_required", "agent_plan_revision_nonconvergent"])
+def test_failed_preparation_keeps_unchanged_candidate_plan_authoritative(review_reason) -> None:
     digest = "a" * 64
     candidate = {
         "run_id": "run_candidate",
@@ -138,7 +141,7 @@ def test_failed_preparation_keeps_unchanged_candidate_plan_authoritative() -> No
         "run_status": "human_review_pending",
         "gate_reason": "human_plan_review_required",
         "scientific_configuration_sha256": digest,
-        "pending_review_reason_codes": ["operator_plan_approval_required"],
+        "pending_review_reason_codes": [review_reason],
         "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
     }
     failed_preparation = {
@@ -182,7 +185,8 @@ def test_cancelled_duplicate_does_not_hide_scientific_revision_candidate() -> No
     )
 
 
-def test_failed_preparation_does_not_restore_stale_candidate_plan() -> None:
+@pytest.mark.parametrize("review_reason", ["operator_plan_approval_required", "agent_plan_revision_nonconvergent"])
+def test_failed_preparation_does_not_restore_stale_candidate_plan(review_reason) -> None:
     failed_preparation = {
         "run_id": "run_failed-preparation",
         "run_type": "full",
@@ -196,7 +200,7 @@ def test_failed_preparation_does_not_restore_stale_candidate_plan() -> None:
         "run_status": "human_review_pending",
         "gate_reason": "human_plan_review_required",
         "scientific_configuration_sha256": "a" * 64,
-        "pending_review_reason_codes": ["operator_plan_approval_required"],
+        "pending_review_reason_codes": [review_reason],
         "artifact_names": ["agent_plan.json"],
     }
 

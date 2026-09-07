@@ -153,7 +153,9 @@ def workflow_authoritative_run(
     A package-bound preparation attempt can fail before producing a plan or
     starting analysis. When it was launched from an unchanged, review-pending
     candidate plan, the failed attempt remains audit history but must not erase
-    that candidate or force the researcher to spend another Planner run.
+    that candidate or force the researcher to spend another Planner run. This
+    includes a nonconvergent plan: its automatic-stop/approval restrictions
+    remain intact, and only its explicit source-bound retry may continue.
     """
 
     if not rows:
@@ -179,6 +181,7 @@ def workflow_authoritative_run(
             and {
                 "operator_plan_approval_required",
                 "plan_scientific_changes_required",
+                "agent_plan_revision_nonconvergent",
             }
             & {
                 str(code or "").strip()
