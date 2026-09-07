@@ -181,22 +181,47 @@ def baseline_requirement_coverage(
 ) -> dict[str, Any]:
     """Check actual typed table rows, not step inputs or a baseline label."""
 
+    return _baseline_roster_coverage(context, [
+        (step.step_id, {step.table_one_spec.group_by},
+         {variable.name for variable in step.table_one_spec.variables})
+        for step in plan.steps if step.table_one_spec is not None
+    ])
+
+
+def baseline_outline_coverage(
+    context: ResearchContext, steps: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Check a prospective baseline owner before its outline becomes binding.
+
+    An outline has not chosen the exact stratum or summary yet. It must expose
+    the accepted grouping and a clinical representation of every required row
+    in ONE Table 1 step. Final coverage still checks the actual typed spec.
+    """
+
+    return _baseline_roster_coverage(context, [
+        (str(step["step_id"]), set(step.get("variable_names", ())),
+         set(step.get("variable_names", ())))
+        for step in steps if step.get("module_id") == "table_one"
+    ])
+
+
+def _baseline_roster_coverage(
+    context: ResearchContext,
+    rosters: Sequence[tuple[str, set[str], set[str]]],
+) -> dict[str, Any]:
     projection = baseline_requirement_projection(context)
     for table in projection["tables"]:
         candidates = [
-            step for step in plan.steps
-            if step.table_one_spec is not None
-            and step.table_one_spec.group_by in table["group_by"]["available_columns"]
+            (step_id, variables) for step_id, groups, variables in rosters
+            if groups.intersection(table["group_by"]["available_columns"])
         ]
         missing_by_step = [
             (
-                step.step_id,
+                step_id,
                 [row["required"] for row in table["variables"]
-                 if not set(row["available_columns"]).intersection(
-                     variable.name for variable in step.table_one_spec.variables
-                 )],
+                 if not set(row["available_columns"]).intersection(variables)],
             )
-            for step in candidates
+            for step_id, variables in candidates
         ]
         best_step, missing = min(missing_by_step, key=lambda pair: len(pair[1]), default=(
             None, [row["required"] for row in table["variables"]],

@@ -5864,6 +5864,38 @@ def test_outline_authority_failure_is_retried_before_foundation() -> None:
     assert "progressive_outline_variable_unavailable" in (llm.calls[1][0][-1].content)
 
 
+def test_accepted_baseline_omission_is_repaired_in_outline_not_a_whole_new_run() -> None:
+    from easyicu.research_agent.planning.baseline_requirements import bind_baseline_requirements
+
+    context = bind_baseline_requirements(_context(), {
+        "schema_version": "easyicu.accepted_baseline_requirements/1",
+        "source_plan_sha256": "a" * 64,
+        "tables": [{
+            "source_step_id": "original_baseline",
+            "group_by": {"name": "exposure_flag"},
+            "variables": [{"name": "age_years"}, {"name": "sex_code"}],
+        }],
+    })
+    invalid = _outline_payload()
+    baseline = next(step for step in invalid["steps"] if step["module_id"] == "table_one")
+    baseline["variable_names"].remove("age_years")
+    responses = [invalid, _outline_payload(), _foundation_payload(), *_materialization_payloads()]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    plan = ProgressivePlannerAgent(llm).run(context)
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert [call[1]["structured_output"].name for call in llm.calls[:3]] == [
+        "easyicu_progressive_plan_outline_v1", "easyicu_progressive_plan_outline_v1",
+        "easyicu_progressive_plan_foundation_v1",
+    ]
+    feedback = llm.calls[1][0][-1].content
+    assert "progressive_outline_accepted_baseline_incomplete" in feedback
+    assert "age_years" in feedback and "original_baseline" in feedback
+    table = next(step for step in plan.steps if step.table_one_spec is not None)
+    assert {v.name for v in table.table_one_spec.variables} == {"age_years", "sex_code"}
+
+
 def test_foundation_outline_digest_is_bound_without_spending_a_retry() -> None:
     invalid_foundation = _foundation_payload()
     invalid_foundation["outline_sha256"] = "0" * 64

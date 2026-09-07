@@ -6,6 +6,7 @@ import pytest
 
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.planning.baseline_requirements import (
+    baseline_outline_coverage,
     baseline_requirement_coverage,
     bind_baseline_requirements,
     candidate_baseline_requirements,
@@ -61,6 +62,29 @@ def test_missing_confirmed_variable_blocks_approval_and_lists_all_missing() -> N
     assert review.approval_allowed is False
     assert review.dimension_scores["content_completeness"] < 100
     assert review.facts["accepted_baseline_coverage"]["tables"][0]["missing_variables"] == ["charlson"]
+
+
+@pytest.mark.parametrize("columns,complete", [
+    (["exposure", "age", "cci_value"], True),
+    (["exposure", "age"], False),
+    (["death", "age", "cci_value"], False),
+    (["exposure", "age", "charlson_n", "charlson_time"], False),
+    (["exposure", "age", "unrelated"], False),
+])
+def test_outline_requires_clinical_roster_before_the_plan_is_materialized(columns, complete) -> None:
+    coverage = baseline_outline_coverage(_bound_context("age", "charlson"), [
+        {"step_id": "renamed", "module_id": "table_one", "variable_names": columns},
+    ])
+    assert coverage["status"] == ("complete" if complete else "incomplete")
+
+
+def test_outline_cannot_pool_a_baseline_from_an_audit_or_separate_tables() -> None:
+    context = _bound_context("age", "charlson")
+    first = {"step_id": "baseline", "module_id": "table_one", "variable_names": ["exposure", "age"]}
+    for module in ("table_one", "measurement_audit", "custom_analysis"):
+        second = {"step_id": "other", "module_id": module, "variable_names": ["exposure", "cci_value"]}
+        assert baseline_outline_coverage(context, [first, second])["status"] == "incomplete"
+    assert baseline_outline_coverage(_context(), [first])["status"] == "not_bound"
 
 
 def test_planner_and_review_use_same_source_bound_roster() -> None:
