@@ -165,7 +165,7 @@
         ? translate('Analysis plan ready for review', '分析计划已就绪，等待审阅')
         : analysisResultsAvailable
           ? analysisValidated
-            ? translate('Analysis complete; publication review remains', '分析已完成；仍需完成投稿审阅')
+            ? translate('Analysis complete; full quality review remains', '分析已完成；完整质量审阅尚未通过')
             : translate('Results generated; one validation item remains', '结果已生成；仍有一项校验待处理')
         : plannerCheckpointSaved
           ? translate('Planner saved a validated checkpoint', '规划器已保存验证检查点')

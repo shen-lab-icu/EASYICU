@@ -88,12 +88,12 @@
           <p>${esc(tr(
             validated
               ? numericVerified
-                ? 'The approved analysis and numeric checks completed. Publication-level review is still open, but it does not hide these analysis-only results.'
+                ? 'The approved analysis and numeric checks completed. Manuscript, evidence, and publication requirements still need review; the generated analysis results are available below.'
                 : 'The approved analysis and automated validation completed. Manuscript-level numeric provenance and publication review remain open, so these results are for analysis review only.'
               : 'Execution, evidence binding, and numeric checks completed. The results remain reviewable while the outstanding validation item is repaired.',
             validated
               ? numericVerified
-                ? '已批准的分析与数值核验均已完成。投稿级审阅尚未闭合，但不会再隐藏这批分析结果。'
+                ? '已批准的分析与数值核验均已完成。稿件、证据及投稿要求仍需审阅；下方可查看已生成的分析结果。'
                 : '已批准的分析与自动校验已经完成。稿件级数字溯源和投稿审阅尚未闭合，因此当前结果仅供分析审阅。'
               : '执行、证据绑定和数值核验已经完成。剩余校验项修复期间，结果仍可查看。',
           ))}</p>

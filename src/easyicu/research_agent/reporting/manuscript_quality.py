@@ -183,12 +183,13 @@ def _has_prose(text: str) -> bool:
 
 
 def _abstract_label_has_prose(abstract: str, label: str) -> bool:
-    """Return true only when a label has reader-visible prose on its line."""
+    """Check the label's block, without borrowing prose from another label."""
 
     match = re.search(
-        rf"^\*\*{re.escape(label)}:\*\*(?P<body>[^\n]*)$",
+        rf"^\*\*{re.escape(label)}:\*\*(?P<body>.*?)"
+        r"(?=^\*\*[^*\n]+:\*\*|^#{1,6}\s|\Z)",
         abstract,
-        flags=re.I | re.M,
+        flags=re.I | re.M | re.S,
     )
     return bool(match and _has_prose(match.group("body")))
 
@@ -780,28 +781,40 @@ def repair_reader_internal_phrases(
         )
         pieces = audit_token.split(repaired)
         tokens = audit_token.findall(repaired)
-        for key in sorted(labels, key=len, reverse=True):
-            label = labels[key]
-            pattern = re.compile(
-                rf"(?<![A-Za-z0-9_])`?{re.escape(key)}`?(?![A-Za-z0-9_])"
-            )
-            count = 0
-            for index, piece in enumerate(pieces):
-                piece, replacements = pattern.subn(label, piece)
-                pieces[index] = piece
-                count += replacements
+        # Match ready labels before any shorter key they contain. A single
+        # pass cannot recursively expand its own output (e.g. age inside
+        # "Patient age in years"), and repeated rendering is idempotent.
+        terms = [(value, None) for value in set(labels.values())]
+        terms.extend((key, key) for key in labels)
+        terms.sort(key=lambda item: (-len(item[0]), item[0], item[1] is not None))
+        branches = [
+            f"(?P<label_{index}>{'(?i:' + re.escape(term) + ')' if key is None else re.escape(term)})"
+            for index, (term, key) in enumerate(terms)
+        ]
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_])`?(?:" + "|".join(branches) + r")`?(?![A-Za-z0-9_])"
+        )
+        counts = dict.fromkeys(labels, 0)
+
+        def replace_label(match: re.Match[str]) -> str:
+            key = terms[int(match.lastgroup.removeprefix("label_"))][1]
+            if key is None:
+                return match.group(0)
+            counts[key] += 1
+            return labels[key]
+
+        pieces = [pattern.sub(replace_label, piece) for piece in pieces]
+        repaired = "".join(
+            part + (tokens[index] if index < len(tokens) else "")
+            for index, part in enumerate(pieces)
+        )
+        for key, count in counts.items():
             if count:
-                repaired = "".join(
-                    part + (tokens[index] if index < len(tokens) else "")
-                    for index, part in enumerate(pieces)
-                )
-                pieces = audit_token.split(repaired)
-                tokens = audit_token.findall(repaired)
                 repairs.append(
                     {
                         "code": "MANUSCRIPT_READER_DISPLAY_LABEL_APPLIED",
                         "source": key,
-                        "replacement": label,
+                        "replacement": labels[key],
                         "count": str(count),
                     }
                 )

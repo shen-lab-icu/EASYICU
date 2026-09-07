@@ -98,9 +98,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20260904-empty-gallery1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
-    assert "js/screens-guided-pi-replay.js?v=20260901-project-restore1" in index
+    assert "js/screens-guided-pi-replay.js?v=20260907-report-quality1" in index
     assert "js/screens-guided-pi-resources.js?v=20260907-preparation-state1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260904-empty-gallery1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260907-report-quality1" in index
     assert "js/screens-guided-pi-activity.js?v=20260901-plan-retries2" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
@@ -6181,7 +6181,7 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "state.latestRun = payload && payload.latest_run" in guided
     assert "RUN_OUTCOME.render(state.latestRun, state.workflow)" in guided
     assert "analysis_results_available" in replay
-    assert "分析已完成；仍需完成投稿审阅" in replay
+    assert "分析已完成；完整质量审阅尚未通过" in replay
     assert "分析已完成，可以审阅结果" in owner
     assert "result_tables.json" in owner
     assert "figure_gallery.json" in owner
