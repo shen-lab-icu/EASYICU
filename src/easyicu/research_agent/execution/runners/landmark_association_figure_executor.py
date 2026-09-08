@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 
 from ...contracts.figure_plan import (
-    LANDMARK_ASSOCIATION_COMPOSITE_INPUTS,
     landmark_association_composite_panels,
 )
 from ...figures.publication import (
@@ -147,17 +146,9 @@ def landmark_association_figure_input_profile(
         and set(values) == _LEGACY_LANDMARK_ARTICLE_INPUTS
     ):
         return values
-    curve = _curve_input(values)
-    adjusted_risk = _adjusted_risk_input(values)
-    measurement = _measurement_input(values)
-    if (
-        curve is None
-        or adjusted_risk is None
-        or measurement is None
-        or len(values) != 4
-        or len(values) != len(set(values))
-        or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(values)
-    ):
+    try:
+        landmark_association_composite_panels(values)
+    except ValueError:
         return None
     return values
 
@@ -215,7 +206,6 @@ def landmark_association_figure_executor_owns_step(
         or (
             curve is not None
             and adjusted_risk is not None
-            and measurement is not None
         )
     )
 
@@ -691,7 +681,7 @@ def run_landmark_association_figure(
     input_keys: tuple[str, ...],
     panel_placements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Render four exact source tables without fitting or filtering a model."""
+    """Render the exact declared curve/audit profile without model fitting."""
 
     if _figure_product(f"figure:{figure_product}") is None:
         raise ValueError("unsafe figure product")
@@ -720,18 +710,14 @@ def run_landmark_association_figure(
     assert (
         curve_key is not None
         and adjusted_risk_key is not None
-        and measurement_key is not None
     )
     curve = bound[curve_key].frame.copy()
     adjusted_risk = bound[adjusted_risk_key].frame.copy()
-    robustness = bound["table:robustness_summary"].frame.copy()
-    process = bound[measurement_key].frame.copy()
-    for key, frame in (
-        (curve_key, curve),
-        (adjusted_risk_key, adjusted_risk),
-        ("table:robustness_summary", robustness),
-        (measurement_key, process),
-    ):
+    has_audits = measurement_key is not None
+    robustness = bound["table:robustness_summary"].frame.copy() if has_audits else None
+    process = bound[measurement_key].frame.copy() if has_audits else None
+    for key, item in bound.items():
+        frame = item.frame
         required = _REQUIRED_COLUMNS[
             "curve"
             if key == curve_key
@@ -770,7 +756,8 @@ def run_landmark_association_figure(
             "exposure_density_fraction",
         ),
     )
-    _require_finite_columns(process, ("n_total", "measured_one_n"))
+    if has_audits:
+        _require_finite_columns(process, ("n_total", "measured_one_n"))
 
     source_files: list[str] = []
     for key, item in bound.items():
@@ -947,23 +934,24 @@ def run_landmark_association_figure(
         exposure_label=exposure_label,
     )
 
-    # Validate the supplementary audit sources even though they do not compete
-    # with the primary result for visual salience.
-    prepare_robustness_coverage(robustness)
-    robustness_display = {
-        "chart_type": "sensitivity_coverage_matrix",
-        "effect_comparison_authorized": False,
-        "reason_code": "ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED",
-        "display_authority": "audit_only",
-    }
-    denominator = pd.to_numeric(process["n_total"])
-    numerator = pd.to_numeric(process["measured_one_n"])
-    if (
-        (denominator <= 0).any()
-        or (numerator < 0).any()
-        or (numerator > denominator).any()
-    ):
-        raise ValueError("measurement-process counts do not nest")
+    if has_audits:
+        # Validate the supplementary audit sources even though they do not compete
+        # with the primary result for visual salience.
+        prepare_robustness_coverage(robustness)
+        robustness_display = {
+            "chart_type": "sensitivity_coverage_matrix",
+            "effect_comparison_authorized": False,
+            "reason_code": "ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED",
+            "display_authority": "audit_only",
+        }
+        denominator = pd.to_numeric(process["n_total"])
+        numerator = pd.to_numeric(process["measured_one_n"])
+        if (
+            (denominator <= 0).any()
+            or (numerator < 0).any()
+            or (numerator > denominator).any()
+        ):
+            raise ValueError("measurement-process counts do not nest")
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
     panel_templates = landmark_association_composite_panels(profile)
@@ -1036,79 +1024,81 @@ def run_landmark_association_figure(
         dpi=300,
     )
     plt.close(fig)
+    supplemental_outputs = {}
     supplemental_name = f"{figure_product}_supplementary"
-    supplemental_panels = [
-        panel
-        for panel in panel_templates
-        if placements.get(panel.panel_id, panel.placement) == "supplementary"
-    ]
-    supplemental_fig, supplemental_axes = plt.subplots(
-        1,
-        2,
-        figsize=(
-            183 / 25.4,
-            max(85, 35 + 6 * max(len(process), len(robustness))) / 25.4,
-        ),
-        layout="constrained",
-    )
-    draw_robustness_coverage(
-        supplemental_axes[0],
-        robustness,
-        color=palette["blue"],
-        label_formatter=display_label,
-    )
-    supplemental_axes[1].barh(
-        np.arange(len(process)), 100 * numerator / denominator, color=palette["blue"]
-    )
-    supplemental_axes[1].set_yticks(
-        np.arange(len(process)), [display_label(value) for value in process["concept"]]
-    )
-    supplemental_axes[1].set_xlim(0, 100)
-    supplemental_axes[1].set_xlabel("Measured (%)")
-    supplemental_axes[1].set_title("Measurement availability", loc="left")
-    supplemental_axes[1].invert_yaxis()
-    for axis, label in zip(supplemental_axes, ("a", "b")):
-        add_panel_label(axis, label)
-    supplemental_contract = make_figure_contract(
-        figure_id=f"figure:{supplemental_name}",
-        core_claim="Supplementary source-backed specification coverage and measurement availability; no effect comparison is authorized.",
-        archetype="quantitative_grid",
-        width_mm=float(supplemental_fig.get_figwidth() * 25.4),
-        height_mm=float(supplemental_fig.get_figheight() * 25.4),
-        panels=[
-            {
-                "panel_id": panel.panel_id,
-                "title": _label(panel.panel_id),
-                "role": panel.article_role,
-                "claim": "Registered counts projected from the bound source table without refitting.",
-                "evidence_ids": [evidence[source] for source in panel.source_products],
-                "metadata": {
-                    "chart_type": panel.chart_type,
-                    "source_products": list(panel.source_products),
-                    "placement": "supplementary",
-                    "source_data": [
-                        f"{source.partition(':')[2]}_source_data.csv"
-                        for source in panel.source_products
-                    ],
-                },
-            }
-            for panel in supplemental_panels
-        ],
-        source_data=[
-            f"{source.partition(':')[2]}_source_data.csv"
-            for panel in supplemental_panels
-            for source in panel.source_products
-        ],
-        statistics_note="Counts only; robustness effect comparability remains unresolved. No patient rows or model fitting.",
-    )
-    supplemental_outputs = save_publication_figure(
-        supplemental_fig,
-        out_dir / supplemental_name,
-        contract=supplemental_contract,
-        formats=("png", "svg", "pdf", "tiff"),
-        dpi=300,
-    )
-    plt.close(supplemental_fig)
+    if has_audits:
+        supplemental_panels = [
+            panel
+            for panel in panel_templates
+            if placements.get(panel.panel_id, panel.placement) == "supplementary"
+        ]
+        supplemental_fig, supplemental_axes = plt.subplots(
+            1,
+            2,
+            figsize=(
+                183 / 25.4,
+                max(85, 35 + 6 * max(len(process), len(robustness))) / 25.4,
+            ),
+            layout="constrained",
+        )
+        draw_robustness_coverage(
+            supplemental_axes[0],
+            robustness,
+            color=palette["blue"],
+            label_formatter=display_label,
+        )
+        supplemental_axes[1].barh(
+            np.arange(len(process)), 100 * numerator / denominator, color=palette["blue"]
+        )
+        supplemental_axes[1].set_yticks(
+            np.arange(len(process)), [display_label(value) for value in process["concept"]]
+        )
+        supplemental_axes[1].set_xlim(0, 100)
+        supplemental_axes[1].set_xlabel("Measured (%)")
+        supplemental_axes[1].set_title("Measurement availability", loc="left")
+        supplemental_axes[1].invert_yaxis()
+        for axis, label in zip(supplemental_axes, ("a", "b")):
+            add_panel_label(axis, label)
+        supplemental_contract = make_figure_contract(
+            figure_id=f"figure:{supplemental_name}",
+            core_claim="Supplementary source-backed specification coverage and measurement availability; no effect comparison is authorized.",
+            archetype="quantitative_grid",
+            width_mm=float(supplemental_fig.get_figwidth() * 25.4),
+            height_mm=float(supplemental_fig.get_figheight() * 25.4),
+            panels=[
+                {
+                    "panel_id": panel.panel_id,
+                    "title": _label(panel.panel_id),
+                    "role": panel.article_role,
+                    "claim": "Registered counts projected from the bound source table without refitting.",
+                    "evidence_ids": [evidence[source] for source in panel.source_products],
+                    "metadata": {
+                        "chart_type": panel.chart_type,
+                        "source_products": list(panel.source_products),
+                        "placement": "supplementary",
+                        "source_data": [
+                            f"{source.partition(':')[2]}_source_data.csv"
+                            for source in panel.source_products
+                        ],
+                    },
+                }
+                for panel in supplemental_panels
+            ],
+            source_data=[
+                f"{source.partition(':')[2]}_source_data.csv"
+                for panel in supplemental_panels
+                for source in panel.source_products
+            ],
+            statistics_note="Counts only; robustness effect comparability remains unresolved. No patient rows or model fitting.",
+        )
+        supplemental_outputs = save_publication_figure(
+            supplemental_fig,
+            out_dir / supplemental_name,
+            contract=supplemental_contract,
+            formats=("png", "svg", "pdf", "tiff"),
+            dpi=300,
+        )
+        plt.close(supplemental_fig)
     for item in bound.values():
         if sha256_file(item.path) != item.sha256:
             raise ValueError(f"typed input changed while rendering: {item.input_key}")
@@ -1147,11 +1137,11 @@ def run_landmark_association_figure(
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [
             f"{figure_product}.figure_contract.json",
-            f"{supplemental_name}.figure_contract.json",
+            *([f"{supplemental_name}.figure_contract.json"] if has_audits else []),
         ],
         "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
         "supplementary_output_files": {
-            f"figure:{figure_product}": f"{supplemental_name}.png"
+            **({f"figure:{figure_product}": f"{supplemental_name}.png"} if has_audits else {})
         },
     }
     (out_dir / "step_summary.json").write_text(
