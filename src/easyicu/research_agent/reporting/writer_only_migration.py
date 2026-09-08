@@ -52,7 +52,7 @@ from .manuscript_quality import (
 )
 from .manuscript_sections import quality_repair_section_keys, quality_repair_section_errors
 from .manuscript_quality import repair_section_opening_connectors
-from .manuscript_labels import recorded_definition_section_errors
+from .manuscript_labels import recorded_definition_section_errors, source_bound_manuscript_labels
 from .manuscript_baseline import baseline_reporting_mentions
 from .manuscript_surface import deduplicate_claim_paragraphs, repair_filtered_section_openers
 from .manuscript_method_facts import place_manuscript_method_facts
@@ -578,6 +578,10 @@ def repair_writer_only(
         )
 
     source_manuscript = prepared.source_manuscript
+    reader_labels = source_bound_manuscript_labels(
+        prepared.context, prepared.plan.display_labels if prepared.plan else {},
+        language=getattr(writer, "language", "en"),
+    )
     if prepared.host_result_facts:
         # Compile the mechanical core before deciding which prose still needs
         # a model. These facts are verified outputs, not hand-written answers.
@@ -598,7 +602,7 @@ def repair_writer_only(
             evidence_ids=prepared.evidence_ids,
             evidence_digest=prepared.evidence_digest,
             literature_digest=prepared.literature_digest,
-            reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
+            reader_display_labels=reader_labels,
             administrative_authority=prepared.administrative_authority,
         )
     except Exception as exc:
@@ -688,6 +692,16 @@ def repair_writer_only(
             canonical,
             prepared.literature,
         )
+        if prepared.literature.citations and not canonical_literature.direct_comparator_keys_available:
+            boundary = (
+                "The literature assembled for this report did not include a verified direct comparator; "
+                "a like-for-like comparison with published estimates is not supported by the available sources "
+                "{evidence:preplan_literature_bundle}."
+            )
+            if boundary not in canonical:
+                canonical = re.sub(r"(?ms)(^## Limitations\s*\n.*?)(?=^## |\Z)",
+                                   lambda match: match.group(1).rstrip() + "\n\n" + boundary + "\n\n",
+                                   canonical, count=1)
         recording_errors = recorded_definition_section_errors(canonical, prepared.context)
         if (
             canonical_quality.status == "pass"
@@ -749,7 +763,7 @@ def repair_writer_only(
                 evidence_ids=prepared.evidence_ids,
                 evidence_digest=prepared.evidence_digest,
                 literature_digest=prepared.literature_digest,
-                reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
+                reader_display_labels=reader_labels,
                 administrative_authority=prepared.administrative_authority,
             )
         except Exception as exc:

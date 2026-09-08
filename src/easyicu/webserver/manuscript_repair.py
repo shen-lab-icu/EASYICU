@@ -35,6 +35,7 @@ from easyicu.webserver import agent_pipeline_runs as pipeline_owner
 from easyicu.webserver import provider_adapter, run_artifact_disclosure, study_contexts
 from easyicu.webserver import dataio
 from easyicu.webserver.report_revision_export import export_revision_pdf
+from easyicu.webserver.report_revision_replay import load_failed_writer_replay
 
 
 def _source_fingerprint(root: Path) -> str:
@@ -201,6 +202,7 @@ def make_report_only_run_runner(
         task = ledger.start_task(str(job.id))
         meter = CostMeter(runtime_dir=output / "runtime")
         public_provider = {key: provider.get(key) for key in ("provider", "model")}
+        replay = load_failed_writer_replay(target.wrapper_dir, prepared)
         try:
             pipeline_owner._progress(
                 job,
@@ -231,12 +233,13 @@ def make_report_only_run_runner(
                         step="report_repair",
                         label=f"Repairing report section: {section}",
                     )
-                    text = super()._call_section(**kwargs)
+                    text = replay.section(section_name=section, instruction=kwargs["instruction"]) if replay else super()._call_section(**kwargs)
                     pipeline_owner._write_json(
                         output
                         / "runtime"
                         / f"writer_candidate_{self.attempt:02d}.json",
-                        {"section": section, "instruction": kwargs["instruction"], "text": text},
+                        {"section": section, "instruction": kwargs["instruction"], "text": text,
+                         "replayed_from_revision": replay.revision_id if replay else None},
                     )
                     return text
 
@@ -285,6 +288,8 @@ def make_report_only_run_runner(
                 "numeric_binding_count": binding_count,
                 "parent_revision_id": parent_revision,
                 "canonical_sha256": hashlib.sha256(canonical).hexdigest(),
+                "replayed_from_revision": replay.revision_id if replay else None,
+                "replayed_section_count": replay.cursor if replay else 0,
                 "analysis_steps_executed": 0,
                 "claim_ceiling": "analysis_only",
                 "publication_authorized": False,
