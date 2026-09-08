@@ -20,9 +20,13 @@ def test_monitor_is_retired_but_shared_renderers_and_history_remain():
     shell = (static / "js/app.js").read_text()
     assert 'src="js/screens-agent.js' not in index
     assert 'src="js/screens-agent-render.js' in index
-    assert 'src="js/screens-guided-pi-history.js' in index
+    assert 'src="js/screens-guided-pi-run-files.js' in index
     assert "if (r === 'agent')" in shell
-    assert "window.__euHistoryRequested = true" in shell
+    assert "__euHistoryRequested" not in shell
     assert "id: 'agent', label:" not in shell
     assert 'data-nav="agent"' not in shell
-    assert 'data-gpi-history' in (static / "js/screens-guided-projects.js").read_text()
+    assert 'data-gpi-history' not in (static / "js/screens-guided-projects.js").read_text()
+    owner = (static / 'js/screens-guided-pi-run-files.js').read_text()
+    assert 'showModal' not in owner
+    assert 'projectTimeline' in owner
+    assert 'RUN_FILES.render(row)' in (static / 'js/screens-guided-pi.js').read_text()

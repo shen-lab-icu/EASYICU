@@ -15,7 +15,7 @@
   function normRoute(r) {
     if (r === 'help') return 'tutorial';
     if (r === 'assistant') return 'guided';
-    if (r === 'agent') { window.__euHistoryRequested = true; window.__euAlias = true; return 'guided'; }
+    if (r === 'agent') { window.__euAlias = true; return 'guided'; }
     if (r === 'audit')       { window.__euCohortPanel = 'coverage'; window.__euAlias = true; return 'cohort'; }
     if (r === 'sofareclass') { window.__euCohortPanel = 'sofa';     window.__euAlias = true; return 'cohort'; }
     if (r === 'icd')         { window.__euExtractFocusICD = true;   window.__euAlias = true; return 'extraction'; }
@@ -382,11 +382,6 @@
         </div>`;
     }
     if (scr.afterRender) scr.afterRender(app);
-    if (route === 'guided' && window.__euHistoryRequested) {
-      window.__euHistoryRequested = false;
-      const owner = window.EasyICU.guidedPi.optional('history');
-      if (owner) owner.open(window.EasyICU.guidedPi.require('shell').historyContext());
-    }
     syncShellAccessibility(app, !!scr.full);
     const title = routeTitleOf(scr);
     document.title = routeDocumentTitle(title);

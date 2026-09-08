@@ -950,7 +950,7 @@
     const ready = !!projectSeed;
     const title = ready ? t('Project seed ready', '项目种子已就绪') : t('Handoff frozen', '交接已冻结');
     const body = ready
-      ? t('Continue in Guided Copilot to confirm the run from this seed. Copilot history & results can review the seed and later outputs.', '在研究引导中基于该种子确认运行；Copilot 历史与成果可查看种子和后续产出。')
+      ? t('Continue in Guided Copilot to confirm the run from this seed. Copilot conversation can review the seed and later outputs.', '在研究引导中基于该种子确认运行；Copilot 对话可查看种子和后续产出。')
       : t('The plan is frozen as a metadata-only handoff. Create a project seed when you are ready to run the study workflow.', '计划已冻结为仅元数据交接。准备运行研究流程时，再创建项目种子。');
     return `
       <div class="ideas-handoff-receipt ${ready ? 'ready' : 'frozen'} mt-12">
@@ -971,7 +971,7 @@
         ${projectDir ? `<div class="ideas-handoff-path"><span>${t('Project folder', '项目文件夹')}</span><code>${esc(projectDir)}</code></div>` : ''}
         <div class="ideas-handoff-actions">
           ${ready ? `<button class="btn primary" data-nav="guided">${icon('spark', 13)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>` : `<button class="btn primary" data-idea-create-project ${projectCreating ? 'aria-disabled="true"' : ''}>${projectCreating ? '<span class="spin"></span>' : icon('agent', 13)} ${t('Create project seed', '创建项目种子')}</button>`}
-          <button class="btn" data-nav="agent">${icon('agent', 13)} ${t('Open history & results', '打开历史与成果')}</button>
+          <button class="btn" data-nav="agent">${icon('agent', 13)} ${t('Open conversation', '打开研究对话')}</button>
         </div>
       </div>`;
   }
@@ -1227,7 +1227,7 @@
             </div>
           </div>
           <div class="row gap-8">
-            <button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Open history & results', '打开历史与成果')}</button>
+            <button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Open conversation', '打开研究对话')}</button>
             <button class="btn sm" data-idea-new>${icon('plus', 13)} ${t('New idea', '新想法')}</button>
           </div>
         </div>
@@ -1458,7 +1458,7 @@
     wide: true,
     crumbs: ['Home', 'Idea Mining'],
     get status() { return `<span class="pill ok"><span class="dot"></span> ${t('Local-first', '本地优先')}</span>`; },
-    get actionHtml() { return `<button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Copilot history & results', 'Copilot 历史与成果')}</button>`; },
+    get actionHtml() { return `<button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Copilot conversation', 'Copilot 对话')}</button>`; },
     rail() {
       const last = result && (result.idea_ledger || [])[0];
       return `
@@ -1492,7 +1492,7 @@
                    app.js; this h1 also becomes the document title. -->
               <h1 style="margin-top:6px;">${t('Idea Mining', '想法挖掘')}</h1>
               <p class="lead">${t('A workspace for turning papers, review themes, or raw hunches into an auditable idea ledger and a governed handoff seed.', '把文章、review 主题或研究直觉转成可审计 idea 台账和受治理的交接种子。')}</p>
-              <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Idea Mining decides what is worth running; Guided Copilot collects the run setup; Copilot history & results reviews outputs and evidence.', 'Idea 挖掘判断什么值得做；研究引导收集运行配置；Copilot 历史与成果审阅产出与证据。')}</div>
+              <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Idea Mining decides what is worth running; Guided Copilot collects the run setup; Copilot conversation reviews outputs and evidence.', 'Idea 挖掘判断什么值得做；研究引导收集运行配置；Copilot 对话审阅产出与证据。')}</div>
             </div>
           </div>
         </div>
