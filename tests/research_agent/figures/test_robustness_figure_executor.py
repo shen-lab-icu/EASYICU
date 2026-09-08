@@ -391,14 +391,15 @@ def test_an_interval_too_narrow_to_see_is_printed_not_left_bare(tmp_path):
         )
     )
     metadata = contract["panels"][0]["metadata"]
-    # only the sub-resolution row is named, and it is named
-    assert metadata["sub_axis_resolution_rows"] == [
-        "signed_linear_functional_form_sensitivity"
-    ]
+    assert metadata["sub_axis_resolution_rows"] == []
+    assert metadata["chart_type"] == "specification_grid"
+    svg = (tmp_path / "out" / "robustness_plot.svg").read_text()
+    assert "0.9999976" in svg
+    assert "0.9999782" in svg
+    assert "1.000017" in svg
     note = contract["statistics_note"]
     note = note if isinstance(note, str) else " ".join(note)
-    assert "narrower than the axis resolution" in note
-    assert "signed linear functional form sensitivity" in note
+    assert "without a common effect axis" in note
 
 
 def test_the_figure_says_whether_a_shared_effect_axis_was_authorized(tmp_path):
@@ -406,10 +407,8 @@ def test_the_figure_says_whether_a_shared_effect_axis_was_authorized(tmp_path):
 
     The planning owner refuses to authorize one axis from `effect_scale`
     alone, because a per-unit OR and a high-vs-reference OR carry the same
-    scale while answering different questions. This renderer draws them on one
-    axis anyway -- the producer does not yet emit the identity columns the
-    assessment needs -- so the verdict has to travel with the figure instead of
-    being assumed away.
+    scale while answering different questions. The specification table retains
+    each result without implying a common effect axis.
     """
     run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
     run_robustness_figure(
@@ -447,7 +446,7 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     # The line at no effect. ``OR`` is the producer's own spelling and was
     # unrecognised until 2026-07-31, so this forest was drawn with no anchor
     # for a reader to judge an interval against, and nothing recorded that.
-    assert summary["null_line_drawn"] is True
+    assert summary["null_line_drawn"] is False
     assert summary["specifications_drawn"] == 1
     assert summary["specifications_not_estimable"] == 1
     assert summary["any_specification_not_estimable"] is True
@@ -460,7 +459,7 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     )
     assert contract["panels"][0]["panel_id"] == "robustness_grid"
     assert contract["panels"][0]["metadata"]["article_role"] == "robustness"
-    assert contract["panels"][0]["metadata"]["chart_type"] == "sensitivity_forest"
+    assert contract["panels"][0]["metadata"]["chart_type"] == "specification_grid"
     assert contract["panels"][0]["metadata"]["source_products"] == [
         "table:robustness_matrix"
     ]
@@ -479,7 +478,8 @@ def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):
     )
 
     assert summary["anchor_input_bound"] is True
-    assert summary["anchor_line_drawn"] is True
+    assert summary["anchor_line_drawn"] is False
+    assert "Bound primary estimate: 1.566" in (tmp_path / "out" / "robustness_plot.svg").read_text()
     source = pd.read_csv(
         tmp_path / "out" / "robustness_plot_bound_statistics_source_data.csv"
     )
@@ -501,6 +501,68 @@ def test_it_refuses_conflicting_primary_effect_aliases(tmp_path):
             step_id="07_robustness_sensitivity_figure",
             figure_product="robustness_plot",
         )
+
+
+@pytest.mark.parametrize("mutation", [None, "contrast", "missing_identity", "duplicate", "nonconverged"])
+def test_forest_requires_comparable_independent_estimates(tmp_path, mutation):
+    rows = [dict(_REAL_ROWS[0], spec_id=f"model_{index}", estimand_id="mortality_association",
+                 contrast_id="high_vs_reference", effect_unit="odds_ratio", independent_variant=True)
+            for index in range(2)]
+    if mutation == "contrast":
+        rows[1]["contrast_id"] = "per_unit"
+    elif mutation == "missing_identity":
+        rows[1]["effect_unit"] = ""
+    elif mutation == "duplicate":
+        rows[1]["independent_variant"] = False
+    elif mutation == "nonconverged":
+        rows[1]["converged"] = False
+    columns = list(_MATRIX_COLUMNS) + ["estimand_id", "contrast_id", "effect_unit", "independent_variant"]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows, columns)
+    _bind_statistic(run_dir, manifest, ROBUSTNESS_PRIMARY_EFFECT_INPUT, 1.566)
+    kwargs = dict(out_dir=tmp_path / "out", run_dir=run_dir, resolved_inputs=manifest,
+                  step_id="07_robustness_sensitivity_figure", figure_product="robustness_plot", chart_type="sensitivity_forest")
+    if mutation:
+        with pytest.raises(ValueError, match="common robustness effect axis is not authorized"):
+            run_robustness_figure(**kwargs)
+        assert not (tmp_path / "out" / "robustness_plot.png").exists()
+    else:
+        summary = run_robustness_figure(**kwargs)
+        assert summary["null_line_drawn"] and summary["anchor_line_drawn"]
+        assert summary["chart_type"] == "sensitivity_forest"
+
+
+def test_failed_fit_with_numeric_placeholders_remains_not_estimable(tmp_path):
+    rows = [dict(_REAL_ROWS[0], converged=False)]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows)
+    summary = run_robustness_figure(out_dir=tmp_path / "out", run_dir=run_dir,
+                                  resolved_inputs=manifest, step_id="07_robustness_sensitivity_figure",
+                                  figure_product="robustness_plot")
+    assert summary["specifications_drawn"] == 0
+    assert summary["specifications_not_estimable"] == 1
+    assert "Not estimable" in (tmp_path / "out" / "robustness_plot.svg").read_text()
+
+
+def test_forest_labels_and_legend_do_not_overlap_at_export_size(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution.runners import robustness_figure_executor as owner
+    save = owner.save_publication_figure
+    checked = []
+
+    def inspect_and_save(fig, *args, **kwargs):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        ax = fig.axes[0]
+        xmin, xmax = ax.get_xlim()
+        boxes = [label.get_window_extent(renderer) for value, label in zip(ax.get_xticks(), ax.get_xticklabels())
+                 if xmin <= value <= xmax]
+        assert len(boxes) >= 2
+        assert all(not left.overlaps(right) for index, left in enumerate(boxes) for right in boxes[index + 1:])
+        assert all(not legend.get_window_extent(renderer).overlaps(ax.get_window_extent(renderer)) for legend in fig.legends)
+        checked.append(True)
+        return save(fig, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "save_publication_figure", inspect_and_save)
+    test_forest_requires_comparable_independent_estimates(tmp_path, None)
+    assert checked == [True]
 
 
 def test_it_refuses_to_draw_a_matrix_the_replay_owner_did_not_write(tmp_path):

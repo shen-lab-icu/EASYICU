@@ -1844,6 +1844,18 @@ def _compile_inputs(
             inputs.append(primary_product)
     inputs = list(dict.fromkeys(inputs))
     if step.module_id == "visualization":
+        diagnostic_inputs = [
+            product for product in inputs
+            if any(source.step_id == producers.get(product) and source.functional_form_spec is not None
+                   for source in skeleton.steps)
+        ]
+        if "table:robustness_matrix" in inputs and diagnostic_inputs:
+            raise _fail(
+                "progressive_robustness_diagnostic_display_mismatch",
+                "functional-form diagnostics are not effect estimates: retain them in the report as a diagnostic table, outside the robustness-matrix figure",
+                step=step, step_index=step_index, path="product_inputs",
+                detail={"diagnostic_inputs": diagnostic_inputs},
+            )
         invalid_sources = [
             value
             for value in inputs

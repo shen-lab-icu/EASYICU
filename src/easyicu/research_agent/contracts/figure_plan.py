@@ -634,7 +634,7 @@ def measurement_availability_figure_panels(
 def robustness_figure_panels(
     source_products: Sequence[str],
 ) -> Tuple[DeterministicFigurePanelTemplate, ...]:
-    """Bind the deterministic sensitivity forest to its exact typed parents."""
+    """Bind a specification table without presuming effect comparability."""
 
     cleaned = tuple(str(value or "").strip() for value in source_products)
     if (
@@ -650,7 +650,7 @@ def robustness_figure_panels(
         DeterministicFigurePanelTemplate(
             panel_id="robustness_grid",
             article_role="robustness",
-            chart_type="sensitivity_forest",
+            chart_type="specification_grid",
             source_products=cleaned,
         ),
     )
