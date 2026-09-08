@@ -107,7 +107,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
-    assert "js/screens-guided-pi-events.js?v=20260907-report-only1" in index
+    assert "js/screens-guided-pi-events.js?v=20260908-restore-dispatch1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260908-source-receipt1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
