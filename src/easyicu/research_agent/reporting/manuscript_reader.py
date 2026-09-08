@@ -15,6 +15,29 @@ from .manuscript_provenance import ManuscriptProvenanceError, build_manuscript_p
 from .manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
 
 
+def refresh_reader_bibliography(payload: Any) -> Any:
+    """Project verified missing author metadata without rewriting a saved reader.
+
+    Existing reference membership, manuscript digests, claims, numbers and
+    publication permissions are unchanged. This is not literature admission.
+    """
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != "easyicu.manuscript-provenance/1":
+        return payload
+    references = payload.get("references")
+    if not isinstance(references, list):
+        return payload
+    projected = []
+    for row in references:
+        if not isinstance(row, Mapping):
+            projected.append(row)
+            continue
+        reference, receipt = complete_missing_authors(row)
+        if receipt is not None:
+            reference["metadata_source"] = receipt
+        projected.append(reference)
+    return {**payload, "references": projected}
+
+
 def build_manuscript_reader(
     *,
     manuscript: str,
