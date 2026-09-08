@@ -31,8 +31,9 @@
         const value = seconds.toFixed(1);
         return tr(`${value}s`, `${value} 秒`);
       }
-      const minutes = Math.floor(seconds / 60);
-      const remainder = Math.round(seconds % 60);
+      const roundedSeconds = Math.round(seconds);
+      const minutes = Math.floor(roundedSeconds / 60);
+      const remainder = roundedSeconds % 60;
       return tr(
         remainder ? `${minutes}m ${remainder}s` : `${minutes}m`,
         remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分`,

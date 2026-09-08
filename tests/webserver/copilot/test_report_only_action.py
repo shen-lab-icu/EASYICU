@@ -40,3 +40,60 @@ def test_explicit_click_sends_report_only_scope_without_plan_or_approval(report_
     assert calls[0]["execution_resume_source_run_id"] == "original"
     assert "plan_revision_source_run_id" not in calls[0]
     assert "decision" not in calls[0] and "budget_mode" not in calls[0]
+
+
+@pytest.mark.parametrize("reason,code,expected", [
+    ("restore", "WRITER_ONLY_REGISTERED_INPUT_CHANGED", [True, False]),
+    ("report_only", "WRITER_ONLY_REGISTERED_INPUT_CHANGED", [True]),
+    ("restore", "WRITER_ONLY_STUDY_CHANGED", [True]),
+    ("restore", "provider_auth_failed", [True]),
+])
+def test_general_restore_has_one_governed_fallback_but_explicit_report_scope_does_not(reason, code, expected):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node unavailable")
+    script = "global.window = {};\n" + _read("js/screens-guided-pi-plan-actions.js")
+    script += """
+      const calls = [], messages = [], errors = [];
+      const host = {
+        tr: (en,zh) => zh, errorText: e => e.code,
+        busy: () => false, sessionIsStale: () => false, session: () => ({}),
+        api: () => ({}), setBusy: () => {}, setError: e => errors.push(e),
+        appendMessage: m => messages.push(m), render: () => {},
+        recordHostAction: async () => {}, watchChildJob: () => {},
+        replay: {retryFailedExecution: async request => {
+          calls.push(request.reportOnly);
+          // Fallback errors must surface, never start a third attempt.
+          throw Object.assign(new Error('sealed input changed'), {code: ERROR_CODE});
+        }},
+      };
+      (async () => {
+        await window.EU_GUIDED_PI_PLAN_ACTIONS.create(host).retryFailedExecution(REASON);
+        process.stdout.write(JSON.stringify({calls,messages,errors}));
+      })().catch(e => {console.error(e);process.exit(1);});
+    """.replace("REASON", json.dumps(reason)).replace("ERROR_CODE", json.dumps(code))
+    result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
+    output = json.loads(result.stdout)
+    assert output["calls"] == expected
+    assert len([m for m in output["messages"] if m["role"] == "user"]) == 1
+    assert output["errors"][-1] == code
+    if len(expected) == 2:
+        assert output["messages"][-1]["role"] == "assistant"
+        assert "不重跑分析" not in output["messages"][0]["text"]
+
+
+def test_duration_rounding_carries_into_minutes():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node unavailable")
+    script = "global.window = {};\n" + _read("js/screens-guided-pi-activity.js")
+    script += """
+      const owner = window.EU_GUIDED_PI_ACTIVITY.create({
+        tr: (en,zh) => zh, esc: String, iconHtml: () => '',
+        resourceName: () => '', resourceKey: () => '', resourceButton: () => '',
+      });
+      process.stdout.write(owner.render({role:'activity',status:'complete',
+        startedAt:1000,endedAt:420900,steps:[]}));
+    """
+    result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
+    assert "7 分" in result.stdout and "60 秒" not in result.stdout
