@@ -104,3 +104,69 @@ def test_recorded_result_count_is_not_a_claim_of_success_or_stability() -> None:
 ))
 def test_plain_vocabulary_never_authorizes_a_scientific_conclusion(sentence: str) -> None:
     assert _filter("## Results\n\n" + sentence).unsupported_scientific_claim_sentences
+
+
+def test_strict_filter_drops_only_newly_orphaned_variable_sentences():
+    rejected = "The primary predictor required a score increase of 2 points."
+    dependent = "It was represented as a binary maximum {evidence:result}."
+    chained = "This representation used the admission record {evidence:result}."
+    independent = "Age was recorded {evidence:result}."
+    draft = f"## Methods\n\n### Variables\n\n{rejected} {dependent} {chained} {independent}\n"
+
+    filtered = _filter(draft)
+
+    assert rejected not in filtered.scaffold
+    assert dependent not in filtered.scaffold
+    assert chained not in filtered.scaffold
+    assert independent in filtered.scaffold
+    assert dependent in filtered.filtered_sentences
+    assert chained in filtered.filtered_sentences
+
+
+@pytest.mark.parametrize("separator", ("\n\n", "\n", "\n### Statistical analysis\n"))
+def test_strict_filter_does_not_drop_a_different_paragraph_or_line(separator):
+    rejected = "The primary predictor required a score increase of 2 points."
+    dependent = "It was represented as a binary maximum {evidence:result}."
+    filtered = _filter(f"## Methods\n\n### Variables\n\n{rejected}{separator}{dependent}")
+    assert dependent in filtered.scaffold
+
+
+@pytest.mark.parametrize("separator", (" ", "\n"))
+def test_strict_filter_preserves_a_surviving_variable_antecedent(separator):
+    intro = "The predictor was recorded {evidence:result}."
+    rejected = "The primary predictor required a score increase of 2 points."
+    dependent = "It was represented as a binary maximum {evidence:result}."
+    filtered = _filter(f"## Methods\n\n### Variables\n\n{intro}{separator}{rejected} {dependent}")
+    assert intro in filtered.scaffold
+    assert dependent in filtered.scaffold
+
+
+def test_strict_filter_leaves_an_incomplete_orphan_for_quality_review():
+    filtered = _filter("## Methods\n\n### Variables\n\nThe score was 2. It represented")
+    assert "It represented" in filtered.scaffold
+
+
+def test_context_deletion_cannot_replace_missing_baseline_method_coverage():
+    from easyicu.research_agent.reporting.manuscript_quality import audit_manuscript_quality
+
+    filtered = _filter("## Methods\n\n### Variables\n\nAge was 24 years. It was recorded {evidence:result}.")
+    audit = audit_manuscript_quality(filtered.scaffold, expected_baseline_mentions={"age": ("age",)})
+    assert any(finding.code == "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE" for finding in audit.findings)
+
+
+def test_context_deletion_preserves_exact_source_owned_method_facts():
+    from easyicu.research_agent.authority.manuscript_method_facts import ManuscriptMethodFact
+
+    fact = ManuscriptMethodFact("variables[0].description", "Recorded source definition for the selected exposure: “Source label”", "a" * 64)
+    draft = (
+        f"## Methods\n\n### Variables\n\n{fact.scaffold}\n\n"
+        "The predictor required a score increase of 2 points. "
+        "It was represented as a binary maximum {evidence:result}."
+    )
+    filtered = filter_evidence_bound_scaffold(
+        draft, resolve_claim=lambda _ref: None,
+        resolve_evidence=lambda ref: ref in ("research_context", "result"),
+        method_facts=(fact,),
+    )
+    assert fact.scaffold in filtered.scaffold
+    assert "It was represented" not in filtered.scaffold
