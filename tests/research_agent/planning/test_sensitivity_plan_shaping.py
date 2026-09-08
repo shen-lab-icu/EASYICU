@@ -543,3 +543,17 @@ def test_unbound_primary_population_cannot_pass_scientific_review():
     bound = authority.bind_plan(plan)
     review = build_plan_scientific_review(context=context, plan=bound)
     assert "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING" not in {f.code for f in review.findings}
+
+
+def test_cohort_risk_population_cannot_be_inferred_from_prose():
+    from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+    _authority, context, plan = _landmark_shaping_case()
+    step = AnalysisStep(step_id="risk", method="absolute_risk_context", planned_analysis_role="secondary", intent="Describe risk in the primary landmark population", inputs=["artifact:analysis_cohort"], expected_outputs=["table:absolute_risk_context"])
+    assert "population_scope" not in step.model_dump(mode="json")
+    plan = plan.model_copy(update={"steps": [plan.steps[0], step]})
+    review = build_plan_scientific_review(context=context, plan=plan)
+    assert not review.approval_allowed
+    assert "DESCRIPTIVE_POPULATION_SCOPE_UNRESOLVED" in {f.code for f in review.findings}
+    step = step.model_copy(update={"population_scope": "analysis_cohort", "intent": "Describe broader eligible cohort risk"})
+    review = build_plan_scientific_review(context=context, plan=plan.model_copy(update={"steps": [plan.steps[0], step]}))
+    assert "DESCRIPTIVE_POPULATION_SCOPE_UNRESOLVED" not in {f.code for f in review.findings}

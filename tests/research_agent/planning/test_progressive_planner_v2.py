@@ -3045,7 +3045,8 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
 
 
 @pytest.mark.parametrize("primary_population", [False, True])
-def test_absolute_risk_context_module_compiles_existing_deterministic_owner(primary_population) -> None:
+@pytest.mark.parametrize("declaration", ["legacy", "explicit", "without_reference", "conflict", "wrong_variables"])
+def test_absolute_risk_context_module_compiles_existing_deterministic_owner(primary_population, declaration) -> None:
     payload = json.loads(json.dumps(_payload()))
     step = next(
         item for item in payload["steps"] if item["step_id"] == "03_distribution"
@@ -3076,6 +3077,23 @@ def test_absolute_risk_context_module_compiles_existing_deterministic_owner(prim
         payload["steps"].insert(index + 1, step)
         step["depends_on"] = ["05_primary"]
         step["product_inputs"] = [{"producer_step_id": "05_primary", "product_id": "table:adjusted_association_estimates"}]
+    if declaration != "legacy":
+        step["population_scope"] = "primary_model" if primary_population else "analysis_cohort"
+    if declaration == "without_reference":
+        step["product_inputs"] = []
+        step["depends_on"] = []
+    if declaration == "conflict":
+        step["population_scope"] = "analysis_cohort" if primary_population else "primary_model"
+        with pytest.raises(ProgressivePlanCompileError, match=(
+            "analysis_cohort scope" if primary_population else "preceding supported primary"
+        )):
+            compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+        return
+    if declaration == "wrong_variables" and primary_population:
+        step["primary_exposure"] = "age_years"
+        with pytest.raises(ProgressivePlanCompileError, match="primary model's exposure and outcome"):
+            compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+        return
     plan, _receipt = compile_progressive_plan(
         skeleton=ProgressivePlanSkeleton.model_validate(payload),
         context=_context(),
@@ -3091,11 +3109,47 @@ def test_absolute_risk_context_module_compiles_existing_deterministic_owner(prim
         "artifact:analysis_cohort",
     ] + (["table:adjusted_association_estimates"] if primary_population else [])
     assert compiled.expected_outputs == ["table:absolute_risk_context"]
+    assert compiled.population_scope == (
+        "primary_model" if primary_population else None if declaration == "legacy" else "analysis_cohort"
+    )
     contract = build_article_analysis_contract(
         _context(),
         analysis_type=plan.analysis_type,
     )
     assert "descriptive_result" in roles_covered_by_plan(plan, contract)
+
+
+def test_fresh_risk_materialization_requires_scope_but_historical_bytes_are_preserved():
+    step = ProgressiveSkeletonStep(
+        step_id="risk", planned_analysis_role="secondary", module_id="absolute_risk_context",
+        objective="Describe absolute risk in the planned population.",
+        primary_exposure="exposure_flag", outcome="outcome_flag",
+    )
+    payload = ProgressiveStepMaterialization(outline_step_sha256="a" * 64, foundation=None, step=step).model_dump(mode="json")
+    assert "population_scope" not in payload["step"]
+    assert ProgressiveStepMaterialization.model_validate(payload).model_dump(mode="json") == payload
+    with pytest.raises(ValueError, match="explicit population_scope"):
+        _parse_step_materialization(json.dumps(payload))
+    for scope in ("primary_model", "analysis_cohort"):
+        payload["step"]["population_scope"] = scope
+        assert _parse_step_materialization(json.dumps(payload)).step.population_scope == scope
+
+
+def test_risk_transport_requires_a_closed_non_null_population_choice():
+    outline = ProgressiveOutlineStep(
+        step_id="risk", planned_analysis_role="secondary", module_id="absolute_risk_context",
+        objective="Describe risk in the prespecified population.",
+        variable_names=["exposure_flag", "outcome_flag"],
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline, outline_step_sha256=canonical_sha256(outline.model_dump(mode="json")),
+        variable_names=outline.variable_names, scientific_action_ids=[],
+    )
+    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"]
+    assert "population_scope" in step["required"]
+    assert step["properties"]["population_scope"] == {
+        "type": "string", "enum": ["analysis_cohort", "primary_model"],
+    }
 
 
 def test_compiler_keeps_ordinal_linear_levels_out_of_treatment_contrasts() -> None:
@@ -5740,6 +5794,8 @@ def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
     encoded = request.canonical_payload_json
 
     assert len(encoded.encode("utf-8")) < 12_000
+    assert schema["properties"]["know_how_decisions"]["maxItems"] == 0
+    assert "ProgressiveKnowHowDecision" not in schema["$defs"]
     assert "CandidateLiteratureDesignDecision" not in schema["$defs"]
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
     branches = schema["$defs"]["ProgressiveSkeletonStep"]["anyOf"]

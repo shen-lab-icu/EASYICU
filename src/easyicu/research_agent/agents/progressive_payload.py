@@ -281,7 +281,10 @@ def parse_progressive_step_materialization(
         # Host-compiled modules advertise outputs.maxItems=0. Provider output
         # aliases cannot extend that exact owner roster.
         payload = {**payload, "step": {**step, "outputs": []}}
-    return ProgressiveStepMaterialization.model_validate(payload)
+    materialization = ProgressiveStepMaterialization.model_validate(payload)
+    if materialization.step.module_id == "absolute_risk_context" and materialization.step.population_scope is None:
+        raise ValueError("absolute_risk_context requires an explicit population_scope: analysis_cohort or primary_model")
+    return materialization
 
 
 def _closed_object(properties: Mapping[str, Any]) -> dict[str, Any]:
@@ -397,6 +400,7 @@ def _bind_step_module_shape(
             required_non_null = (
                 "primary_exposure",
                 "outcome",
+                "population_scope",
             )
         elif locked_module_id == "exposure_outcome_distribution":
             required_non_null = (
@@ -457,6 +461,9 @@ def _bind_step_module_shape(
         else _string_enum(standard_ids)
     )
     standard["properties"]["custom_method"] = {"type": "null"}
+    if locked_module_id is not None and locked_module_id != "absolute_risk_context":
+        standard["properties"].pop("population_scope", None)
+        standard["required"] = [name for name in standard["required"] if name != "population_scope"]
     # These contracts belong only to custom actions. Omit the irrelevant
     # fields entirely; the host fills their identical None defaults.
     for custom_field in ("functional_form_spec", "phenotyping_feature_columns", "phenotyping_comparison_variables"):
@@ -736,6 +743,10 @@ def _bind_foundation_authorities(
     decisions = foundation_properties["know_how_decisions"]
     if not know_how_authority:
         decisions["maxItems"] = 0
+        # An empty sealed roster has no item choices. Avoid transporting the
+        # unreachable decision schema while keeping nonempty arrays forbidden.
+        decisions["items"] = {"type": "null"}
+        definitions.pop("ProgressiveKnowHowDecision", None)
         return
     definition = definitions.get("ProgressiveKnowHowDecision")
     if not isinstance(definition, dict) or not isinstance(
@@ -970,6 +981,8 @@ def _bind_initial_authorities(
     decisions = properties["know_how_decisions"]
     if not know_how_authority:
         decisions["maxItems"] = 0
+        decisions["items"] = {"type": "null"}
+        definitions.pop("ProgressiveKnowHowDecision", None)
         return
     definition = definitions.get("ProgressiveKnowHowDecision")
     if not isinstance(definition, dict) or not isinstance(

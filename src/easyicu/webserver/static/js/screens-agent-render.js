@@ -978,7 +978,7 @@
     if (role === 'auxiliary' && (kind === 'primary' || kind === 'robustness')) return 'support';
     return kind;
   }
-  function agentPlanStepTitle(step) {
+  function agentPlanStepTitle(step, labels = {}) {
     const blob = `${String(step && step.method || '')} ${String(step && step.step_id || '')}`.toLowerCase();
     const stage = agentPlanStepMethodKind(step);
     if (stage === 'figure') {
@@ -991,7 +991,11 @@
       return t('Result figure', '结果图件');
     }
     if (stage === 'robustness') {
-      if (/spline|functional_form/.test(blob)) return t('Sensitivity · exposure functional form', '敏感性分析 · 暴露形式设定');
+      if (/spline|functional_form/.test(blob)) {
+        const target = String(step && step.functional_form_spec && step.functional_form_spec.target_column || '').trim();
+        const title = t('Sensitivity · functional form', '敏感性分析 · 函数形式');
+        return target ? `${title} · ${agentPlanVariableLabel(target, labels)}` : title;
+      }
       if (/missing|complete_case|imputation/.test(blob)) return t('Sensitivity · missing-data handling', '敏感性分析 · 缺失处理');
       if (/landmark|immortal|time/.test(blob)) return t('Sensitivity · time definition', '敏感性分析 · 时间定义');
       return t('Robustness replay', '稳健性复核');
@@ -1014,7 +1018,7 @@
   function agentPlanFlowStages(steps) {
     return AGENT_PLAN_STAGES.filter(stage => steps.some(step => agentPlanStepStage(step) === stage.key));
   }
-  function agentPlanFlowMap(steps) {
+  function agentPlanFlowMap(steps, labels = {}) {
     const stages = agentPlanFlowStages(steps);
     if (!stages.length) return '';
     return `<ol class="ag-plan-flow">${stages.map((stage, position) => {
@@ -1023,7 +1027,7 @@
         .filter(row => agentPlanStepStage(row.step) === stage.key);
       return `<li class="ag-plan-flow-stage is-${stage.key}">
         <div class="ag-plan-flow-head"><span class="ag-plan-flow-mark">${position + 1}</span><div><strong>${esc(stage.label())}</strong><small>${esc(stage.hint())}</small></div></div>
-        <ul class="ag-plan-flow-steps">${rows.map(row => `<li><b>${row.index + 1}</b><span>${esc(agentPlanStepTitle(row.step))}</span></li>`).join('')}</ul>
+        <ul class="ag-plan-flow-steps">${rows.map(row => `<li><b>${row.index + 1}</b><span>${esc(agentPlanStepTitle(row.step, labels))}</span></li>`).join('')}</ul>
       </li>`;
     }).join('')}</ol>`;
   }
@@ -1080,7 +1084,7 @@
       const shown = outputs.slice(0, 4);
       const hidden = outputs.length - shown.length;
       const note = agentPlanStepIntent(step);
-      const title = agentPlanStepTitle(step);
+      const title = agentPlanStepTitle(step, labels);
       const source = agentPlanStepStatedSource(step);
       return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${source ? `<p class="ag-plan-step-source"><small>${esc(t('Plan wording', '计划原文'))}</small>${esc(source)}</p>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
     }).join('');
@@ -1104,7 +1108,7 @@
       ${agentPlanGlance(steps, flowStages.length, citations.length)}
       ${gaps.length ? `<section class="ag-plan-section is-gap"><div class="ag-plan-section-head"><span>!</span><div><small>${esc(t('EasyICU must revise', 'EasyICU 需要修订'))}</small><h3>${esc(t('Why this version is not ready for approval', '为什么这一版还不能批准'))}</h3></div></div><ul>${gaps.map(value => `<li>${esc(value)}</li>`).join('')}</ul><p>${esc(t('These are Planner responsibilities. The researcher reviews the revised complete plan instead of filling these implementation details one by one.', '这些属于 Planner 的职责。研究者应审阅修订后的完整计划，而不是逐项替系统填写实现细节。'))}</p></section>` : ''}
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>01</span><div><small>${esc(t('Chosen design · plan at a glance', '设计选择 · 先看核心设定'))}</small><h3>${esc(agentPlanAnalysisLabel(selected.analysis_type || p.analysis_type))}</h3></div></div><p class="ag-plan-lead">${esc(t('Start with the target quantity, study start, follow-up, and primary method. The full rationale remains available below.', '先看要估计什么、研究从哪里开始、随访到哪里以及主要方法；完整设计理由保留在下方。'))}</p><div class="ag-plan-design-grid"><article><small>${esc(t('Target quantity', '要估计什么'))}</small>${planField('estimand', selected.estimand)}</article><article><small>${esc(t('Study start', '研究起点'))}</small>${planField('time_zero', selected.time_zero)}</article><article><small>${esc(t('Observation window', '观察范围'))}</small>${planField('observation_window', selected.observation_window)}</article><article><small>${esc(t('Primary method', '主要方法'))}</small>${planField('primary_method', selected.primary_method)}</article></div><div class="ag-plan-boundaries"><article><strong>${esc(t('What this design can answer', '这套设计能回答'))}</strong>${planField('supports', selected.supports)}</article><article><strong>${esc(t('What it cannot prove', '这套设计不能证明'))}</strong>${planField('cannot_prove', selected.cannot_prove)}</article></div></section>
-      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>02</span><div><small>${esc(t('Analysis path · workflow', '分析路径 · 分析流程'))}</small><h3>${esc(t(`${steps.length} planned steps in ${flowStages.length} stages`, `共 ${steps.length} 个步骤 · ${flowStages.length} 个阶段`))}</h3></div></div><p class="ag-plan-lead">${esc(t('Read the map first: each stage says what the run finishes before it moves on. Open the detail list only when you need the exact wording of a step.', '先看流程图：每个阶段说明这一段要做完什么，再进入下一段；需要逐条核对时再展开详细说明。'))}</p>${agentPlanFlowMap(steps)}${stepCards ? `<details class="ag-plan-step-detail"><summary>${esc(t(`Step-by-step detail · ${steps.length} steps`, `逐步说明 · 共 ${steps.length} 步`))}</summary><ol class="ag-plan-steps">${stepCards}</ol></details>` : `<ol class="ag-plan-steps"><li><span>—</span><div><strong>${esc(t('No analysis steps are present.', '尚未形成分析步骤。'))}</strong></div></li></ol>`}</section>
+      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>02</span><div><small>${esc(t('Analysis path · workflow', '分析路径 · 分析流程'))}</small><h3>${esc(t(`${steps.length} planned steps in ${flowStages.length} stages`, `共 ${steps.length} 个步骤 · ${flowStages.length} 个阶段`))}</h3></div></div><p class="ag-plan-lead">${esc(t('Read the map first: each stage says what the run finishes before it moves on. Open the detail list only when you need the exact wording of a step.', '先看流程图：每个阶段说明这一段要做完什么，再进入下一段；需要逐条核对时再展开详细说明。'))}</p>${agentPlanFlowMap(steps, labels)}${stepCards ? `<details class="ag-plan-step-detail"><summary>${esc(t(`Step-by-step detail · ${steps.length} steps`, `逐步说明 · 共 ${steps.length} 步`))}</summary><ol class="ag-plan-steps">${stepCards}</ol></details>` : `<ol class="ag-plan-steps"><li><span>—</span><div><strong>${esc(t('No analysis steps are present.', '尚未形成分析步骤。'))}</strong></div></li></ol>`}</section>
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>03</span><div><small>${esc(t('Study ingredients', '研究要素'))}</small><h3>${esc(t('Variables named in the candidate plan', '候选计划涉及的变量'))}</h3></div></div><div class="ag-plan-chips">${variableChips || `<span>${esc(t('Not yet specified', '尚未明确'))}</span>`}</div>${endpoint ? `<p class="ag-plan-note"><strong>${esc(t('Primary outcome', '主要结局'))}：</strong>${esc(agentPlanVariableLabel(endpoint.name, labels))}</p>` : ''}</section>
       ${recommendation ? `<details class="ag-plan-recommendations"><summary><span>${esc(t('Planner recommendation for review · 6 exact settings', 'Planner 推荐方案（待审阅）· 6 项具体设定'))}</span><small>${esc(t('Open when you need to inspect or change the exact definitions.', '需要逐项核对或修改时再展开。'))}</small></summary><p class="ag-plan-lead">${esc(t('EasyICU proposes these choices first; modify or approve them after review. They are not yet treated as researcher-confirmed.', '先给方案，再由你修改或批准。以下内容由 EasyICU 先行推荐，尚未视为研究者确认。'))}</p><div class="ag-plan-design-grid">${recommendationCards}</div></details>` : ''}
       <details class="ag-plan-details"><summary>${esc(t('Why this design was chosen', '查看完整设计理由'))}</summary>${planField('decision_reason', p.rationale || selected.decision_reason)}</details>
