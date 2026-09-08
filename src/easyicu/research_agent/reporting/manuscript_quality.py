@@ -18,6 +18,7 @@ from ..authority.reader_numeric_display import (
     round_reader_numeric_display,
 )
 from .manuscript_sentence_context import has_dependent_opener
+from .manuscript_baseline import missing_baseline_method_mentions
 from .manuscript_result_structure import PRIMARY_RESULT_HEADINGS, required_result_subsections
 from ..schema import AnalysisPlan
 
@@ -1138,13 +1139,7 @@ def audit_manuscript_quality(
     variable_prose = " ".join(re.sub(
         r"<!--.*?-->", "", _strip_audit_markup(variables), flags=re.S,
     ).split())
-    missing_baselines = tuple(
-        name for name, aliases in (expected_baseline_mentions or {}).items()
-        if not any(
-            re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", variable_prose, re.I)
-            for alias in aliases if alias
-        )
-    )
+    missing_baselines = missing_baseline_method_mentions(variable_prose, expected_baseline_mentions or {})
     if missing_baselines:
         findings.append(ManuscriptQualityFinding(
             code="MANUSCRIPT_BASELINE_METHODS_INCOMPLETE",
@@ -1154,6 +1149,7 @@ def audit_manuscript_quality(
                 + ", ".join(missing_baselines)
                 + ". Describe the executed representations using the supplied reader labels; "
                 "a mention elsewhere in the manuscript does not satisfy this requirement."
+                " A missingness or availability count alone is not a method description."
             ),
             excerpts=missing_baselines,
         ))

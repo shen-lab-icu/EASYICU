@@ -7,10 +7,38 @@ remain separate; Writer must describe only the executed representation.
 
 from __future__ import annotations
 
-from typing import Mapping
+import re
+from typing import Mapping, Sequence
 
 from ..planning.baseline_requirements import baseline_requirement_projection
 from ..schema import ResearchContext
+
+
+def missing_baseline_method_mentions(
+    prose: str, expected: Mapping[str, Sequence[str]],
+) -> tuple[str, ...]:
+    """A data-availability result alone is not a description of a variable.
+
+    This narrow completeness check does not verify that a stated representation
+    matches execution; that remains the responsibility of source authority.
+    """
+
+    sentences = re.split(r"(?<=[.!?])\s+|\n\s*\n", prose)
+    method_sentences = [sentence for sentence in sentences if not (
+        re.search(r"\b(?:missing(?:ness)?|completeness|availability)\b", sentence, re.I)
+        and not re.search(
+            r"\b(?:defined|represented|derived|calculated|measured|collected|obtained)\b|"
+            r"\b(?:first|last|mean|maximum|minimum|median)\s+(?:recorded\s+)?value\b",
+            sentence, re.I,
+        )
+    )]
+    return tuple(
+        name for name, aliases in expected.items()
+        if not any(
+            re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", sentence, re.I)
+            for sentence in method_sentences for alias in aliases if alias
+        )
+    )
 
 
 def baseline_reporting_mentions(
@@ -32,4 +60,3 @@ def baseline_reporting_mentions(
                 " ".join(alias.split()) for alias in aliases if alias.strip()
             ))
     return mentions
-

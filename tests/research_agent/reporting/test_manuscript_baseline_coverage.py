@@ -91,6 +91,30 @@ def test_methods_accepts_authorized_label_without_forcing_raw_column_id() -> Non
     assert not any(f.code == "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE" for f in audit.findings)
 
 
+@pytest.mark.parametrize("metadata", (
+    "The Charlson Comorbidity Index representation had 33 missing observations among 94458 stays.",
+    "Missingness for Charlson Comorbidity Index was 3%.",
+    "Charlson Comorbidity Index data availability was 99.7%.",
+))
+def test_missingness_mentions_do_not_replace_a_baseline_method(metadata):
+    text = _valid_manuscript().replace(
+        "### Variables\n", "### Variables\nPatient age in years was a baseline variable. " + metadata + "\n",
+    )
+    audit = manuscript_quality.audit_manuscript_quality(text, expected_baseline_mentions=_mentions())
+    missing = next(f for f in audit.findings if f.code == "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE")
+    assert missing.excerpts == ("charlson",)
+
+
+def test_a_representation_can_describe_its_missingness_in_the_same_sentence():
+    text = _valid_manuscript().replace(
+        "### Variables\n",
+        "### Variables\nPatient age in years was a baseline variable. "
+        "Charlson Comorbidity Index was represented by the first recorded value, with missing values retained.\n",
+    )
+    audit = manuscript_quality.audit_manuscript_quality(text, expected_baseline_mentions=_mentions())
+    assert not any(f.code == "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE" for f in audit.findings)
+
+
 def test_audit_comments_and_similar_names_do_not_complete_baseline_methods() -> None:
     text = _valid_manuscript().replace(
         "### Variables\n",
