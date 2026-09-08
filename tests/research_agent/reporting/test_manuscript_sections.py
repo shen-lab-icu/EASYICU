@@ -536,6 +536,32 @@ def test_regenerated_results_do_not_spend_another_call_repairing_host_callouts()
     assert "See Figure 1 {evidence:publication_figure_contract}." in repaired
 
 
+@pytest.mark.parametrize("named", (False, True))
+def test_every_repair_path_reuses_numeric_display_projection(named):
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace("Evidence-bound outcome prose.", "The result remained host-bound.")
+    calls = []
+
+    def call_section(**kwargs):
+        calls.append(kwargs["section_name"])
+        return _minimal_valid_section("Results").replace(
+            "Evidence-bound outcome prose.",
+            "Mortality was 15.742499% {evidence:registered_result}.",
+        )
+
+    kwargs = {"call_section": call_section, "common": {}}
+    if named:
+        repaired, _ = repair_named_manuscript_sections(
+            manuscript, section_errors={"results": ("Rejected result prose.",)}, **kwargs,
+        )
+    else:
+        repaired, _ = repair_existing_manuscript_sections(manuscript, **kwargs)
+    assert calls == ["Results"]
+    assert "15.742% {evidence:registered_result}" in repaired
+    assert "15.742499" not in repaired
+
+
 def test_adjustment_conflict_repairs_methods_owner_only() -> None:
     manuscript = "\n\n".join(
         _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
