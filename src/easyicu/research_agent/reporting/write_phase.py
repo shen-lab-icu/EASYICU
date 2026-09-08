@@ -1138,29 +1138,37 @@ def _verified_resume_writer_scaffold_for_quality_migration(
 
 def _preserve_rejected_writer_candidate(exc, *, evidence, per_step_records):
     """Seal a failed quality candidate for diagnosis/repair, never for publication."""
-    from uuid import uuid4
-    from .manuscript_sections import (
-        ManuscriptReaderQualityContractError, manuscript_writer_contract_sha256,
-    )
+    from .manuscript_sections import ManuscriptReaderQualityContractError
 
     if not isinstance(exc, ManuscriptReaderQualityContractError) or not exc.manuscript.strip():
         return None
+    return _preserve_writer_checkpoint(
+        exc.manuscript, evidence=evidence, per_step_records=per_step_records,
+        quality_findings=exc.findings,
+    )
+
+
+def _preserve_writer_checkpoint(scaffold, *, evidence, per_step_records, quality_findings=()):
+    """Keep unreviewed progress across transport failures, outside claim authority."""
+    from uuid import uuid4
+    from .manuscript_sections import manuscript_writer_contract_sha256
+
     record = evidence.register_text(
-        kind="log", description="Rejected Writer draft; requires quality and evidence revalidation.",
-        text=exc.manuscript, filename="writer_rejected_scaffold.md",
-        evidence_id="writer_rejected_scaffold_" + uuid4().hex,
+        kind="log", description="Unreviewed Writer checkpoint; requires quality and evidence revalidation.",
+        text=scaffold, filename="writer_draft_checkpoint.md",
+        evidence_id="writer_draft_checkpoint_" + uuid4().hex,
         producer="writer", generation_mode="llm", publish_aliases=False,
         metadata={
             "writer_repair_candidate": True,
             "writer_contract_sha256": manuscript_writer_contract_sha256(),
             "execution_checkpoint_sha256": _writer_execution_checkpoint_sha256(per_step_records),
-            "quality_findings": list(exc.findings),
+            "quality_findings": list(quality_findings),
             "publication_authorized": False,
         },
     )
     evidence.update_record(
         record.evidence_id, finding_severity="error",
-        finding_messages=["Rejected manuscript candidate; not a source for scientific claims."],
+        finding_messages=["Unreviewed manuscript candidate; not a source for scientific claims."],
     )
     return record.evidence_id
 
@@ -1219,8 +1227,12 @@ def _render_or_resume_writer_scaffold(
         run_dir=run_dir,
         per_step_records=per_step_records,
     )
+    def checkpoint(scaffold):
+        _preserve_writer_checkpoint(scaffold, evidence=evidence, per_step_records=per_step_records)
+
     if migration_scaffold is None:
         return writer.run(
+            checkpoint=checkpoint,
             analysis_plan=execute_result.plan,
             context=agent_context,
             evidence_ids=preferred_evidence_names,
@@ -1234,6 +1246,7 @@ def _render_or_resume_writer_scaffold(
     try:
         scaffold, repaired_section_keys = writer.repair_existing(
             prior_scaffold,
+            checkpoint=checkpoint,
             analysis_plan=execute_result.plan,
             context=agent_context,
             evidence_ids=preferred_evidence_names,

@@ -118,6 +118,8 @@ def test_manuscript_facade_preserves_approved_plan_for_draft_and_repair(
     from easyicu.research_agent.agents import manuscript
 
     plan = object()
+    def checkpoint(_draft):
+        pass
     captured = {}
 
     def invoke(self, *args, **kwargs):
@@ -130,9 +132,11 @@ def test_manuscript_facade_preserves_approved_plan_for_draft_and_repair(
 
     getattr(agent, method)(
         *args, context=object(), evidence_ids=("sealed_result",), analysis_plan=plan,
+        checkpoint=checkpoint,
     )
 
     assert captured["analysis_plan"] is plan
+    assert captured["checkpoint"] is checkpoint
     assert captured["evidence_ids"] == ("sealed_result",)
 
 

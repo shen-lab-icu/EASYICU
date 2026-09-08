@@ -31,6 +31,36 @@ def test_manuscript_section_contract_has_fixed_publication_order() -> None:
     ]
 
 
+def test_transport_failure_preserves_completed_sections_for_bounded_resume():
+    checkpoints = []
+    transport_error = RuntimeError('connection interrupted')
+
+    def interrupted(**kwargs):
+        if kwargs['section_name'] == 'Abstract':
+            raise transport_error
+        return _minimal_valid_section(kwargs['section_name'])
+
+    with pytest.raises(RuntimeError) as raised:
+        render_manuscript_sections(call_section=interrupted, common={}, checkpoint=checkpoints.append)
+    assert raised.value is transport_error
+    assert len(checkpoints) == 1
+    assert '**Keywords:**' in checkpoints[0]
+    assert '## Abstract' not in checkpoints[0]
+
+    called = []
+    def continued(**kwargs):
+        called.append(kwargs['section_name'])
+        return _minimal_valid_section(kwargs['section_name'])
+
+    manuscript, repaired = repair_existing_manuscript_sections(
+        checkpoints[0], call_section=continued, common={}, checkpoint=checkpoints.append,
+    )
+    assert 'Title and Keywords' not in called
+    assert 'methods' in repaired and 'results' in repaired
+    assert '## Methods' in manuscript and '## Conclusion' in manuscript
+    assert len(checkpoints) > 1
+
+
 def test_results_contract_requires_complete_non_ph_survival_reporting() -> None:
     results = next(spec for spec in MANUSCRIPT_SECTION_SPECS if spec.key == "results")
 

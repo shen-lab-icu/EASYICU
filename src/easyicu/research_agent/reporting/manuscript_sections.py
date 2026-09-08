@@ -640,6 +640,7 @@ def repair_existing_manuscript_sections(
     call_section: Callable[..., str],
     common: Mapping[str, Any],
     administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Regenerate only section owners named by deterministic quality errors."""
 
@@ -719,6 +720,8 @@ def repair_existing_manuscript_sections(
                     missing_subsections=missing_subsections,
                 )
             sections[spec.key] = repaired
+            if checkpoint:
+                checkpoint(_assemble_scientific_sections(sections))
             if spec.key not in repaired_keys:
                 repaired_keys.append(spec.key)
         scientific = _assemble_scientific_sections(sections)
@@ -842,6 +845,7 @@ def render_manuscript_sections(
     call_section: Callable[..., str],
     common: Mapping[str, Any],
     administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> str:
     """Dispatch scientific sections and append host-owned administrative facts.
 
@@ -904,6 +908,8 @@ def render_manuscript_sections(
                 missing_subsections=missing_subsections,
             )
         sections[spec.key] = section
+        if checkpoint:
+            checkpoint(_assemble_scientific_sections(sections))
 
     scientific = _assemble_scientific_sections(sections)
     from .manuscript_quality import (
@@ -971,6 +977,8 @@ def render_manuscript_sections(
                     missing_subsections=missing_subsections,
                 )
             sections[spec.key] = repaired
+            if checkpoint:
+                checkpoint(_assemble_scientific_sections(sections))
         scientific = _assemble_scientific_sections(sections)
         scientific, _repair_rounding = repair_reader_structure_from_existing_prose(
             scientific
