@@ -73,7 +73,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260902-type-scale2" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
-    assert "css/guided-pi-analysis-report.css?v=20260830-e2-report1" in index
+    assert "css/guided-pi-analysis-report.css?v=20260908-e1-review1" in index
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
@@ -95,13 +95,13 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"
         in index
     )
-    assert "js/screens-guided-pi-analysis-report.js?v=20260904-empty-gallery1" in index
+    assert "js/screens-guided-pi-analysis-report.js?v=20260908-e1-review1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
     assert "js/screens-guided-pi-replay.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-resources.js?v=20260908-source-conversation1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260907-report-only1" in index
-    assert "js/screens-guided-pi-activity.js?v=20260901-plan-retries2" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260908-e1-review1" in index
+    assert "js/screens-guided-pi-activity.js?v=20260908-e1-review1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index
@@ -114,7 +114,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
-    assert "js/screens-guided-pi.js?v=20260906-plan-change1" in index
+    assert "js/screens-guided-pi.js?v=20260908-e1-review1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -6287,7 +6287,7 @@ def test_result_summary_uses_cohort_ledger_when_audit_summary_has_generic_stage_
     }
     assert claims["cohort.n_stays"] == 94458
     assert claims["n_total"] == 94458
-    assert claims["n_complete_case"] == 94458
+    assert "n_complete_case" not in claims
     assert claims["overall_outcome.event_n"] == 9466
     assert claims["overall_outcome.risk_pct"] == 10.021385
 
@@ -6336,7 +6336,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260908-source-conversation1" in index
-    assert "screens-guided-pi.js?v=20260906-plan-change1" in index
+    assert "screens-guided-pi.js?v=20260908-e1-review1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

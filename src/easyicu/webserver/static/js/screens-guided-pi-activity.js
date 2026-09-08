@@ -486,7 +486,31 @@
       return rows;
     }
 
-    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, startTurn, stepLabel, syncLiveClock, timeMs });
+    function renderTimeline(rows, renderRow) {
+      let pending = [];
+      const output = [];
+      function flush() {
+        if (!pending.length) return;
+        const history = pending.length > 2 ? pending.slice(0, -1) : [];
+        if (history.length) {
+          const failed = history.filter(row => ['failed', 'cancelled', 'interrupted'].includes(row.status)).length;
+          output.push(`<details class="gpi-execution-history"><summary>${esc(tr(
+            `Earlier execution records (${history.length}; ${failed} incomplete)`,
+            `此前执行记录（${history.length} 次，${failed} 次未完成）`,
+          ))}</summary>${history.map(renderRow).join('')}</details>`);
+        }
+        output.push(...(history.length ? pending.slice(-1) : pending).map(renderRow));
+        pending = [];
+      }
+      rows.forEach(row => {
+        if (row && row.role === 'activity' && row.status !== 'running') pending.push(row);
+        else { flush(); output.push(renderRow(row)); }
+      });
+      flush();
+      return output.join('');
+    }
+
+    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EasyICU.guidedPi.declare('activity', { create });

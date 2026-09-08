@@ -58,6 +58,10 @@
         ));
       }
       const primaryActions = [
+        latestRun.run_id && ledger ? resourceButton({
+          kind: 'research_report', run_id: latestRun.run_id, artifact: 'full_analysis_report.json',
+          label: tr('Review this study — results, figures, article and references', '审阅本次研究：结果、图表、文章与文献'), media_type: 'application/json', sha256: ledger.sha256,
+        }, tr('Review this study — results, figures, article and references', '审阅本次研究：结果、图表、文章与文献')) : '',
         `<button class="btn sm primary" type="button" data-gpi-run-outcome-data>${iconHtml('chart', 13)} ${esc(tr('Open data visualization', '打开数据可视化'))}</button>`,
         ...Object.keys(labels).map(name => {
           if (!manuscriptReady && name === 'manuscript_provenance.json') return '';

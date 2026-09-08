@@ -198,6 +198,8 @@ def test_legacy_claim_is_replaced_once_by_its_source_fact_not_duplicate_numbers(
     assert "{claim:other.observed_absolute_risk_level_0}" in rendered
     assert token not in rendered
     assert rendered.count(fact.scaffold) == 3  # abstract, results, conclusion
+    assert "descriptive, unadjusted, noncausal" in rendered.split("## Conclusion")[1]
+    assert "descriptive, unadjusted, noncausal" not in results
     assert render_descriptive_report_claims(rendered, facts) == rendered
 
 

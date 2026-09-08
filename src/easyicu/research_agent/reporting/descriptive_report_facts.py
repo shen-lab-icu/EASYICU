@@ -281,9 +281,19 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
     # or similarity; an unrelated endpoint can have exactly the same count.
     for fact in facts:
         if fact.replaces_claim_ref:
+            quantitative_regions = tuple(_primary_result_regions(manuscript))
+
+            def project(match):
+                if any(start <= match.start() < end for _, start, end in quantitative_regions):
+                    return fact.scaffold
+                # The source-bound claim authorizes both the count and its
+                # interpretation ceiling. Never drop that ceiling in an
+                # interpretive section when replacing a complete claim token.
+                return fact.scaffold + " This was a descriptive, unadjusted, noncausal estimate."
+
             manuscript = re.sub(
                 rf"^[ \t]*\{{claim:{re.escape(fact.replaces_claim_ref)}\}}[.!?]?[ \t]*$",
-                lambda _match: fact.scaffold, manuscript, flags=re.M,
+                project, manuscript, flags=re.M,
             )
     return place_primary_result_summaries(place_descriptive_report_facts(manuscript, facts), facts)
 

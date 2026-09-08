@@ -722,7 +722,7 @@ def test_structure_repair_restores_existing_results_prose_slots() -> None:
     ]
 
 
-def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
+def test_structure_repair_does_not_copy_results_evidence_to_empty_conclusion() -> None:
     manuscript = _valid_manuscript().replace(
         "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
         "After adjustment for age and sex, Sepsis-3 status was associated with mortality "
@@ -736,8 +736,36 @@ def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
     repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
 
     conclusion = repaired.split("## Conclusion", 1)[1]
-    assert "{evidence:primary}" in conclusion
-    assert [item["code"] for item in repairs] == ["MANUSCRIPT_CONCLUSION_RESTORED"]
+    assert "{evidence:primary}" not in conclusion
+    assert repairs == ()
+
+
+def test_citations_alone_do_not_make_a_conclusion_complete() -> None:
+    for content in ("{evidence:primary}", "[@Singer2016]", "<!-- hidden prose -->"):
+        manuscript = _valid_manuscript().replace(
+            "Sepsis status was associated with in-hospital mortality and requires external validation.",
+            content,
+        )
+        audit = audit_manuscript_quality(manuscript)
+        assert any(f.section == "Conclusion" and "EMPTY" in f.code for f in audit.findings)
+
+
+def test_generic_caveat_and_copied_results_are_not_interpretation() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "**Conclusions:** Independent validation is required. [@Singer2016]",
+    ).replace(
+        "Sepsis status was associated with in-hospital mortality and requires external validation.",
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+    )
+    audit = audit_manuscript_quality(manuscript)
+    assert {f.section for f in audit.findings if f.code == "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION"} == {
+        "Abstract", "Conclusion",
+    }
+    from easyicu.research_agent.reporting.manuscript_sections import quality_repair_section_errors
+    errors = quality_repair_section_errors(manuscript)
+    assert "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION" in str(errors["abstract"])
+    assert "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION" in str(errors["conclusion"])
 
 
 def test_structure_repair_populates_empty_abstract_conclusions_from_claim() -> None:
