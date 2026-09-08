@@ -935,3 +935,39 @@ def test_the_source_data_beside_the_figure_holds_every_row_it_drew(
         assert set(panel_rows["exposure_level_index"].astype(int)) == set(
             levels["exposure_level_index"].astype(int)
         ), panel
+
+
+def test_report_worker_overrides_gui_backend_in_fresh_process(tmp_path, monkeypatch):
+    """A desktop default must never construct a native window in a job thread."""
+    import os
+    import subprocess
+    import sys
+
+    table = _produced_table(tmp_path, monkeypatch)
+    root, manifest = _bound(tmp_path, table)
+    payload = tmp_path / 'worker.json'
+    payload.write_text(json.dumps({'run_dir': str(root), 'resolved_inputs': manifest,
+                                  'out_dir': str(tmp_path / 'worker-output'),
+                                  'step_id': STEP_ID, 'figure_product': PRODUCT}))
+    script = '''
+import json, sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from easyicu.research_agent.execution.runners.exposure_outcome_distribution_render import run_exposure_outcome_distribution_figure
+args = json.loads(Path(sys.argv[1]).read_text())
+args['run_dir'] = Path(args['run_dir'])
+args['out_dir'] = Path(args['out_dir'])
+with ThreadPoolExecutor(max_workers=1) as pool:
+    pool.submit(run_exposure_outcome_distribution_figure, **args).result(timeout=30)
+import matplotlib
+assert matplotlib.get_backend().lower() == 'agg'
+assert list(args['out_dir'].glob('*.png'))
+assert list(args['out_dir'].glob('*.pdf'))
+'''
+    completed = subprocess.run(
+        [sys.executable, '-c', script, str(payload)], capture_output=True, text=True,
+        env={**os.environ, 'MPLBACKEND': 'MacOSX' if sys.platform == 'darwin' else 'TkAgg',
+             'PYTHONPATH': str(Path(__file__).resolve().parents[3] / 'src')},
+        timeout=45,
+    )
+    assert completed.returncode == 0, completed.stderr
