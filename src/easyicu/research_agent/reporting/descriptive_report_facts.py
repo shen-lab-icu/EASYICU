@@ -293,13 +293,20 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
 
     manuscript = deduplicate_claim_paragraphs(manuscript)
     # Compress only a consecutive set of complete claims from one verified
-    # endpoint/source in Conclusion. Keep each group and percentage, without
+    # endpoint/source in interpretive sections. Keep each group and percentage, without
     # repeating every numerator/denominator or inventing an effect contrast.
-    conclusion = re.search(r"(?m)^## Conclusion[ \t]*$", manuscript)
-    if conclusion:
-        end_match = re.search(r"(?m)^## ", manuscript[conclusion.end():])
-        end = conclusion.end() + end_match.start() if end_match else len(manuscript)
-        body = manuscript[conclusion.end():end]
+    regions = []
+    for section in ("Discussion", "Conclusion"):
+        match = re.search(rf"(?ms)^## {section}[ \t]*\n(?P<body>.*?)(?=^## |\Z)", manuscript)
+        if match:
+            regions.append(match.span("body"))
+    abstract = re.search(r"(?ms)^## Abstract[ \t]*\n(?P<body>.*?)(?=^## |\Z)", manuscript)
+    if abstract:
+        conclusion = re.search(r"(?ms)^\*\*Conclusions:\*\*(?P<body>.*?)(?=^\*\*[^*\n]+:\*\*|\Z)", abstract["body"])
+        if conclusion:
+            regions.append(tuple(abstract.start("body") + offset for offset in conclusion.span("body")))
+    for start, end in sorted(regions, reverse=True):
+        body = manuscript[start:end]
         tokens = {fact.replaces_claim_ref: fact for fact in facts if fact.replaces_claim_ref}
         pattern = r"(?:^[ \t]*\{claim:[A-Za-z0-9_.-]+\}[.!?]?[ \t]*(?:\n|$)\s*){2,}"
 
@@ -316,7 +323,7 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
                     "These are descriptive, unadjusted proportions; they do not establish an adjusted or causal effect.\n\n")
 
         body = re.sub(pattern, summarize, body, flags=re.M)
-        manuscript = manuscript[:conclusion.end()] + body + manuscript[end:]
+        manuscript = manuscript[:start] + body + manuscript[end:]
     # Replace only a complete token matched to the same verified source/level.
     # Other claims and model-authored sentences are not deduplicated by numbers
     # or similarity; an unrelated endpoint can have exactly the same count.

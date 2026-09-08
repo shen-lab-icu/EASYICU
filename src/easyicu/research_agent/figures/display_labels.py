@@ -46,13 +46,20 @@ def scoped_label_lookup(
 ) -> Optional[str]:
     """Return a Planner label declared as ``<scope>=<level>``.
 
-    Binary aliases are matched deliberately (for example ``1`` and ``1.0``),
+    Exact named/ordinal categories are supported. Binary aliases are matched
+    deliberately (for example ``1`` and ``1.0``),
     while the scope still requires an exact normalized identifier.  This keeps
     a level label bound to its variable instead of letting a generic ``0`` or
     ``1`` label leak across unrelated panels.
     """
 
     scope_key = _normalise_display_key(scope)
+    # Exact scoped categories need not be binary (e.g. an ordinal stage or a
+    # named treatment). Never borrow a global level label from another field.
+    raw_value = str(value).strip()
+    exact = (display_labels or {}).get(f"{scope}={raw_value}")
+    if exact is not None and str(exact).strip():
+        return str(exact).strip()
     level = _binary_level(value)
     if not scope_key or level is None or not display_labels:
         return None

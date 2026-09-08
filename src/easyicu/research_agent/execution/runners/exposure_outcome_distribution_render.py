@@ -42,6 +42,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...figures.display_labels import label_lookup, scoped_label_lookup
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .exposure_outcome_distribution_executor import (
     COUNTS_ONLY_COVARIANCE,
@@ -54,7 +55,6 @@ from .exposure_outcome_distribution_executor import (
     wilson_interval,
 )
 from .figure_input_capability import TypedInputCapability
-from .planner_display_labels import planner_binary_level_labels
 from .typed_input_binding import BoundTypedInput, load_typed_input
 
 __all__ = [
@@ -159,8 +159,6 @@ def exposure_outcome_distribution_figure_code(
             "The step is not owned by the exposure-outcome distribution renderer"
         )
     product = _figure_product(step.expected_outputs[0])
-    resolved = planner_binary_level_labels(display_labels)
-    labels = (resolved[1], resolved[2]) if resolved is not None else None
     return textwrap.dedent(
         f"""
         import os
@@ -176,7 +174,7 @@ def exposure_outcome_distribution_figure_code(
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
-            level_labels={labels!r},
+            display_labels={dict(display_labels or {})!r},
         )
         """
     ).strip()
@@ -734,14 +732,21 @@ def _validate(
     return levels, total, design, contrast
 
 
-def _labels(levels: pd.DataFrame, level_labels: tuple[str, str] | None) -> list[str]:
-    """Label rows from the Planner's display labels when they are binary.
+def _labels(
+    levels: pd.DataFrame, level_labels: tuple[str, str] | None,
+    *, exposure: str = "", display_labels: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Match declared labels by exposure and value, never by row position.
 
     Falls back to the level value itself: an unlabelled category is still an
-    honest category, whereas inventing a clinical name would not be.
+    honest category, whereas inventing a clinical name would not be. The legacy
+    explicit tuple remains available only when no scoped mapping is supplied.
     """
 
     values = list(levels["exposure_level"])
+    if display_labels:
+        return [scoped_label_lookup(exposure, value, display_labels) or str(value)
+                for value in values]
     if level_labels is not None and len(values) == 2:
         return [str(level_labels[0]), str(level_labels[1])]
     return [str(value) for value in values]
@@ -789,6 +794,7 @@ def run_exposure_outcome_distribution_figure(
     step_id: str,
     figure_product: str,
     level_labels: tuple[str, str] | None = None,
+    display_labels: Mapping[str, str] | None = None,
 ) -> Mapping[str, Any]:
     """Render the two-panel distribution figure from its one bound table."""
 
@@ -871,7 +877,8 @@ def run_exposure_outcome_distribution_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style()
-    labels = _labels(levels, level_labels)
+    labels = _labels(levels, level_labels, exposure=str(design["exposure_column"]),
+                     display_labels=display_labels)
     positions = list(range(len(levels)))
 
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4), sharey=True)
@@ -1101,7 +1108,8 @@ def run_exposure_outcome_distribution_figure(
         source_data=source_data,
         reader_caption=(
             "Exposure distribution and observed outcome proportions. "
-            f"Exposure: {design['exposure_column']}; outcome: {design['outcome_column']}. "
+            f"Exposure: {label_lookup(design['exposure_column'], display_labels) or design['exposure_column']}; "
+            f"outcome: {label_lookup(design['outcome_column'], display_labels) or design['outcome_column']}. "
             "(A) Bars show each declared exposure level's share of the analysis cohort. "
             "(B) Points show the observed outcome proportion within each level. "
             "Annotations give percentages and their numerators/denominators. "

@@ -372,7 +372,8 @@ def test_full_write_boundary_projects_only_after_model_grammar_and_preserves_cla
     assert not any(f.validator == "manuscript_numeric_auditor" and f.severity == "error" for f in findings)
 
 
-def test_conclusion_compacts_only_same_endpoint_registered_claims():
+@pytest.mark.parametrize('heading', ['## Conclusion', '## Discussion', '## Abstract\n\n**Conclusions:**'])
+def test_conclusion_compacts_only_same_endpoint_registered_claims(heading):
     from easyicu.research_agent.authority.scientific_claims import bind_scientific_claim_drafts
     from easyicu.research_agent.authority.scientific_claims import derive_scientific_claim_drafts
     records, evidence = _inputs()
@@ -383,7 +384,7 @@ def test_conclusion_compacts_only_same_endpoint_registered_claims():
     facts = compile_counts_only_report_facts(records, evidence=evidence,
         reader_display_labels={'exposure=0': 'Reference category', 'exposure=1': 'Other category'}, scientific_claims=claims)
     risks = facts[2:]
-    text = '## Conclusion\n\n' + '\n\n'.join('{claim:' + fact.replaces_claim_ref + '}' for fact in risks)
+    text = heading + '\n\n' + '\n\n'.join('{claim:' + fact.replaces_claim_ref + '}' for fact in risks)
     result = render_descriptive_report_claims(text, facts)
     assert '10.00% in the “Reference category” group; 20.00% in the “Other category” group' in result
     assert '6 of 60' not in result and '8 of 40' not in result
