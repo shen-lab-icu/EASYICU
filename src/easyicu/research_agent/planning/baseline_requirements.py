@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from typing import Any, Literal, Mapping, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.concept_output_sources import resolve_composite_concept_output
 
-from ..schema import AnalysisPlan, ResearchContext, TableOneSpec
+from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
+from ..contracts.cohort_summary import declared_summary_columns, is_descriptive_cohort_summary_step
 
 
 _PROVENANCE_KEY = "accepted_baseline_requirements"
@@ -33,25 +34,31 @@ class BaselineTableRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_step_id: str = Field(min_length=1)
-    group_by: BaselineCoordinate
+    group_by: BaselineCoordinate | None
     variables: tuple[BaselineCoordinate, ...] = Field(min_length=1)
 
 
 class AcceptedBaselineRequirements(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.accepted_baseline_requirements/1"] = (
+    schema_version: Literal["easyicu.accepted_baseline_requirements/1", "easyicu.accepted_baseline_requirements/2"] = (
         "easyicu.accepted_baseline_requirements/1"
     )
     source_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tables: tuple[BaselineTableRequirement, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _versioned_grouping(self) -> "AcceptedBaselineRequirements":
+        if self.schema_version.endswith("/1") and any(table.group_by is None for table in self.tables):
+            raise ValueError("ungrouped baseline requirements require schema version 2")
+        return self
 
 
 def candidate_baseline_requirements(
     *, plan: Mapping[str, Any], source_plan_sha256: str,
     selected_concepts: Sequence[str], catalog_columns: Sequence[str],
 ) -> AcceptedBaselineRequirements | None:
-    """Project every typed baseline table from a digest-verified candidate.
+    """Project every closed baseline owner from a digest-verified candidate.
 
     The caller owns verification of the candidate and zero-row catalog. No
     truncation is permitted here: dropping a long tail would recreate the bug.
@@ -68,7 +75,21 @@ def candidate_baseline_requirements(
 
     tables = []
     for step in plan.get("steps") or ():
-        if not isinstance(step, Mapping) or step.get("table_one_spec") is None:
+        if not isinstance(step, Mapping):
+            continue
+        if step.get("table_one_spec") is None:
+            # Only the closed executable owner declares this roster. Neither
+            # a baseline label nor arbitrary custom inputs create authority.
+            if not set(step.get("expected_outputs") or ()).intersection({"table:baseline_table", "table:cohort_summary"}):
+                continue
+            parsed = AnalysisStep.model_validate(step)
+            if is_descriptive_cohort_summary_step(parsed):
+                tables.append(BaselineTableRequirement(
+                    source_step_id=parsed.step_id, group_by=None,
+                    variables=tuple(coordinate(name) for name in declared_summary_columns(parsed)),
+                ))
+            elif set(parsed.expected_outputs).intersection({"table:baseline_table", "table:cohort_summary"}):
+                raise ValueError("accepted baseline lacks a closed descriptive or Table One owner")
             continue
         spec = TableOneSpec.model_validate(step["table_one_spec"])
         tables.append(BaselineTableRequirement(
@@ -79,6 +100,9 @@ def candidate_baseline_requirements(
     if not tables:
         return None
     return AcceptedBaselineRequirements(
+        schema_version=("easyicu.accepted_baseline_requirements/2"
+                        if any(table.group_by is None for table in tables)
+                        else "easyicu.accepted_baseline_requirements/1"),
         source_plan_sha256=source_plan_sha256, tables=tuple(tables),
     )
 
@@ -162,8 +186,8 @@ def baseline_requirement_projection(context: ResearchContext) -> dict[str, Any]:
             {
                 "source_step_id": table.source_step_id,
                 "group_by": {
-                    "required": table.group_by.name,
-                    "available_columns": _available_columns(table.group_by, context),
+                    "required": table.group_by.name if table.group_by else None,
+                    "available_columns": _available_columns(table.group_by, context) if table.group_by else [],
                 },
                 "variables": [
                     {"required": variable.name,
@@ -179,13 +203,18 @@ def baseline_requirement_projection(context: ResearchContext) -> dict[str, Any]:
 def baseline_requirement_coverage(
     context: ResearchContext, plan: AnalysisPlan,
 ) -> dict[str, Any]:
-    """Check actual typed table rows, not step inputs or a baseline label."""
+    """Check rows declared by closed table owners, never arbitrary inputs."""
 
-    return _baseline_roster_coverage(context, [
+    rosters = [
         (step.step_id, {step.table_one_spec.group_by},
          {variable.name for variable in step.table_one_spec.variables})
         for step in plan.steps if step.table_one_spec is not None
-    ])
+    ]
+    rosters.extend(
+        (step.step_id, set(), set(declared_summary_columns(step)))
+        for step in plan.steps if is_descriptive_cohort_summary_step(step)
+    )
+    return _baseline_roster_coverage(context, rosters)
 
 
 def baseline_outline_coverage(
@@ -195,13 +224,18 @@ def baseline_outline_coverage(
 
     An outline has not chosen the exact stratum or summary yet. It must expose
     the accepted grouping and a clinical representation of every required row
-    in ONE Table 1 step. Final coverage still checks the actual typed spec.
+    in ONE baseline step. Ungrouped requirements can use an auxiliary summary;
+    final coverage must still prove its closed executable owner.
     """
 
     return _baseline_roster_coverage(context, [
-        (str(step["step_id"]), set(step.get("variable_names", ())),
+        (str(step["step_id"]), (set(step.get("variable_names", ()))
+                               if step.get("module_id") == "table_one" else set()),
          set(step.get("variable_names", ())))
         for step in steps if step.get("module_id") == "table_one"
+        or (step.get("module_id") == "custom_analysis"
+            and step.get("planned_analysis_role") == "auxiliary"
+            and step.get("scientific_action_id") is None)
     ])
 
 
@@ -212,8 +246,10 @@ def _baseline_roster_coverage(
     projection = baseline_requirement_projection(context)
     for table in projection["tables"]:
         candidates = [
-            (step_id, variables) for step_id, groups, variables in rosters
-            if groups.intersection(table["group_by"]["available_columns"])
+            (step_id, variables | groups if table["group_by"]["required"] is None else variables)
+            for step_id, groups, variables in rosters
+            if table["group_by"]["required"] is None
+            or groups.intersection(table["group_by"]["available_columns"])
         ]
         missing_by_step = [
             (
@@ -231,7 +267,7 @@ def _baseline_roster_coverage(
             "missing_variables": missing,
             "unavailable_coordinates": [
                 row["required"] for row in [table["group_by"], *table["variables"]]
-                if not row["available_columns"]
+                if row["required"] is not None and not row["available_columns"]
             ],
             "complete": best_step is not None and not missing,
         })

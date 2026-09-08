@@ -112,3 +112,15 @@ def test_frozen_patient_roster_cannot_be_widened_to_repair_a_baseline(
             baseline_requirements=_requirements(),
         )
         assert roster["required_feature_concepts"] == frozen.feature_concepts
+
+
+def test_overall_baseline_clinical_roster_reaches_data_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
+    requirements = _requirements().model_dump(mode="json")
+    requirements["schema_version"] = "easyicu.accepted_baseline_requirements/2"
+    requirements["tables"][0]["group_by"] = None
+    roster = agent_pipeline_runs._materialization_concept_roster(
+        foundation_profile=_profile(monkeypatch), development_resume_acquisition=None,
+        baseline_requirements=AcceptedBaselineRequirements.model_validate(requirements),
+    )
+    assert set(roster["required_feature_concepts"]) == {"sep3_sofa1", "adm", "charlson"}
+    assert roster["static_concepts"] == ("age", "sex")

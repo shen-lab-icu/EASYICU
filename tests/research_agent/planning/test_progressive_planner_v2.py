@@ -969,7 +969,8 @@ def test_article_contract_credits_typed_measurement_audit_with_precise_products(
     assert "data_quality" in roles_covered_by_plan(plan, contract)
 
 
-def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases() -> None:
+@pytest.mark.parametrize("product", ["artifact:baseline_context_summary", "table:baseline_table"])
+def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases(product: str) -> None:
     payload = _payload()
     baseline = payload["steps"][1]
     baseline.update(
@@ -977,7 +978,7 @@ def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases() -> None:
         custom_method="overall_baseline_context_summary",
         outputs=[
             {
-                "product_id": "artifact:baseline_context_summary",
+                "product_id": product,
                 "semantic_role": "custom",
             }
         ],

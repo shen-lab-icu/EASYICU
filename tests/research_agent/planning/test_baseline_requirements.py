@@ -234,3 +234,66 @@ def test_composite_group_uses_owner_mapping_without_selecting_between_definition
     context = bind_baseline_requirements(context, requirements.model_dump(mode="json"))
     coverage = baseline_requirement_coverage(context, _plan("age", group="score_value"))
     assert (coverage["status"] == "complete") is (not ambiguous)
+
+
+def _overall_plan(*names: str) -> AnalysisPlan:
+    return AnalysisPlan.model_validate({
+        "research_question": _context().research_question,
+        "steps": [{"step_id": "overall", "method": "descriptive_cohort_summary",
+                   "planned_analysis_role": "auxiliary", "intent": "Describe the declared clinical roster.",
+                   "inputs": ["artifact:analysis_cohort", *names],
+                   "expected_outputs": ["table:cohort_summary"]}],
+    })
+
+
+def test_overall_roster_survives_extraction_without_inventing_groups() -> None:
+    required = candidate_baseline_requirements(
+        plan=_overall_plan("age", "charlson").model_dump(mode="json"),
+        source_plan_sha256="b" * 64, selected_concepts=["age", "charlson"],
+        catalog_columns=["age", "charlson"],
+    )
+    assert required is not None
+    assert required.schema_version == "easyicu.accepted_baseline_requirements/2"
+    assert required.tables[0].group_by is None
+    context = _bound_context("age", "charlson")
+    context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"provenance": {}})})
+    context = bind_baseline_requirements(context, required.model_dump(mode="json"))
+    assert baseline_requirement_coverage(context, _overall_plan("age", "cci_value"))["status"] == "complete"
+    assert baseline_requirement_coverage(context, _overall_plan("age", "charlson_n"))["status"] == "incomplete"
+    review = build_plan_scientific_review(context=context, plan=_plan("age"))
+    assert not review.approval_allowed
+    assert any(f.code == "ACCEPTED_BASELINE_CONTENT_MISSING" for f in review.findings)
+    assert baseline_outline_coverage(context, [{
+        "step_id": "summary", "module_id": "custom_analysis", "planned_analysis_role": "auxiliary",
+        "scientific_action_id": None, "variable_names": ["age", "cci_value"],
+    }])["status"] == "complete"
+    assert baseline_outline_coverage(context, [{
+        "step_id": "audit", "module_id": "measurement_audit", "variable_names": ["age", "cci_value"],
+    }])["status"] == "incomplete"
+
+
+def test_baseline_named_arbitrary_custom_step_does_not_create_roster_authority() -> None:
+    plan = _overall_plan("age").model_dump(mode="json")
+    plan["steps"][0]["method"] = "arbitrary_model"
+    with pytest.raises(ValueError, match="lacks a closed descriptive"):
+        candidate_baseline_requirements(
+            plan=plan, source_plan_sha256="c" * 64,
+            selected_concepts=["age"], catalog_columns=["age"],
+        )
+    plan["steps"][0]["expected_outputs"] = ["table:custom_result"]
+    assert candidate_baseline_requirements(
+        plan=plan, source_plan_sha256="c" * 64,
+        selected_concepts=["age"], catalog_columns=["age"],
+    ) is None
+
+
+def test_ungrouped_roster_can_be_described_by_later_reviewed_strata() -> None:
+    required = candidate_baseline_requirements(
+        plan=_overall_plan("age", "exposure").model_dump(mode="json"),
+        source_plan_sha256="d" * 64, selected_concepts=["age", "exposure"],
+        catalog_columns=["age", "exposure"],
+    )
+    context = bind_baseline_requirements(_context(), required.model_dump(mode="json"))
+    assert baseline_requirement_coverage(context, _plan("age"))["status"] == "complete"
+    # The earlier fixed-group contract is not loosened by this option.
+    assert baseline_requirement_coverage(_bound_context("age"), _overall_plan("age", "exposure"))["status"] == "incomplete"

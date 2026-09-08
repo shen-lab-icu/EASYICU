@@ -1555,8 +1555,8 @@ def build_plan_scientific_review(
             severity="blocker",
             dimension="content_completeness",
             message=(
-                f"Accepted baseline {table['source_step_id']!r}, grouped by "
-                f"{table['group_by']['required']!r}, is not preserved. "
+                f"Accepted baseline {table['source_step_id']!r} "
+                f"(grouping: {table['group_by']['required'] or 'not required'}), is not preserved. "
                 f"Missing variables: {table['missing_variables']}; "
                 f"unavailable coordinates: {unavailable}; "
                 f"matched table step: {table['matched_step_id']!r}."

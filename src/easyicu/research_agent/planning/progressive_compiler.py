@@ -584,6 +584,7 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
         in {
             "artifact:baseline_context",
             "artifact:baseline_context_summary",
+            "table:baseline_table",
             "table:cohort_summary",
         }
     )
