@@ -243,10 +243,10 @@
         ? tr('Approved analysis steps completed', '已完成批准的分析步骤')
         : tr('Running the approved analysis steps', '正在执行批准的分析步骤');
       if (stage === 'figure') return done
-        ? tr('Figures regenerated from registered result tables and visually checked', '已从登记结果表重新生成图件并完成视觉核查')
+        ? tr('Figure generation and checks finished', '图件生成与检查流程已结束')
         : tr('Regenerating and checking the analysis figures', '正在重新生成并核查分析图件');
       if (stage === 'report') return done
-        ? tr('Evidence-bound article and manuscript exports regenerated', '已重新生成证据绑定文章与稿件导出')
+        ? tr('Manuscript generation and checks finished; see the result verdict', '稿件生成与检查流程已结束；是否通过请看结果审阅')
         : tr('Regenerating the evidence-bound article and manuscript exports', '正在重新生成证据绑定文章与稿件导出');
       if (stage === 'progress') return done
         ? tr('Research-task progress updated', '研究任务进度已更新')

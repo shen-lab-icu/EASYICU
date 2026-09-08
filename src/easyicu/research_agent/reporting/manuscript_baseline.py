@@ -50,12 +50,24 @@ def baseline_reporting_mentions(
     if not isinstance(context, ResearchContext):
         return {}
     labels = reader_display_labels or {}
+    variables = {variable.name: variable for variable in context.variables}
     mentions: dict[str, tuple[str, ...]] = {}
     for table in baseline_requirement_projection(context)["tables"]:
         for row in table["variables"]:
             required = row["required"]
             aliases = [required, *row["available_columns"]]
             aliases.extend(labels.get(name, "") for name in row["available_columns"])
+            for name in row["available_columns"]:
+                # The sealed source catalog already names these concepts in
+                # reader language. Do not force Writer to expose raw codes
+                # merely because a Planner omitted an optional display label.
+                description = " ".join(str(variables[name].description or "").split())
+                if description and len(description) <= 100 and not re.search(r"[.;\n]", description):
+                    aliases.append(description)
+                    # 'patient admission type' and 'admission type' name the
+                    # same attribute. Never shorten clinical modifiers or use
+                    # arbitrary fuzzy/token matching between concepts.
+                    aliases.append(re.sub(r"^patient\s+", "", description, flags=re.I))
             mentions[required] = tuple(dict.fromkeys(
                 " ".join(alias.split()) for alias in aliases if alias.strip()
             ))

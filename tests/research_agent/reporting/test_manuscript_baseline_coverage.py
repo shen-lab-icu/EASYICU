@@ -134,6 +134,27 @@ def test_unbound_context_does_not_invent_baseline_reporting_requirements() -> No
     assert baseline_reporting_mentions(_context(), {"age": "Patient age"}) == {}
 
 
+@pytest.mark.parametrize('prose', [
+    'Patient admission type was represented by its recorded categorical level.',
+    'Admission type was collected as a categorical baseline variable.',
+])
+def test_baseline_methods_accept_source_catalog_names_without_raw_codes(prose):
+    from easyicu.research_agent.reporting.manuscript_baseline import (
+        baseline_reporting_mentions, missing_baseline_method_mentions,
+    )
+    from easyicu.research_agent.schema import ConceptDescriptor
+    context = _bound_context('adm').model_copy(update={'variables': [
+        ConceptDescriptor(name='adm', source_concept='adm', role='demographic',
+                          dtype='str', description='patient admission type'),
+    ]})
+    before = context.model_dump(mode='json')
+    expected = baseline_reporting_mentions(context)
+    assert not missing_baseline_method_mentions(prose, expected)
+    assert missing_baseline_method_mentions('Admission diagnosis was collected.', expected) == ('adm',)
+    assert missing_baseline_method_mentions('Admission type had 2 missing records.', expected) == ('adm',)
+    assert context.model_dump(mode='json') == before
+
+
 def test_sealed_baseline_roster_survives_scalar_projection_and_rejects_drift(tmp_path) -> None:
     from easyicu.research_agent.audits.envelope_consumers import (
         RegisteredOutputAuthorityError, RegisteredOutputEnvelopeConsumer,
