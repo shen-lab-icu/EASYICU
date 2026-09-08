@@ -665,12 +665,14 @@ def get_pi_copilot_research_document(
     project_id: ShortText,
     run_id: RunIdText,
     document_name: ResearchDocumentNameText,
+    expected_sha256: str | None = None,
 ) -> Response:
     try:
         payload = get_pi_copilot_service().get_research_document(
             project_id=project_id,
             run_id=run_id,
             document_name=document_name,
+            expected_sha256=expected_sha256,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

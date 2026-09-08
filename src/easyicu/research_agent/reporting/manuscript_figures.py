@@ -7,7 +7,9 @@ and never discovers manuscript authority by walking mutable step directories.
 
 from __future__ import annotations
 
+import csv
 import json
+from decimal import Decimal, InvalidOperation
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -42,6 +44,7 @@ class ManuscriptFigures:
     figures: tuple[ManuscriptFigure, ...]
     omitted_evidence_ids: tuple[str, ...]
     findings: tuple[ValidationFinding, ...]
+    context_notes: tuple[dict[str, str], ...] = ()
 
     def as_receipt(self) -> dict[str, Any]:
         return {
@@ -49,6 +52,7 @@ class ManuscriptFigures:
             "figures": [asdict(figure) for figure in self.figures],
             "omitted_evidence_ids": list(self.omitted_evidence_ids),
             "findings": [finding.model_dump(mode="json") for finding in self.findings],
+            "context_notes": list(self.context_notes),
         }
 
 
@@ -62,9 +66,9 @@ def _stem(record: Any) -> str:
     return evidence_artifact_basename_stem(Path(record.relative_path), record.evidence_id)
 
 
-def select_figure_exports(records: Sequence[Any]) -> tuple[list[Any], tuple[str, ...]]:
+def select_figure_exports(records: Sequence[Any], *, prefer_png: bool = False) -> tuple[list[Any], tuple[str, ...]]:
     """Choose PDF then PNG within one owner, never across different steps."""
-    priority = {".pdf": 0, ".png": 1}
+    priority = {".pdf": int(prefer_png), ".png": int(not prefer_png)}
     selected: dict[tuple[Any, ...], tuple[int, int, Any]] = {}
     unsupported: dict[tuple[Any, ...], str] = {}
     for index, record in enumerate(records):
@@ -143,8 +147,49 @@ def _is_primary(record: Any) -> bool:
     return _owner(record) == ("publication_figure_skill", "deterministic_figure_skill", None)
 
 
+def _denominator_note(figure, contract, records, root):
+    """A verified single accounting count is prose, not a result figure.
+
+    Never infer this from the image, its title, or a study identifier. A mixed
+    panel or a full attrition ledger still retains its figure representation.
+    """
+    if contract is None or len(contract.panels) != 1:
+        return None
+    panel = contract.panels[0]
+    if panel.role != "cohort_accounting" or panel.metadata.get("accounting_completeness") != "analysis_denominator_only":
+        return None
+    names = panel.metadata.get("source_data") or []
+    candidates = [r for r in records if r.kind == "table" and _owner(r) == _owner(figure)
+                  and _stem(r) + Path(r.relative_path).suffix in names]
+    if len(candidates) != 1:
+        raise ManuscriptFigureProjectionError("Single-denominator display has no unique registered source")
+    source = candidates[0]
+    path = verified_run_evidence_path(root, source)
+    if path is None or path.suffix.lower() != ".csv":
+        raise ManuscriptFigureProjectionError("Single-denominator source changed")
+    try:
+        with path.open(encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        if len(rows) != 1 or rows[0]["accounting_completeness"] != "analysis_denominator_only":
+            raise ValueError("Expected one accounting row")
+        count = Decimal(rows[0]["n_remaining"])
+        if not count.is_finite() or count < 0 or count != count.to_integral_value():
+            raise ValueError("Invalid denominator")
+    except (OSError, UnicodeError, csv.Error, KeyError, ValueError, InvalidOperation) as exc:
+        raise ManuscriptFigureProjectionError("Single-denominator source is invalid") from exc
+    return {
+        "text": f"The recorded analysis denominator is {int(count):,} records. "
+                "The source ledger contains only one stage; earlier eligibility stages "
+                "and exclusions cannot be reconstructed from this ledger.",
+        "source_evidence_id": source.evidence_id,
+        "source_sha256": source.sha256,
+        "figure_evidence_id": figure.evidence_id,
+        "reason_code": "SINGLE_DENOMINATOR_AS_TEXT",
+    }
+
+
 def build_manuscript_figures(
-    *, evidence_records: Sequence[Any], run_dir: Path,
+    *, evidence_records: Sequence[Any], run_dir: Path, prefer_png: bool = False,
 ) -> ManuscriptFigures:
     """Project captions and placement from current digest-verified contracts."""
     versions: dict[tuple[Any, ...], set[tuple[str, Any]]] = {}
@@ -157,7 +202,7 @@ def build_manuscript_figures(
             ))
     if any(len(choices) > 1 for choices in versions.values()):
         raise ManuscriptFigureProjectionError("Current figure export versions are ambiguous")
-    selected, omitted = select_figure_exports(evidence_records)
+    selected, omitted = select_figure_exports(evidence_records, prefer_png=prefer_png)
     contracts = [record for record in evidence_records
                  if record.kind == "log" and record.relative_path.endswith(".figure_contract.json")]
     resolved: list[tuple[Any, Any | None, FigureContract | None]] = []
@@ -176,11 +221,16 @@ def build_manuscript_figures(
                 if record is not None and _is_primary(figure)]
     findings: list[ValidationFinding] = []
     figures: list[ManuscriptFigure] = []
+    context_notes: list[dict[str, str]] = []
     for figure, record, contract in sorted(resolved, key=lambda row: not _is_primary(row[0])):
         if not _is_primary(figure) and any(
             figure.evidence_id in parent.inputs and figure.sha256 == parent.sha256
             for parent in promoted
         ):
+            continue
+        note = _denominator_note(figure, contract, evidence_records, run_dir)
+        if note is not None:
+            context_notes.append(note)
             continue
         caption = contract.reader_caption if contract is not None else None
         if not caption:
@@ -199,7 +249,7 @@ def build_manuscript_figures(
             contract_evidence_id=record.evidence_id if record else None,
             contract_sha256=record.sha256 if record else None,
         ))
-    return ManuscriptFigures(tuple(figures), omitted, tuple(findings))
+    return ManuscriptFigures(tuple(figures), omitted, tuple(findings), tuple(context_notes))
 
 
 def manuscript_figure_receipt_is_current(*, run_dir: Path, evidence_records: Sequence[Any]) -> bool:

@@ -129,11 +129,13 @@
       const artifact = String(value.artifact || '').trim();
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)) return null;
       const validationDocument = value.kind === 'system_validation_document';
+      const sha256 = String(value.sha256 || '').trim().toLowerCase();
+      if (sha256 && !/^[a-f0-9]{64}$/.test(sha256)) return null;
       if (validationDocument
         ? !/^system_validation_report\.(html|pdf)$/.test(artifact)
-        : !/^manuscript_scaffold\.(pdf|tex|bib)$/.test(artifact)) return null;
+        : !/^(manuscript_scaffold\.(pdf|tex|bib)|manuscript_revision\.pdf)$/.test(artifact)) return null;
       return {
-        kind: validationDocument ? 'system_validation_document' : 'research_document', run_id: runId, artifact,
+        kind: validationDocument ? 'system_validation_document' : 'research_document', run_id: runId, artifact, sha256,
         label: String(value.label || artifact).slice(0, 160),
         media_type: String(value.media_type || (artifact.endsWith('.pdf') ? 'application/pdf' : (artifact.endsWith('.html') ? 'text/html' : 'text/plain'))).slice(0, 120),
       };
@@ -291,7 +293,7 @@
     }
     if (isResearchDocument()) {
       return api.piCopilotResearchDocumentUrl
-        ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact)
+        ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact, state.resource.sha256)
         : '';
     }
     const checkedSha256 = String(state.resource && state.resource.checked_sha256 || '').trim().toLowerCase();

@@ -214,3 +214,28 @@ def test_legacy_evidence_relative_path_is_canonicalized_for_latex(tmp_path):
     canonical = figure.relative_path
     figure.relative_path = canonical.removeprefix("evidence/")
     assert _build(tmp_path, [contract, figure]).figures[0].relative_path == canonical
+
+
+@pytest.mark.parametrize('count', [127, 8501, 200000])
+def test_single_denominator_becomes_source_bound_text_for_any_cohort(tmp_path, count):
+    contract, figure = _bundle(tmp_path, key='accounting')
+    path = tmp_path / contract.relative_path
+    raw = json.loads(path.read_text())
+    raw['panels'][0]['role'] = 'cohort_accounting'
+    raw['panels'][0]['metadata'].update(accounting_completeness='analysis_denominator_only', source_data=['ledger.csv'])
+    path.write_text(json.dumps(raw))
+    contract = contract.model_copy(update={'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+    table = _record(tmp_path, 'ledger', 'ledger.csv', f'accounting_completeness,n_remaining\nanalysis_denominator_only,{count}\n'.encode(), kind='table')
+    projection = _build(tmp_path, [contract, figure, table])
+    assert projection.figures == ()
+    assert not projection.findings and not projection.omitted_evidence_ids
+    note = projection.context_notes[0]
+    assert f'{count:,} records' in note['text']
+    assert note['source_sha256'] == table.sha256
+    assert note['reason_code'] == 'SINGLE_DENOMINATOR_AS_TEXT'
+    assert (tmp_path / figure.relative_path).exists()
+    with pytest.raises(ManuscriptFigureProjectionError):
+        _build(tmp_path, [contract, figure])
+    (tmp_path / table.relative_path).write_text('changed')
+    with pytest.raises(ManuscriptFigureProjectionError):
+        _build(tmp_path, [contract, figure, table])

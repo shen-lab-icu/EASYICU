@@ -6738,6 +6738,18 @@ def test_project_document_preview_requires_the_current_ledger_digest(
     assert loaded["content"] == document
     assert loaded["claim_ceiling"] == "engineering_validation_only"
 
+    assert service.get_research_document(
+        project_id="project-a", run_id="run_20260808",
+        document_name="system_validation_report.html", expected_sha256=digest,
+    )["content"] == document
+    for stale in ("f" * 64, "invalid", ""):
+        with pytest.raises(PiCopilotError) as stale_revision:
+            service.get_research_document(
+                project_id="project-a", run_id="run_20260808",
+                document_name="system_validation_report.html", expected_sha256=stale,
+            )
+        assert stale_revision.value.code == "pi_research_document_digest_mismatch"
+
     review["artifact_payloads"]["evidence_ledger.json"]["artifacts"][0][
         "sha256"
     ] = "0" * 64

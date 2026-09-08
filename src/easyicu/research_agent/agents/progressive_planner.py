@@ -156,7 +156,9 @@ from .progressive_attempt import (
 )
 
 
-_GUIDE = load_prompt_pack()["progressive_planner"]
+from ..contracts.research_display import RESEARCH_DISPLAY_GUIDE
+
+_GUIDE = load_prompt_pack()["progressive_planner"] + "\n\n" + RESEARCH_DISPLAY_GUIDE
 # The outline crosses independent family, module, required-output, and action
 # contracts. A targeted repair may expose the next boundary only after fixing
 # the previous one, so permit one fourth and final outline attempt.

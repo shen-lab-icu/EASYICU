@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..contracts.research_display import RESEARCH_DISPLAY_RULES
 from ..contracts.figure_plan import (
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
@@ -511,12 +512,13 @@ def build_article_figure_strategy(
         role_strategies=roles,
         anti_patterns=[
             *list(template["anti_patterns"]),
-            "A single composite treated as the entire article display package.",
+            "A figure added solely to meet a display count or chart-diversity target.",
+            "A solitary sample-size bar used instead of a denominator in text or a table header.",
             "Routine missingness or measurement audits occupying a main-result panel when they are not central to the scientific question.",
         ],
         prompt_rules=[
             *list(template["prompt_rules"]),
-            "Plan an article-level suite, usually 2-4 complementary main figures plus main tables; this is a planning target, not a fixed acceptance count.",
+            *RESEARCH_DISPLAY_RULES,
             "Put routine missingness and measurement-process detail in supplementary displays; promote it to the main text only when it is central to the research question or changes interpretation of the primary result.",
         ],
     )

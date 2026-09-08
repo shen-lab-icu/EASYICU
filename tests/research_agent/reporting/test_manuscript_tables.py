@@ -48,9 +48,10 @@ def test_reader_table_uses_planned_summary_and_preserves_missingness(tmp_path):
     tables = build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)
 
     assert len(tables) == 1
-    assert tables[0].columns == ("Variable", "Group", "N", "Median [Q1, Q3]", "Missing n (%)", "SMD")
-    assert tables[0].rows[1][:5] == ("value", "0", "2", "2.00 [1.50, 2.50]", "0 (0.0%)")
-    assert tables[0].rows[2][4] == "1 (50.0%)"
+    assert tables[0].columns == ("Characteristic", "Overall", "0", "1", "SMD")
+    assert tables[0].rows[0] == ("N", "4", "2", "2", "")
+    assert tables[0].rows[1][2] == "2.00 [1.50, 2.50]"
+    assert tables[0].rows[2][3] == "1 (50.0%)"
     assert record.sha256 in " ".join(tables[0].notes)
     assert (tmp_path / record.relative_path).read_bytes() == before
 
@@ -61,7 +62,7 @@ def test_reader_group_labels_are_exact_authorized_coordinates(tmp_path):
     plan, record, _ = _source(tmp_path)
     plan = plan.model_copy(update={"display_labels": {"exposure=0": "Reference category", "exposure=1": "Comparison category"}})
     table = build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)[0]
-    assert {row[1] for row in table.rows} == {"Overall", "Reference category", "Comparison category"}
+    assert table.columns[1:4] == ("Overall", "Reference category", "Comparison category")
 
 
 @pytest.mark.parametrize("mutation", ["wrong_owner", "drift", "missing", "schema", "contract"])
@@ -152,7 +153,7 @@ def test_reader_does_not_append_percent_unit_to_unavailable_values(tmp_path):
     table.to_csv(path, index=False)
     record = record.model_copy(update={"sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     rendered = build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)
-    assert rendered[0].rows[1][4] == "0 (N/A)"
+    assert rendered[0].rows[2][2] == "0 (N/A)"
 
 
 @pytest.mark.parametrize("value", ["-0.01", "1.01"])
@@ -174,5 +175,55 @@ def test_reader_wraps_unreadable_or_truncated_source_as_projection_error(tmp_pat
     plan, record, _ = _source(tmp_path)
     (tmp_path / record.relative_path).write_bytes(malformed)
     record = record.model_copy(update={"sha256": hashlib.sha256(malformed).hexdigest()})
+    with pytest.raises(ManuscriptTableProjectionError):
+        build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)
+
+
+@pytest.mark.parametrize('group_name,levels', [('treatment', ['usual', 'early']), ('phenotype', ['A', 'B', 'C']), ('stage', [0, 1, 2, 3])])
+@pytest.mark.parametrize('summary', ['mean_sd', 'median_iqr', 'both'])
+def test_pivot_generalizes_across_group_names_levels_and_row_order(tmp_path, group_name, levels, summary):
+    from easyicu.research_agent.reporting.manuscript_tables import build_manuscript_tables
+    plan, record, _ = _source(tmp_path)
+    spec = plan.steps[0].table_one_spec.model_copy(update={
+        'group_by': group_name, 'group_levels': levels,
+        'variables': [plan.steps[0].table_one_spec.variables[0].model_copy(update={'summary': summary})],
+    })
+    frame = pd.DataFrame({group_name: [g for g in levels for _ in range(3)],
+                          'value': [v for i in range(len(levels)) for v in (i + 1., i + 3., None)]})
+    source = build_grouped_table_one(frame, spec).sample(frac=1, random_state=17)
+    path = tmp_path / record.relative_path
+    source.to_csv(path, index=False)
+    record = record.model_copy(update={'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+    plan = plan.model_copy(update={'steps': [plan.steps[0].model_copy(update={'table_one_spec': spec})]})
+    rendered = build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)[0]
+    assert rendered.columns == ('Characteristic', 'Overall', *map(str, levels), 'SMD')
+    assert rendered.rows[0][2:-1] == ('3',) * len(levels)
+    assert rendered.rows[-1][2:-1] == ('1 (33.3%)',) * len(levels)
+    if summary in {'mean_sd', 'both'}:
+        assert rendered.rows[1][2:-1] == tuple(f'{i + 2:.2f} (1.41)' for i in range(len(levels)))
+    else:
+        assert rendered.rows[1][2:-1] == tuple(f'{i + 2:.2f} [{i + 1.5:.2f}, {i + 2.5:.2f}]' for i in range(len(levels)))
+
+
+@pytest.mark.parametrize('mutation', ['duplicate', 'missing_group', 'unexpected_group', 'missing_cell', 'different_n', 'different_smd'])
+def test_pivot_rejects_ambiguous_or_incomplete_cells(tmp_path, mutation):
+    from easyicu.research_agent.reporting.manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
+    plan, record, source = _source(tmp_path)
+    if mutation == 'duplicate':
+        source = pd.concat([source, source.iloc[[0]]])
+    elif mutation in {'missing_group', 'missing_cell'}:
+        source = source.iloc[:-1]
+    else:
+        column = {'unexpected_group': 'group', 'different_n': 'denominator_n', 'different_smd': 'standardized_mean_difference'}[mutation]
+        source.loc[source.index[0], column] = 'unexpected' if mutation == 'unexpected_group' else 99
+        if mutation == 'different_n':
+            # Two characteristics in the same group cannot disagree on common N.
+            copy = source.iloc[[0]].copy()
+            copy['category'] = 'invalid'
+            copy['denominator_n'] = 3
+            source = pd.concat([source, copy])
+    path = tmp_path / record.relative_path
+    source.to_csv(path, index=False)
+    record = record.model_copy(update={'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
     with pytest.raises(ManuscriptTableProjectionError):
         build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)

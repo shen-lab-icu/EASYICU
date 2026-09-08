@@ -34,7 +34,7 @@ from easyicu.research_agent.reporting.manuscript_quality import render_reader_ma
 from easyicu.webserver import agent_pipeline_runs as pipeline_owner
 from easyicu.webserver import provider_adapter, run_artifact_disclosure, study_contexts
 from easyicu.webserver import dataio
-from easyicu.webserver.report_revision_export import export_revision_pdf
+from easyicu.webserver.report_revision_export import build_revision_figure_gallery, export_revision_pdf
 from easyicu.webserver.report_revision_replay import load_failed_writer_replay
 
 
@@ -312,6 +312,7 @@ def make_report_only_run_runner(
                 public_provider,
                 provenance=provenance,
                 pdf_path=output / "pdf" / "manuscript_revision.pdf",
+                figure_gallery=build_revision_figure_gallery(prepared),
             )
             task.finish(score={"report_quality": "pass", "publication_authorized": False})
             return projected
@@ -339,6 +340,7 @@ def make_report_only_run_runner(
 def _project_revision(
     target, study, reader: str, revision: dict, provider: dict, *, provenance: dict,
     pdf_path: Path | None = None,
+    figure_gallery: dict | None = None,
 ) -> dict:
     """Replace only the mutable Web draft projection, never source run gates."""
 
@@ -355,7 +357,12 @@ def _project_revision(
     ledger = json.loads((wrapper / "evidence_ledger.json").read_text())
     provenance = {**provenance, "report_revision": revision}
     gallery = next((row for row in ledger["artifacts"] if row.get("name") == "figure_gallery.json"), None)
-    if gallery:
+    if figure_gallery is not None:
+        gallery_sha = hashlib.sha256(json.dumps(
+            figure_gallery, ensure_ascii=False, indent=2, sort_keys=True,
+        ).encode("utf-8")).hexdigest()
+        provenance["figure_gallery_artifact"] = {"name": "figure_gallery.json", "sha256": gallery_sha}
+    elif gallery:
         provenance["figure_gallery_artifact"] = {"name": "figure_gallery.json", "sha256": gallery["sha256"]}
     draft = json.loads((wrapper / "manuscript_draft.json").read_text())
     draft.update(
@@ -368,6 +375,8 @@ def _project_revision(
         reader=provenance,
     )
     payloads = {"manuscript_draft.json": draft, "manuscript_provenance.json": provenance}
+    if figure_gallery is not None:
+        payloads["figure_gallery.json"] = figure_gallery
     pdf_bytes = None
     if pdf_path is not None:
         pdf = revision.get("pdf_artifact") or {}

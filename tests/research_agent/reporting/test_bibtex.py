@@ -381,7 +381,7 @@ def test_scaffold_to_latex_inline_bibliography_fallback(ra):
         ],
     )
     tex = scaffold_to_latex(
-        markdown="# Methods\n\nbody\n",
+        markdown="# Methods\n\nbody [@ricu_2023]\n",
         bibliography=bundle,
         inline_bibliography=True,
     )
@@ -464,3 +464,17 @@ def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path)
     bib_keys = set(re.findall(r"@\w+\{([^,]+),", bib_text))
     missing = [k for k in cite_keys if k not in bib_keys]
     assert not missing, f"\\cite keys absent from .bib: {missing}"
+
+
+def test_inline_bibliography_only_prints_cited_records_in_first_citation_order():
+    from easyicu.research_agent.literature import LiteratureBundle, CitationRecord
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+    bundle = LiteratureBundle(research_question='test', citations=[
+        CitationRecord(key=k, title=k, year='2023') for k in ('unused', 'first', 'second')
+    ])
+    tex = scaffold_to_latex(markdown='# Report\n\nSee [@second; @first] and [@second].', bibliography=bundle, inline_bibliography=True)
+    assert r'\bibitem{unused}' not in tex
+    assert tex.count(r'\bibitem{second}') == 1
+    assert tex.index(r'\bibitem{second}') < tex.index(r'\bibitem{first}')
+    uncited = scaffold_to_latex(markdown='# Report\n\nNo citations.', bibliography=bundle, inline_bibliography=True)
+    assert r'\bibitem' not in uncited

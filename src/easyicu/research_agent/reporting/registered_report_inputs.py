@@ -256,7 +256,7 @@ def build_registered_report_reader(run_dir: Path, manuscript: str) -> dict:
     records = json.loads((run_dir / "manifest.json").read_text())["per_step_records"]
     RegisteredOutputEnvelopeConsumer().authoritative_writer_records(records, evidence_store=evidence)
     context = parse_research_context_json(evidence.verify_input("research_context.json", "research_context"))
-    plan = plan.model_copy(update={"display_labels": source_bound_manuscript_labels(context, plan.display_labels)})
+    plan = plan.model_copy(update={"display_labels": source_bound_manuscript_labels(context, plan.display_labels, include_unlabeled=True)})
     return build_manuscript_reader(
         manuscript=manuscript, evidence=evidence, plan=plan, literature=literature,
         evidence_records=evidence.current_verified_records(records),

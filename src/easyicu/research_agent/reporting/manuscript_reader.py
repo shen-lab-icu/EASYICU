@@ -13,6 +13,7 @@ from ..bibliographic_metadata import complete_missing_authors
 from ..schema import AnalysisPlan, EvidenceRecord
 from .manuscript_provenance import ManuscriptProvenanceError, build_manuscript_provenance
 from .manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
+from .manuscript_figures import build_manuscript_figures
 
 
 def refresh_reader_bibliography(payload: Any) -> Any:
@@ -64,6 +65,11 @@ def build_manuscript_reader(
         {"label": f"Table {index}", **asdict(table)}
         for index, table in enumerate(tables, 1)
     ]
+    gallery = build_manuscript_figures(
+        evidence_records=evidence.records() if evidence_records is None else evidence_records,
+        run_dir=evidence.root,
+    )
+    payload["figure_context"] = list(gallery.context_notes)
     references = []
     if literature is not None:
         records = manuscript_citable_records(literature)
