@@ -6165,7 +6165,7 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "正在恢复稿件与证据校验" in childjob
     assert "preparePiCopilotDataWorkbenchSnapshot" in owner
     assert "RUN_OUTCOME.openData(previewAnalysisData)" in events
-    assert "reportRetry.dataset.gpiRunOutcomeRetry === 'report_only'" in events
+    assert "['report_only', 'restore'].includes(reason)" in events
     assert "previewApprovedPlanDataPackage, confirmWorkflowAction,\n      retryFailedExecution," in events
     assert "previewApprovedPlanDataPackage, confirmWorkflowAction,\n    retryFailedExecution," in guided
     assert "screens-guided-pi-run-outcome.js" in index
