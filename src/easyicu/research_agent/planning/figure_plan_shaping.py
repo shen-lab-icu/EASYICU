@@ -197,6 +197,7 @@ def dedicated_renderer_consumes_typed_source(
     steps: Sequence[AnalysisStep],
     *,
     source: str,
+    compatible_companions: frozenset[str] = frozenset(),
 ) -> bool:
     """Return whether one explicit renderer already owns a typed source."""
 
@@ -217,9 +218,14 @@ def dedicated_renderer_consumes_typed_source(
             if contract.mode == "all_rows"
         }
         if (
-            inputs == {source}
-            and all_row_inputs == {source}
+            source in inputs
+            and inputs <= {source, *compatible_companions}
+            and all_row_inputs == {
+                item for item in inputs
+                if (product := typed_product(item)) is not None and product[0] == "table"
+            }
             and len(figure_products) == 1
+            and len(step.expected_outputs) == 1
         ):
             return True
     return False
