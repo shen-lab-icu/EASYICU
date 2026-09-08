@@ -497,6 +497,7 @@
     const locator = {
       pointer: String(button.dataset.evidencePointer || '').slice(0, 500),
       value: String(button.dataset.evidenceSourceValue || '').slice(0, 500),
+      display: button.dataset.gpiClaim ? String(button.textContent || '').trim().slice(0, 120) : '',
     };
     let item = state.evidenceTabs.find(row => row.evidenceId === evidenceId);
     if (!item) {

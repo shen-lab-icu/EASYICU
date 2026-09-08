@@ -113,6 +113,30 @@
     if (low == null || high == null) return '—';
     return `${percent(low)}–${percent(high)}`;
   }
+  function selectedNumberView(payload, locator) {
+    if (!locator || !locator.pointer) return '';
+    const pointer = String(locator.pointer);
+    let value = payload.value;
+    if (!pointer.startsWith('/') || /~(?:[^01]|$)/.test(pointer)) value = undefined;
+    else for (const part of pointer.slice(1).split('/')) {
+      const key = part.replace(/~1/g, '/').replace(/~0/g, '~');
+      if (value == null || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, key)) {
+        value = undefined;
+        break;
+      }
+      value = value[key];
+    }
+    // Read the exact admitted source field, never search for the same number or
+    // infer a percentage/unit. The clicked text is display-only, not authority.
+    if (typeof value !== 'number' || !Number.isFinite(value) || String(value) !== String(locator.value)) {
+      return `<div class="gpi-evidence-withheld" role="alert"><strong>${esc(tr('Selected number could not be matched', '所选数字未能与来源匹配'))}</strong><p>${esc(tr('Check the full evidence lineage; this preview does not verify the selected number.', '请核对完整证据链；此预览未确认所选数字。'))}</p></div>`;
+    }
+    const facts = [
+      ...(locator.display ? [[tr('In the manuscript', '正文显示'), text(locator.display, 120)]] : []),
+      [tr('Exact source value', '来源原值'), String(value)],
+    ];
+    return `<section class="gpi-evidence-statistic gpi-evidence-selected-number" aria-label="${esc(tr('Selected number source', '所选数字的来源'))}"><div class="gpi-evidence-statistic-head"><strong>${esc(tr('Selected number source', '所选数字的来源'))}</strong></div><div class="gpi-evidence-statistic-facts">${facts.map(([label, fact]) => `<div class="gpi-evidence-statistic-card"><span>${esc(label)}</span><strong>${esc(fact)}</strong></div>`).join('')}</div><p class="gpi-evidence-record-status">${esc(tr('Source field and value match', '来源字段与原值已核对'))}</p></section>`;
+  }
   function statisticView(payload) {
     const value = payload && payload.value && typeof payload.value === 'object' && !Array.isArray(payload.value)
       ? payload.value : {};
@@ -171,7 +195,7 @@
     const isStatistic = p.previewable && p.renderer === 'json' && p.kind === 'statistic';
     let body = metadataView(p);
     if (p.previewable && p.renderer === 'code') body = codeView(p);
-    else if (isStatistic) body = statisticView(p);
+    else if (isStatistic) body = selectedNumberView(p, locator) + statisticView(p);
     else if (p.previewable && p.renderer === 'json') body = jsonView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
     return `<div class="gpi-evidence-view">${isStatistic ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${isStatistic ? '' : body}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and absolute host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机绝对路径不会进入浏览器边界。'))}</p></div>`;
