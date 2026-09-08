@@ -51,6 +51,8 @@ from .manuscript_quality import (
     render_reader_manuscript,
 )
 from .manuscript_sections import quality_repair_section_keys, quality_repair_section_errors
+from .manuscript_quality import repair_section_opening_connectors
+from .manuscript_labels import recorded_definition_section_errors
 from .manuscript_baseline import baseline_reporting_mentions
 from .manuscript_surface import deduplicate_claim_paragraphs, repair_filtered_section_openers
 from .manuscript_method_facts import place_manuscript_method_facts
@@ -674,6 +676,7 @@ def repair_writer_only(
             canonical, expected_display_labels=prepared.expected_display_labels,
         )
         canonical = remove_empty_optional_subsections(canonical)
+        canonical = repair_section_opening_connectors(canonical)
         canonical_quality = audit_manuscript_quality(
             canonical,
             analysis_plan=prepared.plan,
@@ -685,9 +688,11 @@ def repair_writer_only(
             canonical,
             prepared.literature,
         )
+        recording_errors = recorded_definition_section_errors(canonical, prepared.context)
         if (
             canonical_quality.status == "pass"
             and canonical_literature.status == "pass"
+            and not recording_errors
         ):
             manuscript = canonical
             authority_filtered.extend(
@@ -708,6 +713,7 @@ def repair_writer_only(
                 prepared.context, prepared.plan.display_labels if prepared.plan else None,
             ),
         )
+        repair_errors.update(recording_errors)
         for key in (
             *canonical_literature.missing_required_citation_sections,
             *canonical_literature.direct_comparator_sections_missing,

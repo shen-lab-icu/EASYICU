@@ -84,6 +84,10 @@ _RUN_ARTIFACT_NAMES = [
 # JSON review payloads.  They may be downloaded/previewed but are never parsed
 # as JSON or accepted from a browser-supplied path.
 _RUN_DOCUMENT_SPECS = {
+    "manuscript_revision.pdf": {
+        "media_type": "application/pdf",
+        "max_bytes": 16 * 1024 * 1024,
+    },
     "manuscript_scaffold.pdf": {
         "media_type": "application/pdf",
         "max_bytes": 16 * 1024 * 1024,

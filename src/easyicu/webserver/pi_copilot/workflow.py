@@ -218,6 +218,7 @@ def build_research_workflow_snapshot(
     plan_review_authority: Optional[Mapping[str, Any]] = None,
     continuing_review_choices: bool = False,
     latest_attempt: Optional[Mapping[str, Any]] = None,
+    report_revision_ready: bool = False,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -293,10 +294,12 @@ def build_research_workflow_snapshot(
     gate_checks = dict(raw_gate_checks) if isinstance(raw_gate_checks, Mapping) else {}
     # The projection always writes a bounded manuscript_draft.json, including
     # a diagnostic explanation when Writer fails closed.  Only the Research
-    # Agent's manuscript_ready gate proves that the file contains a real,
-    # evidence-bound draft suitable for human review.
+    # Agent's manuscript_ready gate or a separately verified report revision
+    # proves availability for review. Neither is a completed human review.
     has_manuscript = bool(
-        manuscript_artifact_present and gate_checks.get("manuscript_ready") is True
+        manuscript_artifact_present and (
+            gate_checks.get("manuscript_ready") is True or report_revision_ready
+        )
     )
     executed_analysis_validated = bool(
         gate_checks.get("execution_complete") is True
@@ -892,6 +895,8 @@ def build_research_workflow_snapshot(
             reason_code=(
                 "report_repair_running"
                 if report_repair_running
+                else "report_revision_ready_for_review"
+                if analysis_complete and has_manuscript and report_revision_ready
                 else "manuscript_draft_ready_for_review"
                 if analysis_complete and has_manuscript
                 else "full_agent_manuscript_required"
@@ -1093,6 +1098,7 @@ def build_project_workflow_projection(
         agent_runs.read_run_review(str(latest_run.get("project_dir") or ""))
         if latest_run else {}
     )
+    latest_run_outcome = project_run_outcome(review)
 
     snapshot = build_research_workflow_snapshot(
         study=study,
@@ -1100,6 +1106,7 @@ def build_project_workflow_projection(
         active_job=active_job,
         latest_run=latest_run,
         latest_attempt=rows[0] if rows else None,
+        report_revision_ready=latest_run_outcome.get("report_revision_ready") is True,
         plan_review_authority=plan_review_authority,
         continuing_review_choices=plan_review_progress.has_pending_choices(
             study, latest_run or {}, review,
@@ -1113,9 +1120,7 @@ def build_project_workflow_projection(
                 )
             }
         )
-    latest_run_outcome: Mapping[str, Any] = {"present": False}
     if latest_run:
-        latest_run_outcome = project_run_outcome(review)
         snapshot = _enrich_plan_review(snapshot, study=study, review=review)
 
     return ProjectWorkflowProjection(

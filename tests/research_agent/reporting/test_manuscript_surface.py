@@ -48,3 +48,14 @@ def test_source_metadata_labels_preserve_event_recording_not_clinical_absence():
     exposure.observation_semantics.kind = "positive_only_event"
     exposure.observed_domain["levels"] = [1, 2]
     assert source_bound_manuscript_labels(context, labels)["event=0"] == labels["event=0"]
+
+
+def test_recorded_status_repair_does_not_redefine_measurements_or_background_literature():
+    from easyicu.research_agent.reporting.manuscript_labels import recorded_definition_section_errors
+    context = SimpleNamespace(variables=[SimpleNamespace(observation_semantics=SimpleNamespace(kind='positive_only_event'))])
+    text = '## Introduction\n\nIn this study, the exposure was represented as a diagnosis status observed in the first day.\n\n## Discussion\n\nThe findings are anchored to that clinical definition.\n'
+    assert set(recorded_definition_section_errors(text, context)) == {'introduction', 'discussion'}
+    safe = text.replace('diagnosis status', 'recorded diagnosis status').replace('that clinical definition', 'the operational definition')
+    assert recorded_definition_section_errors(safe, context) == {}
+    context.variables[0].observation_semantics.kind = 'measurement'
+    assert recorded_definition_section_errors(text, context) == {}

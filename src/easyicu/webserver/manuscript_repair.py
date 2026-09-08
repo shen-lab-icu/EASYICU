@@ -34,6 +34,7 @@ from easyicu.research_agent.reporting.manuscript_quality import render_reader_ma
 from easyicu.webserver import agent_pipeline_runs as pipeline_owner
 from easyicu.webserver import provider_adapter, run_artifact_disclosure, study_contexts
 from easyicu.webserver import dataio
+from easyicu.webserver.report_revision_export import export_revision_pdf
 
 
 def _source_fingerprint(root: Path) -> str:
@@ -64,6 +65,43 @@ def _report_only_limits(limits: ProviderHardStopLimits) -> ProviderHardStopLimit
     # output cap need the existing conservative completion reservation.
     validate_provider_transport_reservation_capacity(narrowed)
     return narrowed
+
+
+def _current_revision_input(target) -> tuple[Path | None, str | None]:
+    """Resume the verified current report, retaining its editorial changes."""
+    wrapper = target.wrapper_dir
+    path = wrapper / "manuscript_provenance.json"
+    if not path.exists():
+        return None, None
+    raw = path.read_bytes()
+    provenance = json.loads(raw)
+    revision = provenance.get("report_revision")
+    if not revision:
+        return None, None
+    ledger = json.loads((wrapper / "evidence_ledger.json").read_text())
+    identifier = str(revision.get("revision_id") or "")
+    if (path.is_symlink() or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", identifier)
+        or revision.get("schema_version") != "easyicu.web-report-revision/1"
+        or revision.get("status") != "pass" or revision.get("source_run_id") != target.pipeline_run_id
+        or revision.get("claim_ceiling") != "analysis_only" or revision.get("publication_authorized") is not False
+        or revision.get("output_sha256") != provenance.get("manuscript_sha256")
+        or not any(row.get("name") == path.name and row.get("sha256") == hashlib.sha256(raw).hexdigest()
+                   for row in ledger["artifacts"])):
+        raise WriterOnlyMigrationError(code="WRITER_ONLY_CURRENT_REVISION_CHANGED", detail="Current report binding is invalid.")
+    root = wrapper / "report_revisions" / identifier
+    receipt_path = root / "writer_only_migration_receipt.json"
+    bound_path = root / "manuscript_bound.md"
+    if (root.parent.is_symlink() or root.is_symlink() or receipt_path.is_symlink() or bound_path.is_symlink()
+        or hashlib.sha256(receipt_path.read_bytes()).hexdigest() != revision.get("receipt_sha256")
+        or hashlib.sha256(bound_path.read_bytes()).hexdigest() != revision.get("output_sha256")):
+        raise WriterOnlyMigrationError(code="WRITER_ONLY_CURRENT_REVISION_CHANGED", detail="Current report files changed.")
+    receipt = json.loads(receipt_path.read_text())
+    canonical = revision.get("canonical_sha256")
+    draft = root / ("manuscript_canonical.md" if canonical else "manuscript_scaffold.md")
+    expected = canonical or receipt.get("output_manuscript_sha256")
+    if draft.is_symlink() or hashlib.sha256(draft.read_bytes()).hexdigest() != expected:
+        raise WriterOnlyMigrationError(code="WRITER_ONLY_CURRENT_REVISION_CHANGED", detail="Current editable report changed.")
+    return draft, identifier
 
 
 def make_report_only_run_runner(
@@ -114,7 +152,8 @@ def make_report_only_run_runner(
         prepared_package_binding=seed.prepared_package_binding,
     )
     run_dir = target.wrapper_dir / "pipeline" / target.pipeline_run_id
-    prepare_registered_report_repair(run_dir)
+    draft_path, parent_revision = _current_revision_input(target)
+    prepare_registered_report_repair(run_dir, migration_draft=draft_path)
     source_digest = _source_fingerprint(run_dir)
 
     def runner(job):
@@ -141,7 +180,9 @@ def make_report_only_run_runner(
                 code="WRITER_ONLY_SOURCE_CHANGED",
                 detail="Sealed source changed before repair.",
             )
-        prepared = prepare_registered_report_repair(run_dir)
+        if _current_revision_input(target) != (draft_path, parent_revision):
+            raise WriterOnlyMigrationError(code="WRITER_ONLY_CURRENT_REVISION_CHANGED", detail="Current report changed before repair.")
+        prepared = prepare_registered_report_repair(run_dir, migration_draft=draft_path)
         output = target.wrapper_dir / "report_revisions" / str(job.id)
         if output.parent.is_symlink():
             raise ValueError("Report revision parent must not be a symbolic link")
@@ -205,6 +246,8 @@ def make_report_only_run_runner(
                 nature_writing_enabled=approved_config.enable_nature_writing_skill,
             )
             result = repair_writer_only(prepared, writer=writer)
+            canonical = result.manuscript.encode("utf-8")
+            (output / "manuscript_canonical.md").write_bytes(canonical)
             numbered, binding_count = bind_registered_report_numbers(
                 run_dir, result.manuscript
             )
@@ -240,6 +283,8 @@ def make_report_only_run_runner(
                 ).hexdigest(),
                 "output_sha256": receipt["output_bound_manuscript_sha256"],
                 "numeric_binding_count": binding_count,
+                "parent_revision_id": parent_revision,
+                "canonical_sha256": hashlib.sha256(canonical).hexdigest(),
                 "analysis_steps_executed": 0,
                 "claim_ceiling": "analysis_only",
                 "publication_authorized": False,
@@ -247,7 +292,13 @@ def make_report_only_run_runner(
             provenance = build_registered_report_reader(
                 run_dir, (output / "manuscript_bound.md").read_text(encoding="utf-8"),
             )
+            revision["pdf_artifact"] = export_revision_pdf(
+                prepared=prepared, output=output, reader=result.reader_manuscript,
+                revision=revision,
+            )
             pipeline_owner._write_json(output / "manuscript_provenance.json", provenance)
+            if _current_revision_input(target) != (draft_path, parent_revision):
+                raise WriterOnlyMigrationError(code="WRITER_ONLY_CURRENT_REVISION_CHANGED", detail="Current report changed during repair.")
             projected = _project_revision(
                 target,
                 study_context,
@@ -255,6 +306,7 @@ def make_report_only_run_runner(
                 revision,
                 public_provider,
                 provenance=provenance,
+                pdf_path=output / "pdf" / "manuscript_revision.pdf",
             )
             task.finish(score={"report_quality": "pass", "publication_authorized": False})
             return projected
@@ -280,7 +332,8 @@ def make_report_only_run_runner(
 
 
 def _project_revision(
-    target, study, reader: str, revision: dict, provider: dict, *, provenance: dict
+    target, study, reader: str, revision: dict, provider: dict, *, provenance: dict,
+    pdf_path: Path | None = None,
 ) -> dict:
     """Replace only the mutable Web draft projection, never source run gates."""
 
@@ -310,6 +363,21 @@ def _project_revision(
         reader=provenance,
     )
     payloads = {"manuscript_draft.json": draft, "manuscript_provenance.json": provenance}
+    pdf_bytes = None
+    if pdf_path is not None:
+        pdf = revision.get("pdf_artifact") or {}
+        pdf_bytes = pdf_path.read_bytes()
+        if (
+            pdf_path.is_symlink() or (wrapper / "manuscript_revision.pdf").is_symlink()
+            or pdf.get("name") != "manuscript_revision.pdf"
+            or pdf.get("revision_id") != revision.get("revision_id")
+            or pdf.get("manuscript_sha256") != revision.get("output_sha256")
+            or hashlib.sha256(pdf_bytes).hexdigest() != pdf.get("sha256")
+            or not pdf_bytes.startswith(b"%PDF-") or len(pdf_bytes) > 16 * 1024 * 1024
+        ):
+            raise WriterOnlyMigrationError(code="WRITER_ONLY_PDF_BINDING_FAILED", detail="PDF does not match this revision.")
+    elif revision.get("pdf_artifact"):
+        raise WriterOnlyMigrationError(code="WRITER_ONLY_PDF_BINDING_FAILED", detail="Revision PDF is missing.")
     if not run_artifact_disclosure.scan_browser_projection(payloads)["passed"]:
         raise WriterOnlyMigrationError(
             code="WRITER_ONLY_PROJECTION_PRIVACY_FAILED",
@@ -319,10 +387,14 @@ def _project_revision(
     # was. The revision is a separately identified report, not a new analysis.
     for name, payload in payloads.items():
         pipeline_owner._write_json(wrapper / name, payload)
+    names = set(payloads)
+    if pdf_bytes is not None:
+        (wrapper / "manuscript_revision.pdf").write_bytes(pdf_bytes)
+        names.add("manuscript_revision.pdf")
     ledger["artifacts"] = [
-        row for row in ledger["artifacts"] if row.get("name") not in payloads
+        row for row in ledger["artifacts"] if row.get("name") not in names
     ] + [
-        pipeline_owner._artifact_record(wrapper / name) for name in payloads
+        pipeline_owner._artifact_record(wrapper / name) for name in sorted(names)
     ]
     pipeline_owner._write_json(wrapper / "evidence_ledger.json", ledger)
     gate = json.loads((wrapper / "quality_gate.json").read_text())["gate"]

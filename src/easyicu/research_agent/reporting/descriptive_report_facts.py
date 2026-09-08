@@ -24,6 +24,9 @@ class DescriptiveReportFact:
     source_fields: tuple[str, ...]
     replaces_claim_ref: str | None = None
     cohort_n: int | None = None
+    outcome_label: str | None = None
+    group_label: str | None = None
+    estimate_pct: float | None = None
 
     @property
     def scaffold(self) -> str:
@@ -165,6 +168,7 @@ def compile_counts_only_report_facts(
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
                 source_fields=tuple(f"{prefix}.{key}" for key in ("level", "events", "denominator", "estimate_pct")),
                 replaces_claim_ref=matching_claims[0].claim_ref if matching_claims else None,
+                outcome_label=outcome_label, group_label=label, estimate_pct=estimate,
             ))
     return tuple(facts)
 
@@ -288,6 +292,31 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
     from .manuscript_surface import deduplicate_claim_paragraphs
 
     manuscript = deduplicate_claim_paragraphs(manuscript)
+    # Compress only a consecutive set of complete claims from one verified
+    # endpoint/source in Conclusion. Keep each group and percentage, without
+    # repeating every numerator/denominator or inventing an effect contrast.
+    conclusion = re.search(r"(?m)^## Conclusion[ \t]*$", manuscript)
+    if conclusion:
+        end_match = re.search(r"(?m)^## ", manuscript[conclusion.end():])
+        end = conclusion.end() + end_match.start() if end_match else len(manuscript)
+        body = manuscript[conclusion.end():end]
+        tokens = {fact.replaces_claim_ref: fact for fact in facts if fact.replaces_claim_ref}
+        pattern = r"(?:^[ \t]*\{claim:[A-Za-z0-9_.-]+\}[.!?]?[ \t]*(?:\n|$)\s*){2,}"
+
+        def summarize(match):
+            refs = re.findall(r"\{claim:([^}]+)\}", match.group())
+            selected = [tokens.get(ref) for ref in refs]
+            if any(fact is None or fact.estimate_pct is None or not fact.group_label or not fact.outcome_label for fact in selected):
+                return match.group()
+            if len(set(refs)) != len(refs) or len({(fact.evidence_id, fact.source_sha256, fact.outcome_label) for fact in selected}) != 1:
+                return match.group()
+            values = "; ".join(f"{fact.estimate_pct:.2f}% in the {fact.group_label} group" for fact in selected)
+            return (f"Observed {selected[0].outcome_label} proportions were {values} "
+                    f"{{evidence:{selected[0].evidence_id}}}. "
+                    "These are descriptive, unadjusted proportions; they do not establish an adjusted or causal effect.\n\n")
+
+        body = re.sub(pattern, summarize, body, flags=re.M)
+        manuscript = manuscript[:conclusion.end()] + body + manuscript[end:]
     # Replace only a complete token matched to the same verified source/level.
     # Other claims and model-authored sentences are not deduplicated by numbers
     # or similarity; an unrelated endpoint can have exactly the same count.
@@ -308,6 +337,23 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
                 project, manuscript, flags=re.M,
             )
     return place_primary_result_summaries(place_descriptive_report_facts(manuscript, facts), facts)
+
+
+def restore_descriptive_revision_claims(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:
+    """Re-admit exact prior rendered claims; all numbers must be rebound later.
+
+    Older report revisions saved the bound draft instead of a canonical Writer
+    draft. Remove its old footnote cache and recover only verbatim host claims.
+    Free prose and changed values still face the ordinary scientific filter.
+    """
+    text = re.sub(r"(?m)^\[\^claim_\d+\]:.*$", "", manuscript)
+    text = re.sub(r"\[\^claim_\d+\]", "", text)
+    for fact in facts:
+        if fact.replaces_claim_ref:
+            prior = fact.scaffold + " This was a descriptive, unadjusted, noncausal estimate."
+            text = re.sub(r"(?m)^[ \t]*" + re.escape(prior) + r"[ \t]*$",
+                          lambda _: "{claim:" + fact.replaces_claim_ref + "}", text)
+    return text
 
 
 def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:

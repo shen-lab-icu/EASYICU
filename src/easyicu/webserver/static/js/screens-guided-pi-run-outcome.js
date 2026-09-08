@@ -42,8 +42,11 @@
           label: tr('View technical analysis report', '查看技术分析报告'), media_type: 'application/json', sha256: ledger.sha256,
         }, tr('View technical analysis report', '查看技术分析报告')),
       ] : [];
-      // A report-only revision does not regenerate the source run's PDF.
-      // Never present that historical file as the current revised manuscript.
+      if (latestRun.report_revision_pdf_ready === true) {
+        const pdf = resources.find(row => row && row.artifact === 'manuscript_revision.pdf');
+        if (pdf) detailActions.push(resourceButton(pdf, tr('View current report PDF', '查看当前报告 PDF')));
+      }
+      // Never present the historical source PDF as the current revision.
       if (latestRun.manuscript_ready === true && latestRun.report_revision_ready !== true) {
         const manuscriptPdf = resources.find(row => row && row.artifact === 'manuscript_scaffold.pdf');
         if (manuscriptPdf) {

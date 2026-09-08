@@ -25,11 +25,13 @@ from ..schema import EvidenceRecord
 from ..schema import AnalysisPlan
 from ..literature import LiteratureBundle
 from .manuscript_reader import build_manuscript_reader
+from .manuscript_labels import source_bound_manuscript_labels
 from .writer_evidence import _render_writer_evidence_digest_v2
 from ..research_context.typed import parse_research_context_json
 from .descriptive_report_facts import (
     compile_counts_only_report_facts, render_descriptive_report_claims,
     verified_descriptive_source_records,
+    restore_descriptive_revision_claims,
 )
 from .writer_only_migration import (
     PreparedWriterOnlyMigration,
@@ -116,7 +118,7 @@ class ReadOnlyReportEvidence:
         return sealed.read_bytes()
 
 
-def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigration:
+def prepare_registered_report_repair(run_dir: Path, *, migration_draft: Path | None = None) -> PreparedWriterOnlyMigration:
     """Require sealed inputs and completed analysis before any Writer call."""
 
     evidence = ReadOnlyReportEvidence(Path(run_dir).resolve(strict=True))
@@ -162,9 +164,9 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
         projected, context=context, run_dir=evidence.root, evidence=evidence,
     )
     prepared = prepare_writer_only_migration(
-        evidence.root, host_verified_evidence_digest=digest,
+        evidence.root, host_verified_evidence_digest=digest, migration_draft=migration_draft,
     )
-    return replace(
+    prepared = replace(
         prepared, evidence_digest=digest,
         host_result_facts=compile_counts_only_report_facts(
             verified_descriptive_source_records(projected, evidence),
@@ -173,6 +175,11 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
             scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
         ),
     )
+    if migration_draft is not None:
+        prepared = replace(prepared, source_manuscript=restore_descriptive_revision_claims(
+            prepared.source_manuscript, prepared.host_result_facts,
+        ))
+    return prepared
 
 
 def _require_completed_plan_records(plan, records):
@@ -248,6 +255,8 @@ def build_registered_report_reader(run_dir: Path, manuscript: str) -> dict:
     ))
     records = json.loads((run_dir / "manifest.json").read_text())["per_step_records"]
     RegisteredOutputEnvelopeConsumer().authoritative_writer_records(records, evidence_store=evidence)
+    context = parse_research_context_json(evidence.verify_input("research_context.json", "research_context"))
+    plan = plan.model_copy(update={"display_labels": source_bound_manuscript_labels(context, plan.display_labels)})
     return build_manuscript_reader(
         manuscript=manuscript, evidence=evidence, plan=plan, literature=literature,
         evidence_records=evidence.current_verified_records(records),
