@@ -42,7 +42,9 @@
           label: tr('View technical analysis report', '查看技术分析报告'), media_type: 'application/json', sha256: ledger.sha256,
         }, tr('View technical analysis report', '查看技术分析报告')),
       ] : [];
-      if (manuscriptReady) {
+      // A report-only revision does not regenerate the source run's PDF.
+      // Never present that historical file as the current revised manuscript.
+      if (latestRun.manuscript_ready === true && latestRun.report_revision_ready !== true) {
         const manuscriptPdf = resources.find(row => row && row.artifact === 'manuscript_scaffold.pdf');
         if (manuscriptPdf) {
           detailActions.push(resourceButton(
@@ -74,6 +76,9 @@
       const retryAvailable = Boolean(
         workflow && workflow.analysis_validation_retry_available === true
       );
+      if (retryAvailable && manuscriptReady && validated && numericVerified) {
+        detailActions.push(`<button class="btn sm" type="button" data-gpi-run-outcome-retry="report_only">${iconHtml('refresh', 13)} ${esc(tr('Recheck report without rerunning analysis', '重新校验报告（不重跑分析）'))}</button>`);
+      }
       if (retryAvailable && (!validated || !manuscriptReady)) {
         const retryLabel = validated && numericVerified
           ? tr('Restore manuscript and evidence checks', '恢复稿件与证据校验')

@@ -30,6 +30,24 @@ def test_metadata_completion_is_source_ordered_nonmutating_and_metadata_only():
     assert len(receipt["record_sha256"]) == len(receipt["snapshot_sha256"]) == 64
 
 
+def test_mimic_dataset_authors_require_full_identity_and_preserve_corrections():
+    record = {"pmid": "36596836", "doi": "10.1038/s41597-022-01899-x",
+              "title": "MIMIC-IV, a freely accessible electronic health record dataset.",
+              "venue": "Scientific Data", "year": "2023", "authors": [],
+              "bibliographic_notices": ["Author correction: 10.1038/s41597-023-02136-9."]}
+    original = deepcopy(record)
+    completed, receipt = complete_missing_authors(record)
+    assert len(completed["authors"]) == 13
+    assert completed["authors"][0] == "Alistair E W Johnson"
+    assert completed["authors"][-1] == "Roger G Mark"
+    assert completed["bibliographic_notices"] == record["bibliographic_notices"]
+    assert receipt["source_url"] == "https://pubmed.ncbi.nlm.nih.gov/36596836/"
+    assert original == record
+    for key in ("pmid", "doi", "title", "venue", "year"):
+        conflict = {**record, key: "different"}
+        assert complete_missing_authors(conflict) == (conflict, None)
+
+
 @pytest.mark.parametrize("field", ["pmid", "doi", "title", "year", "venue"])
 def test_wrong_or_missing_identity_never_borrows_authors(field):
     for replacement in ("", "another article"):

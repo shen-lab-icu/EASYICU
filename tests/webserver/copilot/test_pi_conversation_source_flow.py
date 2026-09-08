@@ -183,3 +183,21 @@ def test_report_revision_draft_availability_is_separate_from_scientific_gate(sam
     assert result['report_revision_ready'] is same_source
     assert result['manuscript_ready'] is False
     assert result['reportable'] is False
+
+
+@pytest.mark.parametrize('revision', [True, False])
+def test_revised_report_never_advertises_the_source_runs_old_pdf(revision):
+    html = run_js(f"""
+      global.window = {{}};
+      eval({_read('js/screens-guided-pi-run-outcome.js')!r});
+      const owner = window.EU_GUIDED_PI_RUN_OUTCOME.create({{
+        tr:(_en,zh)=>zh,esc:String,iconHtml:()=>'',resourceButton:(row)=>row.artifact,
+      }});
+      process.stdout.write(JSON.stringify(owner.render({{
+        present:true,analysis_results_available:true,analysis_validated:true,numeric_verified:true,
+        manuscript_ready:true,report_revision_ready:{json.dumps(revision)},run_id:'run_a',
+        artifact_refs:[{{artifact:'evidence_ledger.json',sha256:'a'.repeat(64)}},{{artifact:'manuscript_scaffold.pdf'}}],
+      }},{{stages:[{{id:'analysis',status:'complete'}}],analysis_validation_retry_available:true}})));
+    """)
+    assert ('manuscript_scaffold.pdf' in html) is not revision
+    assert 'data-gpi-run-outcome-retry="report_only"' in html
