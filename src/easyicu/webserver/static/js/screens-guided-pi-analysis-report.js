@@ -101,7 +101,15 @@
     const context = p.run_context && typeof p.run_context === 'object' ? p.run_context : {};
     const sourceManifest = p.source_manifest && typeof p.source_manifest === 'object' ? p.source_manifest : {};
     const provenance = p.manuscript_provenance && typeof p.manuscript_provenance === 'object' ? p.manuscript_provenance : {};
-    const manuscriptReady = !!(sourceManifest.readiness && sourceManifest.readiness.manuscript_ready === true);
+    // The original run gate is immutable. A separately verified report-only
+    // revision can be readable without promoting that scientific gate.
+    const revision = provenance.report_revision || {};
+    const revisionReady = revision.schema_version === 'easyicu.web-report-revision/1'
+      && revision.status === 'pass' && revision.claim_ceiling === 'analysis_only'
+      && revision.publication_authorized === false && revision.analysis_steps_executed === 0
+      && /^[a-f0-9]{64}$/.test(String(revision.output_sha256 || ''))
+      && revision.output_sha256 === provenance.manuscript_sha256;
+    const manuscriptReady = revisionReady || !!(sourceManifest.readiness && sourceManifest.readiness.manuscript_ready === true);
     const resultSummary = window.EasyICU.guidedPi.optional('resultSummary');
     const registeredSummary = resultSummary
       ? resultSummary.summarize(p.result_tables || {}, p.plan)
@@ -124,6 +132,7 @@
     const figureCount = Array.isArray(p.figure_gallery && p.figure_gallery.figures)
       ? p.figure_gallery.figures.length : 0;
     const planSteps = Array.isArray(p.plan && p.plan.steps) ? p.plan.steps : [];
+    const scienceSteps = planSteps.filter(step => step.method !== 'visualization');
     const groupRows = registeredSummary.exposureLevels || [];
     const count = value => value == null ? '—' : Number(value).toLocaleString('en-US');
     const pct = value => value == null ? '—' : `${Number(value).toFixed(2)}%`;
@@ -157,7 +166,7 @@
         ${metric(tr('Observed outcome events', '观察到的结局事件'), display(eventN), tr('Recorded event count', '已登记事件数'), eventN)}
         ${metric(tr('Overall outcome risk', '总体结局风险'), display(overallRisk), descriptiveEvents ? `${display(descriptiveEvents)} / ${display(eligibleN)}` : tr('Descriptive result', '描述性结果'), overallRisk)}
       </section>
-      <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>01</span><div><small>${esc(tr('Design and population', '设计与研究人群'))}</small><h3>${esc(tr('The registered plan', '本次采用的研究计划'))}</h3></div></div><p>${esc(tr('Data source: ', '数据源：'))}${esc(context.source && (context.source.label || context.source.database) || '—')} · ${artifactButton('agent_plan.json', tr('Full plan and definitions', '完整计划与定义'))}</p><ol>${planSteps.map(step => `<li>${esc(step.intent || step.method || '')}</li>`).join('')}</ol>${completeN ? `<p>${esc(tr('Model-complete records: ', '模型完整记录：'))}${esc(display(completeN))}</p>` : ''}</section>
+      <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>01</span><div><small>${esc(tr('Design and population', '设计与研究人群'))}</small><h3>${esc(tr('The registered plan', '本次采用的研究计划'))}</h3></div></div><p>${esc(tr('Data source: ', '数据源：'))}${esc(context.source && (context.source.label || context.source.database) || '—')} · ${artifactButton('agent_plan.json', tr('Full plan and definitions', '完整计划与定义'))}</p><ol>${scienceSteps.map(step => `<li>${esc(step.intent || step.method || '')}</li>`).join('')}</ol>${completeN ? `<p>${esc(tr('Model-complete records: ', '模型完整记录：'))}${esc(display(completeN))}</p>` : ''}</section>
       <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>02</span><div><small>${esc(tr('Results', '分析结果'))}</small><h3>${esc(effect ? tr('Primary association and absolute-risk context', '主要关联与绝对风险背景') : tr('Exposure distribution and outcome-risk context', '暴露分布与结局风险背景'))}</h3></div></div>${presentation ? `<div class="gpi-analysis-presentation-note"><strong>${esc(tr('Digest-verified presentation figures', '摘要核验后的展示图'))}</strong><span>${esc(tr('Re-rendered from registered source tables; original run figures and digests are unchanged.', '根据已登记源数据表重新排版；原始运行图件及其摘要保持不变。'))}</span></div>` : ''}${gallery || `<p>${esc(tr('No embedded figure is available.', '暂无可嵌入图件。'))}</p>`}</section>
       <section class="gpi-analysis-section is-interpretation"><div class="gpi-analysis-section-head"><span>03</span><div><small>${esc(tr('Result interpretation', '结果解读'))}</small><h3>${esc(tr('Clinical and statistical meaning', '临床与统计含义'))}</h3></div></div><ol>${interpretation.map(value => `<li>${esc(value)}</li>`).join('')}</ol>${discussion.length ? `<details><summary>${esc(tr('Show evidence-bound discussion text', '展开证据绑定的 Discussion 文本'))}</summary>${discussion.map(value => `<p>${esc(value)}</p>`).join('')}</details>` : ''}</section>
       <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>04</span><div><small>${esc(tr('Robustness and data quality', '稳健性与数据质量'))}</small><h3>${esc(tr('What was checked—and how to read it', '检查了什么，以及应如何理解'))}</h3></div></div><ul><li>${esc(tr('Displayed denominators and estimates come from registered evidence; unavailable values remain unavailable.', '展示的分母和估计值来自已登记证据；不可用的数值继续保持不可用。'))}</li><li>${esc(tr('Measurement opportunity, missingness and applicability must be interpreted using the run-specific audit artifacts.', '测量机会、缺失性和适用性必须依据本次运行的审计产物解读。'))}</li><li>${esc(tr('Primary and sensitivity rows must not be treated as independent or equivalent unless the registered analysis says so.', '除非已登记分析明确说明，否则不得把主要分析与敏感性分析视为相互独立或等价。'))}</li></ul></section>

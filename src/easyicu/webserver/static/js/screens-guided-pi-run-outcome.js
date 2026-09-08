@@ -24,7 +24,7 @@
       if (!analysis || !['complete', 'review_required'].includes(String(analysis.status || ''))) return '';
       const validated = latestRun.analysis_validated === true;
       const numericVerified = latestRun.numeric_verified === true;
-      const manuscriptReady = latestRun.manuscript_ready === true;
+      const manuscriptReady = latestRun.manuscript_ready === true || latestRun.report_revision_ready === true;
       const figureCount = Number.isInteger(latestRun.figure_count) ? latestRun.figure_count : null;
       const resources = Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [];
       const ledger = resources.find(row => row && row.artifact === 'evidence_ledger.json');
