@@ -122,6 +122,15 @@ def test_named_variable_definition_is_not_a_dependent_opener():
     assert "MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING" not in _codes(_valid_manuscript())
 
 
+def test_possessive_variable_paragraph_requires_an_antecedent():
+    for opener in ("Its levels", "Their values"):
+        text = _valid_manuscript().replace(
+            "The exposure was Sepsis-3 status and the outcome was in-hospital death.",
+            f"{opener} were retained as materialized.",
+        )
+        assert "MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING" in _codes(text)
+
+
 def test_reader_title_uses_host_packet_and_fails_to_draft_label(tmp_path) -> None:
     assert _load_reader_title(tmp_path) == "EasyICU analysis-only manuscript draft"
     (tmp_path / "manuscript_packet.json").write_text(

@@ -199,8 +199,12 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
 
 
 def _primary_result_regions(manuscript: str):
-    """Locate existing reader sections; never manufacture a missing section."""
-    for section in ("Abstract", "Results", "Discussion", "Conclusion"):
+    """Locate quantitative reporting sections, not interpretive sections.
+
+    Discussion and Conclusion must explain the evidence, but need not repeat
+    every count. Their actual claims still pass the scientific/numeric gates.
+    """
+    for section in ("Abstract", "Results"):
         match = re.search(rf"^## {section}[ \t]*\n(?P<body>.*?)(?=^##\s|\Z)", manuscript, re.M | re.S)
         if match is None:
             continue
@@ -231,16 +235,17 @@ def missing_primary_result_facts(manuscript: str, facts: Sequence[DescriptiveRep
         return {}
     regions = {section: manuscript[start:end] for section, start, end in _primary_result_regions(manuscript)}
     return {
-        section: missing for section in ("Abstract", "Results", "Discussion", "Conclusion")
+        section: missing for section in ("Abstract", "Results")
         if (missing := tuple(fact for fact in facts if not _fact_present(regions.get(section, ""), fact)))
     }
 
 
 def place_primary_result_summaries(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:
-    """Carry verified primary counts into summaries after scientific filtering.
+    """Carry verified primary counts into the abstract after scientific filtering.
 
     These are the same observed counts, not new effects, uncertainty estimates,
-    literature comparisons or a substitute for interpretive review.
+    literature comparisons or a substitute for interpretive review. Never
+    manufacture Discussion or Conclusion content by appending result counts.
     """
     if not facts:
         return manuscript

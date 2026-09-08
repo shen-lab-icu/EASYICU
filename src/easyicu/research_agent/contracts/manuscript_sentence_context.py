@@ -12,7 +12,7 @@ import re
 
 
 _DEPENDENT_OPENER = re.compile(
-    r"^(?:It\b|They\b|These\s+(?:values|estimates|measures|representations)\b|"
+    r"^(?:It\b|Its\b|They\b|Their\b|These\s+(?:values|estimates|measures|representations)\b|"
     r"This\s+(?:value|estimate|measure|representation)\b|"
     r"The\s+(?:former|latter|clinical definition|maximum representation|"
     r"minimum representation)\b)",
