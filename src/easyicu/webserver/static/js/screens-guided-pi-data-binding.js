@@ -53,6 +53,12 @@
           preview.open(payload.resource, projectId());
         }
         render();
+        if (payload.session && !payload.resource
+          && payload.session.data_source_authorization?.status === 'confirmed') {
+          await loadWorkflow();
+          render();
+          await continueAfterDataSourceConfirmation();
+        }
       } catch (error) {
         host.setError(errorText(error));
         render();

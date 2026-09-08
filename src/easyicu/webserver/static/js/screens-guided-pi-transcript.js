@@ -29,10 +29,9 @@
   // Host receipts prove that EasyICU ran a plan task; they are not authored
   // conversation turns. A manual click is already shown immediately by the
   // UI, while replay must never manufacture an editable user quotation.
-  const SYSTEM_ONLY_HOST_ACTION_CODES = new Set([
-    'auto_generate_plan',
-    'auto_revise_plan',
-    'generate_plan',
+  const PASSIVE_HOST_ACTION_CODES = new Set([
+    'review_prepared_data', 'review_results', 'review_result_tables',
+    'review_figures', 'review_manuscript', 'review_scientific_review',
   ]);
   const PLAN_ARTIFACTS = [
     ['agent_plan.json', 'Open full plan', '打开完整计划'],
@@ -557,9 +556,11 @@
       const supersededPlanRunIds = new Set(
         Array.from(supersededPlanTurns).map(turnIndex => planRunIds.get(turnIndex)).filter(Boolean),
       );
-      let previousPassiveReview = null;
       hostTurns.forEach((turn, turnIndex) => {
         const actionCode = String(turn && turn.action_code || '');
+        // Navigation receipts remain in the audit store, not the conversation.
+        // Real authored messages are projected independently above.
+        if (PASSIVE_HOST_ACTION_CODES.has(actionCode)) return;
         // The replay store keeps every immutable attempt. The main conversation
         // projects only the latest attempt for each user-visible workflow
         // action, so one natural-language question does not turn into dozens of
@@ -585,19 +586,9 @@
         if (!copy) return;
         const startedAt = timeMs(turn.started_at);
         const endedAt = timeMs(turn.ended_at || turn.started_at);
-        const legacyDuplicate = !childJobId && actionCode === 'review_results'
-          && previousPassiveReview
-          && startedAt - previousPassiveReview < 5 * 60 * 1000;
-        if (legacyDuplicate) return;
-        previousPassiveReview = !childJobId && actionCode === 'review_results'
-          ? startedAt : null;
         const actionId = String(turn.job_id || `${actionCode}-${startedAt}`);
-        if (!SYSTEM_ONLY_HOST_ACTION_CODES.has(actionCode)) {
-          messages.push({
-            id: 'host-user-' + actionId, role: 'user', text: copy.user, complete: true,
-            hostActionCode: actionCode, timelineAt: startedAt, timelineOrder: turnIndex * 10,
-          });
-        }
+        // A job receipt cannot prove who clicked or approved. Never synthesize
+        // an editable user quotation from a completed host action.
         if (childJobId) {
           const activityStatus = status === 'running' ? 'running'
             : hostActionFailed(actionCode, job || sourceJob, status) ? 'error'

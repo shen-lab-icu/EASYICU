@@ -367,6 +367,13 @@
 .gpi-literature-resource-list .gpi-resource-link{display:block;width:100%}
 .gpi-message-resources{margin-top:16px;padding-top:10px;border-top:1px solid var(--line)}
 .gpi-message-resources .gpi-resource-list{margin-top:6px}
+.gpi-file-cards{display:grid;gap:0;margin-top:8px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.gpi-file-card{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 14px;min-width:0;background:var(--paper)}
+.gpi-file-card+.gpi-file-card{border-top:1px solid var(--line)}
+.gpi-file-card>div{min-width:0}
+.gpi-file-card>div>span{display:block;margin-top:4px;font-size:14px;color:var(--ink-3);overflow-wrap:anywhere}
+.gpi-file-card .gpi-resource-link{font-size:15px}
+.gpi-resource-technical{margin-top:10px;font-size:14px;color:var(--ink-3)}
 .gpi-resource-section+.gpi-resource-section{margin-top:10px}
 .gpi-resource-section-title{display:block;color:var(--ink-3);font-size:var(--type-label);font-weight:650;letter-spacing:.02em}
 .gpi-resource-empty{margin:6px 0 0;color:var(--ink-3);font-size:var(--type-label);line-height:1.55}

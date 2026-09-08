@@ -68,7 +68,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260906-resume-scope1" in index
+    assert "css/guided-pi.css?v=20260908-source-conversation1" in index
     assert "css/guided-pi-idea-source.css?v=20260902-type-scale2" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260902-type-scale2" in index
@@ -99,7 +99,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
     assert "js/screens-guided-pi-replay.js?v=20260907-report-only1" in index
-    assert "js/screens-guided-pi-resources.js?v=20260907-preparation-state1" in index
+    assert "js/screens-guided-pi-resources.js?v=20260908-source-conversation1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-activity.js?v=20260901-plan-retries2" in index
     assert (
@@ -109,8 +109,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
     assert "js/screens-guided-pi-events.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20260904-agent-plan-auto1" in index
-    assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20260908-source-conversation1" in index
+    assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
@@ -1130,7 +1130,7 @@ def test_new_conversation_control_clears_the_selected_session() -> None:
     }
 
 
-def test_pending_data_source_status_is_hidden_until_selection_starts() -> None:
+def test_pending_data_source_offers_explicit_binding_before_planning() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -1155,10 +1155,10 @@ def test_pending_data_source_status_is_hidden_until_selection_starts() -> None:
           source: {{label: 'MIMIC-IV', reference_release: '3.1'}},
         }},
       }}, ctx);
-      if (pending !== '') throw new Error('pending data state must not occupy the conversation');
+      if (!pending.includes('data-gpi-data-source-action="begin_local_selection"')) throw new Error('missing source must offer selection');
       if (!selecting.includes('<section class="gpi-data-consent"')) throw new Error('active selection must stay visible');
-      if (reusable.includes('data-gpi-data-source-action')) throw new Error('legacy project source must not ask the researcher to choose');
-      if (!reusable.includes('EasyICU is applying the study-required data policy')) throw new Error('automatic policy must be explicit');
+      if (!reusable.includes('data-gpi-data-source-action="use_study_required_data"')) throw new Error('existing source needs confirmation');
+      if (!reusable.includes('data-gpi-data-source-action="begin_local_selection"')) throw new Error('another source must remain selectable');
       if (!reusable.includes('MIMIC-IV v3.1')) throw new Error('bound source identity must be path free and visible');
       console.log('ok');
     """
@@ -5182,14 +5182,11 @@ def test_repeated_workflow_attempts_are_coalesced_in_main_conversation() -> None
     )
     payload = json.loads(completed.stdout)
     assert payload["childJobs"] == ["prepare-child-current", "retry-child-current"]
-    assert payload["users"] == [
-        "打开 EasyICU 数据审阅与可视化",
-        "重试未完成的分析",
-    ]
+    assert payload["users"] == []  # Host receipts do not prove authored speech.
     assert all("old" not in row_id for row_id in payload["ids"])
 
 
-def test_passive_review_actions_are_distinct_and_legacy_duplicates_are_coalesced() -> None:
+def test_passive_review_receipts_do_not_generate_conversation_messages() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -5239,44 +5236,8 @@ def test_passive_review_actions_are_distinct_and_legacy_duplicates_are_coalesced
         [node, "--eval", script], check=True, capture_output=True, text=True
     )
     assert json.loads(completed.stdout) == {
-        "users": [
-            "审阅分析结果和图表",
-            "查看分析结果表",
-            "审阅分析图表",
-            "预览证据绑定文章",
-            "查看科学审阅",
-        ],
-        "evidence": [
-            {
-                "action": "review_results",
-                "artifacts": [
-                    "result_tables.json",
-                    "figure_gallery.json",
-                    "manuscript_provenance.json",
-                    "evidence_ledger.json",
-                ],
-            },
-            {
-                "action": "review_result_tables",
-                "artifacts": ["result_tables.json", "evidence_ledger.json"],
-            },
-            {
-                "action": "review_figures",
-                "artifacts": ["figure_gallery.json", "result_tables.json"],
-            },
-            {
-                "action": "review_manuscript",
-                "artifacts": [
-                    "manuscript_provenance.json",
-                    "evidence_ledger.json",
-                    "scientific_readiness.json",
-                ],
-            },
-            {
-                "action": "review_scientific_review",
-                "artifacts": ["scientific_readiness.json", "evidence_ledger.json"],
-            },
-        ],
+        "users": [],
+        "evidence": [],
     }
 
 
@@ -6374,7 +6335,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20260907-preparation-state1" in index
+    assert "screens-guided-pi-transcript.js?v=20260908-source-conversation1" in index
     assert "screens-guided-pi.js?v=20260906-plan-change1" in index
 
 
@@ -6478,7 +6439,7 @@ def test_idea_resources_separate_topic_search_from_folded_method_references() ->
     payload = json.loads(completed.stdout)
     html = payload["html"]
     assert payload["authorityClass"] == "literature_method"
-    assert "查看方案" in html
+    assert "研究方案" in html
     assert "Idea Mining 方案预览" in html
     assert "本题文献检索" in html
     assert '<ol class="gpi-resource-list gpi-literature-resource-list">' in html
