@@ -109,12 +109,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
     assert "js/screens-guided-pi-events.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20260908-source-conversation1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20260908-source-receipt1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
-    assert "js/screens-guided-pi.js?v=20260908-e1-review1" in index
+    assert "js/screens-guided-pi.js?v=20260908-source-receipt1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -291,7 +291,8 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
     assert "data-gpi-data-demo" not in owner
     assert "data-gpi-data-planning" not in owner
     assert '<section class="gpi-data-consent"' in owner
-    assert "<summary>" not in owner
+    pending_picker = owner.split('function render(session, ctx)', 1)[1]
+    assert "<summary>" not in pending_picker
     assert "authorizePiCopilotDataSource" in data_binding_owner
     assert "confirm_selected_source" in data_binding_owner
     assert "data-source-authorization" in api
@@ -6336,7 +6337,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260908-source-conversation1" in index
-    assert "screens-guided-pi.js?v=20260908-e1-review1" in index
+    assert "screens-guided-pi.js?v=20260908-source-receipt1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

@@ -729,6 +729,8 @@
             : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
         })}
         ${workflowHtml()}
+        ${!workspace && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
+          ? DATA_CONSENT.renderSelectedSource(session, { tr, esc, icon: iconHtml }) : ''}
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
         <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
           ${messages || (workspace
