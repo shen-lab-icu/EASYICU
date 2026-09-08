@@ -52,6 +52,18 @@ def test_curated_method_citations_carry_authors_including_collective_names():
     assert records["strobe_2007"]["bibliographic_notices"] == _record()["bibliographic_notices"]
 
 
+def test_entire_curated_method_pack_has_source_verified_author_coverage():
+    for record in method_literature_citations():
+        assert record.get("authors"), record["key"]
+        frozen = {**record, "authors": []}
+        completed, receipt = complete_missing_authors(frozen)
+        assert completed["authors"] == record["authors"]
+        assert receipt["scope"] == "bibliographic_metadata_only"
+        for field in ("pmid", "doi", "title", "year", "venue"):
+            changed = {**frozen, field: "conflicting identity"}
+            assert complete_missing_authors(changed) == (changed, None)
+
+
 def test_frozen_reader_completes_metadata_with_a_separate_receipt(tmp_path):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.literature import LiteratureBundle
