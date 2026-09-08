@@ -97,3 +97,26 @@ def test_duration_rounding_carries_into_minutes():
     """
     result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
     assert "7 分" in result.stdout and "60 秒" not in result.stdout
+
+
+def test_real_outcome_click_preserves_restore_vs_explicit_report_only_scope():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node unavailable")
+    script = "global.window = {};\n" + _read("js/screens-guided-pi-events.js")
+    script += """
+      let click;
+      const calls = [];
+      const host = {querySelector:()=>null, addEventListener:(name,handler)=>{if(name==='click')click=handler;}};
+      const owner = window.EasyICU.guidedPi.require('events').create({
+        state:{host}, retryFailedExecution: reason => calls.push(reason),
+      });
+      owner.wire();
+      for(const reason of ['restore','report_only','unknown']) {
+        click({target:{closest:selector => selector==='[data-gpi-run-outcome-retry]'
+          ? {dataset:{gpiRunOutcomeRetry:reason}} : null}});
+      }
+      process.stdout.write(JSON.stringify(calls));
+    """
+    result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == ["restore", "report_only", "validation_repair"]
