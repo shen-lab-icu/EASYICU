@@ -14,6 +14,18 @@ from typing import Any, Mapping
 PUBMED_SNAPSHOT_SHA256 = "3fb8330bbe3a874d9f52db3cec04f1712c4d37eebbd944c6b385b97cd05ddd52"
 _SOURCES = (
     {
+        "pmid": "36596836", "doi": "10.1038/s41597-022-01899-x", "year": "2023",
+        "venue": "Scientific Data",
+        "title": "MIMIC-IV, a freely accessible electronic health record dataset.",
+        "authors": (
+            "Alistair E W Johnson", "Lucas Bulgarelli", "Lu Shen", "Alvin Gayles",
+            "Ayad Shammout", "Steven Horng", "Tom J Pollard", "Sicheng Hao",
+            "Benjamin Moody", "Brian Gow", "Li-Wei H Lehman", "Leo A Celi", "Roger G Mark",
+        ),
+        "source_url": "https://pubmed.ncbi.nlm.nih.gov/36596836/",
+        "snapshot_sha256": "2571e086a745c373ad518b395bc5ec49897c6d8277d0cc76e399171e9ed97944",
+    },
+    {
         "pmid": "26903338", "doi": "10.1001/jama.2016.0287", "year": "2016", "venue": "JAMA",
         "title": "The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3).",
         "authors": (

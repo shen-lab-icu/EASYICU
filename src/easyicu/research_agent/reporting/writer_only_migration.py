@@ -52,6 +52,7 @@ from .manuscript_quality import (
 )
 from .manuscript_sections import quality_repair_section_keys, quality_repair_section_errors
 from .manuscript_baseline import baseline_reporting_mentions
+from .manuscript_surface import deduplicate_claim_paragraphs, repair_filtered_section_openers
 from .manuscript_method_facts import place_manuscript_method_facts
 from .descriptive_report_facts import (
     DescriptiveReportFact, place_descriptive_report_facts, place_primary_result_summaries,
@@ -258,6 +259,8 @@ def _claim_policy_projection(
         resolve_evidence=resolve_evidence,
         method_facts=facts,
     )
+    cleaned = repair_filtered_section_openers(filtered.scaffold, before_filter=manuscript)
+    cleaned = deduplicate_claim_paragraphs(cleaned)
     rejected = tuple(
         dict.fromkeys(
             (
@@ -275,7 +278,7 @@ def _claim_policy_projection(
                 detail=_sha256(excerpt.encode("utf-8")),
             )
         by_section.setdefault(key, []).append(excerpt[:500])
-    return filtered.scaffold, {
+    return cleaned, {
         key: tuple(values) for key, values in by_section.items()
     }
 

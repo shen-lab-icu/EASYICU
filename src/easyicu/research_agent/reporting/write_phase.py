@@ -1941,6 +1941,7 @@ def _bind_and_review_manuscript(
     """Bind manuscript claims to current evidence and persist the critique."""
     primary_result_facts = compile_primary_counts_only_report_facts(
         per_step_records, evidence=evidence, reader_display_labels=reader_display_labels,
+        context=context, manuscript_language=manuscript_language,
     )
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
         scaffold,
@@ -1984,6 +1985,11 @@ def _bind_and_review_manuscript(
 
     evidence_bound_scaffold, removed_sentences = (
         evidence.enforce_evidence_bound_scaffold(scaffold)
+    )
+    from .manuscript_surface import repair_filtered_section_openers
+
+    evidence_bound_scaffold = repair_filtered_section_openers(
+        evidence_bound_scaffold, before_filter=scaffold,
     )
     if removed_sentences:
         findings.append(

@@ -783,6 +783,15 @@ def test_generic_caveat_and_copied_results_are_not_interpretation() -> None:
     assert "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION" in str(errors["conclusion"])
 
 
+def test_reader_gate_rejects_repeated_long_paragraphs_within_conclusion():
+    paragraph = "The observed comparison is descriptive and unadjusted; independent clinical validation remains necessary."
+    manuscript = _valid_manuscript().replace(
+        "## Conclusion\n", "## Conclusion\n\n" + paragraph + "\n\n" + paragraph + "\n",
+    )
+    assert any(f.code == "MANUSCRIPT_REPEATED_PARAGRAPH" and f.section == "Conclusion"
+               for f in audit_manuscript_quality(manuscript).findings)
+
+
 def test_structure_repair_populates_empty_abstract_conclusions_from_claim() -> None:
     manuscript = _valid_manuscript().replace(
         "**Conclusions:** The association requires external validation.",

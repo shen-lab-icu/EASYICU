@@ -169,6 +169,7 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
         host_result_facts=compile_counts_only_report_facts(
             verified_descriptive_source_records(projected, evidence),
             evidence=evidence, reader_display_labels=prepared.plan.display_labels,
+            context=context,
             scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
         ),
     )
@@ -204,6 +205,7 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
     facts = compile_counts_only_report_facts(
         verified_descriptive_source_records(projected, evidence), evidence=evidence,
         reader_display_labels=plan.display_labels, scientific_claims=claims,
+        context=parse_research_context_json(evidence.verify_input("research_context.json", "research_context")),
     )
     manuscript = render_descriptive_report_claims(manuscript, facts)
     expanded = expand_scientific_claim_tokens(

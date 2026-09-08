@@ -74,9 +74,16 @@ def compile_counts_only_report_facts(
     evidence: Any,
     reader_display_labels: Mapping[str, str],
     scientific_claims: Sequence[ScientificClaim] = (),
+    context: Any = None,
+    manuscript_language: str = "en",
 ) -> tuple[DescriptiveReportFact, ...]:
     """Compile the exact primary counts-only capability, not arbitrary tables."""
 
+    from .manuscript_labels import source_bound_manuscript_labels
+
+    reader_display_labels = source_bound_manuscript_labels(
+        context, reader_display_labels, language=manuscript_language,
+    )
     facts: list[DescriptiveReportFact] = []
     for record in verified_records:
         summary = record.get("step_summary", {})
@@ -183,7 +190,8 @@ def verified_descriptive_source_records(projected, evidence):
     return records
 
 
-def compile_primary_counts_only_report_facts(records, *, evidence, reader_display_labels):
+def compile_primary_counts_only_report_facts(records, *, evidence, reader_display_labels,
+                                           context=None, manuscript_language="en"):
     """Shared full-run/report-only admission; loose wrapper counts are not facts."""
     from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
     from ..authority.scientific_claim_registry import load_registered_scientific_claims
@@ -194,6 +202,7 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
     return compile_counts_only_report_facts(
         verified_descriptive_source_records(projected, evidence), evidence=evidence,
         reader_display_labels=reader_display_labels,
+        context=context, manuscript_language=manuscript_language,
         scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
     )
 
@@ -276,6 +285,9 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
     Numeric binding still follows this display projection. Keep machine claim
     tokens during Writer repair, where they are the semantic authority.
     """
+    from .manuscript_surface import deduplicate_claim_paragraphs
+
+    manuscript = deduplicate_claim_paragraphs(manuscript)
     # Replace only a complete token matched to the same verified source/level.
     # Other claims and model-authored sentences are not deduplicated by numbers
     # or similarity; an unrelated endpoint can have exactly the same count.

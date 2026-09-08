@@ -993,6 +993,16 @@ def audit_manuscript_quality(
     section_map = _sections(text)
     findings: list[ManuscriptQualityFinding] = []
     from .descriptive_report_facts import missing_primary_result_facts
+    from .manuscript_surface import repeated_reader_paragraphs
+
+    for section, body in _sections(reader).items():
+        duplicates = repeated_reader_paragraphs(body)
+        if duplicates:
+            findings.append(ManuscriptQualityFinding(
+                code="MANUSCRIPT_REPEATED_PARAGRAPH", severity="error", section=section,
+                message="The same paragraph is repeated within one reader section.",
+                excerpts=duplicates,
+            ))
 
     for section, missing in missing_primary_result_facts(text, expected_primary_result_facts).items():
         findings.append(ManuscriptQualityFinding(
