@@ -1395,6 +1395,57 @@ def test_metadata_only_planning_merges_exact_source_metadata_for_dependence(
     assert acquisition.coverage.missing == []
 
 
+def test_metadata_checkpoint_reuses_selected_source_catalog_and_rejects_lost_concept(tmp_path, monkeypatch):
+    import hashlib
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    source = tmp_path / "selected-export"
+    source_concepts = [CatalogConcept(concept_id="local_score", file_name="score.parquet")]
+    seen_paths = []
+
+    def source_catalog(path):
+        seen_paths.append(path)
+        return AvailableCatalog(source=str(path), concepts=list(source_concepts))
+
+    monkeypatch.setattr(catalog_module, "build_available_catalog", source_catalog)
+    original = agent_pipeline_runs._metadata_only_planning_acquisition(
+        database="miiv", export_path=source,
+        question="Describe the locally supplied score and mortality.",
+        llm=ScriptedMockLLMClient([json.dumps({
+            "selected_concepts": ["local_score", "death"],
+            "inclusion_exclusion": [], "rationale": "Use the supplied score and outcome.",
+        })]), output_dir=tmp_path / "original",
+    )
+    assert not original.blocked
+    profile = research_launch_resume._DevelopmentResumeAcquisition(
+        kind="metadata_only_planning_catalog",
+        selected_concepts=tuple(original.selection.selected_concepts),
+        universe_path=original.universe_path, provenance_path=original.provenance_path,
+        universe_sha256=hashlib.sha256(original.universe_path.read_bytes()).hexdigest(),
+        provenance_sha256=hashlib.sha256(original.provenance_path.read_bytes()).hexdigest(),
+    )
+    restored = agent_pipeline_runs._restore_metadata_only_planning_acquisition(
+        database="miiv", export_path=source, profile=profile,
+        output_dir=tmp_path / "restored",
+    )
+    assert restored.coverage.missing == []
+    assert restored.universe_path.read_bytes() == original.universe_path.read_bytes()
+    assert restored.provenance_path.read_bytes() == original.provenance_path.read_bytes()
+    assert pd.read_parquet(restored.universe_path).empty
+    assert seen_paths == [source, source]
+
+    source_concepts.clear()
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as rejected:
+        agent_pipeline_runs._restore_metadata_only_planning_acquisition(
+            database="miiv", export_path=source, profile=profile,
+            output_dir=tmp_path / "rejected",
+        )
+    assert rejected.value.code == "research_pipeline_development_resume_acquisition_authority_mismatch"
+    assert not (tmp_path / "rejected").exists()
+
+
 def test_metadata_only_kdigo_stage_keeps_closed_domain_in_research_context(
     tmp_path: Path,
 ) -> None:

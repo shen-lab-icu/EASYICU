@@ -1038,6 +1038,29 @@ def _metadata_only_patient_grouping_authority(
     }
 
 
+def _metadata_only_planning_catalog(
+    *, database: str, export_path: str | Path | None = None,
+) -> Any:
+    """Use the same source-aware menu for initial planning and restoration."""
+    from easyicu.research_agent.acquisition.catalog import (
+        build_available_catalog,
+        build_database_capability_catalog,
+    )
+
+    catalog = build_database_capability_catalog(database)
+    if export_path is not None:
+        try:
+            source_catalog = build_available_catalog(Path(export_path).expanduser())
+        except (FileNotFoundError, OSError, ValueError):
+            source_catalog = None
+        if source_catalog is not None:
+            by_id = {item.concept_id: item for item in catalog.concepts}
+            # Exact source metadata takes precedence without reading values.
+            by_id.update((item.concept_id, item) for item in source_catalog.concepts)
+            catalog.concepts = list(by_id.values())
+    return catalog
+
+
 def _metadata_only_planning_acquisition(
     *,
     database: str,
@@ -1065,8 +1088,6 @@ def _metadata_only_planning_acquisition(
 
     from easyicu.research_agent.acquisition.catalog import (
         assess_coverage,
-        build_available_catalog,
-        build_database_capability_catalog,
     )
     from easyicu.research_agent.acquisition.foundation import (
         AcquisitionResult,
@@ -1075,19 +1096,7 @@ def _metadata_only_planning_acquisition(
     from easyicu.database_config import ID_COLUMNS
     from easyicu.research_agent.concept_availability import normalize_database_name
 
-    catalog = build_database_capability_catalog(database)
-    if export_path is not None:
-        try:
-            source_catalog = build_available_catalog(Path(export_path).expanduser())
-        except (FileNotFoundError, OSError, ValueError):
-            source_catalog = None
-        if source_catalog is not None:
-            by_id = {item.concept_id: item for item in catalog.concepts}
-            for item in source_catalog.concepts:
-                # Exact source metadata is stronger than generic database
-                # capability metadata, but no patient values are read here.
-                by_id[item.concept_id] = item
-            catalog.concepts = list(by_id.values())
+    catalog = _metadata_only_planning_catalog(database=database, export_path=export_path)
     if not catalog.concepts:
         raise ResearchPipelineRunError(
             "research_pipeline_planning_catalog_unavailable",
@@ -1288,6 +1297,7 @@ def _metadata_only_planning_acquisition(
 def _restore_metadata_only_planning_acquisition(
     *,
     database: str,
+    export_path: str | Path | None = None,
     profile: _DevelopmentResumeAcquisition,
     output_dir: Path,
     endpoint: Any = None,
@@ -1304,7 +1314,6 @@ def _restore_metadata_only_planning_acquisition(
 
     from easyicu.research_agent.acquisition.catalog import (
         assess_coverage,
-        build_database_capability_catalog,
     )
     from easyicu.research_agent.acquisition.foundation import (
         AcquisitionResult,
@@ -1323,13 +1332,13 @@ def _restore_metadata_only_planning_acquisition(
             "research_pipeline_development_resume_acquisition_invalid",
             "The Planner checkpoint has no restorable metadata-only catalog.",
         )
-    catalog = build_database_capability_catalog(database)
+    catalog = _metadata_only_planning_catalog(database=database, export_path=export_path)
     coverage = assess_coverage(profile.selected_concepts, catalog)
     if not coverage.sufficient:
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_acquisition_authority_mismatch",
-            "The prior Planner catalog is no longer executable in the current "
-            "database capability registry.",
+            "The prior Planner catalog is no longer available in the current "
+            "database and selected-source metadata catalogs.",
         )
     try:
         universe_raw = profile.universe_path.read_bytes()
@@ -4696,6 +4705,7 @@ def make_research_pipeline_run_runner(
             ):
                 acquisition = _restore_metadata_only_planning_acquisition(
                     database=database,
+                    export_path=export_path,
                     profile=development_resume_acquisition,
                     output_dir=wrapper_dir / "pipeline_input",
                     endpoint=metadata_planning_coordinates.get("endpoint"),
