@@ -345,7 +345,12 @@ def test_full_write_boundary_projects_only_after_model_grammar_and_preserves_cla
     claims = store.register_step_summary_scientific_claims(step_id="distribution", evidence_id="summary", summary=records[0]["step_summary"])
     assert len(claims) == 2
     records[0]["evidence_ids"] = ["summary"]
-    facts = compile_counts_only_report_facts(records, evidence=store, reader_display_labels={}, scientific_claims=claims)
+    labels = {"exposure=0": "未记录暴露", "exposure=1": "记录到暴露", "outcome": "院内死亡"}
+    facts = compile_counts_only_report_facts(records, evidence=store, reader_display_labels=labels, scientific_claims=claims)
+    store.register_text(
+        kind="table", text="group,n\n0,20\n1,10\n", filename="table_one.csv",
+        evidence_id="table_one", description="Registered baseline table",
+    )
     # Envelope admission has independent contracts and the real frozen-run
     # replay; this test exercises the downstream ordering against a real store.
     monkeypatch.setattr(write_phase, "compile_primary_counts_only_report_facts", lambda *args, **kwargs: facts)
@@ -356,11 +361,12 @@ def test_full_write_boundary_projects_only_after_model_grammar_and_preserves_cla
         SimpleNamespace(_evidence_enforcement_mode=EvidenceEnforcementMode.STRICT),
         critic=SimpleNamespace(review_manuscript=lambda **kwargs: CritiqueReport(reviewer="test fixture", status="blocked")),
         evidence=store, findings=findings, literature=None, per_step_records=records,
-        current_evidence_names=["summary"], scaffold=scaffold, writer_error_message=None,
+        current_evidence_names=["summary", "table_one"], scaffold=scaffold, writer_error_message=None,
         writer_probe_mode=False, writer_probe_failed_steps=(), run_dir=root,
-        reader_display_labels={}, manuscript_language="en",
+        reader_display_labels=labels, manuscript_language="en",
     )
     assert missing_primary_result_facts(output.bound, facts) == {}
+    assert "See Table 1" in output.bound
     assert "[^claim_" in output.bound
     assert not any(f.validator == "manuscript_result_sufficiency" for f in findings)
     assert not any(f.validator == "manuscript_numeric_auditor" and f.severity == "error" for f in findings)

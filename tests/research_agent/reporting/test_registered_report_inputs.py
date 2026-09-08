@@ -18,6 +18,24 @@ from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 from easyicu.research_agent.authority.evidence_store import EvidenceEnforcementMode
 
 
+def test_report_input_uses_latest_sealed_revision_without_retargeting_old_citations(tmp_path):
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "writer_evidence_digest.md"
+    source.write_text("old verified digest")
+    old = store.register_text(kind="log", description="Digest", text=source.read_text(),
+                              filename=source.name, evidence_id="writer_evidence_digest")
+    source.write_text("new verified digest")
+    new = store.register_text(kind="log", description="Digest", text=source.read_text(),
+                              filename=source.name, evidence_id="writer_evidence_digest", on_sha_change="new_id")
+    reader = ReadOnlyReportEvidence(tmp_path)
+    assert reader.get("writer_evidence_digest").sha256 == old.sha256
+    assert new.sha256 != old.sha256
+    assert reader.verify_input(source.name, "writer_evidence_digest") == source.read_bytes()
+    source.write_text("old verified digest")
+    with pytest.raises(WriterOnlyMigrationError):
+        reader.verify_input(source.name, "writer_evidence_digest")
+
+
 def _bind_numbers(root, text):
     # Exercise the unchanged value binder through the new read-only facade;
     # envelope admission has its own owner/real-run replay tests.

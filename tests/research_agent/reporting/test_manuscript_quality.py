@@ -232,7 +232,7 @@ def test_english_reader_does_not_inject_cjk_ui_labels() -> None:
     )
 
 
-def test_post_binding_language_repair_removes_foreign_ui_labels() -> None:
+def test_post_binding_language_repair_preserves_verified_clinical_labels() -> None:
     source = (
         "In-hospital 院内死亡 was 10% for 达到 Sepsis-3 判定标准 "
         "{evidence:result}."
@@ -247,11 +247,26 @@ def test_post_binding_language_repair_removes_foreign_ui_labels() -> None:
         manuscript_language="en",
     )
 
-    assert repaired == (
-        "In-hospital death was 10% for exposure category 1 "
-        "{evidence:result}."
-    )
+    assert repaired == source
+    assert "exposure category 1" not in repaired
     assert len(repairs) == 2
+
+
+def test_abstract_caveat_can_reuse_existing_conclusion_claims_not_numeric_prose():
+    from easyicu.research_agent.reporting.manuscript_quality import repair_reader_structure_from_existing_prose
+
+    claims = "{claim:distribution.group_zero}\n\n{claim:distribution.group_one}"
+    source = (
+        "## Abstract\n\n**Background:** Clinical context.\n\n**Methods:** Descriptive study.\n\n"
+        "**Results:** Observed counts.\n\n**Conclusions:** Independent validation is required.\n\n"
+        "## Conclusion\n\n" + claims
+    )
+    repaired, _ = repair_reader_structure_from_existing_prose(source)
+    assert all(token in repaired.split("## Conclusion")[0] for token in claims.split("\n\n"))
+    assert "Independent validation is required." in repaired
+    unowned = source.replace(claims, "Mortality was 12% {evidence:outcome}.")
+    unchanged, _ = repair_reader_structure_from_existing_prose(unowned)
+    assert "Mortality was 12%" not in unchanged.split("## Conclusion")[0]
 
 
 def test_claim_placeholders_are_audit_syntax_not_reader_internal_terms() -> None:

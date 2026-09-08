@@ -1510,25 +1510,23 @@ def _draft_manuscript(
             )
         writer_digest_path = run_dir / "writer_evidence_digest.md"
         writer_digest_path.write_text(writer_evidence_digest, encoding="utf-8")
-        if evidence.get("writer_evidence_digest") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    "Writer evidence digest "
-                    f"({'v2 widened' if pipeline._writer_digest_widened else 'v1 primary-only'})."
+        evidence.register_text(
+            kind="log",
+            description=(
+                "Writer evidence digest "
+                f"({'v2 widened' if pipeline._writer_digest_widened else 'v1 primary-only'})."
+            ),
+            text=writer_evidence_digest, filename="writer_evidence_digest.md",
+            evidence_id="writer_evidence_digest", on_sha_change="new_id",
+            producer="pipeline", generation_mode="system",
+            metadata={
+                "writer_digest_widened": bool(pipeline._writer_digest_widened),
+                "step_result_envelope_authority": True,
+                "writer_digest_secondary_cap_per_step": int(
+                    pipeline._writer_digest_secondary_cap_per_step
                 ),
-                source_path=writer_digest_path,
-                evidence_id="writer_evidence_digest",
-                producer="pipeline",
-                generation_mode="system",
-                metadata={
-                    "writer_digest_widened": bool(pipeline._writer_digest_widened),
-                    "step_result_envelope_authority": True,
-                    "writer_digest_secondary_cap_per_step": int(
-                        pipeline._writer_digest_secondary_cap_per_step
-                    ),
-                },
-            )
+            },
+        )
         scaffold = _render_or_resume_writer_scaffold(
             writer=writer,
             resume_state=resume_state,
@@ -1865,8 +1863,8 @@ def _repair_bound_display_language(
                 validator="manuscript_display_language",
                 severity="warning",
                 message=(
-                    "Removed UI-locale display labels that conflicted with the "
-                    "selected manuscript language."
+                    "Preserved source-bound clinical labels in their supplied "
+                    "language because no verified translation was available."
                 ),
                 detail={"repairs": list(repairs)},
             )
@@ -2013,6 +2011,14 @@ def _bind_and_review_manuscript(
     # The model grammar has already passed. Project only envelope-verified host
     # facts here, then apply the unchanged evidence and per-value binding gates.
     evidence_bound_scaffold = render_descriptive_report_claims(evidence_bound_scaffold, primary_result_facts)
+    from .manuscript_quality import repair_registered_display_callouts
+
+    # Scientific filtering can remove a model-authored Table/Figure sentence.
+    # Reapply only host-registered callouts before the unchanged binding gates.
+    evidence_bound_scaffold, _display_callouts = repair_registered_display_callouts(
+        evidence_bound_scaffold,
+        expected_display_labels=expected_manuscript_display_labels(current_evidence_names),
+    )
     bound_unfiltered = evidence.bind_manuscript(
         evidence_bound_scaffold,
         per_step_records=per_step_records,
