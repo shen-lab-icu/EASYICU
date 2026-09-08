@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..authority.current_case_scientific_runtime import CurrentCaseScientificRuntimeAuthority
 from ..contracts.declared_product import typed_product
 from ..contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
@@ -1367,12 +1368,15 @@ def apply_required_plan_obligations(
     plan: AnalysisPlan,
     context: ResearchContext,
     findings: list[ValidationFinding],
+    *,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> AnalysisPlan:
     """Close paired typed sensitivity and descriptive-context obligations."""
 
     shaped, sensitivity_findings = ensure_prespecified_sensitivity_steps(
         plan=plan,
         context=context,
+        runtime_authority=runtime_authority,
     )
     shaped, figure_findings = ensure_descriptive_context_figure_step(plan=shaped)
     findings.extend([*sensitivity_findings, *figure_findings])

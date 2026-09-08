@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.contracts.association_execution import (
     association_binary_sensitivity_plan_verdict,
 )
@@ -349,3 +351,95 @@ def test_time_varying_choice_is_not_projected_without_a_registered_runtime() -> 
 
     assert shaped.steps == _plan().steps
     assert findings == []
+
+
+def _landmark_shaping_case():
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        build_current_case_scientific_runtime_authority,
+    )
+
+    authority = build_current_case_scientific_runtime_authority({
+        "schema_version": "easyicu.landmark_spline_runtime_authority/1",
+        "authority_kind": "landmark_spline_association",
+        "protocol_content_sha256": "a" * 64,
+        "plan_method": "signed_landmark_restricted_cubic_spline",
+        "plan_intent": "Estimate the prespecified landmark association.",
+        "plan_outputs": ["table:risk_curve", "table:exposure_contrasts", "table:linear_sensitivity", "log:runtime_receipt"],
+        "exposure_column": "exposure", "outcome_column": "outcome",
+        "outcome_time_column": "event_hours",
+        "observation_duration_column": "followup_hours",
+        "observation_duration_unit": "hours", "landmark_hours": 24,
+        "required_adjustment_columns": ["age"], "categorical_adjustment_columns": [],
+        "alternative_exposure_columns": [], "dependence": None,
+        "adjusted_absolute_risk_product": None, "population_flow_product": None,
+        "variable_opportunity_sensitivity_product": None,
+        "spline_knot_quantiles": [.1, .5, .9], "curve_quantile_range": [.1, .9],
+        "spline_reference": "median_in_primary_population", "curve_points": 41,
+        "linear_sensitivity_per_unit": 1.,
+        "interpretation": "descriptive_prognostic_association_not_causal",
+    })
+    spec = {
+        "spec_id": "predeclared_time_zero", "axis": "timing", "strategy": "landmark",
+        "landmark_hours": 24., "require_alive_at_landmark": True,
+        "exclude_negative_event_times": True,
+        "event_time_variable": "event_hours", "observation_duration_variable": "followup_hours",
+        "observation_duration_unit": "hours", "execution_variables": ["event_hours", "followup_hours"],
+    }
+    context = _context().model_copy(update={"user_preferences": UserPreferences(sensitivity_specs=[spec])})
+    primary = _plan().steps[0].model_copy(update={"sensitivity_spec_ids": [spec["spec_id"]]})
+    plan = _plan().model_copy(update={"steps": [primary], "robustness_specs": []})
+    return authority, context, plan
+
+
+@pytest.mark.parametrize("mutation", [None, "no_authority", "different_hour", "different_event", "different_unit", "extra_variable", "different_adjustment", "unreferenced", "different_eligibility"])
+def test_landmark_obligation_uses_exact_primary_runtime_owner(mutation):
+    from easyicu.research_agent.planning.figure_plan_shaping import apply_required_plan_obligations
+
+    authority, context, plan = _landmark_shaping_case()
+    payload = context.user_preferences.model_dump(mode="json")
+    spec = payload["sensitivity_specs"][0]
+    if mutation == "no_authority":
+        authority = None
+    elif mutation == "different_hour":
+        spec["landmark_hours"] = 48
+    elif mutation == "different_event":
+        spec["event_time_variable"] = "other_event_hours"
+    elif mutation == "different_unit":
+        spec["observation_duration_unit"] = "days"
+    elif mutation == "extra_variable":
+        spec["execution_variables"].append("other_exposure")
+    elif mutation == "different_eligibility":
+        spec["require_alive_at_landmark"] = False
+    elif mutation == "different_adjustment":
+        primary = plan.steps[0]
+        requirement = primary.model_requirements[0].model_copy(update={"covariates": ["other_age"]})
+        plan = plan.model_copy(update={"steps": [primary.model_copy(update={"model_requirements": [requirement]})]})
+    elif mutation == "unreferenced":
+        plan = plan.model_copy(update={"steps": [plan.steps[0].model_copy(update={"sensitivity_spec_ids": []})]})
+    context = context.model_copy(update={"user_preferences": UserPreferences.model_validate(payload)})
+    findings = []
+    shaped = apply_required_plan_obligations(plan, context, findings, runtime_authority=authority)
+    added = [step for step in shaped.steps if step.method == "landmark_analysis"]
+    if mutation is not None:
+        assert len(added) == 1
+        assert added[0].sensitivity_spec_ids == [spec["spec_id"]]
+        return
+    assert added == []
+    assert shaped.steps[0] == plan.steps[0]
+    assert any(f.detail.get("reason_code") == "typed_landmark_obligation_owned_by_primary" for f in findings)
+    bound = authority.bind_plan(shaped)
+    authority.validate_plan(bound)
+    assert bound.steps[0].method == authority.plan_method
+    assert bound.steps[0].sensitivity_spec_ids == [spec["spec_id"]]
+
+
+def test_primary_landmark_coverage_does_not_remove_other_sensitivity_obligations():
+    authority, context, plan = _landmark_shaping_case()
+    preferences = context.user_preferences.model_dump(mode="json")
+    preferences["sensitivity_specs"].append({
+        "spec_id": "different_missingness", "axis": "missing_data",
+        "strategy": "multiple_imputation", "execution_variables": ["exposure", "age"],
+    })
+    context = context.model_copy(update={"user_preferences": UserPreferences.model_validate(preferences)})
+    shaped, _ = ensure_prespecified_sensitivity_steps(plan=plan, context=context, runtime_authority=authority)
+    assert [s.method for s in shaped.steps] == ["adjusted_association_models", "multiple_imputation_sensitivity"]

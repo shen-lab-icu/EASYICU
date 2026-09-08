@@ -2510,7 +2510,10 @@ class ResearchAgentPipeline:
             findings.extend(plan_contract_findings)
             plan, split_findings = _final_plan._split_table_and_figure_outputs_in_plan(plan=plan)
             findings.extend(split_findings)
-            plan = _figure_plan.apply_required_plan_obligations(plan, context, findings)
+            plan = _figure_plan.apply_required_plan_obligations(
+                plan, context, findings,
+                runtime_authority=self._scientific_runtime_authorities.current_case,
+            )
             plan, report_input_findings = _final_plan._augment_report_typed_product_inputs(
                 plan=plan
             )
