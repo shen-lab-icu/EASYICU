@@ -500,12 +500,19 @@
         return esc(token);
       }).join('');
     };
+    const claimSourceValue = claim => {
+      // source_value is the numeric claim's rounded lexical label. Preserve
+      // its canonical value for exact comparison with the admitted JSON field.
+      if (claim.canonical_value == null) return claim.source_value == null ? '' : claim.source_value;
+      return typeof claim.canonical_value === 'number' && Number.isFinite(claim.canonical_value)
+        ? claim.canonical_value : '';
+    };
     const claimEvidenceAttrs = claim => {
       const evidence = claim && claim.evidence && typeof claim.evidence === 'object' ? claim.evidence : {};
       const evidenceId = String(evidence.evidence_id || '').trim();
       const sha256 = String(evidence.sha256 || '').trim().toLowerCase();
       if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return '';
-      return ` data-gpi-evidence-open data-evidence-id="${escAttr(evidenceId)}" data-evidence-sha256="${escAttr(sha256)}" data-evidence-kind="${escAttr(String(evidence.kind || 'statistic'))}" data-evidence-label="${escAttr(t('Exact result source', '准确结果来源'))}" data-evidence-pointer="${escAttr(String(claim.source_json_pointer || ''))}" data-evidence-source-value="${escAttr(String(claim.source_value == null ? '' : claim.source_value))}"`;
+      return ` data-gpi-evidence-open data-evidence-id="${escAttr(evidenceId)}" data-evidence-sha256="${escAttr(sha256)}" data-evidence-kind="${escAttr(String(evidence.kind || 'statistic'))}" data-evidence-label="${escAttr(t('Exact result source', '准确结果来源'))}" data-evidence-pointer="${escAttr(String(claim.source_json_pointer || ''))}" data-evidence-source-value="${escAttr(String(claimSourceValue(claim)))}"`;
     };
     const renderSegments = value => (Array.isArray(value) ? value : []).map(segment => {
       const text = readableText(segment && segment.text || '');
@@ -574,12 +581,12 @@
         ${artifactTable(t('Exact result source', '准确结果来源'), [t('Item', '项目'), t('Value', '值')], [
           [t('JSON field', 'JSON 字段'), claim.source_field || ''],
           [t('JSON pointer', 'JSON 指针'), claim.source_json_pointer || ''],
-          [t('Source value', '源数值'), claim.source_value || ''],
+          [t('Source value', '源数值'), claimSourceValue(claim)],
           [t('Analysis step', '分析步骤'), claim.step_id || ''],
           [t('Evidence ID', '证据 ID'), evidence.evidence_id || ''],
           ['SHA-256', evidence.sha256 || ''],
         ])}
-        ${lineageTable(evidence, artifacts, claim.source_json_pointer, claim.source_value)}
+        ${lineageTable(evidence, artifacts, claim.source_json_pointer, claimSourceValue(claim))}
         <p class="gpi-claim-boundary">${esc(t('This view exposes immutable IDs and digests, not patient rows or host file paths. Scientific authority remains analysis-only until Host gates and human review permit more.', '此视图只显示不可变 ID 与摘要，不暴露患者行或主机文件路径。除非 Host 闸门与人工审阅另行许可，科学权限仍为 analysis-only。'))}</p>
       </section>`;
     }).join('');

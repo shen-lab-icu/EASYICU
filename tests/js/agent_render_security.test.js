@@ -160,4 +160,28 @@ assert.ok(!assembled.includes('<script>') && !assembled.includes('<svg onload'))
 const withoutDiscussion = renderer.manuscriptProvenanceView({ ...assembledPayload, article_blocks: [] });
 assert.equal((withoutDiscussion.match(/Bound caption\./g) || []).length, 1, 'figures are not lost when a heading is missing');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 15 }));
+const preciseClaim = {
+  claim_id: 'precision', display_value: '23.46%', source_value: '23.4568',
+  canonical_value: 23.456789, source_json_pointer: '/estimate_pct',
+  evidence: { evidence_id: 'summary', sha256: 'a'.repeat(64), kind: 'statistic' },
+};
+const precisionReader = claim => renderer.manuscriptProvenanceView({
+  claims: [claim], article_blocks: [{ kind: 'paragraph', segments: [
+    { kind: 'claim', claim_id: claim.claim_id, text: claim.display_value },
+  ] }],
+});
+const precise = precisionReader(preciseClaim);
+assert.equal((precise.match(/data-evidence-source-value="23.456789"/g) || []).length, 2,
+  'the number and audit link must carry the canonical source, not its rounded lexical label');
+assert.ok(!precise.includes('data-evidence-source-value="23.4568"'));
+assert.ok(precisionReader({ ...preciseClaim, canonical_value: 0 }).includes('data-evidence-source-value="0"'));
+const { canonical_value: _canonical, ...legacyClaim } = preciseClaim;
+assert.ok(precisionReader(legacyClaim).includes('data-evidence-source-value="23.4568"'),
+  'legacy readers retain their source label for exact verification, not guessed extra precision');
+for (const invalid of [NaN, Infinity, '23.456789']) {
+  const rejected = precisionReader({ ...preciseClaim, canonical_value: invalid });
+  assert.ok(rejected.includes('data-evidence-source-value=""'));
+  assert.ok(!rejected.includes('data-evidence-source-value="23.4568"'));
+}
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 21 }));
