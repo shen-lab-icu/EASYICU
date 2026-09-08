@@ -18,7 +18,7 @@
     showSetup: false, availableModels: [], project: null,
     researchProvider: 'codex', researchModel: '', codexAuth: null,
     codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
-    projectInitialization: null, projectIssue: '', workflow: null, latestRun: null,
+    projectInitialization: null, projectIssue: '', workflow: null, latestRun: null, workflowError: '',
     projectLoading: false, projectDiscoveryLoading: false,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
@@ -728,7 +728,7 @@
             ? tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')
             : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
         })}
-        ${workflowHtml()}
+        ${state.workflowError ? `<div class="gpi-stale" role="alert">${esc(state.workflowError)}<button type="button" data-gpi-history>${tr('Open saved history', '查看已保存历史')}</button></div>` : workflowHtml()}
         ${!workspace && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
           ? DATA_CONSENT.renderSelectedSource(session, { tr, esc, icon: iconHtml }) : ''}
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
@@ -1165,19 +1165,27 @@
   }
   async function refreshSession(preserveTimeline) {
     if (!state.session || !projectId()) return;
+    const expectedProjectId = projectId();
+    const expectedSessionId = state.session.session_id;
     try {
-      const payload = await api().loadPiCopilotSession(state.session.session_id, projectId());
+      const payload = await api().loadPiCopilotSession(expectedSessionId, expectedProjectId);
+      if (projectId() !== expectedProjectId || !state.session || state.session.session_id !== expectedSessionId) return;
       const replayOwner = MODULES.require('replay');
-      state.session = !preserveTimeline && replayOwner && typeof replayOwner.hydrate === 'function'
-        ? await replayOwner.hydrate(api(), payload.session, projectId())
+      const refreshed = !preserveTimeline && replayOwner && typeof replayOwner.hydrate === 'function'
+        ? await replayOwner.hydrate(api(), payload.session, expectedProjectId)
         : payload.session;
+      if (projectId() !== expectedProjectId || !state.session || state.session.session_id !== expectedSessionId) return;
+      state.session = refreshed;
       state.sessions = [state.session].concat(
         state.sessions.filter(row => row.session_id !== state.session.session_id)
       );
       if (!preserveTimeline) state.messages = transcriptMessages(state.session);
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
       reconcileSettledSession();
-    } catch (e) {}
+    } catch (error) {
+      if (projectId() !== expectedProjectId || !state.session || state.session.session_id !== expectedSessionId) return;
+      state.error = tr('Conversation refresh failed. Your saved records are unchanged: ', '对话刷新失败，已保存记录未改变：') + errorText(error);
+    }
   }
 
   function adoptPersistedEntryIds() {
@@ -1296,6 +1304,7 @@
     try {
       const payload = await api().loadPiCopilotProjectWorkflow(expectedProjectId);
       if (expectedProjectId !== projectId()) return;
+      state.workflowError = '';
       state.workflow = payload && payload.workflow ? payload.workflow : null;
       state.latestRun = payload && payload.latest_run ? payload.latest_run : { present: false };
       if (state.workflow) state.workflow.active_job = (payload && payload.active_job) || { present: false };
@@ -1313,6 +1322,7 @@
       if (expectedProjectId === projectId()) {
         state.workflow = null;
         state.latestRun = null;
+        state.workflowError = tr('Could not read current task status. Refresh to retry: ', '无法读取当前任务状态，请刷新重试：') + errorText(error);
       }
     }
   }
@@ -1756,5 +1766,10 @@
     notifyExtractionHandoff,
     confirmDataSourceBinding,
     setProjectDiscoveryLoading,
+    historyContext: () => ({ projectId: projectId(), title: state.project && state.project.title,
+      studyId: (state.session && state.session.binding && state.session.binding.study_context_id)
+        || (state.projectInitialization && state.projectInitialization.study_context_id) || '',
+      runId: (state.session && state.session.binding && state.session.binding.run_id) || '',
+      busy: state.busy || Boolean(state.childJobId) }),
   });
 })();
