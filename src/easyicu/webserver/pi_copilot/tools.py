@@ -3895,7 +3895,8 @@ def _run(
         context,
         status="ok",
         code=(
-            "easyicu_full_run_submitted"
+            "easyicu_report_repair_submitted"
+            if report_source_run_id else "easyicu_full_run_submitted"
             if run_type == "full"
             else "easyicu_run_submitted"
         ),

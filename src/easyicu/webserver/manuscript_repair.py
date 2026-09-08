@@ -168,6 +168,10 @@ def make_report_only_run_runner(
 
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", str(job.id)):
             raise ValueError("Invalid report revision identifier")
+        pipeline_owner._progress(
+            job, step="report_repair",
+            label="Checking sealed report inputs; no analysis is being executed",
+        )
         current = study_contexts.get_context(study_context["id"])
         if (
             study_contexts.scientific_configuration_sha256(current)
@@ -205,11 +209,6 @@ def make_report_only_run_runner(
         public_provider = {key: provider.get(key) for key in ("provider", "model")}
         replay = load_failed_writer_replay(target.wrapper_dir, prepared)
         try:
-            pipeline_owner._progress(
-                job,
-                step="report_repair",
-                label="Repairing only the manuscript from sealed aggregate evidence; no analysis is being executed",
-            )
             client, _ = provider_adapter.build_research_agent_provider_client(
                 dict(provider),
                 request_timeout=task.cap_timeout(180),

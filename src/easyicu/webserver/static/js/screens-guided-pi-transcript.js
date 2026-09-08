@@ -15,6 +15,7 @@
     'easyicu_extraction_submitted',
     'easyicu_run_submitted',
     'easyicu_full_run_submitted',
+    'easyicu_report_repair_submitted',
     'easyicu_review_submitted',
   ]);
   const IDEA_EXPLORATION_TOOLS = new Set([

@@ -1145,13 +1145,13 @@
       if (localWorkspace && preview && preview.open) {
         preview.open(localWorkspace, projectId());
       }
-      if (event.host_rebind_after_turn === true || ['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
+      if (event.host_rebind_after_turn === true || ['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted', 'easyicu_report_repair_submitted'].includes(String(event.code || ''))) {
         state.pendingAuthorityRebind = true;
       }
-      if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|result_|manuscript_))/.test(String(event.code || ''))) {
+      if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|report_repair_|result_|manuscript_))/.test(String(event.code || ''))) {
         loadWorkflow().then(render).catch(() => {});
       }
-      if (event.job_id && ['easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
+      if (event.job_id && ['easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted', 'easyicu_report_repair_submitted'].includes(String(event.code || ''))) {
         watchChildJob(String(event.job_id), String(event.code || ''));
       }
     } else if (event.type === 'turn_end') {
@@ -1329,7 +1329,9 @@
       const activeJob = payload && payload.active_job;
       if (activeJob && activeJob.present && activeJob.status === 'running' && activeJob.job_id) {
         const kind = String(activeJob.kind || '');
-        const code = /extract/i.test(kind)
+        const code = activeJob.report_only === true
+          ? 'easyicu_report_repair_submitted'
+          : /extract/i.test(kind)
           ? 'easyicu_extraction_submitted'
           : (/research|agent/i.test(kind) ? 'easyicu_full_run_submitted' : 'easyicu_run_submitted');
         watchChildJob(String(activeJob.job_id), code);

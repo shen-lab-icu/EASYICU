@@ -150,6 +150,35 @@
       === 'research_pipeline_execution_runtime_unavailable';
     const created = Number(job && job.created_at_epoch);
     const finished = Number(job && job.finished_at_epoch);
+    const reportOnly = Boolean(job && (job.report_only === true
+      || rows(job.progress).some(event => event.step === 'report_repair')));
+    if (reportOnly) {
+      const status = String(job.status || '');
+      const ready = status === 'done' && job.report_revision_ready === true;
+      const pdfReady = ready && job.report_revision_pdf_ready === true;
+      const title = status === 'failed'
+        ? translate('Report revision failed; previous report preserved', '报告修订失败；原报告保留')
+        : status === 'cancelled'
+          ? translate('Report revision cancelled', '报告修订已取消')
+          : pdfReady
+            ? translate('Revised report and PDF ready for review', '新版报告与 PDF 已生成，待审阅')
+            : ready
+              ? translate('Report revised; PDF needs verification', '报告已修订；PDF 待核对')
+              : status === 'done'
+                ? translate('Report revision ended; verify its artifacts', '报告修订已结束；产物待核对')
+                : translate('Revising the report from existing analysis', '正在复用分析结果修订报告');
+      return {
+        expanded: false,
+        durationKnown: Number.isFinite(created) && Number.isFinite(finished) && finished >= created,
+        startedAt: Number.isFinite(created) ? created * 1000 : null,
+        endedAt: Number.isFinite(finished) ? finished * 1000 : null,
+        title,
+        terminalLabel: pdfReady
+          ? translate('This revision and PDF are ready to review; analysis and publication gates are unchanged', '本次修订及 PDF 可审阅；原分析与发表门不变')
+          : title,
+        blocked: status === 'done' && !pdfReady,
+      };
+    }
     return {
       // A pending review does not need its build log unfolded. The attention
       // signal is the review card below the activity -- which states the

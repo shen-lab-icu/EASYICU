@@ -59,7 +59,7 @@ def context(actions=('report_revision',), opt_in=True):
 def test_report_tool_uses_exact_owned_source_and_existing_submission(setup):
     ctx = context(('report_revision', 'literature', 'provider_run'))
     result = tools.execute_tool('easyicu_repair_report', {}, ctx)
-    assert result['code'] == 'easyicu_full_run_submitted'
+    assert result['code'] == 'easyicu_report_repair_submitted'
     assert result['details']['report_only'] is True
     assert result['details']['run_id_status'] == 'existing_analysis'
     assert result['details']['source_run_id'] == 'run-source'
