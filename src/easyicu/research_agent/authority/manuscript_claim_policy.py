@@ -16,6 +16,7 @@ from .reader_numeric_display import round_reader_numeric_display
 from .scientific_claims import ScientificClaim
 from .manuscript_method_facts import ManuscriptMethodFact, is_method_fact_candidate
 from ..contracts.manuscript_result_structure import PLAN_RESULT_HEADINGS
+from ..contracts.manuscript_sentence_context import contextual_sentence_deletion
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
 EvidenceResolver = Callable[[str], bool]
@@ -748,6 +749,24 @@ def filter_evidence_bound_scaffold(
                 filtered_claims.append(rejected)
                 continue
             kept.append(sentence.strip())
+        previous_line = filtered_lines[-1].strip() if filtered_lines else ""
+        at_paragraph_start = not previous_line or bool(re.match(r"^#{1,6}\s", previous_line))
+        if (
+            section == "## Methods" and subsection == "### Variables"
+            and not structure_prefix and at_paragraph_start and kept
+        ):
+            # The same context rule used by explicit evidence repair also
+            # applies to automatic filtering. Never leave a dependent fragment
+            # after deleting its opener, invent an antecedent, or cross a line.
+            opener_end = content.find(kept[0])
+            if opener_end > 0:
+                deletion = contextual_sentence_deletion(content, 0, opener_end)
+                for dependent in deletion.dependent_sentences:
+                    if not kept or kept[0] != dependent:
+                        break
+                    kept.pop(0)
+                    removed.append(dependent)
+                    filtered_claims.append(dependent)
         kept_content = " ".join(part for part in kept if part).strip()
         filtered_lines.append(
             f"{structure_prefix}{kept_content}".rstrip() if kept_content else ""
