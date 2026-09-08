@@ -18,22 +18,23 @@ from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 from easyicu.research_agent.authority.evidence_store import EvidenceEnforcementMode
 
 
-def test_report_input_uses_latest_sealed_revision_without_retargeting_old_citations(tmp_path):
+@pytest.mark.parametrize("evidence_id,name", [("writer_evidence_digest", "writer_evidence_digest.md"), ("run_status", "run_status.json")])
+def test_report_input_uses_latest_sealed_revision_without_retargeting_old_citations(tmp_path, evidence_id, name):
     store = EvidenceStore(tmp_path)
-    source = tmp_path / "writer_evidence_digest.md"
+    source = tmp_path / name
     source.write_text("old verified digest")
     old = store.register_text(kind="log", description="Digest", text=source.read_text(),
-                              filename=source.name, evidence_id="writer_evidence_digest")
+                              filename=source.name, evidence_id=evidence_id)
     source.write_text("new verified digest")
     new = store.register_text(kind="log", description="Digest", text=source.read_text(),
-                              filename=source.name, evidence_id="writer_evidence_digest", on_sha_change="new_id")
+                              filename=source.name, evidence_id=evidence_id, on_sha_change="new_id")
     reader = ReadOnlyReportEvidence(tmp_path)
-    assert reader.get("writer_evidence_digest").sha256 == old.sha256
+    assert reader.get(evidence_id).sha256 == old.sha256
     assert new.sha256 != old.sha256
-    assert reader.verify_input(source.name, "writer_evidence_digest") == source.read_bytes()
+    assert reader.verify_input(source.name, evidence_id) == source.read_bytes()
     source.write_text("old verified digest")
     with pytest.raises(WriterOnlyMigrationError):
-        reader.verify_input(source.name, "writer_evidence_digest")
+        reader.verify_input(source.name, evidence_id)
 
 
 def _bind_numbers(root, text):

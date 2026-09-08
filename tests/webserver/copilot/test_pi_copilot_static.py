@@ -100,8 +100,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
     assert "js/screens-guided-pi-replay.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-resources.js?v=20260908-source-conversation1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260908-e1-review2" in index
-    assert "js/screens-guided-pi-activity.js?v=20260908-writer-status1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260908-sealed-restore1" in index
+    assert "js/screens-guided-pi-activity.js?v=20260908-duration1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index
@@ -112,7 +112,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-data-consent.js?v=20260908-source-receipt1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20260907-report-only1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20260908-sealed-restore1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi.js?v=20260908-source-receipt1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index

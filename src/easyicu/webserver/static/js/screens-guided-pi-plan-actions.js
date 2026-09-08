@@ -490,10 +490,13 @@
         return;
       }
       const reportOnly = reason === 'report_only';
-      const validationRepair = reason === 'validation_repair' || reportOnly;
+      const restore = reason === 'restore';
+      const validationRepair = reason === 'validation_repair' || reportOnly || restore;
       host.appendMessage({
         id: 'execution-retry-' + Date.now(), role: 'user', complete: true,
-        text: reportOnly
+        text: restore
+          ? tr('Restore the report and its checks using the approved study', '按已批准的研究恢复报告与校验')
+          : reportOnly
           ? tr('Repair only the report from sealed results; do not rerun analysis', '只使用封存结果修订报告，不重跑分析')
           : validationRepair
           ? tr('Repair the remaining validation item', '修复剩余校验项')
@@ -501,10 +504,27 @@
       });
       setPending(true);
       try {
-        const payload = await replay.retryFailedExecution({
-          api: host.api(), session: host.session(),
-          reportOnly,
-        });
+        let payload;
+        try {
+          payload = await replay.retryFailedExecution({
+            api: host.api(), session: host.session(), reportOnly: reportOnly || restore,
+          });
+        } catch (error) {
+          // A general Restore action may revalidate the same approved run
+          // when old report inputs were not sealed. Explicit report-only
+          // requests never widen scope, and all other failures stay closed.
+          if (!restore || String(error && (error.code || error.message) || '') !== 'WRITER_ONLY_REGISTERED_INPUT_CHANGED') throw error;
+          host.appendMessage({
+            id: 'report-recovery-' + Date.now(), role: 'assistant', complete: true,
+            text: tr(
+              'The saved report checks need restoration. I am revalidating the existing run against its approved plan before continuing the report; the research question and data source stay unchanged.',
+              '报告的历史校验记录需要恢复。正在按原批准方案重新核验现有运行，再继续报告；研究问题和数据来源不变。',
+            ),
+          });
+          payload = await replay.retryFailedExecution({
+            api: host.api(), session: host.session(), reportOnly: false,
+          });
+        }
         await host.recordHostAction(
           'retry_analysis', String(payload.job_id || ''), String(payload.job_id || ''),
         );

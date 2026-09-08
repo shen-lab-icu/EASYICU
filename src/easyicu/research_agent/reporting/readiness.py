@@ -2594,16 +2594,12 @@ def write_readiness_artifacts(
         json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    if evidence.get("run_status") is None:
-        evidence.register_file(
-            kind="log",
-            description="Fail-closed run readiness gate summary.",
-            source_path=run_status_path,
-            evidence_id="run_status",
-            aliases=["run_status"],
-            producer="pipeline",
-            generation_mode="system",
-        )
+    evidence.register_json(
+        kind="log", description="Fail-closed run readiness gate summary.",
+        payload=run_status_payload, filename="run_status.json",
+        evidence_id="run_status", on_sha_change="new_id",
+        producer="pipeline", generation_mode="system",
+    )
 
     return gates, artifact_paths
 

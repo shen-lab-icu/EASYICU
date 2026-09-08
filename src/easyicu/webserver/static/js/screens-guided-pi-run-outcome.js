@@ -78,7 +78,7 @@
         const retryLabel = validated && numericVerified
           ? tr('Restore manuscript and evidence checks', '恢复稿件与证据校验')
           : tr('Repair and revalidate', '修复并重新校验');
-        primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry="${validated && numericVerified ? 'report_only' : 'validation_repair'}">${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
+        primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry="${validated && numericVerified ? 'restore' : 'validation_repair'}">${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
       }
       if (!primaryActions.length && !detailActions.length) return '';
       const figureNote = figureCount === 0
