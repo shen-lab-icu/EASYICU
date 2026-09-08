@@ -186,6 +186,41 @@ def _render(run_dir: Path, manifest: dict, out_dir: Path):
     )
 
 
+@pytest.mark.parametrize("levels", [[0, 1], [1, 0]])
+def test_compiled_renderer_binds_labels_to_exposure_and_value(tmp_path, monkeypatch, levels):
+    from easyicu.research_agent.execution.runners import exposure_outcome_distribution_render as owner
+    table = _produced_table(tmp_path, monkeypatch, spec_updates={"exposure_levels": levels})
+    run_dir, manifest = _bound(tmp_path, table)
+    labels = {"unrelated=0": "Wrong reference", "unrelated=1": "Wrong comparison",
+              EXPOSURE: "Anticoagulant exposure", OUTCOME: "30-day readmission",
+              f"{EXPOSURE}=0": "No recorded treatment", f"{EXPOSURE}=1": "Recorded treatment"}
+    code = owner.exposure_outcome_distribution_figure_code(_step(), display_labels=labels)
+    inputs = run_dir / "resolved.json"
+    inputs.write_text(json.dumps(manifest))
+    output = tmp_path / "figures"
+    monkeypatch.setenv("STEP_OUT_DIR", str(output))
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(inputs))
+    exporter = owner.save_publication_figure
+    def check(fig, *args, **kwargs):
+        assert [t.get_text().replace("\n", " ") for t in fig.axes[0].get_yticklabels()] == [labels[f"{EXPOSURE}={n}"] for n in levels]
+        caption = kwargs["contract"].reader_caption
+        assert "Anticoagulant exposure" in caption and "30-day readmission" in caption
+        assert EXPOSURE not in caption and OUTCOME not in caption
+        return exporter(fig, *args, **kwargs)
+    monkeypatch.setattr(owner, "save_publication_figure", check)
+    exec(compile(code, "<compiled renderer>", "exec"), {})
+    pd.testing.assert_frame_equal(pd.read_csv(table), pd.read_csv(output / f"{PRODUCT}_input_source_data.csv"))
+
+
+def test_scoped_category_labels_support_named_and_ordinal_levels():
+    from easyicu.research_agent.figures.display_labels import scoped_label_lookup
+    labels = {"stage=3": "Stage III", "arm=usual care": "Usual care", "other=3": "Other label"}
+    assert scoped_label_lookup("stage", 3, labels) == "Stage III"
+    assert scoped_label_lookup("arm", "usual care", labels) == "Usual care"
+    assert scoped_label_lookup("unmapped", 3, labels) is None
+
+
 def _tampered(tmp_path: Path, monkeypatch, mutate) -> tuple[Path, dict]:
     """Rebind a table after ``mutate`` has changed one published number."""
 
