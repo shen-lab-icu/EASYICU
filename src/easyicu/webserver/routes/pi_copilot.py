@@ -82,7 +82,7 @@ ResearchDocumentNameText = Annotated[
         min_length=20,
         max_length=64,
         pattern=(
-            r"^(?:manuscript_scaffold\.(?:pdf|tex|bib)|"
+            r"^(?:manuscript_scaffold\.(?:pdf|tex|bib)|manuscript_revision\.pdf|"
             r"system_validation_report\.(?:html|pdf))$"
         ),
     ),
