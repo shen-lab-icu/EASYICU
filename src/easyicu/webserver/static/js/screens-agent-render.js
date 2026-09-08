@@ -402,7 +402,7 @@
           <table class="ag-artifact-table${opts.compact ? ' is-compact' : ''}">
             <thead><tr>${labels.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
             <tbody>
-              ${safeRows.map(row => `<tr>${row.map((cell, index) => `<td>${esc(artifactScalar(cell, headers[index]))}</td>`).join('')}</tr>`).join('')}
+              ${safeRows.map(row => `<tr>${row.map((cell, index) => `<td>${esc(opts.formattedCells ? String(cell == null ? "" : cell) : artifactScalar(cell, headers[index]))}</td>`).join('')}</tr>`).join('')}
             </tbody>
           </table>
         </div>`;
@@ -526,7 +526,7 @@
     }).join('');
     const reportFigures = figureGallery(p.figure_gallery || {});
     const tables = (Array.isArray(p.tables) ? p.tables.slice(0, 20) : []).map(table =>
-      `<section class="gpi-reader-table">${artifactTable(`${table.label || ''}. ${table.caption || ''}`, table.columns || [], table.rows || [])}<details><summary>${esc(t('Table definitions and source', '表格定义与来源'))}</summary>${(Array.isArray(table.notes) ? table.notes : []).map(note => `<p>${esc(note)}</p>`).join('')}</details></section>`
+      `<section class="gpi-reader-table">${artifactTable(`${table.label || ''}. ${table.caption || ''}`, table.columns || [], table.rows || [], '', { formattedCells: true })}<details><summary>${esc(t('Table definitions and source', '表格定义与来源'))}</summary>${(Array.isArray(table.notes) ? table.notes : []).map(note => `<p>${esc(note)}</p>`).join('')}</details></section>`
     ).join('');
     let displaysInserted = false;
     const figureContext = (Array.isArray(p.figure_context) ? p.figure_context : [])

@@ -937,3 +937,21 @@ def test_owner_error_keeps_stable_code_and_owner(monkeypatch) -> None:
     detail = response.json()["detail"]
     assert detail["error"] == "external_llm_opt_in_required"
     assert detail["owner"] == "easyicu.webserver.pi_copilot"
+
+
+def test_current_revision_pdf_route_accepts_only_the_named_document_and_forwards_digest(monkeypatch):
+    received = []
+    fake = FakeService()
+    def document(**kwargs):
+        received.append(kwargs)
+        return {'content': b'%PDF-current', 'media_type': 'application/pdf', 'claim_ceiling': 'analysis_only'}
+    fake.get_research_document = document
+    monkeypatch.setattr(route_module, 'get_pi_copilot_service', lambda: fake)
+    client = TestClient(app)
+    base = '/api/copilot/pi/projects/project-a/runs/run_20260808/documents/'
+    result = client.get(base + 'manuscript_revision.pdf', params={'expected_sha256': 'a' * 64})
+    assert result.status_code == 200
+    assert result.content == b'%PDF-current'
+    assert received[-1]['expected_sha256'] == 'a' * 64
+    for name in ('manuscript_revision.tex', 'unregistered_report.pdf'):
+        assert client.get(base + name).status_code == 422
