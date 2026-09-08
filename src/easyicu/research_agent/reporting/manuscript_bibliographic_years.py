@@ -20,6 +20,7 @@ _NAMED_DEFINITION = re.compile(
     # An explanatory clause may precede its citation, but cannot cross a
     # sentence, line, or another citation. Only the year span is admitted.
     r"[ \t]*(?:[,;:][^.!?\r\n\[\]]{0,600}?)?[ \t]*\.?[ \t]*"
+    r"(?:\{evidence:[A-Za-z0-9_.:-]+\}[ \t]*)*"
     r"(?P<citation>\[@[A-Za-z0-9_.:-]+(?:;[ \t]*@[A-Za-z0-9_.:-]+)*\])",
     re.I,
 )
