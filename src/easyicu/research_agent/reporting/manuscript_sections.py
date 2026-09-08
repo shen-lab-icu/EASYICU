@@ -152,7 +152,11 @@ MANUSCRIPT_SECTION_SPECS = (
             "  Include every baseline variable listed in the verified "
             "EXECUTED METHOD BOUNDARY, not only model adjustment covariates. "
             "Use its exact executed representation and the supplied reader label; "
-            "mentioning a variable only in Introduction or Table 1 is insufficient.\n"
+            "mentioning a variable only in Introduction or Table 1 is insufficient. "
+            "A missingness or availability count alone does not describe its representation.\n"
+            "  Attach an exact allowed {evidence:<id>} token to each current-study "
+            "method sentence, including variable introductions and analysis choices; "
+            "a citation on a later sentence does not authorize an earlier one.\n"
             "  Introduce the named variable in every Variables paragraph; do not "
             "start one with an unanchored pronoun or 'the representation'. "
             "Recorded source definitions are not independent clinical validation.\n"
@@ -349,7 +353,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "19"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "20"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
