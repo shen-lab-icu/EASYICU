@@ -515,6 +515,7 @@ def test_web_study_context_drops_legacy_primary_cluster_duplicate() -> None:
 def test_descriptive_timing_choice_declines_landmark_in_typed_preferences() -> None:
     study = {
         **_complete_study(),
+        "analysis_design": {},
         "confirmations": {
             **_complete_study()["confirmations"],
             "plan_timing_descriptive_only": True,
@@ -882,8 +883,7 @@ def test_web_descriptive_timing_choice_compiles_closed_analysis_family() -> None
         "analysis_goal": "描述暴露与结局分布，不估计时间对齐后的关联",
         "analysis_design": {
             "analysis_unit": "icu_stay",
-            "variance_estimator": "cluster_robust",
-            "cluster_unit": "patient",
+            "variance_estimator": "none_counts_only",
         },
         "confirmations": {
             "extraction_completed": True,

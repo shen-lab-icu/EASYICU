@@ -113,6 +113,7 @@ from easyicu.webserver.research_launch_scientific import (
     _primary_exposure_aggregation,
     _runtime_projection_sensitivity_specs,
     _target_outcome,
+    resolve_study_analysis_design,
     validate_analysis_design_for_execution,
 )
 from easyicu.webserver.research_pipeline_run_preparation import (
@@ -1668,26 +1669,14 @@ def _research_user_preferences(
             )
             if part
         )
-    raw_analysis_design = study.get("analysis_design")
-    analysis_design = (
-        dict(raw_analysis_design) if isinstance(raw_analysis_design, Mapping) else {}
-    )
+    analysis_design = resolve_study_analysis_design(study)
     confirmations = study.get("confirmations")
     if (
         isinstance(confirmations, Mapping)
         and confirmations.get("plan_timing_descriptive_only") is True
     ):
-        # The researcher explicitly requested, or the host conservatively
-        # derived, a descriptive scientific ceiling. Transport that decision
-        # as the typed family authority the Planner already treats as closed; prose in
-        # ``must_have_outputs`` is only an output request and cannot safely own
-        # analysis-family routing.  This also repairs projects saved before the
-        # descriptive choice wrote an explicit ``analysis_family`` field.
-        analysis_design = {
-            "analysis_family": "descriptive_epidemiology",
-            "analysis_unit": "icu_stay",
-            "variance_estimator": "none_counts_only",
-        }
+        # Scope was resolved by the same owner used by execution above. A
+        # descriptive confirmation never silently replaces an explicit model.
         # This choice also declines a time-aligned association estimand.  Make
         # that boundary explicit in the existing timing/design authority so a
         # Planner cannot describe a landmark population while compiling only

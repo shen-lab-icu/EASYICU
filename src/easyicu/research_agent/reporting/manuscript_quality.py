@@ -18,6 +18,8 @@ from ..authority.reader_numeric_display import (
     round_reader_numeric_display,
 )
 from .manuscript_sentence_context import has_dependent_opener
+from .manuscript_result_structure import PRIMARY_RESULT_HEADINGS, required_result_subsections
+from ..schema import AnalysisPlan
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
     "Abstract": (),
@@ -262,13 +264,18 @@ def repair_registered_display_callouts(
     """Add neutral Results callouts only for host-registered displays."""
 
     repaired = str(manuscript or "")
+    existing_subsections = _subsections(_sections(repaired).get("Results", ""))
+    primary_heading = next(
+        (heading for heading in PRIMARY_RESULT_HEADINGS if heading in existing_subsections),
+        "Primary association",
+    )
     templates = {
         "Table 1": (
             "Cohort characteristics",
             "See Table 1 {evidence:table_one}.",
         ),
         "Figure 1": (
-            "Primary association",
+            primary_heading,
             "See Figure 1 {evidence:publication_figure_contract}.",
         ),
     }
@@ -986,6 +993,7 @@ def audit_manuscript_quality(
     expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
     expected_primary_result_facts: Sequence = (),
     require_administrative_sections: bool = True,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> ManuscriptQualityAudit:
     """Audit structure, terminology, and one high-confidence consistency rule."""
 
@@ -1027,6 +1035,8 @@ def audit_manuscript_quality(
         )
 
     required_sections = dict(_REQUIRED_SECTIONS)
+    if analysis_plan is not None:
+        required_sections["Results"] = required_result_subsections(analysis_plan)
     if not require_administrative_sections:
         for section in (
             "Data and code availability",
@@ -1072,6 +1082,21 @@ def audit_manuscript_quality(
                         excerpts=(subsection,),
                     )
                 )
+            elif analysis_plan is not None and section == "Results":
+                # A valid display pointer is useful navigation, not an answer
+                # to the research question. Keep citation validation separate.
+                substantive = _strip_audit_markup(subsection_body)
+                substantive = re.sub(
+                    r"\bSee\s+(?:Figure|Table)\s+[A-Z]?\d+[a-z]?\s*[.!]?",
+                    "", substantive, flags=re.I,
+                )
+                if not _has_prose(substantive) and not _CLAIM_PLACEHOLDER_RE.search(subsection_body):
+                    findings.append(ManuscriptQualityFinding(
+                        code="MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY",
+                        severity="error", section="Results",
+                        message=f"Required subsection {subsection!r} contains only a display callout, not a result.",
+                        excerpts=(subsection,),
+                    ))
 
     abstract = section_map.get("Abstract")
     if abstract is not None:
