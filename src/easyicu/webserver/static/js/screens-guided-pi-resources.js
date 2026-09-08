@@ -126,6 +126,14 @@
       if (!grouped.primary.length && !hasLiterature && !hasDataWorkbench) return '';
       const zh = window.EU_LANG === 'zh';
       const list = resources => `<div class="gpi-resource-list">${resources.map(resource => button(resource)).join('')}</div>`;
+      const technicalArtifacts = new Set(['source_run_manifest.json', 'run_context.json', 'evidence_ledger.json', 'quality_gate.json', 'scientific_readiness.json', 'scientific_plan_review.json']);
+      const cards = resources => `<div class="gpi-file-cards">${resources.map(resource => {
+        const title = label(resource).replace(/^(?:打开|查看|预览)\s*|^(?:Open|View|Preview)\s+/i, '');
+        const filename = String(resource.artifact || resource.file || '').split(/[\\/]/).pop();
+        const format = /\.(pdf|docx|csv|html)$/i.exec(filename || '');
+        const type = format ? format[1].toUpperCase() : (zh ? '交互预览' : 'Interactive preview');
+        return `<div class="gpi-file-card"><div>${button(resource, title)}<span>${esc(type)}${filename ? ` · ${esc(filename)}` : ''}</span></div><span aria-hidden="true">↗</span></div>`;
+      }).join('')}</div>`;
       const numberedLiteratureList = resources => `<ol class="gpi-resource-list gpi-literature-resource-list">${resources.map(resource => `<li>${button(resource)}</li>`).join('')}</ol>`;
       const sections = [];
       if (hasDataWorkbench) {
@@ -133,7 +141,10 @@
       }
       if (grouped.primary.length) {
         const onlyPlan = grouped.primary.every(resource => resource.kind === 'idea_plan');
-        sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(zh && onlyPlan ? '查看方案' : (zh ? '打开证据和产物' : (onlyPlan ? 'View plan' : 'Open evidence and artifacts')))}</span>${list(grouped.primary)}</div>`);
+        const primary = grouped.primary.filter(resource => !technicalArtifacts.has(resource.artifact));
+        const technical = grouped.primary.filter(resource => technicalArtifacts.has(resource.artifact));
+        if (primary.length) sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(onlyPlan ? (zh ? '研究方案' : 'Research plan') : (zh ? '本轮文件' : 'Files from this step'))}</span>${cards(primary)}</div>`);
+        if (technical.length) sections.push(`<details class="gpi-resource-technical"><summary>${esc(zh ? `来源与校验详情（${technical.length}）` : `Sources and validation (${technical.length})`)}</summary>${list(technical)}</details>`);
       }
       if (hasLiterature) {
         sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(zh ? '本题文献检索' : 'Topic literature search')}</span>${grouped.topicLiterature.length

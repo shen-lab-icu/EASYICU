@@ -753,7 +753,7 @@ def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return current
 
 
-def test_bound_project_source_defaults_to_study_required_agent_preparation(
+def test_bound_project_source_requires_explicit_confirmation(
     tmp_path: Path,
     study_state: dict[str, Any],
 ) -> None:
@@ -766,9 +766,9 @@ def test_bound_project_source_defaults_to_study_required_agent_preparation(
     session_id = created["session"]["session_id"]
     authorization = created["session"]["data_source_authorization"]
 
-    assert authorization["status"] == "confirmed"
-    assert authorization["reason"] is None
-    assert authorization["confirmation_mode"] == "agent_default_study_required"
+    assert authorization["status"] == "pending"
+    assert authorization["reason"] == "project_source_confirmation_required"
+    assert authorization["confirmation_mode"] is None
     assert authorization["extraction_scope"] == "study_required"
     assert authorization["source"]["database"] == "mimiciv"
     assert authorization["source"]["label"] == "MIMIC-IV"
@@ -799,17 +799,20 @@ def test_bound_project_source_defaults_to_study_required_agent_preparation(
         "session.prompt",
     ]
     context = gateway.tool_contexts[-1]
-    assert context.session.data_source_authorization.status == "confirmed"
-    assert (
-        context.session.data_source_authorization.confirmation_mode
-        == "agent_default_study_required"
-    )
+    assert context.session.data_source_authorization.status == "pending"
+    assert context.session.data_source_authorization.confirmation_mode is None
 
     listed = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
     assert listed["status"] == "ok"
+    confirmed = service.authorize_data_source(
+        session_id, project_id="project-data-consent", action="use_study_required_data"
+    )["session"]["data_source_authorization"]
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["confirmation_mode"] == "reuse_project_source"
+    assert confirmed["extraction_scope"] == "study_required"
 
 
-def test_legacy_pending_project_source_is_reconciled_without_user_choice(
+def test_reading_legacy_pending_project_source_does_not_create_consent(
     tmp_path: Path,
     study_state: dict[str, Any],
 ) -> None:
@@ -835,9 +838,9 @@ def test_legacy_pending_project_source_is_reconciled_without_user_choice(
         created["session_id"], project_id="project-legacy-data-choice"
     )["session"]["data_source_authorization"]
 
-    assert restored["status"] == "confirmed"
-    assert restored["confirmation_mode"] == "agent_default_study_required"
-    assert restored["extraction_scope"] == "study_required"
+    assert restored["status"] == "pending"
+    assert restored["confirmation_mode"] is None
+    assert restored == record.data_source_authorization.model_dump(mode="json")
 
 
 def test_exact_registered_path_in_message_binds_source_before_provider(
@@ -1396,7 +1399,7 @@ def test_explicit_prepared_source_reference_preserves_agent_default_scope(
     )["session"]
     assert session["data_source_authorization"]["status"] == "confirmed"
     assert session["data_source_authorization"]["confirmation_mode"] == (
-        "agent_default_study_required"
+        "reuse_project_source"
     )
     assert session["binding"]["study_revision"] == study_state["revision"]
 
@@ -1446,11 +1449,11 @@ def test_prepared_project_source_is_available_in_the_same_provider_turn(
     turn_context = gateway.tool_contexts[-1]
     assert turn_context.session.data_source_authorization.status == "confirmed"
     assert turn_context.session.data_source_authorization.confirmation_mode == (
-        "agent_default_study_required"
+        "reuse_project_source"
     )
 
 
-def test_bound_project_source_needs_no_second_confirmation_in_question_turn(
+def test_database_mention_in_question_does_not_confirm_a_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     study_state: dict[str, Any],
@@ -1495,8 +1498,8 @@ def test_bound_project_source_needs_no_second_confirmation_in_question_turn(
         project_id="project-source-mention-only",
     )["session"]
     authorization = session["data_source_authorization"]
-    assert authorization["status"] == "confirmed"
-    assert authorization["confirmation_mode"] == "agent_default_study_required"
+    assert authorization["status"] == "pending"
+    assert authorization["confirmation_mode"] is None
     assert authorization["extraction_scope"] == "study_required"
 
 

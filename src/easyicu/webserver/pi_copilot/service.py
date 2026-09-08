@@ -901,12 +901,11 @@ class PiCopilotService:
         source = cls._session_source_reference(context)
         if source is not None:
             return PiSessionDataSourceAuthorization(
-                status="confirmed",
-                reason=None,
-                confirmation_mode="agent_default_study_required",
+                status="pending",
+                reason="project_source_confirmation_required",
+                confirmation_mode=None,
                 extraction_scope="study_required",
                 source=source,
-                confirmed_at=utc_now(),
             )
         return PiSessionDataSourceAuthorization(
             status="pending",
@@ -1288,25 +1287,9 @@ class PiCopilotService:
             clean_project,
             record.binding.study_context_id,
         )
-        authorization = record.data_source_authorization
-        if (
-            record.agent_mode == "research"
-            and authorization.status == "pending"
-            and authorization.reason == "project_source_confirmation_required"
-            and not self._stale_details(record).get("stale")
-        ):
-            context = study_contexts.get_context(record.binding.study_context_id)
-            source = self._session_source_reference(context or {})
-            if source is not None:
-                record.data_source_authorization = PiSessionDataSourceAuthorization(
-                    status="confirmed",
-                    reason=None,
-                    confirmation_mode="agent_default_study_required",
-                    extraction_scope="study_required",
-                    source=source,
-                    confirmed_at=utc_now(),
-                )
-                self._save_record(record)
+        # Reading a session must not manufacture a source-selection decision.
+        # Existing confirmations remain historical facts; pending ones require
+        # the explicit source action (or an exact user-selected source).
         return record
 
     def create_session(

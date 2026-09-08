@@ -268,7 +268,8 @@ def test_scientific_plan_revision_requests_a_fresh_governed_plan() -> None:
     assert "await PLAN_ACTIONS.continueUserRequestedSystemProgression(text)" in guided
     assert "plan_revision_source_run_id" not in guided
     assert 'planner_start_mode=strategy' in tool_owner
-    assert 'fresh_run_required = bool(same_study_plan and not current_review_is_resumable)' in tool_owner
+    assert 'fresh_run_required = bool(' in tool_owner
+    assert 'not current_review_is_resumable or plan_change_request is not None' in tool_owner
 
 
 def test_demo_next_step_is_one_click_and_supports_an_existing_local_copy() -> None:
