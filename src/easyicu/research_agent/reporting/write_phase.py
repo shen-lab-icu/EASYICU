@@ -995,7 +995,10 @@ def _writer_execution_checkpoint_sha256(
 ) -> str:
     """Digest the final record for every execution step."""
 
-    payload = current_step_records(records)
+    # Finalization sorts independent steps into plan order.  Deduplicate first
+    # (a later failure still supersedes success), then canonicalize only that
+    # presentation order; every field of each current attempt remains bound.
+    payload = sorted(current_step_records(records), key=lambda row: str(row.get("step_id") or ""))
     encoded = json.dumps(
         payload,
         ensure_ascii=False,

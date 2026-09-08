@@ -19,7 +19,7 @@ from .administrative_authority import (
     ManuscriptAdministrativeAuthority,
     render_manuscript_administrative_sections,
 )
-from .manuscript_baseline import baseline_reporting_mentions
+from .manuscript_baseline import baseline_naming_instruction, baseline_reporting_mentions
 from .manuscript_result_structure import required_result_subsections, result_section_instruction
 from ..schema import AnalysisPlan
 
@@ -358,7 +358,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "26"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "27"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
@@ -519,6 +519,11 @@ def _quality_repair_specs(
             detail = f"{finding.code}: {finding.message}"
             if finding.excerpts:
                 detail += " Offending text: " + "; ".join(finding.excerpts)
+            if finding.code == "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE":
+                detail += "\n" + baseline_naming_instruction({
+                    name: aliases for name, aliases in (expected_baseline_mentions or {}).items()
+                    if name in finding.excerpts
+                })
             messages.setdefault(key, []).append(detail)
     return tuple(
         (by_key[key], "\n".join(f"- {message}" for message in values))
