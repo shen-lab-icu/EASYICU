@@ -7,6 +7,7 @@ from typing import Mapping, Optional, Sequence
 from ..providers.protocol import LLMClient
 from ..reporting.administrative_authority import ManuscriptAdministrativeAuthority
 from ..schema import (
+    AnalysisPlan,
     ClinicalSemanticsResolution,
     EvidenceRef,
     ManuscriptDraftPacket,
@@ -58,6 +59,7 @@ class ManuscriptAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
     ) -> str:
         return WriterAgent(
             self.llm,
@@ -65,6 +67,7 @@ class ManuscriptAgent:
             nature_writing_enabled=self.nature_writing_enabled,
             user_writing_advisory=self.user_writing_advisory,
         ).run(
+            analysis_plan=analysis_plan,
             context=context,
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
@@ -83,6 +86,7 @@ class ManuscriptAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return WriterAgent(
             self.llm,
@@ -91,6 +95,7 @@ class ManuscriptAgent:
             user_writing_advisory=self.user_writing_advisory,
         ).repair_existing(
             manuscript,
+            analysis_plan=analysis_plan,
             context=context,
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
