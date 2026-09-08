@@ -11,6 +11,10 @@ from __future__ import annotations
 import re
 from typing import Sequence
 
+from ..authority.current_case_scientific_runtime import (
+    CurrentCaseScientificRuntimeAuthority,
+    LandmarkSplineRuntimeAuthority,
+)
 from ..contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT,
@@ -23,7 +27,7 @@ from ..schema import (
     ResearchContext,
     ValidationFinding,
 )
-from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
+from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY, PrespecifiedSensitivitySpec
 
 
 _PREFERRED_METHOD_BY_STRATEGY = {
@@ -96,6 +100,7 @@ def ensure_prespecified_sensitivity_steps(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> tuple[AnalysisPlan, list[ValidationFinding]]:
     """Add only missing, exact binary-association sensitivity coordinates.
 
@@ -120,6 +125,14 @@ def ensure_prespecified_sensitivity_steps(
     if len(primary_steps) != 1:
         return plan, []
     primary = primary_steps[0]
+    # A declared id or prose alone is insufficient. Only the actual runtime
+    # owner, with the exact same time coordinates, can fulfill this obligation
+    # through the primary fit. Final runtime binding/validation remains required.
+    primary_covered = {
+        spec.spec_id
+        for spec in specs
+        if _primary_landmark_covers_spec(primary, spec, runtime_authority)
+    }
     already_executed = {
         spec_id
         for step in plan.steps
@@ -129,14 +142,28 @@ def ensure_prespecified_sensitivity_steps(
         and _method_head(step) in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
     }
     already_executed.update(_locked_complete_case_spec_ids(plan))
+    already_executed.update(primary_covered)
     missing = [
         spec
         for spec in specs
         if spec.spec_id not in already_executed
         and spec.strategy in _PREFERRED_METHOD_BY_STRATEGY
     ]
+    coverage_findings = [
+        ValidationFinding(
+            validator="prespecified_sensitivity_plan_shaping",
+            severity="warning",
+            message="The exact landmark obligation is assigned to the runtime-bound primary fit, not a duplicate sensitivity analysis.",
+            detail={
+                "reason_code": "typed_landmark_obligation_owned_by_primary",
+                "step_id": primary.step_id,
+                "spec_ids": sorted(primary_covered),
+                "execution_contract_sha256": runtime_authority.execution_contract_sha256,
+            },
+        )
+    ] if primary_covered and runtime_authority is not None else []
     if not missing:
-        return plan, []
+        return plan, coverage_findings
 
     requirement = primary.model_requirements[0]
     dependence_group_source = (
@@ -167,7 +194,7 @@ def ensure_prespecified_sensitivity_steps(
     }
     occupied_ids = {str(step.step_id) for step in plan.steps}
     inserted: list[AnalysisStep] = []
-    findings: list[ValidationFinding] = []
+    findings: list[ValidationFinding] = list(coverage_findings)
     for spec in missing:
         base_id = re.sub(
             r"[^a-z0-9]+", "_", f"sensitivity_{spec.spec_id}".casefold()
@@ -244,6 +271,32 @@ def ensure_prespecified_sensitivity_steps(
         *plan.steps[primary_index + 1 :],
     ]
     return plan.model_copy(update={"steps": steps}), findings
+
+
+def _primary_landmark_covers_spec(
+    primary: AnalysisStep,
+    spec: PrespecifiedSensitivitySpec,
+    authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> bool:
+    if not isinstance(authority, LandmarkSplineRuntimeAuthority):
+        return False
+    requirement = primary.model_requirements[0]
+    return (
+        spec.spec_id in primary.sensitivity_spec_ids
+        and spec.strategy == "landmark"
+        and spec.landmark_hours == authority.landmark_hours
+        and spec.require_alive_at_landmark
+        and spec.exclude_negative_event_times
+        and spec.event_time_variable == authority.outcome_time_column
+        and spec.observation_duration_variable == authority.observation_duration_column
+        and spec.observation_duration_unit == authority.observation_duration_unit
+        and set(spec.execution_variables) == {
+            authority.outcome_time_column, authority.observation_duration_column
+        }
+        and requirement.exposure_source == authority.exposure_column
+        and requirement.outcome == authority.outcome_column
+        and set(requirement.covariates) == set(authority.required_adjustment_columns)
+    )
 
 
 __all__ = ["ensure_prespecified_sensitivity_steps"]
