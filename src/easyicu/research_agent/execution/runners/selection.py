@@ -149,6 +149,11 @@ from .landmark_spline_functional_form_executor import (
     landmark_spline_functional_form_executor_code,
     landmark_spline_functional_form_executor_owns_step,
 )
+from .primary_population_descriptive import (
+    PRIMARY_POPULATION_RISK,
+    primary_population_risk_code,
+    primary_population_risk_owns_step,
+)
 from .landmark_spline_robustness_executor import (
     LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
     landmark_spline_robustness_executor_code,
@@ -495,6 +500,16 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind=LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
             selection_reason="signed_landmark_spline_functional_form_preflight",
             progress_message="Using target-bound landmark spline functional-form comparison",
+            consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
+        ),
+        StepExecutor(
+            key=PRIMARY_POPULATION_RISK,
+            applicable=lambda c: isinstance(c.current_case_scientific_runtime_authority, LandmarkSplineRuntimeAuthority),
+            owns=lambda c: primary_population_risk_owns_step(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority),
+            render=lambda c: primary_population_risk_code(c.step, authority=c.current_case_scientific_runtime_authority, runtime_projection_sha256=c.scientific_runtime_projection_sha256, plausibility_scope=c.plausibility_scope),
+            analysis_kind=PRIMARY_POPULATION_RISK,
+            selection_reason="primary_population_descriptive_preflight",
+            progress_message="Using the bound primary model population for descriptive risk",
             consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
         ),
         StepExecutor(

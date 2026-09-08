@@ -3044,7 +3044,8 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
-def test_absolute_risk_context_module_compiles_existing_deterministic_owner() -> None:
+@pytest.mark.parametrize("primary_population", [False, True])
+def test_absolute_risk_context_module_compiles_existing_deterministic_owner(primary_population) -> None:
     payload = json.loads(json.dumps(_payload()))
     step = next(
         item for item in payload["steps"] if item["step_id"] == "03_distribution"
@@ -3069,6 +3070,12 @@ def test_absolute_risk_context_module_compiles_existing_deterministic_owner() ->
         "producer_step_id": "03_absolute_risk_context",
         "product_id": "table:absolute_risk_context",
     }
+    if primary_population:
+        payload["steps"].remove(step)
+        index = next(i for i, item in enumerate(payload["steps"]) if item["step_id"] == "05_primary")
+        payload["steps"].insert(index + 1, step)
+        step["depends_on"] = ["05_primary"]
+        step["product_inputs"] = [{"producer_step_id": "05_primary", "product_id": "table:adjusted_association_estimates"}]
     plan, _receipt = compile_progressive_plan(
         skeleton=ProgressivePlanSkeleton.model_validate(payload),
         context=_context(),
@@ -3077,12 +3084,12 @@ def test_absolute_risk_context_module_compiles_existing_deterministic_owner() ->
     compiled = next(
         item for item in plan.steps if item.step_id == "03_absolute_risk_context"
     )
-    assert compiled.method == "absolute_risk_context"
+    assert compiled.method == ("primary_population_absolute_risk_context" if primary_population else "absolute_risk_context")
     assert compiled.inputs == [
         "exposure_flag",
         "outcome_flag",
         "artifact:analysis_cohort",
-    ]
+    ] + (["table:adjusted_association_estimates"] if primary_population else [])
     assert compiled.expected_outputs == ["table:absolute_risk_context"]
     contract = build_article_analysis_contract(
         _context(),
