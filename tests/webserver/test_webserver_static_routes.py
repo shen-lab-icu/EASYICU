@@ -189,11 +189,11 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20260908-copilot-history1" in index_html
+    assert "js/app.js?v=20260908-conversation-files1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction.js?v=20260829-data-scope1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-history.js?v=20260908-copilot-history1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -203,7 +203,7 @@ def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
     history_js = _static_js("screens-agent-run-history.js")
 
     owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
-    monitor_asset = "js/screens-guided-pi-history.js?v=20260908-copilot-history1"
+    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1"
     assert owner_asset in index_html
     assert index_html.index(owner_asset) < index_html.index(monitor_asset)
     assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
@@ -347,7 +347,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260908-copilot-history1" in index_html
+    assert "js/app.js?v=20260908-conversation-files1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -366,7 +366,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260908-copilot-history1" in index_html
+        "js/screens-guided-projects.js?v=20260908-conversation-files1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -551,7 +551,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20260904-agent-plan-compiler1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260908-copilot-history1" in index_html
+        "js/screens-guided-projects.js?v=20260908-conversation-files1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -697,7 +697,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-history.js?v=20260908-copilot-history1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -891,14 +891,14 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "loadAgentRunReview" in agent_js
     assert "signoffAgentRun" in agent_js
     assert "Project Monitor" not in app_js
-    assert "window.__euHistoryRequested = true" in app_js
+    assert "__euHistoryRequested" not in app_js
     assert "runs · outputs · evidence · review" not in app_js
     assert "sendPiCopilotMessage" in guided_js
     assert "easyicu_run_submitted" in guided_js
     assert "data-gpi-provider-form" in provider_js
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-history.js?v=20260908-copilot-history1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
@@ -932,7 +932,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
 
     # render file loads BEFORE the main file in index.html
     render_pos = index_html.find("screens-agent-render.js")
-    main_pos = index_html.find("screens-guided-pi-history.js?")
+    main_pos = index_html.find("screens-guided-pi-run-files.js?")
     assert render_pos != -1 and main_pos != -1
     assert (
         render_pos < main_pos
@@ -1110,7 +1110,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-history.js?v=20260908-copilot-history1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -1607,7 +1607,7 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "paper, PDF, or topic → feasible plan" not in app_js
     assert "研究主题、临床现象、文章链接或 PDF 都从 Copilot 开始" in app_js
     assert "Project Monitor" not in app_js
-    assert "window.__euHistoryRequested = true" in app_js
+    assert "__euHistoryRequested" not in app_js
     assert "runs · outputs · evidence · review" not in app_js
     assert "Data & Review" in app_js
     assert "Data Workspace" in app_js
@@ -1634,7 +1634,7 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
     assert "js/icons.js?v=20260901-composer-plus1" in index_html
-    assert "js/app.js?v=20260908-copilot-history1" in index_html
+    assert "js/app.js?v=20260908-conversation-files1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2766,7 +2766,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20260904-agent-plan-compiler1" in index_html
-    assert "screens-guided-projects.js?v=20260908-copilot-history1" in index_html
+    assert "screens-guided-projects.js?v=20260908-conversation-files1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
@@ -3200,7 +3200,7 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
         "manifest parsed · denominators previewed · aggregate payload returned"
         in cohort_js
     )
-    assert "聚合载荷已就绪；打开历史与成果做证据绑定草稿核验。" in cohort_js
+    assert "聚合载荷已就绪；打开研究对话做证据绑定草稿核验。" in cohort_js
     assert "Draft gate" not in cohort_js
     assert "Evidence checks" not in cohort_js
     assert "locked · needs reviewer sign-off" not in cohort_js
@@ -3532,7 +3532,7 @@ def test_guided_terminal_path_opens_project_monitor_without_moving_setup_there()
     assert "function guidedAgentHandoffPrefill()" in guided_js
     assert "function openGuidedAgentHandoff()" in guided_js
     assert "data-ga-open-agent" in guided_js
-    assert "Open history & results" in guided_js
+    assert "Open conversation" in guided_js
     assert "Provider and model selection stay in Guided Copilot" in guided_js
     assert "local, no-cost preflight" in guided_js
 
@@ -3561,7 +3561,7 @@ def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> 
     assert "Plan in Guided Copilot" in crossdb_js
 
     for owner in (ideas_js, help_js, settings_js, guided_js):
-        assert "Open history & results" in owner
+        assert "Open conversation" in owner
         assert "Open Agent Projects" not in owner
     assert "t('Project Monitor', '项目监控')" not in app_js
     assert "if (r === 'agent')" in app_js

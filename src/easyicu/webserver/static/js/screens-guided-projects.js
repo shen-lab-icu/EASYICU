@@ -118,7 +118,6 @@
               ${icon('globe', 14)} <span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span>
             </button>
           </div>
-          <button class="btn sm block" type="button" data-gpi-history>${icon('history', 13)} ${t('History & results', '历史与成果')}</button>
           <button class="btn sm block gd-data-workspace" data-open="extraction">${icon('grid', 13)} ${t('Data workspace', '数据工作台')}</button>
         </div>
       </aside>`;

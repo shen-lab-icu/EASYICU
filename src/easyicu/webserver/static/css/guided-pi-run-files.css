@@ -1,0 +1,21 @@
+/* Run-bound controls live with their conversation receipt. */
+.gpi-run-files { margin: 12px 0; border: 1px solid var(--line, #deded8); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.gpi-run-files > summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.gpi-run-files > summary small { display: block; font-size: 11px; font-weight: 400; color: var(--ink-3); overflow-wrap: anywhere; margin-top: 5px; }
+.gpi-run-files-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.gpi-run-files button { cursor: pointer; border: 1px solid var(--line, #deded8); background: var(--surface, #fff); color: var(--ink-2); padding: 6px 10px; border-radius: 6px; font: inherit; font-size: 12px; }
+.gpi-run-files button:disabled { opacity: .5; cursor: default; }
+.gpi-run-file-list { display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+.gpi-run-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px 8px; padding: 6px 0; }
+.gpi-run-file > :first-child { text-align: left; overflow-wrap: anywhere; min-width: 0; }
+.gpi-run-file small { grid-column: 1; grid-row: 2; overflow-wrap: anywhere; font-size: 11px; color: var(--ink-3); }
+.gpi-run-file > :last-child { grid-column: 2; grid-row: 1 / 3; }
+.gpi-run-signoff { margin-top: 14px; font-size: 12px; }
+.gpi-run-extra { margin-top: 10px; font-size: 12px; }
+.gpi-run-artifact { min-width: 0; overflow: auto; }
+.gpi-run-artifact pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.gpi-run-signoff fieldset { border: 0; padding: 0; display: grid; gap: 8px; }
+.gpi-run-signoff label { display: flex; align-items: start; gap: 6px; }
+.gpi-run-signoff input { margin-top: 2px; }
+.gpi-run-files-error { color: var(--danger, #a43525); font-size: 12px; overflow-wrap: anywhere; }
+.gpi-saved-run > .gpi-message-body > p { font-size: 12px; color: var(--ink-3); }

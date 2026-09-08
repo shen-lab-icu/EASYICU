@@ -1,5 +1,5 @@
 /* User-visible product labels are projected here so internal runtime names do
-   not leak differently across Copilot and Copilot history & results. Internal API,
+   not leak differently across Copilot and Copilot conversation. Internal API,
    storage, and diagnostics identifiers remain unchanged. */
 (function () {
   const COPILOT_DEFAULT_TITLES = new Set(['Pi Copilot', 'EasyICU Copilot']);

@@ -6,7 +6,7 @@
 
   function create(options) {
     const {
-      state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
+      state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
       DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
       openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
       openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
@@ -63,6 +63,8 @@
     function wire() {
       if (!state.host) return;
       state.host.addEventListener('click', event => {
+        if (RUN_FILES && RUN_FILES.handleClick(event)) return;
+        if (event.target.closest('[data-gpi-refresh-status]')) { loadStatus(); return; }
         if (IDEA_SOURCE && IDEA_SOURCE.handleClick(event, {
           host: () => state.host, render, tr,
         })) return;
@@ -227,6 +229,7 @@
         if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
       });
       state.host.addEventListener('change', event => {
+        if (RUN_FILES && RUN_FILES.handleChange(event)) return;
         if (IDEA_SOURCE && IDEA_SOURCE.handleChange(event, {
           host: () => state.host, render, tr,
           onReady: () => {

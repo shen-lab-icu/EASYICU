@@ -253,7 +253,7 @@
           <button type="button" class="btn" data-gi-replan ${guidedIdea.planning ? 'disabled' : ''}>${guidedIdea.planning ? '<span class="spin"></span>' : icon('refresh', 13)} ${t('Replan from notes', '根据说明重规划')}</button>
           <button type="button" class="btn primary" data-gi-handoff ${guidedIdea.handoffing ? 'disabled' : ''}>${icon('lock', 13)} ${t('Freeze handoff for Agent', '冻结交接给 Agent')}</button>
           <button type="button" class="btn" data-gi-project ${!guidedIdea.handoff || guidedIdea.projectCreating ? 'disabled' : ''}>${icon('agent', 13)} ${t('Create project seed', '创建项目种子')}</button>
-          ${guidedIdea.project ? `<button type="button" class="btn" data-open="agent">${t('Open history & results', '打开历史与成果')}</button>` : ''}
+          ${guidedIdea.project ? `<button type="button" class="btn" data-open="agent">${t('Open conversation', '打开研究对话')}</button>` : ''}
         </div>
       </div>`;
   }

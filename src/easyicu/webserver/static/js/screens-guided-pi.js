@@ -235,6 +235,16 @@
   const resourceKey = RESOURCE_OWNER.key;
   const resourceLabel = RESOURCE_OWNER.label;
   const resourceButton = RESOURCE_OWNER.button;
+  function runFilesContext() {
+    return { projectId: projectId(), title: state.project && state.project.title,
+      sessionId: state.session && state.session.session_id,
+      studyId: state.session && state.session.binding && state.session.binding.study_context_id,
+      runId: state.session && state.session.binding && state.session.binding.run_id,
+      busy: state.busy || Boolean(state.childJobId) };
+  }
+  const RUN_FILES = MODULES.require('runFiles').create({
+    api, context: runFilesContext, changed: () => render(true), resourceButton,
+  });
   const PROVIDER_CONTROL = MODULES.require('providerControl').create({
     state, api, tr, render, runtimeReady, shellReady,
     connectionConfigured, connectionReady, errorText,
@@ -374,7 +384,7 @@
     host: () => state.host,
   });
   const EVENTS = MODULES.require('events').create({
-    state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
+    state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
     DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
     openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
     openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
@@ -550,7 +560,8 @@
 
   function messageHtml(row, options) {
     if (row.childJobHandoff) return '';
-    if (row.role === 'activity') return ACTIVITY.render(row);
+    if (row.role === 'activity') return ACTIVITY.render(row) + RUN_FILES.render(row);
+    if (row.role === 'saved_run') return `<article class="gpi-message assistant gpi-saved-run"><div class="gpi-message-body"><p>${tr('Saved run synchronized from this research project.', '已从本研究同步保存的运行记录。')}</p>${RUN_FILES.render(row)}</div></article>`;
     if (row.role === 'workflow_receipt') {
       const rows = row.total_rows == null ? Number.NaN : Number(row.total_rows);
       const files = Number(row.data_file_count);
@@ -619,6 +630,7 @@
       <div class="gpi-message-body">
         ${contentHtml}
         ${messageResourcesHtml}
+        ${RUN_FILES.render(row)}
         ${historicalDataConsentHtml}
         ${nextStepHtml}
         ${messageActions.actionsHtml}
@@ -672,7 +684,7 @@
     const showProjectContinuationCards = !workspace && !ideaExplorationTurn;
     const dataConsentRequired = showProjectContinuationCards
       && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
-    const fullTimeline = state.messages.concat(state.workflowReceipts);
+    const fullTimeline = RUN_FILES.timeline(state.messages.concat(state.workflowReceipts));
     const timeline = state.regenerating && REGENERATION
       ? REGENERATION.visibleRows(fullTimeline, state.regeneration)
       : fullTimeline;
@@ -728,11 +740,12 @@
             ? tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')
             : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
         })}
-        ${state.workflowError ? `<div class="gpi-stale" role="alert">${esc(state.workflowError)}<button type="button" data-gpi-history>${tr('Open saved history', '查看已保存历史')}</button></div>` : workflowHtml()}
+        ${state.workflowError ? `<div class="gpi-stale" role="alert">${esc(state.workflowError)}<button type="button" data-gpi-refresh-status>${tr('Retry', '重试')}</button></div>` : workflowHtml()}
         ${!workspace && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
           ? DATA_CONSENT.renderSelectedSource(session, { tr, esc, icon: iconHtml }) : ''}
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
         <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
+          ${RUN_FILES.notice()}
           ${messages || (workspace
               ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
               : emptyResearchHtml)}
@@ -801,8 +814,11 @@
   }
 
 
-  function render() {
+  function render(preserveScroll) {
     if (!state.host) return;
+    const previousLog = preserveScroll && state.host.querySelector('[data-gpi-log]');
+    const previousTop = previousLog ? previousLog.scrollTop : null;
+    if (!state.demoMode) RUN_FILES.sync();
     const restoring = state.loading || state.projectLoading || state.projectDiscoveryLoading;
     const setupFocused = !restoring && state.shell !== 'legacy'
       && !state.demoMode
@@ -831,7 +847,7 @@
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) {
-        log.scrollTop = state.demoScrollTopPending ? 0 : log.scrollHeight;
+        log.scrollTop = previousTop !== null ? previousTop : state.demoScrollTopPending ? 0 : log.scrollHeight;
         state.demoScrollTopPending = false;
       }
       ACTIVITY.syncLiveClock(state.host, state.busy || Boolean(state.childJobId));
@@ -1752,6 +1768,7 @@
     return state.startupPromise;
   }
   function unmount() {
+    RUN_FILES.reset();
     document.removeEventListener('click', dismissHeaderOverflow);
     stopCodexPoll(); closeSource(); closeChildSource(); if (IDEA_SOURCE) IDEA_SOURCE.reset(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }

@@ -430,7 +430,7 @@
                 <span class="dot-${s}"></span>${tt}${nav ? `<span style="margin-left:auto;color:var(--ink-4);">${icon('arrow', 12)}</span>` : ''}
               </div>
               <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;">${d}</div>
-              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Copilot history & results for evidence-bound draft review.', '聚合载荷已就绪；打开历史与成果做证据绑定草稿核验。') : t('Demo review is local-only; use Guided Copilot after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再使用研究引导。')}</div>` : ''}
+              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Copilot conversation for evidence-bound draft review.', '聚合载荷已就绪；打开研究对话做证据绑定草稿核验。') : t('Demo review is local-only; use Guided Copilot after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再使用研究引导。')}</div>` : ''}
             </div>`).join('')}
         </div>
       </div>
