@@ -817,6 +817,59 @@ def ensure_cohort_accounting_figure_step(
         source=source,
     ):
         return plan, []
+    # A runtime adapter may expose the primary population only after the
+    # generic cohort renderer was selected. Rebind that one closed draft
+    # renderer instead of retaining the broad denominator or adding a duplicate.
+    generic_renderers = [
+        index
+        for index, step in enumerate(steps)
+        if step.planned_analysis_role == "auxiliary"
+        and len(step.expected_outputs) == 1
+        and _dedicated_renderer_consumes_exact_sources(
+            [step], sources=[COHORT_FLOW_INPUT]
+        )
+    ]
+    if (
+        len(primary_population_sources) == 1
+        and len(generic_sources) == 1
+        and len(generic_renderers) == 1
+        and source != COHORT_FLOW_INPUT
+    ):
+        index = generic_renderers[0]
+        old = steps[index]
+        rebound = migrate_render_step_contract(
+            old,
+            [source],
+            intent=(
+                "Render the primary analysis population's recorded selection "
+                "stages and denominators. Preserve the broader cohort ledger "
+                "as a separate table; do not infer exclusions or recount patients."
+            ),
+        )
+        steps[index] = rebound.model_copy(
+            update={
+                "figure_panels": [
+                    panel.model_copy(update={"source_products": (source,)}).bind(
+                        figure_output=str(old.expected_outputs[0])
+                    )
+                    for panel in COHORT_FLOW_FIGURE_PANELS
+                ],
+            }
+        )
+        return plan.model_copy(update={"steps": steps}), [
+            ValidationFinding(
+                validator="cohort_accounting_figure_contract",
+                severity="warning",
+                message="Bound the existing cohort figure to the final primary population ledger.",
+                detail={
+                    "reason_code": "cohort_figure_primary_population_rebound",
+                    "step_id": old.step_id,
+                    "source_product": source,
+                    "producer_step_id": owner,
+                    "preserved_table": COHORT_FLOW_INPUT,
+                },
+            )
+        ]
     step_id = _next_step_id(steps, "cohort_accounting_figure")
     figure_output = _next_figure_output(steps, "figure:cohort_flow")
     figure_step = AnalysisStep(
@@ -1422,6 +1475,8 @@ def apply_runtime_bound_figure_contracts(
 
     revised, renderer_findings = select_deterministic_result_renderers(plan=plan)
     findings.extend(renderer_findings)
+    revised, cohort_findings = ensure_cohort_accounting_figure_step(plan=revised)
+    findings.extend(cohort_findings)
     revised, audit_findings = omit_redundant_composite_audits(plan=revised)
     findings.extend(audit_findings)
     return apply_deterministic_figure_panels(revised, findings)

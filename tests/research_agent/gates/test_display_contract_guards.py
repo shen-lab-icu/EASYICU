@@ -1149,3 +1149,71 @@ def test_composite_audits_move_only_to_existing_closed_displays(broken):
             next(s for s in rebound.steps if s.step_id == "composite").inputs
             == curve_sources
         )
+
+
+def test_late_primary_population_binding_reuses_existing_cohort_figure():
+    from easyicu.research_agent.planning.figure_plan_shaping import (
+        apply_runtime_bound_figure_contracts,
+    )
+
+    cohort = AnalysisStep(
+        step_id="cohort",
+        planned_analysis_role="auxiliary",
+        intent="Describe eligible cohort.",
+        method="cohort_definition_and_attrition",
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+    )
+    initial = AnalysisPlan(research_question="Association", steps=[cohort])
+    initial, _ = ensure_cohort_accounting_figure_step(plan=initial)
+    renderer_id = initial.steps[-1].step_id
+    primary = AnalysisStep(
+        step_id="primary",
+        planned_analysis_role="primary",
+        intent="Fit the prespecified population.",
+        method="signed_landmark_restricted_cubic_spline",
+        expected_outputs=["table:primary_population_flow"],
+    )
+    bound = initial.model_copy(update={"steps": [cohort, primary, initial.steps[-1]]})
+    result = apply_runtime_bound_figure_contracts(bound, [])
+    assert len(result.steps) == len(bound.steps)
+    rendered = next(s for s in result.steps if s.step_id == renderer_id)
+    assert rendered.inputs == ["table:primary_population_flow"]
+    assert [
+        c.input_key for c in rendered.input_consumption_contracts
+    ] == rendered.inputs
+    assert rendered.figure_panels[0].source_products == rendered.inputs
+    assert result.steps[0] == cohort and result.steps[1] == primary
+    assert apply_runtime_bound_figure_contracts(result, []) == result
+
+
+def test_ambiguous_primary_population_does_not_relabel_broad_cohort():
+    from easyicu.research_agent.planning.figure_plan_shaping import (
+        apply_runtime_bound_figure_contracts,
+    )
+
+    cohort = AnalysisStep(
+        step_id="cohort",
+        planned_analysis_role="auxiliary",
+        intent="Describe cohort.",
+        method="cohort_definition_and_attrition",
+        expected_outputs=["table:cohort_flow"],
+    )
+    plan, _ = ensure_cohort_accounting_figure_step(
+        plan=AnalysisPlan(research_question="Association", steps=[cohort])
+    )
+    original_renderer = plan.steps[-1]
+    for name in ("first", "second"):
+        plan.steps.insert(
+            1,
+            AnalysisStep(
+                step_id=name,
+                planned_analysis_role="primary",
+                intent="Estimate population.",
+                method="adjusted_association",
+                expected_outputs=[f"table:{name}_population_flow"],
+            ),
+        )
+    result = apply_runtime_bound_figure_contracts(plan, [])
+    actual = next(s for s in result.steps if s.step_id == original_renderer.step_id)
+    assert actual.inputs == ["table:cohort_flow"]
+    assert len(result.steps) == len(plan.steps)
