@@ -584,9 +584,7 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not _abstract_label_has_prose(
-        abstract, "Conclusions"
-    ):
+    if abstract is not None and not _abstract_label_has_prose(abstract, "Conclusions"):
         paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
         results_index = next(
             (
@@ -625,28 +623,33 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not _abstract_label_has_prose(
-        abstract, "Conclusions"
+    abstract_conclusion = _abstract_blocks(abstract or "").get("conclusions", "")
+    caveat_only = bool(re.fullmatch(
+        r"Independent validation is required\s*\.?",
+        _strip_audit_markup(abstract_conclusion).strip(), flags=re.I,
+    ))
+    if abstract is not None and (
+        not _abstract_label_has_prose(abstract, "Conclusions") or caveat_only
     ):
         conclusion = section_map.get("Conclusion", "")
         # Do not fill an interpretation gap by copying a numeric Results
         # sentence. Only reuse an existing complete Conclusion claim.
         source = conclusion
-        candidate = next(
-            (
+        candidates = tuple(
                 sentence.strip()
                 for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
                 if _has_prose(sentence)
                 and (
                     _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
                 )
-            ),
-            None,
         )
-        if candidate is not None:
+        if candidates:
+            candidate = "\n\n".join(dict.fromkeys(candidates))
             populated = re.sub(
+                r"(\*\*Conclusions:\*\*)[\s\S]*\Z" if caveat_only else
                 r"(\*\*Conclusions:\*\*)\s*(?=\n\s*\n|\Z)",
-                lambda match: f"{match.group(1)}\n\n{candidate}",
+                lambda match: f"{match.group(1)}\n\n{candidate}" +
+                ("\n\n" + abstract_conclusion.strip() if caveat_only else ""),
                 abstract,
                 count=1,
                 flags=re.I,
@@ -861,14 +864,11 @@ def repair_incompatible_reader_labels(
     reader_display_labels: Mapping[str, str] | None = None,
     manuscript_language: str = "en",
 ) -> tuple[str, tuple[dict[str, str], ...]]:
-    """Remove UI-locale labels that conflict with the manuscript language.
+    """Retain source-bound clinical meanings when translation is unavailable.
 
-    This post-binding repair is deliberately narrow: it never translates a
-    clinical concept or touches evidence coordinates.  For an English draft,
-    a foreign plain variable label falls back to its readable key, while a
-    foreign categorical level becomes ``exposure category <value>``.  The
-    surrounding, evidence-bound sentence retains the exact estimate and group
-    coordinate without leaking a raw runtime identifier.
+    An English paragraph with a verified Chinese label is preferable to losing
+    its endpoint or group definition. Report the language boundary for review;
+    never replace a clinical label by an anonymous category or raw column key.
     """
 
     repaired = str(manuscript or "")
@@ -880,24 +880,14 @@ def repair_incompatible_reader_labels(
         label = " ".join(str(raw_label or "").split())
         if not key or not label or not re.search(r"[\u3400-\u9fff]", label):
             continue
-        if "=" in key:
-            _base, level = key.rsplit("=", 1)
-            fallback = f"exposure category {level.strip()}"
-        elif re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", key):
-            fallback = key.replace("_", " ")
-        else:
-            # A compound implementation key is not safe reader prose.  It is
-            # normally translated by Writer and therefore needs no fallback.
-            continue
         count = repaired.count(label)
         if not count:
             continue
-        repaired = repaired.replace(label, fallback)
         repairs.append(
             {
-                "code": "MANUSCRIPT_INCOMPATIBLE_DISPLAY_LABEL_REMOVED",
+                "code": "MANUSCRIPT_SOURCE_LABEL_PRESERVED_PENDING_TRANSLATION",
                 "source": label,
-                "replacement": fallback,
+                "replacement": label,
                 "count": str(count),
             }
         )

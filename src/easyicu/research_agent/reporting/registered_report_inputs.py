@@ -74,6 +74,15 @@ class ReadOnlyReportEvidence:
 
     def verify_input(self, name: str, evidence_id: str) -> bytes:
         record = self.get(evidence_id)
+        # Stable citation ids deliberately retain their first version. A live
+        # input file must instead match the newest explicitly sealed revision,
+        # never an arbitrary same-byte record or an older rollback candidate.
+        revisions = [row for row in self._records if (
+            row.evidence_id == evidence_id
+            or (row.metadata or {}).get("resume_supersedes") == evidence_id
+        )]
+        if revisions:
+            record = revisions[-1]
         sealed = verified_run_evidence_path(self.root, record) if record else None
         source = self.root / name
         if (
