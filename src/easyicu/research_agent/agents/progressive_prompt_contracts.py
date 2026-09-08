@@ -318,11 +318,14 @@ def step_materialization_shape_contract(
         "primary_contrast_level_index": None, "denominator_policy": None,
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
-        "population_scope": None,
         "phenotyping_feature_columns": None,
         "phenotyping_comparison_variables": None,
         "literature_bindings": [],
     }
+    # JSON-mode providers use this same template on initial and repair calls.
+    # Do not advertise a population choice to modules that cannot own it.
+    if outline_step.module_id == "absolute_risk_context":
+        step["population_scope"] = None
     template = {
         "schema_version": "easyicu.progressive_step_materialization/1",
         "outline_step_sha256": outline_step_sha256,
@@ -333,6 +336,7 @@ def step_materialization_shape_contract(
         "ProgressiveStepMaterialization shape template (preserve this root wrapper; emit only the step keys permitted by the current structured schema):\n"
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
         + "\nCopy schema_version, outline_step_sha256, foundation=null, and the six outline-owned step coordinates exactly. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
+        "population_scope belongs exclusively to absolute_risk_context: that module must choose analysis_cohort or primary_model. Omit this field for every other module; primary-model eligibility is governed by its cohort and method contracts, not this descriptive-table selector.\n"
         "Nested item shapes, when used: product_inputs items are exactly "
         '{"producer_step_id":"<preceding step id>","product_id":"<kind:product>"}; outputs items are exactly '
         '{"product_id":"<kind:product>","semantic_role":"<allowed role>"}; table_one_variables items are exactly '
