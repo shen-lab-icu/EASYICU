@@ -113,6 +113,42 @@
     if (low == null || high == null) return '—';
     return `${percent(low)}–${percent(high)}`;
   }
+  function confidenceLabel(level) {
+    return typeof level === 'number' && Number.isFinite(level) && level > 0 && level < 1
+      ? `${Number((level * 100).toFixed(4))}% CI` : tr('Confidence interval', '置信区间');
+  }
+  function selectedStatisticFacts(payload, pointer) {
+    const value = payload.value || {};
+    const estimates = value.descriptive_estimates;
+    const match = /^\/descriptive_estimates\/(exposure_prevalence|outcome_absolute_risks)\/(0|[1-9]\d*)\/(n|events|denominator|estimate_pct)$/.exec(pointer);
+    if (!match || !estimates || estimates.schema_version !== 'easyicu.exposure_outcome_descriptive_estimates/1') return [];
+    const prevalence = match[1] === 'exposure_prevalence';
+    if ((prevalence && match[3] === 'events') || (!prevalence && match[3] === 'n')) return [];
+    const rows = estimates[match[1]];
+    const row = Array.isArray(rows) ? rows[Number(match[2])] : null;
+    if (!row || typeof row !== 'object') return [];
+    const count = row[prevalence ? 'n' : 'events'];
+    const denominator = row.denominator;
+    const metric = {
+      n: tr('Records in this group', '该分组记录数'),
+      events: tr('Outcome events in this group', '该分组结局事件数'),
+      denominator: prevalence ? tr('Cohort denominator', '队列分母') : tr('Outcome denominator in this group', '该分组结局分母'),
+      estimate_pct: prevalence ? tr('Group share of the cohort', '分组占队列比例') : tr('Observed outcome proportion within the group', '组内观察到的结局比例'),
+    }[match[3]];
+    const facts = [[tr('Selected metric', '当前指标'), metric]];
+    if (typeof value.exposure === 'string' && value.exposure) facts.push([tr('Exposure field', '分组变量'), text(value.exposure)]);
+    if (typeof row.level === 'string' || typeof row.level === 'number' || typeof row.level === 'boolean') {
+      facts.push([tr('Recorded group value', '原始分组值'), String(row.level)]);
+    }
+    if (!prevalence && typeof value.outcome === 'string' && value.outcome) facts.push([tr('Outcome field', '结局变量'), text(value.outcome)]);
+    // These are direct siblings of the selected pointer, not a search for
+    // matching numbers in the file and not a reconstructed denominator.
+    if (Number.isSafeInteger(count) && Number.isSafeInteger(denominator)
+        && count >= 0 && denominator > 0 && count <= denominator) {
+      facts.push([prevalence ? tr('Group records / cohort records', '分组记录数 / 队列记录数') : tr('Events / outcome records in this group', '该分组事件数 / 有结局记录数'), `${scalar(count)} / ${scalar(denominator)}`]);
+    }
+    return facts;
+  }
   function selectedNumberView(payload, locator) {
     if (!locator || !locator.pointer) return '';
     const pointer = String(locator.pointer);
@@ -132,6 +168,7 @@
       return `<div class="gpi-evidence-withheld" role="alert"><strong>${esc(tr('Selected number could not be matched', '所选数字未能与来源匹配'))}</strong><p>${esc(tr('Check the full evidence lineage; this preview does not verify the selected number.', '请核对完整证据链；此预览未确认所选数字。'))}</p></div>`;
     }
     const facts = [
+      ...selectedStatisticFacts(payload, pointer),
       ...(locator.display ? [[tr('In the manuscript', '正文显示'), text(locator.display, 120)]] : []),
       [tr('Exact source value', '来源原值'), String(value)],
     ];
@@ -152,7 +189,7 @@
     if (overall.event_n != null || value.outcome_event_n != null) facts.push([tr('Events', '事件数'), scalar(overall.event_n != null ? overall.event_n : value.outcome_event_n)]);
     if (overall.risk_pct != null) facts.push([tr('Overall risk', '总体风险'), `${percent(overall.risk_pct)} (${confidenceInterval(overall.risk_ci_low_pct, overall.risk_ci_high_pct)})`]);
     if (value.estimate != null) facts.push([tr('Estimate', '估计值'), scalar(value.estimate)]);
-    if (Array.isArray(value.ci) && value.ci.length >= 2) facts.push([tr('95% CI', '95% CI'), `${scalar(value.ci[0])}–${scalar(value.ci[1])}`]);
+    if (Array.isArray(value.ci) && value.ci.length >= 2) facts.push([confidenceLabel(value.confidence_level), `${scalar(value.ci[0])}–${scalar(value.ci[1])}`]);
     if (Array.isArray(value.exposure_columns) && value.exposure_columns.length) facts.push([tr('Exposure', '暴露'), scalar(value.exposure_columns)]);
     const factCards = facts.map(([label, fact]) => `<div class="gpi-evidence-statistic-card"><span>${esc(label)}</span><strong>${esc(fact)}</strong></div>`).join('');
     const method = value.method || report.method || '';
@@ -161,7 +198,7 @@
       const groups = Array.isArray(exposure && exposure.groups) ? exposure.groups.slice(0, 24) : [];
       const distribution = exposure && exposure.continuous_distribution && typeof exposure.continuous_distribution === 'object'
         ? exposure.continuous_distribution : null;
-      const groupTable = groups.length ? `<div class="gpi-evidence-table-wrap"><table class="gpi-evidence-table"><thead><tr><th>${esc(tr('Group', '分组'))}</th><th>${esc(tr('N', '例数'))}</th><th>${esc(tr('Events / N', '事件 / N'))}</th><th>${esc(tr('Risk', '风险'))}</th><th>${esc(tr('95% CI', '95% CI'))}</th></tr></thead><tbody>${groups.map(group => `<tr><td>${esc(scalar(group.label || group.group_value))}</td><td>${esc(scalar(group.n))}</td><td>${esc(`${scalar(group.outcome_event_n)} / ${scalar(group.outcome_n)}`)}</td><td>${esc(percent(group.outcome_risk_pct))}</td><td>${esc(confidenceInterval(group.outcome_risk_ci_low_pct, group.outcome_risk_ci_high_pct))}</td></tr>`).join('')}</tbody></table></div>` : '';
+      const groupTable = groups.length ? `<div class="gpi-evidence-table-wrap"><table class="gpi-evidence-table"><thead><tr><th>${esc(tr('Group', '分组'))}</th><th>${esc(tr('N', '例数'))}</th><th>${esc(tr('Events / N', '事件 / N'))}</th><th>${esc(tr('Risk', '风险'))}</th><th>${esc(tr('Confidence interval', '置信区间'))}</th></tr></thead><tbody>${groups.map(group => `<tr><td>${esc(scalar(group.label || group.group_value))}</td><td>${esc(scalar(group.n))}</td><td>${esc(`${scalar(group.outcome_event_n)} / ${scalar(group.outcome_n)}`)}</td><td>${esc(percent(group.outcome_risk_pct))}</td><td>${esc(confidenceInterval(group.outcome_risk_ci_low_pct, group.outcome_risk_ci_high_pct))}${typeof group.confidence_level === 'number' && group.confidence_level > 0 && group.confidence_level < 1 ? ` (${esc(confidenceLabel(group.confidence_level))})` : ''}</td></tr>`).join('')}</tbody></table></div>` : '';
       const distributionTable = distribution ? `<div class="gpi-evidence-table-wrap"><table class="gpi-evidence-table"><thead><tr><th>${esc(tr('N', '例数'))}</th><th>${esc(tr('Median', '中位数'))}</th><th>${esc(tr('IQR', '四分位距'))}</th><th>${esc(tr('Range', '范围'))}</th></tr></thead><tbody><tr><td>${esc(scalar(distribution.n))}</td><td>${esc(scalar(distribution.median))}</td><td>${esc(`${scalar(distribution.q25)}–${scalar(distribution.q75)}`)}</td><td>${esc(`${scalar(distribution.minimum)}–${scalar(distribution.maximum)}`)}</td></tr></tbody></table></div>` : '';
       if (!groupTable && !distributionTable) return '';
       return `<section class="gpi-evidence-statistic-section"><h3>${esc(scalar(exposure.exposure || tr('Exposure', '暴露')))}${exposure.unit ? ` <small>${esc(scalar(exposure.unit, 80))}</small>` : ''}</h3>${groupTable}${distributionTable}</section>`;
@@ -195,7 +232,14 @@
     const isStatistic = p.previewable && p.renderer === 'json' && p.kind === 'statistic';
     let body = metadataView(p);
     if (p.previewable && p.renderer === 'code') body = codeView(p);
-    else if (isStatistic) body = selectedNumberView(p, locator) + statisticView(p);
+    else if (isStatistic) {
+      const selected = selectedNumberView(p, locator);
+      const wholeFile = statisticView(p);
+      // A file-level outcome summary is not the meaning of every number in
+      // that file. Keep it accessible, explicitly separated from the selection.
+      body = selected + (selected && wholeFile
+        ? `<details class="gpi-evidence-result-details"><summary>${esc(tr('Whole-file context (not the selected metric)', '整份结果背景（不是当前所选指标）'))}</summary>${wholeFile}</details>` : wholeFile);
+    }
     else if (p.previewable && p.renderer === 'json') body = jsonView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
     return `<div class="gpi-evidence-view">${isStatistic ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${isStatistic ? '' : body}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and absolute host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机绝对路径不会进入浏览器边界。'))}</p></div>`;
