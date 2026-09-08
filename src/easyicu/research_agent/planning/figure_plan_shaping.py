@@ -481,6 +481,7 @@ def ensure_landmark_association_composite_figure_step(
         or _method_head(str(curve_owner.method or ""))
         != "signed_landmark_restricted_cubic_spline"
         or _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources)
+        or _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources[:2])
     ):
         return plan, []
 
@@ -1312,6 +1313,102 @@ def apply_deterministic_figure_panels(
     return shaped
 
 
+def omit_redundant_composite_audits(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Keep audit displays with their closed dedicated owners before review.
+
+    The primary curve pair can stand alone only when both former audit
+    sources remain consumed by explicit deterministic displays elsewhere.
+    No table, analysis, population, or historical reviewed plan is changed.
+    """
+    sources, _owners, missing, ambiguous = _closed_data_quality_sources(plan.steps)
+    if sources is None or missing or ambiguous:
+        return plan, []
+    if not _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources):
+        return plan, []
+    if not any(
+        ROBUSTNESS_FIGURE_INPUT in candidate.inputs
+        and dedicated_renderer_consumes_typed_source(
+            [candidate],
+            source="table:robustness_summary",
+            compatible_companions=ROBUSTNESS_FIGURE_KNOWN_INPUTS
+            - {"table:robustness_summary"},
+        )
+        for candidate in plan.steps
+    ):
+        return plan, []
+    findings = []
+    steps = []
+    for step in plan.steps:
+        if (
+            step.planned_analysis_role != "auxiliary"
+            or _method_head(str(step.method or "")) != "visualization"
+            or len(step.inputs) != 4
+            or len(step.expected_outputs) != 1
+            or not str(step.expected_outputs[0]).startswith("figure:")
+        ):
+            steps.append(step)
+            continue
+        try:
+            panels = landmark_association_composite_panels(step.inputs)
+        except ValueError:
+            steps.append(step)
+            continue
+        audit_inputs = {
+            source for panel in panels[2:] for source in panel.source_products
+        }
+        if not audit_inputs <= {*sources, "table:robustness_summary"}:
+            steps.append(step)
+            continue
+        all_rows = {
+            c.input_key
+            for c in step.input_consumption_contracts
+            if c.mode == "all_rows"
+        }
+        if all_rows != set(step.inputs) or any(
+            sum(source in candidate.expected_outputs for candidate in plan.steps) != 1
+            for source in step.inputs
+        ):
+            steps.append(step)
+            continue
+        primary_inputs = [
+            source for source in step.inputs if source not in audit_inputs
+        ]
+        revised = migrate_render_step_contract(
+            step,
+            primary_inputs,
+            intent=(
+                "Render the aligned primary association and absolute-risk curves. "
+                "The exact audit tables remain in their dedicated diagnostic displays; "
+                "do not refit models or duplicate those displays."
+            ),
+        )
+        revised = revised.model_copy(
+            update={
+                "figure_panels": [
+                    panel.bind(figure_output=str(step.expected_outputs[0]))
+                    for panel in landmark_association_composite_panels(primary_inputs)
+                ]
+            }
+        )
+        steps.append(revised)
+        findings.append(
+            ValidationFinding(
+                validator="deterministic_figure_plan_binding",
+                severity="warning",
+                message="Kept composite audits in their existing dedicated source-bound displays.",
+                detail={
+                    "reason": "composite_audits_have_dedicated_displays",
+                    "step_id": step.step_id,
+                    "preserved_audit_sources": sorted(audit_inputs),
+                },
+            )
+        )
+    return (plan.model_copy(update={"steps": steps}) if findings else plan), findings
+
+
 def apply_runtime_bound_figure_contracts(
     plan: AnalysisPlan,
     findings: list[ValidationFinding],
@@ -1325,6 +1422,8 @@ def apply_runtime_bound_figure_contracts(
 
     revised, renderer_findings = select_deterministic_result_renderers(plan=plan)
     findings.extend(renderer_findings)
+    revised, audit_findings = omit_redundant_composite_audits(plan=revised)
+    findings.extend(audit_findings)
     return apply_deterministic_figure_panels(revised, findings)
 
 

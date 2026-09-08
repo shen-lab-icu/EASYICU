@@ -472,3 +472,59 @@ def test_main_landmark_figure_keeps_audit_panels_in_supplement(
     svg = (tmp_path / "outputs" / "display_suite.svg").read_text(encoding="utf-8")
     assert "Sensitivity-analysis coverage" not in svg
     assert "Measurement availability" not in svg
+
+
+def test_primary_curve_pair_does_not_generate_undeclared_audit_figures(tmp_path):
+    inputs = INPUTS[:2]
+    bindings = {}
+    for key, frame in _frames().items():
+        if key not in inputs:
+            continue
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep(
+        step_id="primary_display",
+        planned_analysis_role="auxiliary",
+        intent="Render primary curves; diagnostics have separate displays.",
+        method="visualization",
+        inputs=list(inputs),
+        expected_outputs=["figure:primary_display"],
+        input_consumption_contracts=[
+            {"input_key": k, "mode": "all_rows"} for k in inputs
+        ],
+        figure_panels=[
+            p.bind(figure_output="figure:primary_display")
+            for p in landmark_association_composite_panels(inputs)
+        ],
+    )
+    assert landmark_association_figure_executor_owns_step(
+        step, resolved_bindings=bindings
+    )
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Association", steps=[step]),
+        resolved_bindings=bindings,
+    )
+    assert selection.analysis_kind == "landmark_association_composite_figure"
+    summary = run_landmark_association_figure(
+        out_dir=tmp_path / "outputs",
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="primary_display",
+        input_keys=inputs,
+    )
+    assert summary["supplementary_output_files"] == {}
+    assert summary["supplementary_panel_ids"] == []
+    assert len(summary["source_data_files"]) == 2
+    assert len(summary["contract_files"]) == 1
+    assert not list((tmp_path / "outputs").glob("*supplementary*"))
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=tmp_path / "outputs",
+            step_summary=summary,
+        )
+        == []
+    )

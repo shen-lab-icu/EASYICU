@@ -12,6 +12,8 @@ and the run produces robustness/data-quality evidence. The scorer reads
 
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.evaluation_scorecard import score_plan
 from easyicu.research_agent.icu_agent_bench import ICUAgentBenchTask
 from easyicu.research_agent.plan_utils import (
@@ -306,7 +308,7 @@ def test_deterministic_robustness_renderer_binds_statistics_and_tables() -> None
     panel = shaped.steps[0].figure_panels[0]
     assert panel.panel_id == "robustness_grid"
     assert panel.article_role == "robustness"
-    assert panel.chart_type == "sensitivity_forest"
+    assert panel.chart_type == "specification_grid"
     assert panel.source_products == step.inputs
     assert findings[0].detail["reason"] == "deterministic_figure_panels_bound"
 
@@ -1045,3 +1047,105 @@ def test_cohort_accounting_figure_prefers_unique_primary_population_flow() -> No
     assert renderer.input_consumption_contracts[0].input_key == (
         "table:landmark_population_flow"
     )
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        None,
+        "missing_audit",
+        "missing_robustness",
+        "ambiguous_source",
+        "filtered_composite",
+    ],
+)
+def test_composite_audits_move_only_to_existing_closed_displays(broken):
+    from easyicu.research_agent.planning.figure_plan_shaping import (
+        apply_runtime_bound_figure_contracts,
+        omit_redundant_composite_audits,
+    )
+    from easyicu.research_agent.contracts.figure_plan import (
+        landmark_association_composite_panels,
+    )
+
+    plan = _plan_with_typed_data_quality_sources()
+    plan, _ = ensure_data_quality_figure_step(
+        plan=plan, context=_Ctx(plan.research_question)
+    )
+    curve_sources = [
+        "table:biomarker_rcs_curve",
+        "table:biomarker_adjusted_absolute_risk",
+    ]
+    sources = [
+        *curve_sources,
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    ]
+    primary = AnalysisStep(
+        step_id="primary",
+        planned_analysis_role="primary",
+        intent="Estimate curves.",
+        method="signed_landmark_restricted_cubic_spline",
+        expected_outputs=curve_sources,
+    )
+    robustness = AnalysisStep(
+        step_id="robust",
+        planned_analysis_role="sensitivity",
+        intent="Check sensitivity.",
+        method="robustness_sensitivity",
+        expected_outputs=["table:robustness_summary", "table:robustness_matrix"],
+    )
+    robust_display = AnalysisStep(
+        step_id="robust_display",
+        planned_analysis_role="auxiliary",
+        intent="Show sensitivity.",
+        method="visualization",
+        inputs=robustness.expected_outputs,
+        expected_outputs=["figure:robust"],
+        input_consumption_contracts=[
+            {"input_key": k, "mode": "all_rows"} for k in robustness.expected_outputs
+        ],
+    )
+    composite = AnalysisStep(
+        step_id="composite",
+        planned_analysis_role="auxiliary",
+        intent="Show curves and audits.",
+        method="visualization",
+        inputs=sources,
+        expected_outputs=["figure:curves"],
+        input_consumption_contracts=[
+            {"input_key": k, "mode": "all_rows"} for k in sources
+        ],
+        figure_panels=[
+            p.bind(figure_output="figure:curves")
+            for p in landmark_association_composite_panels(sources)
+        ],
+    )
+    if broken == "missing_audit":
+        plan.steps.pop()
+    if broken == "filtered_composite":
+        composite.input_consumption_contracts = []
+    plan.steps.extend([primary, robustness, composite])
+    if broken != "missing_robustness":
+        plan.steps.append(robust_display)
+    if broken == "ambiguous_source":
+        plan.steps.append(robustness.model_copy(update={"step_id": "other_robustness"}))
+    original = plan.model_dump(mode="json")
+    shaped, findings = omit_redundant_composite_audits(plan=plan)
+    assert plan.model_dump(mode="json") == original
+    actual = next(s for s in shaped.steps if s.step_id == "composite")
+    assert actual.inputs == (curve_sources if broken is None else sources)
+    assert bool(findings) is (broken is None)
+    if broken is None:
+        assert len(actual.figure_panels) == 2
+        assert set(c.input_key for c in actual.input_consumption_contracts) == set(
+            curve_sources
+        )
+        again, repeated = omit_redundant_composite_audits(plan=shaped)
+        assert again == shaped and repeated == []
+        rebound = apply_runtime_bound_figure_contracts(shaped, [])
+        assert len(rebound.steps) == len(shaped.steps)
+        assert (
+            next(s for s in rebound.steps if s.step_id == "composite").inputs
+            == curve_sources
+        )

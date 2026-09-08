@@ -444,13 +444,20 @@ def landmark_association_composite_panels(
     if (
         curve is None
         or adjusted_risk is None
-        or measurement is None
-        or len(cleaned) != 4
+        or len(cleaned) not in {2, 4}
         or len(cleaned) != len(set(cleaned))
-        or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
+        or (
+            len(cleaned) == 4
+            and (
+                measurement is None
+                or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
+            )
+        )
     ):
-        raise ValueError("landmark composite requires its four exact typed tables")
-    return (
+        raise ValueError(
+            "landmark composite requires two curve tables or the complete four-table profile"
+        )
+    panels = (
         DeterministicFigurePanelTemplate(
             panel_id="association_curve",
             article_role="primary_estimand",
@@ -463,6 +470,12 @@ def landmark_association_composite_panels(
             chart_type="absolute_risk_curve",
             source_products=(adjusted_risk,),
         ),
+    )
+    if len(cleaned) == 2:
+        return panels
+    assert measurement is not None
+    return (
+        *panels,
         DeterministicFigurePanelTemplate(
             panel_id="robustness_summary",
             article_role="robustness",
