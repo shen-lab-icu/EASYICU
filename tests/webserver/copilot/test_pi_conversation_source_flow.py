@@ -47,6 +47,30 @@ def test_source_confirmation_continues_once_but_selection_only_opens_picker():
     assert result == ['use_study_required_data', 'workflow', 'continue', 'begin_local_selection']
 
 
+@pytest.mark.parametrize('status', ['confirmed', 'pending', 'selection_in_progress'])
+def test_local_source_receipt_is_visible_without_inventing_a_chat_decision(status):
+    result = run_js(f"""
+      global.window = {{}};
+      eval({_read('js/html-escape.js')!r});
+      eval({_read('js/screens-guided-pi-data-consent.js')!r});
+      const session = {{data_source_authorization:{{status:{status!r},
+        confirmation_mode:'select_local_source',confirmed_at:'2026-09-08T08:12:48Z',
+        source:{{label:'MIMIC-IV <img src=x>',reference_release:'3.1'}}}}}};
+      const before = JSON.stringify(session);
+      const html = window.EU_GUIDED_PI_DATA_CONSENT.renderSelectedSource(session,
+        {{esc:window.EU_HTML.esc,tr:(_en,zh)=>zh}});
+      process.stdout.write(JSON.stringify({{html,same:before===JSON.stringify(session)}}));
+    """)
+    assert result['same']
+    if status != 'confirmed':
+        assert result['html'] == ''
+    else:
+        assert 'MIMIC-IV &lt;img src=x&gt; v3.1' in result['html']
+        assert '2026-09-08T08:12:48Z' in result['html']
+        assert '<img' not in result['html']
+        assert 'data-gpi-data-source-action' not in result['html']
+
+
 def test_resource_cards_preserve_coordinates_and_escape_labels():
     result = run_js(f"""
       global.window = {{EU_LANG:'zh'}};
