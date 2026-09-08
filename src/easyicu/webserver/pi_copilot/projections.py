@@ -566,6 +566,21 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     artifact_payloads = (
         artifact_payloads if isinstance(artifact_payloads, Mapping) else {}
     )
+    provenance = artifact_payloads.get("manuscript_provenance.json") or {}
+    revision = (provenance.get("report_revision") or {}) if isinstance(provenance, Mapping) else {}
+    # This is draft availability only, not the immutable source manuscript
+    # gate or permission to publish. Payloads have passed the run ledger check.
+    projection["report_revision_ready"] = bool(
+        isinstance(revision, Mapping)
+        and revision.get("schema_version") == "easyicu.web-report-revision/1"
+        and revision.get("status") == "pass"
+        and revision.get("source_run_id") == review.get("run_id")
+        and revision.get("analysis_steps_executed") == 0
+        and revision.get("claim_ceiling") == "analysis_only"
+        and revision.get("publication_authorized") is False
+        and re.fullmatch(r"[a-f0-9]{64}", str(revision.get("output_sha256") or ""))
+        and revision.get("output_sha256") == provenance.get("manuscript_sha256")
+    )
     figure_gallery = artifact_payloads.get("figure_gallery.json")
     if isinstance(figure_gallery, Mapping):
         figures = figure_gallery.get("figures")
@@ -593,6 +608,7 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 "numeric_verified",
                 "evidence_complete",
                 "manuscript_ready",
+                "report_revision_ready",
                 "analysis_results_available",
                 "figure_count",
                 "reportable",

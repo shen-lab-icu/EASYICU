@@ -66,7 +66,9 @@
       .map(item => {
         const raw = item.record.exposure_level;
         const matches = (Array.isArray(spec && spec.exposure_levels) ? spec.exposure_levels : [])
-          .filter(level => String(level) === String(raw));
+          .filter(level => String(level) === String(raw)
+            || (typeof level === 'number' && typeof raw === 'string'
+              && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) && Number(raw) === level));
         const key = matches.length === 1 ? `${spec.exposure}=${JSON.stringify(matches[0])}` : '';
         return {
         level: String(item.record.exposure_level == null ? '' : item.record.exposure_level),

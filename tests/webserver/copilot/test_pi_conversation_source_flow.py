@@ -5,6 +5,8 @@ import subprocess
 
 import pytest
 
+from easyicu.webserver.pi_copilot.projections import project_run_outcome
+
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
     _read,
@@ -75,7 +77,7 @@ def test_result_summary_does_not_invent_complete_cases_or_merge_distributions():
       global.window = {{}};
       eval({_read('js/screens-guided-pi-result-summary.js')!r});
       const table = {{headers:['row_role','exposure_level','n_rows','exposure_denominator','exposure_pct','outcome_events','outcome_denominator','outcome_rate_pct'],
-        rows:[['overall','',10,10,100,2,10,20],['exposure_level',0,10,10,100,2,10,20]]}};
+        rows:[['overall','',10,10,100,2,10,20],['exposure_level','0.0',10,10,100,2,10,20]]}};
       const summarize = window.EU_GUIDED_PI_RESULT_SUMMARY.summarize;
       const plan = {{display_labels:{{'x=0':'Reference','y':'Outcome'}},steps:[{{planned_analysis_role:'primary',exposure_outcome_distribution_spec:{{exposure:'x',outcome:'y',exposure_levels:[0]}}}}]}};
       process.stdout.write(JSON.stringify({{one:summarize({{tables:[table]}},plan),two:summarize({{tables:[table,{{...table}}]}},plan)}}));
@@ -86,6 +88,25 @@ def test_result_summary_does_not_invent_complete_cases_or_merge_distributions():
     assert result['one']['exposureLevels'][0]['label'] == 'Reference'
     assert result['two']['exposureLevels'] == []
     assert result['two']['claims'] == []
+
+
+@pytest.mark.parametrize('matching_digest', [True, False])
+def test_full_report_reads_separately_bound_revision_without_promoting_source(matching_digest):
+    digest = 'a' * 64
+    result = run_js(f"""
+      global.window = {{EU_LANG:'zh',AGENT_RENDER:{{manuscriptProvenanceView:()=>'<article>Verified revision</article>'}}}};
+      eval({_read('js/html-escape.js')!r});
+      eval({_read('js/screens-guided-pi-analysis-report.js')!r});
+      const payload = {{source_manifest:{{readiness:{{manuscript_ready:false}}}},
+        manuscript_provenance:{{manuscript_sha256:{digest!r},report_revision:{{
+          schema_version:'easyicu.web-report-revision/1',status:'pass',claim_ceiling:'analysis_only',
+          publication_authorized:false,analysis_steps_executed:0,
+          output_sha256:{(digest if matching_digest else 'b' * 64)!r}}}}}}};
+      const before = JSON.stringify(payload);
+      process.stdout.write(JSON.stringify({{html:window.EU_GUIDED_PI_ANALYSIS_REPORT.render(payload),same:before===JSON.stringify(payload)}}));
+    """)
+    assert result['same']
+    assert ('Verified revision' in result['html']) is matching_digest
 
 
 def test_full_report_shows_real_results_plan_and_article_without_raw_html():
@@ -123,3 +144,18 @@ def test_execution_history_keeps_user_decisions_latest_failure_and_live_activity
     assert html.count('<details') == 1
     assert html.index('</details>') < html.index('attempt2') < html.index('decision') < html.index('live')
     assert all(html.count(name) == 1 for name in ('question', 'attempt0', 'attempt1', 'attempt2', 'decision', 'live'))
+
+
+@pytest.mark.parametrize('same_source', [True, False])
+def test_report_revision_draft_availability_is_separate_from_scientific_gate(same_source):
+    review = {'ok': True, 'run_id': 'run_a', 'gate': {'reportable': False},
+        'artifact_payloads': {'manuscript_provenance.json': {
+            'manuscript_sha256': 'a' * 64,
+            'report_revision': {'schema_version': 'easyicu.web-report-revision/1',
+                'source_run_id': 'run_a' if same_source else 'run_b', 'status': 'pass',
+                'analysis_steps_executed': 0, 'claim_ceiling': 'analysis_only',
+                'publication_authorized': False, 'output_sha256': 'a' * 64}}}}
+    result = project_run_outcome(review)
+    assert result['report_revision_ready'] is same_source
+    assert result['manuscript_ready'] is False
+    assert result['reportable'] is False
