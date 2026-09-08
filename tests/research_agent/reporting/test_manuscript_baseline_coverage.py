@@ -61,6 +61,34 @@ def _mentions():
     )
 
 
+def test_baseline_repair_names_authorized_reader_labels_not_only_internal_ids():
+    errors = manuscript_sections.quality_repair_section_errors(
+        _valid_manuscript(),
+        expected_baseline_mentions={"adm": ("adm", "patient admission type", "admission type")},
+    )
+    assert "admission type" in "\n".join(errors["methods"])
+    assert "not authorize" in "\n".join(errors["methods"])
+
+
+def test_methods_writer_receives_exact_baseline_naming_contract(monkeypatch):
+    from easyicu.research_agent.agents import reporting
+
+    captured = []
+    def complete(_llm, messages, **_kwargs):
+        captured.append(messages[-1].content)
+        return "## Methods\nStudy methods."
+    monkeypatch.setattr(reporting, "authorized_complete", complete)
+    writer = reporting.WriterAgent(SimpleNamespace())
+    writer._call_section(
+        section_name="Methods", instruction="Write Methods.",
+        context=_bound_context("age", "charlson"),
+        evidence_ids=[], evidence_digest=None,
+        reader_display_labels={"cci_value": "Charlson Comorbidity Index"},
+    )
+    assert "ACCEPTED BASELINE NAMING CONTRACT" in captured[0]
+    assert '"charlson"' in captured[0] and '"Charlson Comorbidity Index"' in captured[0]
+
+
 def test_methods_coverage_is_not_satisfied_by_introduction_or_table_mentions() -> None:
     text = _valid_manuscript().replace(
         "Sepsis definitions and transparent cohort accounting matter for reproducible ICU research.",

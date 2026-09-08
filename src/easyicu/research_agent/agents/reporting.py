@@ -220,6 +220,12 @@ class WriterAgent:
         display_labels = _writer_display.normalise_reader_display_labels(
             reader_display_labels
         )
+        from ..reporting.manuscript_baseline import baseline_naming_instruction, baseline_reporting_mentions
+
+        baseline_instruction = (
+            baseline_naming_instruction(baseline_reporting_mentions(context, reader_display_labels))
+            if str(section_name).strip().casefold() == "methods" else ""
+        )
         messages = [
             LLMMessage(
                 role="system",
@@ -240,6 +246,7 @@ class WriterAgent:
                     "manuscript in markdown. Do NOT write any other section.\n\n"
                     f"{instruction}\n\n"
                     f"{lang_inst}\n\n"
+                    + baseline_instruction
                     + (
                         self.user_writing_advisory + "\n\n"
                         if self.user_writing_advisory

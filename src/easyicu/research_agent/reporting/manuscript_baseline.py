@@ -8,10 +8,27 @@ remain separate; Writer must describe only the executed representation.
 from __future__ import annotations
 
 import re
+import json
 from typing import Mapping, Sequence
 
 from ..planning.baseline_requirements import baseline_requirement_projection
 from ..schema import ResearchContext
+
+
+def baseline_naming_instruction(mentions: Mapping[str, Sequence[str]]) -> str:
+    """Expose the same accepted names checked downstream, without new authority."""
+
+    if not mentions:
+        return ""
+    return (
+        "ACCEPTED BASELINE NAMING CONTRACT:\n"
+        "In Methods/Variables describe every accepted baseline using an exact "
+        "clinical reader name from its list below. Keys and raw column codes are "
+        "internal coordinates, not required prose. Include the executed representation; "
+        "missingness alone is not a method description. These names do not authorize "
+        "an unexecuted method or a different clinical definition.\n"
+        + json.dumps(dict(mentions), ensure_ascii=False) + "\n\n"
+    )
 
 
 def missing_baseline_method_mentions(
