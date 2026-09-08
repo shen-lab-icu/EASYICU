@@ -4402,7 +4402,7 @@ def _materialization_concept_roster(
             coordinate.source_concept
             for table in baseline_requirements.tables
             for coordinate in (table.group_by, *table.variables)
-            if coordinate.source_concept is not None
+            if coordinate is not None and coordinate.source_concept is not None
         }
         resolved = {
             concept: resolve_composite_concept_output(concept, available)
