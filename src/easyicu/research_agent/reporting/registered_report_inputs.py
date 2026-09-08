@@ -25,7 +25,8 @@ from ..schema import EvidenceRecord
 from ..schema import AnalysisPlan
 from ..literature import LiteratureBundle
 from .manuscript_reader import build_manuscript_reader
-from .writer_evidence import _executed_method_boundary_rows
+from .writer_evidence import _render_writer_evidence_digest_v2
+from ..research_context.typed import parse_research_context_json
 from .descriptive_report_facts import (
     compile_counts_only_report_facts, render_descriptive_report_claims,
     verified_descriptive_source_records,
@@ -60,6 +61,12 @@ class ReadOnlyReportEvidence:
     def authoritative_numeric_claims(self, records):
         return EvidenceStore.authoritative_numeric_claims(self, records)
 
+    def scientific_claims(self):
+        return list(load_registered_scientific_claims(root=self.root, records=self._records))
+
+    def authoritative_scientific_claims(self, records):
+        return EvidenceStore.authoritative_scientific_claims(self, records)
+
     def records(self):
         return list(self._records)
 
@@ -72,7 +79,7 @@ class ReadOnlyReportEvidence:
             (row for row in self._records if row.evidence_id == canonical), None
         )
 
-    def verify_input(self, name: str, evidence_id: str) -> bytes:
+    def latest_sealed_record(self, evidence_id: str):
         record = self.get(evidence_id)
         # Stable citation ids deliberately retain their first version. A live
         # input file must instead match the newest explicitly sealed revision,
@@ -83,6 +90,17 @@ class ReadOnlyReportEvidence:
         )]
         if revisions:
             record = revisions[-1]
+        return record
+
+    def read_sealed(self, evidence_id: str) -> bytes:
+        record = self.latest_sealed_record(evidence_id)
+        sealed = verified_run_evidence_path(self.root, record) if record else None
+        if sealed is None:
+            raise WriterOnlyMigrationError(code="WRITER_ONLY_REGISTERED_INPUT_CHANGED", detail=evidence_id)
+        return sealed.read_bytes()
+
+    def verify_input(self, name: str, evidence_id: str) -> bytes:
+        record = self.latest_sealed_record(evidence_id)
         sealed = verified_run_evidence_path(self.root, record) if record else None
         source = self.root / name
         if (
@@ -106,11 +124,15 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
         ("research_context.json", "research_context"),
         ("analysis_plan.json", "analysis_plan"),
         ("preplan_literature_bundle.json", "preplan_literature_bundle"),
-        ("writer_evidence_digest.md", "writer_evidence_digest"),
         ("manuscript_scaffold.md", "manuscript_scaffold_raw"),
     ):
         evidence.verify_input(name, evidence_id)
-    status = json.loads(evidence.verify_input("run_status.json", "run_status"))
+    # Reporting caches can change after a failed Writer without a corresponding
+    # new seal in older runs. Never trust those mutable caches as authority.
+    # Require an immutable completed-analysis receipt AND revalidate every
+    # current planned output below. Manuscript numeric success is an OUTPUT
+    # gate of repair, not a prerequisite that makes failed writing unrepairable.
+    status = json.loads(evidence.read_sealed("run_status"))
     gates = status.get("gates", {})
     if (
         any(
@@ -118,7 +140,6 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
             for key in (
                 "execution_complete",
                 "analysis_validated",
-                "numeric_verified",
             )
         )
         or gates.get("failed_steps")
@@ -128,49 +149,21 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
             code="WRITER_ONLY_COMPLETED_ANALYSIS_REQUIRED",
             detail="Only a completed, validated analysis can enter report-only repair.",
         )
-    prepared = prepare_writer_only_migration(evidence.root)
-    if prepared.plan is None:
-        raise WriterOnlyMigrationError(
-            code="WRITER_ONLY_CURRENT_PLAN_REQUIRED",
-            detail="The sealed plan must parse.",
-        )
-    # Resolve every method from its sealed envelope and exact source summary.
-    # Only refresh this host-generated block; preserve the sealed numeric and
-    # scientific-claim digest byte-for-byte outside it.
+    plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
+    context = parse_research_context_json(evidence.verify_input("research_context.json", "research_context"))
     manifest = json.loads((evidence.root / "manifest.json").read_text())
-    records = manifest.get("per_step_records", [])
+    records = current_step_records(manifest.get("per_step_records", []))
+    _require_completed_plan_records(plan, records)
     projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
         records,
         evidence_store=evidence,
     )
-    planned_ids = {step.step_id for step in prepared.plan.steps}
-    # The consumer also verifies dedicated host cohort/probe authorities, then
-    # deliberately omits these non-result records from the Writer digest.
-    completed_ids = {
-        row.get("step_id")
-        for row in current_step_records(records)
-        if row.get("status") == "ok"
-    }
-    if not planned_ids or not planned_ids.issubset(completed_ids):
-        raise WriterOnlyMigrationError(
-            code="WRITER_ONLY_PLAN_RESULTS_INCOMPLETE",
-            detail="Registered plan steps are missing.",
-        )
-    rows = _executed_method_boundary_rows(projected, evidence=evidence)
-    marker = "\n## EXECUTED METHOD BOUNDARY"
-    digest = prepared.evidence_digest
-    if marker in digest:
-        before, rest = digest.split(marker, 1)
-        next_heading = rest.find("\n## ")
-        after = rest[next_heading:] if next_heading >= 0 else ""
-        digest = (
-            before + marker + "\n" + json.dumps(rows, ensure_ascii=False) + "\n" + after
-        )
-    else:
-        raise WriterOnlyMigrationError(
-            code="WRITER_ONLY_METHOD_DIGEST_UNAVAILABLE",
-            detail="No registered method block.",
-        )
+    digest = _render_writer_evidence_digest_v2(
+        projected, context=context, run_dir=evidence.root, evidence=evidence,
+    )
+    prepared = prepare_writer_only_migration(
+        evidence.root, host_verified_evidence_digest=digest,
+    )
     return replace(
         prepared, evidence_digest=digest,
         host_result_facts=compile_counts_only_report_facts(
@@ -179,6 +172,19 @@ def prepare_registered_report_repair(run_dir: Path) -> PreparedWriterOnlyMigrati
             scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
         ),
     )
+
+
+def _require_completed_plan_records(plan, records):
+    """An earlier success cannot conceal a newer failure or a missing step."""
+    current = current_step_records(records)
+    planned_ids = {step.step_id for step in plan.steps}
+    completed_ids = {row.get("step_id") for row in current if row.get("status") == "ok"}
+    if (not planned_ids or not planned_ids.issubset(completed_ids)
+            or any(row.get("status") != "ok" for row in current)):
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_PLAN_RESULTS_INCOMPLETE",
+            detail="Every current planned step must be complete before report-only repair.",
+        )
 
 
 def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str, int]:

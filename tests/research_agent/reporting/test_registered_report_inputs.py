@@ -10,6 +10,7 @@ from easyicu.research_agent.authority.evidence_store import (
 )
 from easyicu.research_agent.reporting.registered_report_inputs import (
     ReadOnlyReportEvidence,
+    _require_completed_plan_records,
 )
 from easyicu.research_agent.reporting.writer_only_migration import (
     WriterOnlyMigrationError,
@@ -115,6 +116,31 @@ def test_named_report_input_must_equal_its_sealed_registered_copy(tmp_path):
     path.write_text('{"n_total":121}')
     with pytest.raises(WriterOnlyMigrationError, match="REGISTERED_INPUT_CHANGED"):
         reader.verify_input("input.json", "input")
+
+
+def test_derived_working_status_is_not_used_as_immutable_analysis_authority(tmp_path):
+    root, store = _source(tmp_path)
+    status = {"gates": {"execution_complete": True, "analysis_validated": True, "numeric_verified": False}}
+    record = store.register_json(kind="log", description="Completed analysis", payload=status,
+                                filename="run_status.json", evidence_id="run_status")
+    (root / "run_status.json").write_text('{"gates":{"reportable":true}}')
+    reader = ReadOnlyReportEvidence(root)
+    assert json.loads(reader.read_sealed("run_status")) == status
+    assert json.loads(reader.read_sealed("run_status"))["gates"]["numeric_verified"] is False
+    (root / record.relative_path).write_text('{}')
+    with pytest.raises(WriterOnlyMigrationError):
+        reader.read_sealed("run_status")
+
+
+@pytest.mark.parametrize("suffix", [[], [{"step_id":"cohort","status":"failed"}]])
+def test_current_plan_requires_all_outputs_and_never_revives_prior_success(suffix):
+    from types import SimpleNamespace
+    plan = SimpleNamespace(steps=[SimpleNamespace(step_id="cohort"), SimpleNamespace(step_id="analysis")])
+    success = [{"step_id":"cohort","status":"ok"}, {"step_id":"analysis","status":"ok"}]
+    _require_completed_plan_records(plan, success)
+    invalid = success + suffix if suffix else success[:1]
+    with pytest.raises(WriterOnlyMigrationError, match="PLAN_RESULTS_INCOMPLETE"):
+        _require_completed_plan_records(plan, invalid)
 
 
 def test_report_repair_binds_values_to_exact_step_not_only_valid_citations(tmp_path):
