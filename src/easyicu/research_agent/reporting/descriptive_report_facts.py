@@ -23,6 +23,7 @@ class DescriptiveReportFact:
     source_sha256: str
     source_fields: tuple[str, ...]
     replaces_claim_ref: str | None = None
+    cohort_n: int | None = None
 
     @property
     def scaffold(self) -> str:
@@ -123,6 +124,7 @@ def compile_counts_only_report_facts(
                 text=f"Exposure prevalence in the {label} group was {count:,} of {denominator:,} observations ({estimate:.2f}%)",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
                 source_fields=tuple(f"{prefix}.{key}" for key in ("level", "n", "denominator", "estimate_pct")),
+                cohort_n=cohort_n,
             ))
         if cohort_count != cohort_n:
             raise ValueError("Prevalence fact counts do not partition the cohort")
@@ -309,6 +311,20 @@ def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveR
         {name: tuple(fact for fact in facts if fact.subsection == name)
          for name in dict.fromkeys(fact.subsection for fact in facts)}
     )
+    cohort_sources = tuple(fact for fact in facts if fact.cohort_n is not None)
+    if descriptive_heading is not None and cohort_sources:
+        # Copy the recorded cohort_n, not a number parsed from prose or an
+        # outcome denominator. Different analysis cohorts cannot be collapsed
+        # into one unqualified cohort count.
+        counts = {_count(fact.cohort_n, positive=True) for fact in cohort_sources}
+        if len(counts) == 1:
+            source = cohort_sources[0]
+            destinations["Cohort characteristics"] = (DescriptiveReportFact(
+                subsection="Cohort characteristics",
+                text=f"The analysis cohort comprised {source.cohort_n:,} observations",
+                evidence_id=source.evidence_id, source_sha256=source.source_sha256,
+                source_fields=("cohort_n",),
+            ),)
     for subsection, subsection_facts in destinations.items():
         heading = re.search(rf"^### {re.escape(subsection)}[ \t]*$", body, re.M)
         if heading is None:
