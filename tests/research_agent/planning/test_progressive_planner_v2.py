@@ -7042,3 +7042,21 @@ def test_step_transport_requires_each_outline_literature_key_once() -> None:
 
     assert bindings["minItems"] == 1
     assert bindings["maxItems"] == 1
+
+
+def test_ungrouped_baseline_refuses_identifier_summary_before_execution() -> None:
+    from easyicu.research_agent.schema import ConceptDescriptor
+    payload = _payload()
+    baseline = payload["steps"][1]
+    baseline.update(
+        module_id="custom_analysis", custom_method="baseline_description",
+        outputs=[{"product_id": "table:baseline_table", "semantic_role": "custom"}],
+        table_one_group_by=None, table_one_mode=None, table_one_variables=[],
+    )
+    baseline["raw_inputs"].append("row_key")
+    context = _context().model_copy(update={"variables": [
+        *_context().variables, ConceptDescriptor(name="row_key", role="id", dtype="string"),
+    ]})
+    with pytest.raises(ProgressivePlanCompileError) as raised:
+        compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context)
+    assert raised.value.code == "progressive_baseline_summary_semantic_role_ineligible"

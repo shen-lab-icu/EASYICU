@@ -2,9 +2,50 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import json
+from typing import Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+
+
+class ReferencedPlan(BaseModel):
+    """Host-read, privacy-checked planning content; no execution grant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    run_id: str = Field(min_length=1, max_length=160)
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    plan: dict[str, Any]
+
+
+def reference_plan_content(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep scientific choices and exact rosters without result artifacts.
+
+    This consumes the artifact owner's privacy-checked payload. Size is checked
+    by PlanChangeRequest; silent list truncation would hide the requested rows.
+    """
+    projected = {key: plan[key] for key in (
+        "research_question", "analysis_type", "cohort", "endpoint", "robustness_specs",
+        "subgroup_analysis_spec", "display_labels",
+    ) if key in plan}
+    selection = plan.get("design_selection")
+    if isinstance(selection, Mapping):
+        projected["design_selection"] = [
+            {key: candidate[key] for key in (
+                "design_id", "disposition", "estimand", "time_zero", "observation_window",
+                "primary_method", "required_variables",
+            ) if key in candidate}
+            for candidate in selection.get("candidates", ()) if isinstance(candidate, Mapping)
+        ]
+    projected["steps"] = [
+        {key: step[key] for key in (
+            "step_id", "planned_analysis_role", "intent", "method", "inputs", "expected_outputs",
+            "table_one_spec", "model_requirements", "cohort_definition_spec", "functional_form_spec",
+            "population_scope", "scientific_action_id", "literature_citation_keys",
+        ) if key in step}
+        for step in plan.get("steps", ()) if isinstance(step, Mapping)
+    ]
+    return projected
+
 
 
 class PlanChangeRequest(BaseModel):
@@ -17,6 +58,36 @@ class PlanChangeRequest(BaseModel):
     )
     source_run_id: str = Field(min_length=1, max_length=160)
     user_message: str = Field(min_length=1, max_length=12_000)
+    reference_plans: tuple[ReferencedPlan, ...] = Field(default=(), max_length=4)
+
+    @model_validator(mode="after")
+    def _bounded_references(self) -> "PlanChangeRequest":
+        payload = [reference.model_dump(mode="json") for reference in self.reference_plans]
+        if len(json.dumps(payload, ensure_ascii=False).encode()) > 64_000:
+            raise ValueError("referenced plan context exceeds its bounded transport")
+        if len({reference.run_id for reference in self.reference_plans}) != len(self.reference_plans):
+            raise ValueError("referenced plans must be unique")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _legacy_serialization(self, handler):
+        payload = handler(self)
+        if not self.reference_plans:
+            payload.pop("reference_plans", None)
+        return payload
+
+    def reference_concepts(self, catalog_ids: set[str]) -> tuple[str, ...]:
+        """Keep historical coordinates available in a zero-row planning menu.
+
+        These are candidates for revision, not required analysis variables or
+        permission to read patient rows. The new plan still requires review.
+        """
+        coordinates = set()
+        for reference in self.reference_plans:
+            for step in reference.plan.get("steps") or ():
+                if isinstance(step, Mapping):
+                    coordinates.update(value for value in step.get("inputs", ()) if isinstance(value, str))
+        return tuple(sorted(coordinates & catalog_ids))
 
     def planner_context(self) -> str:
         """Keep requested amendments distinct from reviewed plan authority."""
@@ -27,9 +98,13 @@ class PlanChangeRequest(BaseModel):
             "This request is not a scientific fact, approved plan, clinical "
             "sign-off, or permission to execute analysis. Preserve the research "
             "question, data source, required outcomes, and host authority gates; "
-            "propose changes for a fresh complete-plan review.\n"
+            "propose changes for a fresh complete-plan review. "
+            "reference_plans contain the exact saved content discussed by the user; "
+            "compare their declared variables, methods and outputs instead of "
+            "reconstructing them from run names. Historical plans are context, "
+            "not current approval or evidence of scientific correctness.\n"
             + self.model_dump_json()
         )
 
 
-__all__ = ["PlanChangeRequest"]
+__all__ = ["PlanChangeRequest", "ReferencedPlan", "reference_plan_content"]

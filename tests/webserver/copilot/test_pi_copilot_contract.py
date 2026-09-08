@@ -3633,6 +3633,11 @@ def test_current_plan_restarts_only_with_current_user_amendments(
             "plan_approval_allowed": True,
         },
     )
+    monkeypatch.setattr(
+        tool_module.agent_runs, "read_run_artifact",
+        lambda *_: {"ok": True, "artifact": {"sha256": "a" * 64},
+                    "payload": {"research_question": study["question"], "steps": []}},
+    )
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         research_run_submission,
@@ -3676,6 +3681,7 @@ def test_current_plan_restarts_only_with_current_user_amendments(
         assert request.planner_start_mode == "fresh"
         assert request.execution_resume_source_run_id == ""
         assert request.plan_change_request.source_run_id == "run-current-review"
+        assert request.plan_change_request.reference_plans[0].run_id == "run-current-review"
         assert "保留全部结局" in request.plan_change_request.user_message
         assert "/private/export" not in request.plan_change_request.user_message
         assert "host-verified local data source: MIIV" in request.plan_change_request.user_message

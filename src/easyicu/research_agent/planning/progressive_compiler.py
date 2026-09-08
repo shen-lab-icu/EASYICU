@@ -1720,6 +1720,16 @@ def _compile_inputs(
         step_index=step_index,
         path="raw_inputs",
     )
+    if _is_ungrouped_baseline_summary(step):
+        ineligible = [name for name in raw if variables[name].role.value in {"id", "index", "meta", "time"}]
+        if ineligible:
+            raise _fail(
+                "progressive_baseline_summary_semantic_role_ineligible",
+                "A baseline summary requires clinical value variables; identifiers and measurement metadata "
+                "belong to cohort accounting or data-quality outputs, not patient-characteristic rows.",
+                step=step, step_index=step_index, path="raw_inputs",
+                detail={"columns": ineligible},
+            )
     for name in raw:
         try:
             require_supported_variable_source(variables[name], context.cohort.database)

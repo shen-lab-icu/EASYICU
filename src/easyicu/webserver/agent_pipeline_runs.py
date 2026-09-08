@@ -1073,6 +1073,7 @@ def _metadata_only_planning_acquisition(
     required_concepts: Sequence[str] = (),
     patient_grouping: Optional[PatientGroupingBinding] = None,
     operationalized_columns: Sequence[str] = (),
+    plan_change_request: PlanChangeRequest | None = None,
 ) -> Any:
     """Select a planning catalog without reading patient data.
 
@@ -1107,7 +1108,11 @@ def _metadata_only_planning_acquisition(
         question=question,
         catalog=catalog,
         target_outcome=target_outcome,
+        planning_context=plan_change_request.planner_context() if plan_change_request else "",
     )
+    if plan_change_request is not None:
+        # Widen only the schema menu, never the scientific execution roster.
+        required_concepts = (*required_concepts, *plan_change_request.reference_concepts(set(catalog.ids())))
     # This catalog is the host's complete executable menu for planning, not a
     # partial user export. Ground ordinary clinical spellings through the
     # dictionary's unique aliases and discard any remaining model-only names.
@@ -4719,6 +4724,7 @@ def make_research_pipeline_run_runner(
                     question=question,
                     llm=acquisition_client,
                     output_dir=wrapper_dir / "pipeline_input",
+                    plan_change_request=execution.plan_change_request,
                     target_outcome=metadata_planning_coordinates.get("target_outcome"),
                     endpoint=metadata_planning_coordinates.get("endpoint"),
                     required_concepts=(

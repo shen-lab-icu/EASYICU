@@ -336,6 +336,9 @@ def run_cohort_summary_from_env(
             + ", ".join(missing_metadata)
         )
 
+    identifiers = [column for column in columns if metadata_by_name[column].get("role") in {"id", "index"}]
+    if identifiers:
+        raise RuntimeError("Identifiers cannot be described as clinical characteristics: " + ", ".join(identifiers))
     cohort_n = int(len(frame))
     rows = [
         _row(

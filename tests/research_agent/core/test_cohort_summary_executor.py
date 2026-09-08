@@ -595,3 +595,15 @@ def test_a_step_with_no_scope_may_not_smuggle_in_a_receipt(
                 }
             },
         )
+
+
+@pytest.mark.parametrize("role", ["id", "index"])
+def test_summary_does_not_publish_numeric_identifier_statistics(tmp_path, monkeypatch, role):
+    cohort_path, out_dir = _bind_run(tmp_path, monkeypatch)
+    context_path = cohort_path.parent / "research_context.json"
+    context = json.loads(context_path.read_text())
+    context["variables"][0]["role"] = role
+    context_path.write_text(json.dumps(context))
+    with pytest.raises(RuntimeError, match="Identifiers cannot be described"):
+        run_cohort_summary_from_env(declared_columns=["age"], typed_cohort_input="artifact:analysis_cohort")
+    assert not (out_dir / "cohort_summary.csv").exists()
