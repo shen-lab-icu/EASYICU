@@ -353,7 +353,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "20"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "21"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
@@ -717,6 +717,7 @@ def repair_existing_manuscript_sections(
             if spec.key not in repaired_keys:
                 repaired_keys.append(spec.key)
         scientific = _assemble_scientific_sections(sections)
+        scientific, _repair_rounding = repair_reader_structure_from_existing_prose(scientific)
         scientific, _phrase_repairs = repair_reader_internal_phrases(
             scientific,
             reader_display_labels=common.get("reader_display_labels", {}),
@@ -802,12 +803,14 @@ def repair_named_manuscript_sections(
     from .manuscript_quality import (
         expected_manuscript_display_labels,
         repair_reader_internal_phrases,
+        repair_reader_structure_from_existing_prose,
         repair_registered_display_callouts,
     )
 
     display_labels = expected_manuscript_display_labels(
         tuple(common.get("evidence_ids") or ())
     )
+    scientific, _repair_rounding = repair_reader_structure_from_existing_prose(scientific)
     scientific, _display_repairs = repair_registered_display_callouts(
         scientific,
         expected_display_labels=display_labels,
