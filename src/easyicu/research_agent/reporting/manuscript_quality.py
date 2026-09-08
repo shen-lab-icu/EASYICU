@@ -177,12 +177,16 @@ def _subsections(text: str) -> dict[str, str]:
 
 
 def _has_prose(text: str) -> bool:
-    cleaned = _CLAIM_DEFINITION_RE.sub("", text)
-    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
+    visible = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    cleaned = _strip_audit_markup(visible)
+    cleaned = _LITERATURE_CITATION_RE.sub("", cleaned)
     cleaned = re.sub(r"^#{1,6}\s+.*$", "", cleaned, flags=re.M)
-    cleaned = _EVIDENCE_LINK_RE.sub("", cleaned)
-    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
-    return bool(re.search(r"[A-Za-z]{2,}", cleaned))
+    # A complete claim token will become prose at binding; a citation or an
+    # evidence identifier alone never will. The authority owner validates the
+    # claim separately, so this structural check does not grant permission.
+    return bool(re.search(r"[A-Za-z]{2,}", cleaned) or re.search(
+        rf"^\s*{_CLAIM_PLACEHOLDER_RE.pattern}[.!?]?\s*$", visible, re.M,
+    ))
 
 
 def _abstract_label_has_prose(abstract: str, label: str) -> bool:
@@ -564,9 +568,7 @@ def repair_reader_structure_from_existing_prose(
                 for sentence in re.split(r"(?<=[.!?])\s+", source)
                 if _has_prose(sentence)
                 and (
-                    "{evidence:" in sentence
-                    or "{claim:" in sentence
-                    or _EVIDENCE_LINK_RE.search(sentence) is not None
+                    _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
                 )
             ),
             None,
@@ -576,7 +578,7 @@ def repair_reader_structure_from_existing_prose(
             repairs.append(
                 {
                     "code": "MANUSCRIPT_CONCLUSION_RESTORED",
-                    "source": "existing_results_evidence_sentence",
+                    "source": "existing_results_claim_token",
                 }
             )
 
@@ -627,18 +629,16 @@ def repair_reader_structure_from_existing_prose(
         abstract, "Conclusions"
     ):
         conclusion = section_map.get("Conclusion", "")
-        results = section_map.get("Results", "")
-        primary = _subsections(results).get("Primary association", "")
-        source = conclusion or primary or results
+        # Do not fill an interpretation gap by copying a numeric Results
+        # sentence. Only reuse an existing complete Conclusion claim.
+        source = conclusion
         candidate = next(
             (
                 sentence.strip()
                 for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
                 if _has_prose(sentence)
                 and (
-                    "{evidence:" in sentence
-                    or "{claim:" in sentence
-                    or _EVIDENCE_LINK_RE.search(sentence) is not None
+                    _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
                 )
             ),
             None,
@@ -656,7 +656,7 @@ def repair_reader_structure_from_existing_prose(
                 repairs.append(
                     {
                         "code": "MANUSCRIPT_ABSTRACT_CONCLUSIONS_RESTORED",
-                        "source": "existing_conclusion_or_results_evidence_sentence",
+                        "source": "existing_conclusion_claim_token",
                     }
                 )
     return repaired, tuple(repairs)
@@ -1133,6 +1133,33 @@ def audit_manuscript_quality(
                     ),
                 )
             )
+
+    # A disclaimer alone, or a subset of the result sentences, is not a
+    # conclusion. Check both the pre-binding scaffold and the reader surface;
+    # complete claim tokens remain pending the separate authority check.
+    results_text = section_map.get("Results", "")
+    for section, body in (
+        ("Abstract", _abstract_blocks(abstract or "").get("conclusions", "")),
+        ("Conclusion", section_map.get("Conclusion", "")),
+    ):
+        if not _has_prose(body) or _CLAIM_PLACEHOLDER_RE.search(body):
+            continue
+        visible = _LITERATURE_CITATION_RE.sub("", _strip_audit_markup(body))
+        visible = re.sub(r"\bIndependent validation is required\s*\.", "", visible, flags=re.I)
+        sentences = [re.sub(r"\s+", " ", sentence).strip(" .\n").casefold()
+                     for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", visible)
+                     if re.search(r"[A-Za-z]{2,}", sentence)]
+        normalized_results = re.sub(r"\s+", " ", _strip_audit_markup(results_text)).casefold()
+        if not sentences or all(sentence in normalized_results for sentence in sentences):
+            findings.append(ManuscriptQualityFinding(
+                code="MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION",
+                severity="error", section=section,
+                message=(
+                    "Conclusions contains only a generic validation caveat or copied result sentences. "
+                    "Use a complete supplied host claim token to preserve the bounded study interpretation; "
+                    "do not invent a causal or adjusted comparison."
+                ),
+            ))
 
     adjustments = _adjustment_sets(section_map)
     variables = _subsections(section_map.get("Methods", "")).get("Variables", "")

@@ -68,3 +68,58 @@ def test_resource_cards_preserve_coordinates_and_escape_labels():
     assert '<img' not in html
     assert '<details class="gpi-resource-technical">' in html
     assert '交互预览' in html
+
+
+def test_result_summary_does_not_invent_complete_cases_or_merge_distributions():
+    result = run_js(f"""
+      global.window = {{}};
+      eval({_read('js/screens-guided-pi-result-summary.js')!r});
+      const table = {{headers:['row_role','exposure_level','n_rows','exposure_denominator','exposure_pct','outcome_events','outcome_denominator','outcome_rate_pct'],
+        rows:[['overall','',10,10,100,2,10,20],['exposure_level',0,10,10,100,2,10,20]]}};
+      const summarize = window.EU_GUIDED_PI_RESULT_SUMMARY.summarize;
+      const plan = {{display_labels:{{'x=0':'Reference','y':'Outcome'}},steps:[{{planned_analysis_role:'primary',exposure_outcome_distribution_spec:{{exposure:'x',outcome:'y',exposure_levels:[0]}}}}]}};
+      process.stdout.write(JSON.stringify({{one:summarize({{tables:[table]}},plan),two:summarize({{tables:[table,{{...table}}]}},plan)}}));
+    """)
+    claims = result['one']['claims']
+    assert not any(row['source_field'] == 'n_complete_case' for row in claims)
+    assert next(row for row in claims if row['source_field'] == 'overall_outcome.risk_pct')['display_value'] == '20.00%'
+    assert result['one']['exposureLevels'][0]['label'] == 'Reference'
+    assert result['two']['exposureLevels'] == []
+    assert result['two']['claims'] == []
+
+
+def test_full_report_shows_real_results_plan_and_article_without_raw_html():
+    result = run_js(f"""
+      global.window = {{EU_LANG:'zh',AGENT_RENDER:{{manuscriptProvenanceView:()=>'<article>Bound article and references</article>'}}}};
+      eval({_read('js/html-escape.js')!r});
+      eval({_read('js/screens-guided-pi-result-summary.js')!r});
+      eval({_read('js/screens-guided-pi-analysis-report.js')!r});
+      const payload = {{run_context:{{question:'<img src=x>',source:{{label:'Selected source'}}}},
+        source_manifest:{{readiness:{{manuscript_ready:true}}}},
+        plan:{{steps:[{{intent:'Describe observed counts'}}]}},
+        result_tables:{{tables:[{{headers:['row_role','exposure_level','n_rows','exposure_denominator','exposure_pct','outcome_events','outcome_denominator','outcome_rate_pct'],
+          rows:[['overall','',100,100,100,3,100,3],['exposure_level','A',100,100,100,3,100,3]]}}]}}}};
+      process.stdout.write(JSON.stringify(window.EU_GUIDED_PI_ANALYSIS_REPORT.render(payload)));
+    """)
+    assert '<img' not in result
+    assert '3.00%' in result and '3 / 100' in result
+    assert 'Describe observed counts' in result
+    assert 'Bound article and references' in result
+    assert '完整变量行' not in result
+
+
+def test_execution_history_keeps_user_decisions_latest_failure_and_live_activity_visible():
+    result = run_js(f"""
+      global.window = {{}};
+      eval({_read('js/screens-guided-pi-activity.js')!r});
+      const owner = window.EU_GUIDED_PI_ACTIVITY.create({{esc:String,tr:(_en,zh)=>zh}});
+      const rows = [{{id:'question',role:'user'}},...['complete','failed','failed'].map((status,index)=>({{id:'attempt'+index,role:'activity',status}})),
+        {{id:'decision',role:'user'}},{{id:'live',role:'activity',status:'running'}}];
+      const before = JSON.stringify(rows);
+      process.stdout.write(JSON.stringify({{html:owner.renderTimeline(rows,row=>`<p>${{row.id}}</p>`),same:before===JSON.stringify(rows)}}));
+    """)
+    assert result['same']
+    html = result['html']
+    assert html.count('<details') == 1
+    assert html.index('</details>') < html.index('attempt2') < html.index('decision') < html.index('live')
+    assert all(html.count(name) == 1 for name in ('question', 'attempt0', 'attempt1', 'attempt2', 'decision', 'live'))

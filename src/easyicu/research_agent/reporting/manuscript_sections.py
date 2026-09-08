@@ -93,8 +93,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "results, report observed events, denominators, and proportions "
             "without inferential or causal comparisons. Do not invent missing "
             "estimates, uncertainty, tests, or supporting findings.\n"
-            "- **Conclusions:** 1-2 sentences (associational phrasing only, call "
-            "for validation).\n"
+            "- **Conclusions:** 1-2 sentences using supplied complete claim tokens. "
+            "Match the approved analysis: descriptive evidence is not an association. "
+            "A validation caveat alone is incomplete.\n"
             "Use an exact standalone `{claim:<step>.<claim>}` sentence for any "
             "current-study qualitative direction or comparison when the machine "
             "digest supplies one; emit only the token and do not paraphrase or "
@@ -113,8 +114,8 @@ MANUSCRIPT_SECTION_SPECS = (
         key="introduction",
         section_name="Introduction",
         instruction=(
-            "Write `## Introduction` with 4-5 paragraphs (900-1200 words "
-            "total):\n"
+            "Write `## Introduction` with 3-5 concise paragraphs (roughly 300-500 words; "
+            "scale to the question, not a mandatory quota):\n"
             "- Para 1: Clinical importance of the ICU question and why it "
             "matters now.\n"
             "- Para 2: Prior evidence on the key predictor / score / exposure. "
@@ -279,14 +280,15 @@ MANUSCRIPT_SECTION_SPECS = (
         key="discussion",
         section_name="Discussion",
         instruction=(
-            "Write `## Discussion` with 5 paragraphs (900-1300 words total):\n"
+            "Write `## Discussion` with 4-5 concise paragraphs (roughly 400-650 words; "
+            "do not inflate a descriptive study to meet a quota):\n"
             "- Para 1: Restate the main finding and interpret it cautiously in "
             "the context of the results.\n"
             "- Para 2: Compare with prior literature and explain where this "
             "study agrees or diverges.\n"
-            "- Para 3: Discuss plausible mechanisms using only associational "
-            "language ('may reflect', 'could be consistent with', 'one possible "
-            "explanation').\n"
+            "- Para 3: Discuss alternative explanations only if supported by the "
+            "supplied literature. Do not invent mechanisms or imply that a descriptive "
+            "analysis tested those explanations. Omit this paragraph if unsupported.\n"
             "- Para 4: Clinical implications, limits to generalisability, and why "
             "the result should not be over-interpreted.\n"
             "- Para 5: Methodological strengths, evidence traceability, ICU-aware "
@@ -333,7 +335,8 @@ MANUSCRIPT_SECTION_SPECS = (
         section_name="Conclusion",
         instruction=(
             "## Conclusion\n"
-            "1-2 sentences. Use a complete host-authorized claim token for the "
+            "1-2 sentences. A generic validation caveat alone is incomplete. "
+            "Use a complete host-authorized claim token for the "
             "study interpretation. An evidence citation alone does not authorize "
             "a free-form conclusion. For a validation caveat use the neutral "
             "sentence `Independent validation is required.` with an exact "
@@ -353,7 +356,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "24"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "25"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):

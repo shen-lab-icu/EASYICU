@@ -682,7 +682,7 @@
     let precedingUserText = '';
     let precedingUserEntryId = '';
     let historicalDataConsentProjected = false;
-    const messages = timeline.map(row => {
+    const messages = ACTIVITY.renderTimeline(timeline, row => {
       const displayRow = state.regenerating && REGENERATION
         ? REGENERATION.project(row, state.regeneration) : row;
       const historicalDataConsent = !historicalDataConsentProjected
@@ -704,7 +704,7 @@
         precedingUserEntryId = String(row.entryId || '');
       }
       return html;
-    }).join('');
+    });
     const emptyResearch = !workspace && !messages;
     const dataConsentHtml = dataConsentRequired
       ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml })

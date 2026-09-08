@@ -950,11 +950,11 @@ def run_exposure_outcome_distribution_figure(
         ax_a.text(
             0.98,
             position + 0.26,
-            f"{float(pct):.1f}%  {int(n_rows):,}/{int(denominator):,}",
+            f"{float(pct):.2f}%  {int(n_rows):,}/{int(denominator):,}",
             transform=ax_a.get_yaxis_transform(),
             ha="right",
             va="top",
-            fontsize=6.1,
+            fontsize=7.2,
         )
     add_panel_label(ax_a, "A", x=-0.14, y=1.04)
 
@@ -979,8 +979,8 @@ def run_exposure_outcome_distribution_figure(
     lower = min(0.0, float(low.min()) * 1.15)
     upper = max(5.0, float(high.max()) * 1.35)
     ax_b.set_xlim(lower, upper)
-    ax_b.set_xlabel("Outcome rate (%)")
-    ax_b.set_title("Outcome rate by exposure", loc="left", pad=4)
+    ax_b.set_xlabel("Observed outcome proportion (%)")
+    ax_b.set_title("Outcome proportion by group", loc="left", pad=4)
     ax_b.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
     for position, estimate, events, denominator, missing in zip(
         positions,
@@ -993,11 +993,11 @@ def run_exposure_outcome_distribution_figure(
         ax_b.text(
             0.98,
             position + 0.26,
-            f"{float(estimate):.1f}%  {int(events):,}/{int(denominator):,}{suffix}",
+            f"{float(estimate):.2f}%  {int(events):,}/{int(denominator):,}{suffix}",
             transform=ax_b.get_yaxis_transform(),
             va="top",
             ha="right",
-            fontsize=6.1,
+            fontsize=7.2,
         )
     add_panel_label(ax_b, "B", x=-0.14, y=1.04)
     if contrast is not None:
@@ -1076,7 +1076,7 @@ def run_exposure_outcome_distribution_figure(
             },
             {
                 "panel_id": panel_templates[1].panel_id,
-                "title": "Outcome rate by exposure",
+                "title": "Outcome proportion by group",
                 "role": panel_templates[1].article_role,
                 "claim": (
                     "Events, the denominator they are taken over, and the "
