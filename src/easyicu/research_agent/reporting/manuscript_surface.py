@@ -7,6 +7,31 @@ _REGION = re.compile(r"(?=^#{1,6} |^\*\*(?:Background|Methods|Results|Conclusion
 _CLAIM = re.compile(r"\{claim:[^{}\s]+\}[.!?]?")
 
 
+def collapse_repeated_label_prefix(text: str, labels) -> tuple[str, tuple[dict[str, str], ...]]:
+    """Remove a duplicated multiword prefix of a complete source-bound label.
+
+    A raw field embedded in prose may already have part of its expanded label
+    before it. Only exact alphabetic prefixes (at least two words) are handled;
+    there is no synonym matching, numerical cleanup or scientific paraphrase.
+    The caller keeps evidence/citation tokens out of these visible text pieces.
+    """
+    repairs = []
+    for label in sorted(set(labels), key=len, reverse=True):
+        if not re.fullmatch(r"[A-Za-z]+(?:[ -]+[A-Za-z]+){2,}", label):
+            continue
+        words = re.split(r"[ -]+", label)
+        full = r"[ -]+".join(map(re.escape, words))
+        for length in range(len(words) - 1, 1, -1):
+            prefix = r"[ -]+".join(map(re.escape, words[:length]))
+            pattern = re.compile(r"(?<![A-Za-z0-9_])" + prefix + r"[ -]+(?P<label>" + full + r")(?![A-Za-z0-9_])", re.I)
+            text, count = pattern.subn(lambda match: match["label"], text)
+            if count:
+                repairs.append({"code": "MANUSCRIPT_REPEATED_LABEL_PREFIX_REMOVED",
+                                "source": " ".join(words[:length]) + " " + label,
+                                "replacement": label, "count": str(count)})
+    return text, tuple(repairs)
+
+
 def deduplicate_claim_paragraphs(text: str) -> str:
     """Repeat a claim across sections if needed, but once within each block."""
     regions = _REGION.split(text)

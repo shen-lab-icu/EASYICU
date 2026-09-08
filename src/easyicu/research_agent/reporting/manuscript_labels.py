@@ -4,6 +4,18 @@ import re
 from typing import Mapping
 
 
+def _recorded_term(variable):
+    semantics = getattr(variable, "observation_semantics", None)
+    definition = getattr(variable, "clinical_definition", None)
+    domain = getattr(variable, "observed_domain", None) or {}
+    if (getattr(semantics, "kind", None) != "positive_only_event"
+            or definition is None or domain.get("is_binary") is not True
+            or set(domain.get("levels") or []) != {0, 1}):
+        return None
+    term = str(definition.definition or "").strip()
+    return term if term and not re.search(r"[\u3400-\u9fff]", term) else None
+
+
 def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, language="en", include_unlabeled=False):
     """Use existing English source metadata when the UI label is Chinese.
 
@@ -21,7 +33,17 @@ def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, langua
             continue
         description = str(variable.description or "").strip()
         if description and not re.search(r"[\u3400-\u9fff]", description):
-            result[name] = description
+            term = _recorded_term(variable)
+            result[name] = f"Recorded {term} status" if term else description
+    if include_unlabeled:
+        # Audit products identify the source concept rather than a particular
+        # aggregation. Only the typed event representative can supply this alias.
+        for name, variable in variables.items():
+            semantics = getattr(variable, "observation_semantics", None)
+            concept = getattr(variable, "source_concept", None)
+            term = _recorded_term(variable)
+            if concept and term and getattr(semantics, "representative_column", None) == name:
+                result.setdefault(concept, f"Recorded {term} status")
     for key, label in labels.items():
         if not re.search(r"[\u3400-\u9fff]", str(label)):
             continue
@@ -32,7 +54,8 @@ def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, langua
         description = str(variable.description or "").strip()
         if not separator:
             if description and not re.search(r"[\u3400-\u9fff]", description):
-                result[key] = description
+                term = _recorded_term(variable)
+                result[key] = f"Recorded {term} status" if term else description
             continue
         semantics = variable.observation_semantics
         definition = variable.clinical_definition

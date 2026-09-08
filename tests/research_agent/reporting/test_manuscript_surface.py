@@ -59,3 +59,27 @@ def test_recorded_status_repair_does_not_redefine_measurements_or_background_lit
     assert recorded_definition_section_errors(safe, context) == {}
     context.variables[0].observation_semantics.kind = 'measurement'
     assert recorded_definition_section_errors(text, context) == {}
+
+
+def test_event_representative_supplies_recorded_status_not_diagnosis_label():
+    variable = SimpleNamespace(name='signal_max', source_concept='signal', description='Syndrome diagnosis',
+        observation_semantics=SimpleNamespace(kind='positive_only_event', representative_column='signal_max'),
+        clinical_definition=SimpleNamespace(definition='Syndrome-X'), observed_domain={'is_binary':True,'levels':[0,1]})
+    context = SimpleNamespace(variables=[variable])
+    labels = source_bound_manuscript_labels(context, {'signal_max':'诊断'}, include_unlabeled=True)
+    assert labels['signal_max'] == labels['signal'] == 'Recorded Syndrome-X status'
+    variable.observation_semantics.representative_column = 'other'
+    assert 'signal' not in source_bound_manuscript_labels(context, {}, include_unlabeled=True)
+
+
+def test_source_label_expansion_deduplicates_only_its_exact_multiword_prefix():
+    from easyicu.research_agent.reporting.manuscript_quality import repair_reader_internal_phrases
+    text = 'In-hospital outcome proportions were reported {evidence:outcome}. In-hospital in hospital mortality remained descriptive.'
+    result, changes = repair_reader_internal_phrases(text, reader_display_labels={'outcome':'in hospital mortality'})
+    assert 'in-hospital in hospital' not in result.lower()
+    assert result.count('in hospital mortality') == 2
+    assert '{evidence:outcome}' in result
+    assert any(r['code']=='MANUSCRIPT_REPEATED_LABEL_PREFIX_REMOVED' for r in changes)
+    assert repair_reader_internal_phrases(result, reader_display_labels={'outcome':'in hospital mortality'})[0] == result
+    unchanged = 'Hospital mortality and in hospital mortality used different denominators: 10 and 10.'
+    assert repair_reader_internal_phrases(unchanged, reader_display_labels={'outcome':'in hospital mortality'})[0] == unchanged

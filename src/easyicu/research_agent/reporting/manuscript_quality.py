@@ -856,6 +856,11 @@ def repair_reader_internal_phrases(
             return labels[key]
 
         pieces = [pattern.sub(replace_label, piece) for piece in pieces]
+        from .manuscript_surface import collapse_repeated_label_prefix
+
+        for index, piece in enumerate(pieces):
+            pieces[index], prefix_repairs = collapse_repeated_label_prefix(piece, labels.values())
+            repairs.extend(prefix_repairs)
         repaired = "".join(
             part + (tokens[index] if index < len(tokens) else "")
             for index, part in enumerate(pieces)
