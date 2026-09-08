@@ -1549,6 +1549,8 @@ def _public_review_payloads(
     if "scientific_readiness.json" in payloads:
         public["scientific_readiness.json"] = payloads["scientific_readiness.json"]
     if "manuscript_draft.json" in payloads:
+        from easyicu.research_agent.reporting.manuscript_reader import refresh_reader_bibliography
+
         row = payloads["manuscript_draft.json"]
         public["manuscript_draft.json"] = {
             "run_id": row.get("run_id"),
@@ -1559,13 +1561,15 @@ def _public_review_payloads(
             "markdown_preview": row.get("markdown_preview"),
             "source": row.get("source"),
             "report_revision": row.get("report_revision"),
-            "reader": row.get("reader"),
+            "reader": refresh_reader_bibliography(row.get("reader")),
         }
     if "manuscript_provenance.json" in payloads:
         # This artifact is already a path-free host projection.  Preserve its
         # typed reader structure; the normal payload privacy scan still runs
         # before it crosses the Web boundary.
-        public["manuscript_provenance.json"] = payloads["manuscript_provenance.json"]
+        from easyicu.research_agent.reporting.manuscript_reader import refresh_reader_bibliography
+
+        public["manuscript_provenance.json"] = refresh_reader_bibliography(payloads["manuscript_provenance.json"])
     for name in (
         "benchmark_scorecard.json",
         "workflow_graph.json",

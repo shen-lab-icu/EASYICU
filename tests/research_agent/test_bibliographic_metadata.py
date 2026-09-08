@@ -77,3 +77,33 @@ def test_frozen_reader_completes_metadata_with_a_separate_receipt(tmp_path):
     assert row["metadata_source"]["fields"] == ["authors"]
     assert payload["publication_authorized"] is False
     assert literature.model_dump_json() == original
+
+
+def test_cached_web_reader_refresh_is_metadata_only_and_does_not_mutate_history():
+    from easyicu.webserver.agent_runs import _public_review_payloads
+
+    reader = {
+        "schema_version": "easyicu.manuscript-provenance/1",
+        "references": [{"number": 1, **_record()}],
+        "manuscript_sha256": "frozen", "claims": [{"value": 42}],
+        "publication_authorized": False,
+    }
+    payloads = {"manuscript_provenance.json": reader, "manuscript_draft.json": {"reader": reader}}
+    before = deepcopy(payloads)
+    result = _public_review_payloads(payloads)
+    assert payloads == before
+    for projected in (result["manuscript_provenance.json"], result["manuscript_draft.json"]["reader"]):
+        assert projected["references"][0]["authors"][0] == "Erik von Elm"
+        assert projected["references"][0]["number"] == 1
+        assert {k: v for k, v in projected.items() if k != "references"} == {
+            k: v for k, v in reader.items() if k != "references"
+        }
+
+
+@pytest.mark.parametrize("references", [None, "malformed", [{"doi": "unverified", "authors": []}]])
+def test_cached_reader_does_not_invent_authors_for_unverifiable_input(references):
+    from easyicu.research_agent.reporting.manuscript_reader import refresh_reader_bibliography
+
+    payload = {"schema_version": "easyicu.manuscript-provenance/1", "references": references}
+    assert refresh_reader_bibliography(payload) == payload
+    assert refresh_reader_bibliography(None) is None
