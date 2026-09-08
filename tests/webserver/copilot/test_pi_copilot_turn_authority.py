@@ -129,6 +129,16 @@ def test_database_mention_or_local_choice_does_not_confirm_prepared_source(
         ("我不知道做什么研究", "idea_discovery_entry"),
         ("液体平衡会不会影响撤机？", "implement_scientific_question"),
         (
+            "我想用 MIMIC-IV 看一下 Sepsis-3 脓毒症有多常见，并比较脓毒症和非脓毒症的院内死亡情况，最后给我完整的研究报告和图表。",
+            "implement_scientific_question",
+        ),
+        ("比较 AKI 与非 AKI 患者的住院时长", "implement_scientific_question"),
+        ("Compare mortality in treated and untreated groups", "implement_scientific_question"),
+        ("描述 ICU 患者谵妄的患病率", "implement_scientific_question"),
+        ("我想了解 ICU 中谵妄有多常见", "implement_scientific_question"),
+        ("请比较几个研究方向", "idea_mining_entry"),
+        ("患病率", "clarify_research_entry"),
+        (
             "研究成人 ICU 早期液体平衡与拔管失败的关系",
             "implement_scientific_question",
         ),

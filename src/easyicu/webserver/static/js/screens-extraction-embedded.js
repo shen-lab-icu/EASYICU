@@ -88,8 +88,8 @@
       const lead = head.querySelector('.lead');
       if (title) title.textContent = t('Bind data source', '绑定数据来源');
       if (lead) lead.textContent = t(
-        'Identify the local ICU database only. After you return, tell EasyICU what you want to study; cohort, features, time window, and export settings will be recommended later.',
-        '现在只识别本地 ICU 数据库。返回对话后请告诉 EasyICU 你想研究什么；队列、特征、时间窗和导出设置将在之后推荐。'
+        'Choose and confirm the local data for this study. EasyICU keeps your question and will propose the complete plan next; selecting data does not start analysis.',
+        '选择并确认本次研究使用的本地数据。EasyICU 会保留你已提出的问题，接着拟定完整计划；选择数据不会开始分析。'
       );
       Array.from(head.children).slice(2).forEach(node => node.remove());
     }
@@ -141,7 +141,7 @@
       <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : syncLabel}</button>`;
     host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>
       <div class="gpi-extraction-toolbar">
-        <div><span>${sourceBinding ? t('Local data', '本地数据') : t('Native Data Extraction', '原生数据提取')}</span><strong>${sourceBinding ? t('Bind one source before the research conversation', '开始研究对话前先绑定一个数据来源') : t('The same owner as Classic Workspace', '与经典工作台共用同一个功能 owner')}</strong></div>
+        <div><span>${sourceBinding ? t('Local data', '本地数据') : t('Native Data Extraction', '原生数据提取')}</span><strong>${sourceBinding ? t('Choose the data for this study', '选择这项研究使用的数据') : t('The same owner as Classic Workspace', '与经典工作台共用同一个功能 owner')}</strong></div>
         <div class="row gap-8">${extractionActions}</div>
       </div>
       ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${esc(syncReceiptMessage)}</div></div></div>` : ''}

@@ -204,7 +204,10 @@ def infer_research_entry_intent(message: str) -> str:
         return "idea_mining_entry"
     if re.search(
         r"(?:与|和|对).{1,80}(?:关系|相关|关联|影响|效应|差异|风险|预测)|"
+        r"(?:比较|对比).{1,80}(?:与|和|及|之间)|"
+        r"(?:描述|估计|研究|了解|看看|看一下).{1,80}(?:患病率|发生率|有多常见)|"
         r"(?:是否|会不会|能否|有没有).{0,80}(?:影响|相关|关联|预测|增加|降低|不同)|"
+        r"\bcompar(?:e|ing|ison)\b.{1,100}\b(?:and|between|versus|vs)\b|"
         r"(?:relationship|association|effect|impact|difference|risk|predict)",
         text,
     ):
