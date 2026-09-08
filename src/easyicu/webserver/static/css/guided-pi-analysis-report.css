@@ -1,4 +1,12 @@
 /* Guided Copilot complete analysis-report view owner. */
+/* Complete reports need a reading page, not a narrow chat sidebar. Closing
+   the existing preview restores the conversation without changing its state. */
+.gd-main.threecol.gpi-preview-open:has(.gpi-analysis-report){grid-template-columns:minmax(0,1fr)}
+.gd-main.gpi-preview-open:has(.gpi-analysis-report)>.gd-rail,.gd-main.gpi-preview-open:has(.gpi-analysis-report)>.gd-conv,.gd-main.gpi-preview-open:has(.gpi-analysis-report)>.gd-rail-restore,.gd-main.gpi-preview-open:has(.gpi-analysis-report)>.gd-aside-restore{display:none}
+.gd-main.gpi-preview-open:has(.gpi-analysis-report)>#gdContextAside{width:auto;max-width:none;min-width:0;grid-column:1}
+.gpi-analysis-summary>div{min-width:0}
+.gpi-analysis-table-scroll table thead th{white-space:normal}
+.gpi-preview-body .gpi-analysis-report{max-width:1200px;margin-inline:auto}
 .gpi-execution-history{margin:12px 24px;border-top:1px solid #dde3eb;padding-top:12px}.gpi-execution-history>summary{cursor:pointer;font-size:14px;color:#66716f}
 .gpi-analysis-table-scroll{overflow-x:auto;max-width:100%}.gpi-analysis-table-scroll table{width:100%;border-collapse:collapse;font-size:14px}.gpi-analysis-table-scroll caption{text-align:left;font-weight:700;padding-bottom:12px}.gpi-analysis-table-scroll th,.gpi-analysis-table-scroll td{padding:10px 12px;text-align:right;border-bottom:1px solid #dde3eb;white-space:nowrap}.gpi-analysis-table-scroll th:first-child{text-align:left;white-space:normal;min-width:160px}.gpi-analysis-report .gpi-analysis-summary p,.gpi-analysis-report .gpi-analysis-section p,.gpi-analysis-report .gpi-analysis-section li{font-size:14px;line-height:1.75}.gpi-analysis-report .gpi-analysis-summary{grid-template-columns:1fr}
 .gpi-analysis-report{--ar-blue:#19477f;--ar-teal:#23898c;display:block;padding-bottom:28px;background:#f5f6f8;color:#18212f}
