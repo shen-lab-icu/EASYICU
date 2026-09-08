@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
+from ..contracts.figure_plan import ROBUSTNESS_FIGURE_KNOWN_INPUTS
 from ..contracts.step_families import (
     _CONTRACT_FAMILIES,
     _HEURISTIC_REACHABLE_FAMILIES,
@@ -170,6 +171,7 @@ def _enforce_advanced_plan_contract(
     if family == "robustness" and _dedicated_renderer_consumes_typed_source(
         plan.steps,
         source="table:robustness_matrix",
+        compatible_companions=ROBUSTNESS_FIGURE_KNOWN_INPUTS - {"table:robustness_matrix"},
     ):
         # A Planner-owned renderer already presents the deterministic replay
         # result.  Do not add a differently named conventional figure to the
@@ -357,4 +359,3 @@ def _enforce_advanced_plan_contract(
         },
     )
     return revised, [finding]
-
