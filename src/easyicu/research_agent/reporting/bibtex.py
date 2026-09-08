@@ -252,7 +252,9 @@ def render_bibtex(bundle: Optional[LiteratureBundle]) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
-def render_thebibliography_block(bundle: Optional[LiteratureBundle]) -> str:
+def render_thebibliography_block(
+    bundle: Optional[LiteratureBundle], *, cited_keys: Optional[Sequence[str]] = None,
+) -> str:
     """Render a fallback inline ``thebibliography`` block.
 
     Used when the user wants a single-file ``.tex`` that does not need
@@ -260,6 +262,11 @@ def render_thebibliography_block(bundle: Optional[LiteratureBundle]) -> str:
     standalone with ``pdflatex`` alone.
     """
     records = manuscript_citable_records(bundle)
+    if cited_keys is not None:
+        by_key = {record.key: record for record in records}
+        if len(by_key) != len(records) or any(key not in by_key for key in cited_keys):
+            raise ValueError("Inline bibliography citation identities are unavailable or ambiguous")
+        records = [by_key[key] for key in dict.fromkeys(cited_keys)]
     if not records:
         return ""
     lines = [r"\begin{thebibliography}{99}"]

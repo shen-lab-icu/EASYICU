@@ -296,6 +296,7 @@ def scaffold_to_latex(
     supplementary_figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
     figures: Sequence[ManuscriptFigure] = (),
     tables: Sequence[ManuscriptTable] = (),
+    figure_context: Sequence[str] = (),
     draft_watermark: bool = False,
     claim_base_url: Optional[str] = None,
 ) -> str:
@@ -338,12 +339,12 @@ def scaffold_to_latex(
 
     if bibliography is not None:
         allowed_citation_keys = set(manuscript_citable_keys(bibliography))
-        requested_citation_keys = {
+        requested_citation_keys = list(dict.fromkeys(
             part.strip().lstrip("@")
             for match in _LITERATURE_CITATION_PATTERN.finditer(markdown)
             for part in match.group("keys").split(";")
-        }
-        unknown_citation_keys = sorted(requested_citation_keys - allowed_citation_keys)
+        ))
+        unknown_citation_keys = sorted(set(requested_citation_keys) - allowed_citation_keys)
         if unknown_citation_keys:
             raise ValueError(
                 "manuscript cites keys absent from the run-bound bibliography: "
@@ -451,7 +452,7 @@ def scaffold_to_latex(
 
     if manuscript_citable_keys(bibliography):
         if inline_bibliography:
-            block = render_thebibliography_block(bibliography)
+            block = render_thebibliography_block(bibliography, cited_keys=requested_citation_keys)
             if block:
                 parts.append(block)
                 parts.append("")
@@ -460,13 +461,25 @@ def scaffold_to_latex(
             parts.append(r"\bibliography{" + bibliography_basename + "}")
             parts.append("")
 
+    if figure_context:
+        parts.append(r"\section*{Cohort accounting}")
+        parts.extend(_escape_latex(note) + "\n" for note in figure_context)
+
     if tables:
         parts.extend([r"\clearpage", r"\section*{Tables}", ""])
         for table in tables:
             if not table.columns or any(len(row) != len(table.columns) for row in table.rows):
                 raise ValueError("reader table rows must match the declared columns")
             count = len(table.columns)
-            layout = r"@{}*{" + str(count) + r"}{p{\dimexpr\linewidth/" + str(count) + r"-2\tabcolsep\relax}}@{}"
+            weights = [1.0] * count
+            if table.columns[0] == "Characteristic":
+                weights = [1.5, *(0.55 if column in {"SMD", "P value"} else 1.1
+                                  for column in table.columns[1:])]
+            layout = "@{}" + "".join(
+                r">{\raggedright\arraybackslash}p{\dimexpr"
+                + f"{weight / sum(weights):.5f}" + r"\linewidth-2\tabcolsep\relax}"
+                for weight in weights
+            ) + "@{}"
             header = " & ".join(_escape_latex(cell) for cell in table.columns) + r" \\"
             parts.extend([
                 r"\begingroup\footnotesize", r"\begin{longtable}{" + layout + "}",
@@ -475,9 +488,12 @@ def scaffold_to_latex(
                 r"\toprule", header, r"\midrule\endhead",
             ])
             for row in table.rows:
-                parts.append(" & ".join(
+                cells = [
                     _escape_latex(cell).replace(r"\_", r"\_\allowbreak{}") for cell in row
-                ) + r" \\")
+                ]
+                if row[0].startswith("  "):
+                    cells[0] = r"\hspace*{1em}" + cells[0].lstrip()
+                parts.append(" & ".join(cells) + r" \\")
             parts.extend([r"\bottomrule", r"\end{longtable}"])
             for note in table.notes:
                 parts.append(r"\par\noindent " + _escape_latex(note))
@@ -571,6 +587,7 @@ def latex_template_preamble(venue_template: str = "article") -> str:
         \usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=teal!55!black,urlcolor=blue!55!black]{hyperref}
         \usepackage{booktabs}
         \usepackage{longtable}
+        \usepackage{array}
         \usepackage{xcolor}
         \usepackage[hang,small,bf]{caption}
         \setlength{\emergencystretch}{4em}

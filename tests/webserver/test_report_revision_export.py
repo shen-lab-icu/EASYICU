@@ -20,7 +20,7 @@ def test_export_uses_revision_text_and_declared_engine_without_rerunning_analysi
     seen = {}
     evidence = SimpleNamespace(root=source, current_verified_records=lambda rows: seen.setdefault('execution', rows))
     monkeypatch.setattr(owner, 'ReadOnlyReportEvidence', lambda root: evidence)
-    monkeypatch.setattr(owner, 'build_manuscript_figures', lambda **kw: SimpleNamespace(figures=(), findings=(), omitted_evidence_ids=()))
+    monkeypatch.setattr(owner, 'build_manuscript_figures', lambda **kw: SimpleNamespace(figures=(), findings=(), omitted_evidence_ids=(), context_notes=()))
     monkeypatch.setattr(owner, 'build_manuscript_tables', lambda **kw: ())
     monkeypatch.setattr(owner, 'scaffold_to_latex', lambda **kw: seen.setdefault('latex', kw) and 'TeX')
     def render(**kwargs):

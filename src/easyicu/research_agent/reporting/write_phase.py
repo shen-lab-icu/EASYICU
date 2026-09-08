@@ -2480,6 +2480,7 @@ def _publish_and_audit_manuscript(
                 bibliography_basename=bib_basename,
                 venue_template=pipeline._latex_venue_template,
                 figures=figure_projection.figures,
+                figure_context=[note["text"] for note in figure_projection.context_notes],
                 tables=build_manuscript_tables(
                     plan=plan, evidence_records=current_verified_evidence_records, run_dir=run_dir,
                 ),

@@ -97,7 +97,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-analysis-report.js?v=20260908-e1-review2" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260909-research-displays1" in index
     assert "js/screens-guided-pi-replay.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-resources.js?v=20260909-report-revision1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260909-report-revision1" in index
@@ -120,7 +120,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260904-agent-plan-compiler1" in index
+    assert "js/api.js?v=20260909-research-displays1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"

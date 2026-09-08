@@ -73,6 +73,75 @@ def _p_value(value: str) -> str:
     return "<0.001" if value and 0 <= Decimal(value) < Decimal("0.001") else formatted
 
 
+def _same(rows: Sequence[dict[str, str]], field: str) -> str:
+    values = {row[field] for row in rows}
+    if len(values) != 1:
+        raise ManuscriptTableProjectionError(f"Table 1 inconsistent repeated {field}")
+    return next(iter(values))
+
+
+def _group_columns(plan, spec, source):
+    """Pivot source identities, never human labels or recomputed statistics."""
+    groups = ["Overall", *(str(level) for level in spec.group_levels)]
+    if len(set(groups)) != len(groups) or {row["group"] for row in source} != set(groups):
+        raise ManuscriptTableProjectionError("Table 1 group roster is ambiguous or incomplete")
+    indexed = {}
+    for row in source:
+        key = (row["variable"], row["category"], row["group"])
+        if key in indexed:
+            raise ManuscriptTableProjectionError("Table 1 duplicate variable/category/group")
+        indexed[key] = row
+    # The source contract uses the same eligible population for every variable.
+    # Reject disagreement rather than putting a misleading common N in the header.
+    denominators = [
+        _count(_same([r for r in source if r["group"] == group], "denominator_n"))
+        for group in groups
+    ]
+    columns = ("Characteristic", *(plan.display_labels.get(
+        f"{spec.group_by}={group}", group,
+    ) for group in groups), "SMD")
+    if spec.p_values_required:
+        columns += ("P value",)
+    blank = ("",) * (1 + int(spec.p_values_required))
+    rows = [("N", *denominators, *blank)]
+    for variable in spec.variables:
+        name = variable.name
+        label = plan.display_labels.get(name, name)
+        categories = ([str(level) for level in variable.levels]
+                      if variable.summary == "count_percent" else [""])
+        expected = {(name, category, group) for category in categories for group in groups}
+        if {key for key in indexed if key[0] == name} != expected:
+            raise ManuscriptTableProjectionError("Table 1 category/group cells are incomplete")
+        variable_rows = [row for row in source if row["variable"] == name]
+        p = (_p_value(_same(variable_rows, "p_value")),) if spec.p_values_required else ()
+        if variable.summary == "count_percent":
+            rows.append((label + ", n (%)", *("" for _ in groups), "", *p))
+        for category in categories:
+            cells = [indexed[(name, category, group)] for group in groups]
+            smd = _number(_same(cells, "standardized_mean_difference"), 3)
+            if variable.summary == "count_percent":
+                rows.append(("  " + category, *(_count_percent(r["count"], r["percentage"])
+                                              for r in cells), smd,
+                             *(("",) if spec.p_values_required else ())))
+            else:
+                if variable.summary in {"mean_sd", "both"}:
+                    rows.append((label + ", mean (SD)", *(f"{_number(r['mean'])} ({_number(r['sd'])})"
+                                                         for r in cells), smd, *p))
+                if variable.summary in {"median_iqr", "both"}:
+                    row_label = ("  Median [Q1, Q3]" if variable.summary == "both"
+                                 else label + ", median [Q1, Q3]")
+                    comparison = blank if variable.summary == "both" else (smd, *p)
+                    rows.append((row_label, *(f"{_number(r['median'])} [{_number(r['q25'])}, {_number(r['q75'])}]"
+                                             for r in cells), *comparison))
+        missing = []
+        for group in groups:
+            group_rows = [r for r in variable_rows if r["group"] == group]
+            missing.append(_count_percent(_same(group_rows, "missing_n"),
+                                          _same(group_rows, "missing_pct")))
+        rows.append(("  Missing, n (%)", *missing, *blank))
+    return columns, rows
+
+
 def build_manuscript_tables(
     *,
     plan: AnalysisPlan,
@@ -117,47 +186,15 @@ def build_manuscript_tables(
         variables = {item.name: item for item in spec.variables}
         if {row.get("variable") for row in source} != set(variables):
             raise ManuscriptTableProjectionError("Table 1 variable roster mismatch")
-        summaries = {item.summary for item in spec.variables}
-        header = {
-            "median_iqr": "Median [Q1, Q3]", "mean_sd": "Mean (SD)",
-            "count_percent": "n (%)",
-        }.get(next(iter(summaries)), "Summary") if len(summaries) == 1 else "Summary"
-        columns = ("Variable", "Group", "N", header, "Missing n (%)", "SMD")
-        if spec.p_values_required:
-            columns += ("P value",)
-        rows: list[tuple[str, ...]] = []
         try:
-            for row in source:
-                variable = variables[row["variable"]]
-                label = plan.display_labels.get(variable.name, variable.name)
-                summary_parts = []
-                if variable.summary == "count_percent":
-                    label += ": " + row["category"]
-                    summary_parts.append(
-                        _count_percent(row["count"], row["percentage"])
-                    )
-                if variable.summary in {"mean_sd", "both"}:
-                    summary_parts.append(f"{_number(row['mean'])} ({_number(row['sd'])})")
-                if variable.summary in {"median_iqr", "both"}:
-                    summary_parts.append(
-                        f"{_number(row['median'])} [{_number(row['q25'])}, {_number(row['q75'])}]"
-                    )
-                cells = (
-                    label, plan.display_labels.get(f"{spec.group_by}={row['group']}", row["group"]), _count(row["denominator_n"]),
-                    "; ".join(summary_parts),
-                    _count_percent(row["missing_n"], row["missing_pct"]),
-                    _number(row["standardized_mean_difference"], 3),
-                )
-                if spec.p_values_required:
-                    cells += (_p_value(row["p_value"]),)
-                rows.append(cells)
+            columns, rows = _group_columns(plan, spec, source)
         except KeyError as exc:
             raise ManuscriptTableProjectionError("Table 1 required source field is missing") from exc
         exclusions = {row.get("group_missing_excluded_n", "") for row in source}
         if len(exclusions) != 1 or "" in exclusions:
             raise ManuscriptTableProjectionError("Table 1 grouping exclusions are not explicit")
         notes = [
-            f"Grouping variable: {spec.group_by}. Rows are the executed table population.",
+            f"Grouping variable: {spec.group_by}. Columns use the executed table population.",
             "Categorical percentages use non-missing observations; missing percentages use N.",
             "Numeric summaries follow the approved plan: mean (SD), median [Q1, Q3], or both.",
             "Signed SMD is comparison minus reference; it is not a significance test. N/A means unavailable.",

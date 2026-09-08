@@ -3893,6 +3893,7 @@ class PiCopilotService:
         project_id: str,
         run_id: str,
         document_name: str,
+        expected_sha256: str | None = None,
     ) -> Dict[str, Any]:
         """Return one fixed, receipt-bound manuscript document for preview."""
 
@@ -3946,15 +3947,16 @@ class PiCopilotService:
             ),
             None,
         )
-        expected_sha256 = (
+        registered_sha256 = (
             str(registered.get("sha256") or "").lower()
             if isinstance(registered, Mapping)
             else ""
         )
         current_sha256 = hashlib.sha256(loaded["content"]).hexdigest()
         if (
-            not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)
-            or current_sha256 != expected_sha256
+            not re.fullmatch(r"[a-f0-9]{64}", registered_sha256)
+            or current_sha256 != registered_sha256
+            or (expected_sha256 is not None and current_sha256 != expected_sha256)
         ):
             raise PiCopilotError(
                 "pi_research_document_digest_mismatch",

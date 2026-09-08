@@ -529,7 +529,9 @@
       `<section class="gpi-reader-table">${artifactTable(`${table.label || ''}. ${table.caption || ''}`, table.columns || [], table.rows || [])}<details><summary>${esc(t('Table definitions and source', '表格定义与来源'))}</summary>${(Array.isArray(table.notes) ? table.notes : []).map(note => `<p>${esc(note)}</p>`).join('')}</details></section>`
     ).join('');
     let displaysInserted = false;
-    const displayInsert = tables + (reportFigures
+    const figureContext = (Array.isArray(p.figure_context) ? p.figure_context : [])
+      .map(note => `<p class="gpi-reader-context">${esc(note.text || '')}</p>`).join('');
+    const displayInsert = figureContext + tables + (reportFigures
       ? `<section class="gpi-article-figure-insert"><div class="gpi-article-figure-head"><h2>${esc(t('Result figures', '结果图件'))}</h2><p>${esc(p.figure_gallery && p.figure_gallery.presentation_variant ? t('Re-rendered from digest-verified source tables. Original run figures remain unchanged.', '根据摘要核验后的源数据表重新排版；原始运行图件保持不变。') : t('Figures registered by this run.', '本次运行登记的图件。'))}</p></div>${reportFigures}</section>` : '');
     const article = blocks.map(block => {
       const content = renderSegments(block && block.segments);

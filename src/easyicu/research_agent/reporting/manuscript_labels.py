@@ -4,7 +4,7 @@ import re
 from typing import Mapping
 
 
-def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, language="en"):
+def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, language="en", include_unlabeled=False):
     """Use existing English source metadata when the UI label is Chinese.
 
     Only typed positive-only binary event records admit the recorded/not-recorded
@@ -16,6 +16,12 @@ def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, langua
     if context is None or not str(language).lower().startswith("en"):
         return result
     variables = {variable.name: variable for variable in context.variables}
+    for name, variable in (variables.items() if include_unlabeled else ()):
+        if name in result and result[name] != name:
+            continue
+        description = str(variable.description or "").strip()
+        if description and not re.search(r"[\u3400-\u9fff]", description):
+            result[name] = description
     for key, label in labels.items():
         if not re.search(r"[\u3400-\u9fff]", str(label)):
             continue

@@ -64,6 +64,6 @@ def test_reader_uses_existing_table_owner_without_changing_source(tmp_path):
     )
     assert len(result["tables"]) == 1
     assert result["tables"][0]["label"] == "Table 1"
-    assert result["tables"][0]["rows"][1][3] == "2.00 [1.50, 2.50]"
+    assert result["tables"][0]["rows"][1][2] == "2.00 [1.50, 2.50]"
     assert record.sha256 in " ".join(result["tables"][0]["notes"])
     assert (tmp_path / record.relative_path).read_bytes() == before

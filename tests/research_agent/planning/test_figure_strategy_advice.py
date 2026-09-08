@@ -61,3 +61,11 @@ def test_visual_variety_is_advice_while_scientific_coverage_still_gates(
         article_contract_complete=True,
         article_figure_strategy_complete=status["article_figure_strategy_complete"],
     ) is (broken is None)
+
+
+def test_actual_planner_transports_share_research_display_requirements():
+    from easyicu.research_agent.contracts.research_display import RESEARCH_DISPLAY_GUIDE
+    from easyicu.research_agent.agents import planner, progressive_planner
+    # Protect the real transport inputs, not an unused strategy renderer.
+    assert RESEARCH_DISPLAY_GUIDE in planner._PRINCIPLES_GUIDE
+    assert RESEARCH_DISPLAY_GUIDE in progressive_planner._GUIDE
