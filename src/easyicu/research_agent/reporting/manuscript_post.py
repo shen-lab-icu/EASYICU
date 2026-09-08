@@ -21,7 +21,10 @@ pure functions with no pipeline state, so isolating them here cuts
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..literature import LiteratureBundle
 
 from ..authority.evidence_store import (
     EvidenceEnforcementError,
@@ -35,6 +38,7 @@ from ..authority.evidence_store import (
 from ..schema import ResearchContext
 from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
+from .manuscript_bibliographic_years import bibliographic_year_spans
 from .side_findings import (
     SideFinding,
     annotate_side_finding_leaks,
@@ -1925,6 +1929,7 @@ def bind_numeric_values(
     enforcement_mode: Optional[EvidenceEnforcementMode] = None,
     footnote_prefix: str = "claim",
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    literature: LiteratureBundle | None = None,
 ) -> Tuple[str, Dict[str, NumericClaim], List[str]]:
     """Bind every numeric value in ``manuscript`` to a registered claim.
 
@@ -1970,7 +1975,7 @@ def bind_numeric_values(
     )
 
     lineage = _evidence_lineage(evidence)
-    skip_spans = _spans_to_skip(manuscript)
+    skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
     miscited: List[Dict[str, Any]] = []
@@ -2122,6 +2127,7 @@ def drop_untraceable_numeric_sentences(
     *,
     evidence: EvidenceStore,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    literature: LiteratureBundle | None = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Remove only sentences that the unchanged STRICT numeric gate rejects.
 
@@ -2135,7 +2141,7 @@ def drop_untraceable_numeric_sentences(
 
     if not manuscript:
         return manuscript, []
-    skip_spans = _spans_to_skip(manuscript)
+    skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
     for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
         start, end = match.start("value"), match.end("value")
@@ -2159,6 +2165,7 @@ def drop_untraceable_numeric_sentences(
                 evidence=evidence,
                 enforcement_mode=EvidenceEnforcementMode.STRICT,
                 per_step_records=per_step_records,
+                literature=literature,
             )
         except EvidenceEnforcementError as exc:
             detail = dict(exc.detail or {})

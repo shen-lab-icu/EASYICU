@@ -258,12 +258,12 @@ def test_primary_summary_coverage_cannot_borrow_another_metric_or_section():
     text = place_descriptive_report_facts(text, facts)
     missing = missing_primary_result_facts(text, facts)
     assert missing["Abstract"] == facts[:2]
-    assert missing["Conclusion"] == facts[:2]
-    assert missing["Discussion"] == facts
+    assert "Conclusion" not in missing
+    assert "Discussion" not in missing
     assert "Results" not in missing
     audit = audit_manuscript_quality(text, expected_primary_result_facts=facts)
     failures = [f for f in audit.findings if f.code == "MANUSCRIPT_PRIMARY_RESULT_COVERAGE_INCOMPLETE"]
-    assert {f.section for f in failures} == {"Abstract", "Discussion", "Conclusion"}
+    assert {f.section for f in failures} == {"Abstract"}
     assert all(f.severity == "error" for f in failures)
     owners = quality_repair_section_errors(text, expected_primary_result_facts=facts)
     assert "MANUSCRIPT_PRIMARY_RESULT_COVERAGE_INCOMPLETE" in str(owners["abstract"])
@@ -271,8 +271,29 @@ def test_primary_summary_coverage_cannot_borrow_another_metric_or_section():
     assert missing_primary_result_facts(repaired, facts) == {}
     assert place_primary_result_summaries(repaired, facts) == repaired
     assert "A preserved limitation, not a result." in repaired
-    assert all(repaired.count(f.scaffold) == 4 for f in facts)
+    assert all(repaired.count(f.scaffold) == 2 for f in facts[:2])
+    assert all(repaired.count(f.scaffold) == 3 for f in facts[2:])
+    assert repaired.split("## Discussion")[1] == text.split("## Discussion")[1]
     assert "confidence interval" not in repaired and "risk difference" not in repaired
+
+
+def test_numeric_result_projection_does_not_write_the_interpretation_sections():
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    interpretation = (
+        "## Discussion\n\nThe observed distribution does not establish a causal effect.\n\n"
+        "## Conclusion\n\nInterpretation is limited to the recorded ICU stays.\n"
+    )
+    text = (
+        "## Abstract\n\n**Results:**\n\n**Conclusions:**\nCaution is needed.\n\n"
+        "## Results\n\n### Cohort characteristics\n\n### Primary outcome\n\n"
+        + interpretation
+    )
+    projected = render_descriptive_report_claims(text, facts)
+    assert projected[projected.index("## Discussion"):] == interpretation
+    assert all(projected.count(fact.scaffold) == 2 for fact in facts)
+    assert missing_primary_result_facts(projected, facts) == {}
+    assert render_descriptive_report_claims(projected, facts) == projected
 
 
 def test_hidden_or_wrong_source_metric_text_does_not_satisfy_primary_coverage():

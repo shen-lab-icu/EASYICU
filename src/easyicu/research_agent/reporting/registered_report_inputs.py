@@ -208,6 +208,9 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
         evidence=evidence,
         enforcement_mode=EvidenceEnforcementMode.STRICT,
         per_step_records=records,
+        literature=LiteratureBundle.model_validate_json(evidence.verify_input(
+            "preplan_literature_bundle.json", "preplan_literature_bundle",
+        )),
     )
     findings = audit_manuscript_numeric_claims(bound, per_step_records=records)
     if untraced or any(row.severity == "error" for row in findings):

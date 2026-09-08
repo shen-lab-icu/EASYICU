@@ -50,6 +50,30 @@ def test_surviving_antecedent_keeps_dependent_sentence():
     assert not result.dependent_sentences
 
 
+@pytest.mark.parametrize("opener", ["Its levels", "Their values"])
+def test_deleted_definition_removes_possessive_context_only_when_newly_orphaned(opener):
+    target = "Rejected variable definition."
+    dependent = f"{opener} were retained as materialized."
+    tail = "Age was obtained from the source."
+    text = f"{target} {dependent} {tail}"
+    result = contextual_sentence_deletion(text, 0, len(target))
+    assert result.dependent_sentences == (dependent,)
+    assert text[result.end:].strip() == tail
+
+    prefix = "The variable was measured at admission. "
+    retained = contextual_sentence_deletion(
+        prefix + text, len(prefix), len(prefix) + len(target),
+    )
+    assert not retained.dependent_sentences
+
+
+@pytest.mark.parametrize("opener", ["Its levels", "Their values"])
+def test_possessive_context_is_not_deleted_across_a_paragraph(opener):
+    target = "Rejected variable definition."
+    text = f"{target}\n\n{opener} were retained as materialized."
+    assert contextual_sentence_deletion(text, 0, len(target)).end == len(target)
+
+
 @pytest.mark.parametrize(
     "text",
     [

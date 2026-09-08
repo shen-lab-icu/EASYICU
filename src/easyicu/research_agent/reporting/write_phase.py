@@ -1836,6 +1836,37 @@ def _manifest_caveat_finding(bound: str) -> ValidationFinding | None:
     )
 
 
+def _persist_literature_audit(
+    scaffold: str,
+    *,
+    literature: Optional[LiteratureBundle],
+    evidence: Any,
+    run_dir: Path,
+    findings: List[ValidationFinding],
+) -> None:
+    """Persist the exact-bundle audit and preserve any blocking finding."""
+    audit = audit_manuscript_literature(scaffold, literature)
+    path = run_dir / "manuscript_literature_audit.json"
+    path.write_text(audit.model_dump_json(indent=2), encoding="utf-8")
+    if evidence.get("manuscript_literature_audit") is None:
+        evidence.register_file(
+            kind="log",
+            description="Exact run-bound manuscript literature citation audit.",
+            source_path=path,
+            evidence_id="manuscript_literature_audit",
+            producer="pipeline",
+            generation_mode="system",
+        )
+    if audit.status != "pass":
+        findings.append(ValidationFinding(
+            validator="manuscript_literature",
+            severity="error",
+            message=audit.message,
+            evidence_ids=["manuscript_literature_audit"],
+            detail=audit.model_dump(mode="json"),
+        ))
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -1894,30 +1925,10 @@ def _bind_and_review_manuscript(
                 },
             )
         )
-    manuscript_literature_audit = audit_manuscript_literature(scaffold, literature)
-    manuscript_literature_path = run_dir / "manuscript_literature_audit.json"
-    manuscript_literature_path.write_text(
-        manuscript_literature_audit.model_dump_json(indent=2), encoding="utf-8"
+    _persist_literature_audit(
+        scaffold, literature=literature, evidence=evidence,
+        run_dir=run_dir, findings=findings,
     )
-    if evidence.get("manuscript_literature_audit") is None:
-        evidence.register_file(
-            kind="log",
-            description="Exact run-bound manuscript literature citation audit.",
-            source_path=manuscript_literature_path,
-            evidence_id="manuscript_literature_audit",
-            producer="pipeline",
-            generation_mode="system",
-        )
-    if manuscript_literature_audit.status != "pass":
-        findings.append(
-            ValidationFinding(
-                validator="manuscript_literature",
-                severity="error",
-                message=manuscript_literature_audit.message,
-                evidence_ids=["manuscript_literature_audit"],
-                detail=manuscript_literature_audit.model_dump(mode="json"),
-            )
-        )
 
     evidence_bound_scaffold, removed_sentences = (
         evidence.enforce_evidence_bound_scaffold(scaffold)
@@ -1973,6 +1984,7 @@ def _bind_and_review_manuscript(
             bound,
             evidence=evidence,
             per_step_records=per_step_records,
+            literature=literature,
         )
     if removed_numeric_sentences:
         numeric_filtered_path = run_dir / "manuscript_scaffold_numeric_filtered.md"
@@ -2108,6 +2120,7 @@ def _bind_and_review_manuscript(
         evidence=evidence,
         enforcement_mode=pipeline._evidence_enforcement_mode,
         per_step_records=per_step_records,
+        literature=literature,
     )
     numeric_binding_findings: List[ValidationFinding] = []
     if untraced_numerics:
