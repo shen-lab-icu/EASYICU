@@ -32,6 +32,7 @@
     }
     function runningJobTitle(code) {
       const value = String(code || '').toLowerCase();
+      if (value.includes('report_repair')) return tr('Revising the report from existing analysis', '正在复用分析结果修订报告');
       if (value.includes('extraction')) return tr('Extracting and validating study data', '正在提取并验证研究数据');
       if (value.includes('review')) return tr('Running the approved research plan', '正在执行已批准的研究计划');
       if (value.includes('full_run_report_resume')) return tr('Restoring the manuscript and evidence checks', '正在恢复稿件与证据校验');
@@ -47,8 +48,11 @@
       activity = {
         id: 'easyicu-job-' + jobId, role: 'activity', status: 'running',
         startedAt, childJobId: jobId, runningTitle: runningJobTitle(code), steps: [], expanded: true,
+        reportOnly: String(code || '').includes('report_repair'),
       };
-      const label = code === 'easyicu_extraction_submitted'
+      const label = activity.reportOnly
+        ? tr('Report revision submitted; existing analysis reused', '报告修订已提交；复用已有分析')
+        : code === 'easyicu_extraction_submitted'
         ? tr('EasyICU data extraction submitted', 'EasyICU 数据提取任务已提交')
         : String(code || '').includes('easyicu_full_run')
           ? String(code || '').includes('report_resume')
@@ -126,6 +130,7 @@
             gate_status: gate && gate.status,
             gate_reason_code: gate && gate.reason,
             human_review_pending: pending,
+            report_only: activity.reportOnly || (event.result && event.result.report_revision && event.result.report_revision.revision_id === jobId),
           }, tr) : {};
         const failed = event.status === 'failed' || event.status === 'cancelled';
         const blocked = Boolean(presentation.blocked);
@@ -170,6 +175,10 @@
       if (!['start', 'progress', 'gate', 'artifact', 'cancel_requested'].includes(String(event.type || ''))) return;
       completeRunningPipelineSteps(activity);
       const step = String(event.step || event.type || 'pipeline').slice(0, 80);
+      if (step === 'report_repair') {
+        activity.reportOnly = true;
+        activity.runningTitle = runningJobTitle('easyicu_report_repair_submitted');
+      }
       const kind = childEventKind(event);
       upsertActivityStep(activity, {
         // One row per pipeline step, updated in place. Keying on `seq` gave a
@@ -239,7 +248,7 @@
       if (!job || !job.present || !job.job_id || !host.session()) return;
       const jobId = String(job.job_id);
       supersedeEarlierPlanAttempts(job);
-      const activity = childActivity(jobId, String(job.kind || ''));
+      const activity = childActivity(jobId, job.report_only ? 'easyicu_report_repair_submitted' : String(job.kind || ''));
       activity.childJobPlanAttempt = isPlanAttempt(job);
       activity.childJobCreatedAt = Number(job.created_at_epoch);
       const replayOwner = window.EasyICU.guidedPi.require('replay');

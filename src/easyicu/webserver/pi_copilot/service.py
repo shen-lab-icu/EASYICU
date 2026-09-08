@@ -2229,6 +2229,7 @@ class PiCopilotService:
                         "easyicu_demo_source_preparation_submitted",
                         "easyicu_run_submitted",
                         "easyicu_full_run_submitted",
+                        "easyicu_report_repair_submitted",
                     }
                 ):
                     self._watch_child_job_for_replay(

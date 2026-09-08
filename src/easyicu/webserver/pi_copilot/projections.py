@@ -431,6 +431,33 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     }
     artifacts = result.get("artifacts")
     artifacts = artifacts if isinstance(artifacts, list) else []
+    revision = result.get("report_revision")
+    revision = revision if isinstance(revision, Mapping) else {}
+    own_revision = bool(revision.get("revision_id") == snapshot.get("id") and revision)
+    report_only = own_revision or any(
+        isinstance(event, Mapping) and event.get("step") == "report_repair"
+        for event in events
+    )
+    revision_ready = bool(
+        own_revision and snapshot.get("status") == "done"
+        and revision.get("schema_version") == "easyicu.web-report-revision/1"
+        and revision.get("source_run_id") == run_id
+        and revision.get("status") == "pass"
+        and revision.get("analysis_steps_executed") == 0
+        and revision.get("claim_ceiling") == "analysis_only"
+        and revision.get("publication_authorized") is False
+        and re.fullmatch(r"[a-f0-9]{64}", str(revision.get("output_sha256") or ""))
+    )
+    pdf = revision.get("pdf_artifact")
+    pdf = pdf if isinstance(pdf, Mapping) else {}
+    revision_pdf_ready = bool(
+        revision_ready and pdf.get("name") == "manuscript_revision.pdf"
+        and pdf.get("revision_id") == snapshot.get("id")
+        and pdf.get("manuscript_sha256") == revision.get("output_sha256")
+        and re.fullmatch(r"[a-f0-9]{64}", str(pdf.get("sha256") or ""))
+        and any(isinstance(row, Mapping) and row.get("name") == pdf.get("name")
+                and row.get("sha256") == pdf.get("sha256") for row in artifacts)
+    )
     artifact_names = {
         str(row.get("name") or "").strip()
         for row in artifacts
@@ -475,7 +502,9 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             continue
         name = _bounded_text(row.get("name"), 160)
         digest = _bounded_text(row.get("sha256"), 64).lower()
-        if diagnostic_only and name not in diagnostic_artifacts:
+        if diagnostic_only and name not in diagnostic_artifacts and not (
+            revision_pdf_ready and name == "manuscript_revision.pdf"
+        ):
             continue
         if (
             not run_id
@@ -537,6 +566,10 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "evidence_complete": gate_checks.get("evidence_complete") is True,
             "manuscript_ready": gate_checks.get("manuscript_ready") is True,
             "analysis_results_available": analysis_results_available,
+            "report_only": report_only,
+            "report_revision_ready": revision_ready,
+            "report_revision_pdf_ready": revision_pdf_ready,
+            "report_revision_id": stable_code(revision.get("revision_id")) if own_revision else "",
             "reportable": bool(gate.get("reportable")),
             "human_review_pending": bool(result.get("human_review_pending")),
         }
