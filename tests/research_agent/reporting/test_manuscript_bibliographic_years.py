@@ -23,9 +23,13 @@ def _literature(**changes):
     return LiteratureBundle(research_question="Example", citations=[CitationRecord(**record)])
 
 
-@pytest.mark.parametrize("tail", [" [@definition_2016].", ". [@definition_2016]"])
-def test_explicit_definition_year_uses_cited_metadata_not_result_claim(tmp_path, tail):
-    text = "We used the source-bound 2016 Example-3 definition" + tail
+@pytest.mark.parametrize("qualifier", ["source-bound", "recorded"])
+@pytest.mark.parametrize("tail", [
+    " [@definition_2016].", ". [@definition_2016]",
+    ", with the source criteria retained for this analysis [@definition_2016].",
+])
+def test_explicit_definition_year_uses_cited_metadata_not_result_claim(tmp_path, tail, qualifier):
+    text = f"We used the {qualifier} 2016 Example-3 definition" + tail
     store = EvidenceStore(tmp_path)
     bound, bindings, untraced = bind_numeric_values(
         text, evidence=store, enforcement_mode=EvidenceEnforcementMode.STRICT,
@@ -58,6 +62,9 @@ def test_definition_year_requires_matching_source_metadata(tmp_path, changes):
     "We observed 2016 events [@definition_2016].",
     "We used a threshold of 2016 [@definition_2016].",
     "We used the 2016 Example-3 definition.\n\n[@definition_2016]",
+    "We used the recorded 2016 Example-3 definition. Another assertion [@definition_2016].",
+    "We used the recorded 2016 Example-3 definition;\nanother assertion [@definition_2016].",
+    "We used the recorded 2016 Example-3 definition [@unrelated], then discussed [@definition_2016].",
 ])
 def test_citation_cannot_exempt_study_numbers_or_cross_paragraphs(tmp_path, text):
     with pytest.raises(EvidenceEnforcementError):
@@ -80,6 +87,16 @@ def test_a_supported_definition_year_does_not_hide_a_new_study_count(tmp_path):
     with pytest.raises(EvidenceEnforcementError) as caught:
         bind_numeric_values(
             "We used the 2016 Example-3 definition [@definition_2016] in 999 patients.",
+            evidence=EvidenceStore(tmp_path), enforcement_mode=EvidenceEnforcementMode.STRICT,
+            literature=_literature(),
+        )
+    assert caught.value.detail["untraced"] == ["999"]
+
+
+def test_same_sentence_citation_does_not_exempt_intervening_study_numbers(tmp_path):
+    with pytest.raises(EvidenceEnforcementError) as caught:
+        bind_numeric_values(
+            "We used the recorded 2016 Example-3 definition, with 999 patients [@definition_2016].",
             evidence=EvidenceStore(tmp_path), enforcement_mode=EvidenceEnforcementMode.STRICT,
             literature=_literature(),
         )

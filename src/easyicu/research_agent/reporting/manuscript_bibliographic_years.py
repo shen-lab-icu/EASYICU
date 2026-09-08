@@ -14,10 +14,12 @@ if TYPE_CHECKING:
 
 
 _NAMED_DEFINITION = re.compile(
-    r"\bthe[ \t]+(?:source-bound[ \t]+)?(?P<year>(?:19|20)\d{2})[ \t]+"
+    r"\bthe[ \t]+(?:(?:source-bound|recorded)[ \t]+)?(?P<year>(?:19|20)\d{2})[ \t]+"
     r"(?P<name>[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z][A-Za-z0-9-]*){0,5})[ \t]+"
     r"(?:definition|guidelines?|framework|criteria|consensus statement)"
-    r"[ \t]*[.,;:]?[ \t]*"
+    # An explanatory clause may precede its citation, but cannot cross a
+    # sentence, line, or another citation. Only the year span is admitted.
+    r"[ \t]*(?:[,;:][^.!?\r\n\[\]]{0,600}?)?[ \t]*\.?[ \t]*"
     r"(?P<citation>\[@[A-Za-z0-9_.:-]+(?:;[ \t]*@[A-Za-z0-9_.:-]+)*\])",
     re.I,
 )
