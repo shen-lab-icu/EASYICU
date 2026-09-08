@@ -1504,6 +1504,18 @@ def build_plan_scientific_review(
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
+    for step in plan.steps:
+        if step.method == "primary_population_absolute_risk_context" and step.runtime_outcome_contract is None:
+            findings.append(PlanScientificFinding(
+                code="PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
+                severity="blocker",
+                dimension="icu_clinical_design",
+                message="A descriptive risk step requests the primary model population, but no typed runtime owner binds that population.",
+                evidence_refs=["analysis_plan.json"],
+                remediation="Bind the declared primary population through its supported execution adapter; do not fall back to the broader cohort.",
+                remediation_route="runtime_capability",
+                requires_user_authorization=False,
+            ))
     baseline_coverage = baseline_requirement_coverage(context, plan)
     accepted_baseline = context_baseline_requirements(context)
     for table in baseline_coverage["tables"]:

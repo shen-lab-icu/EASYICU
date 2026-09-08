@@ -443,3 +443,103 @@ def test_primary_landmark_coverage_does_not_remove_other_sensitivity_obligations
     context = context.model_copy(update={"user_preferences": UserPreferences.model_validate(preferences)})
     shaped, _ = ensure_prespecified_sensitivity_steps(plan=plan, context=context, runtime_authority=authority)
     assert [s.method for s in shaped.steps] == ["adjusted_association_models", "multiple_imputation_sensitivity"]
+
+
+@pytest.mark.parametrize("mutation", [None, "plausibility", "cohort_digest", "missing_parent", "wrong_step", "different_population"])
+def test_primary_population_risk_executes_same_rows_and_refuses_drift(tmp_path, monkeypatch, mutation):
+    import hashlib
+    import json
+    import numpy as np
+    import pandas as pd
+    from easyicu.research_agent.execution.runners.landmark_spline_executor import run_landmark_spline_association
+    from easyicu.research_agent.execution.runners.selection import select_standard_executor
+    from easyicu.research_agent.execution.runners.typed_input_binding import TypedInputBindingError
+
+    authority, context, plan = _landmark_shaping_case()
+    descriptive = AnalysisStep(
+        step_id="risk_in_primary_population", planned_analysis_role="secondary",
+        method="primary_population_absolute_risk_context", intent="Describe risk in the primary model population.",
+        inputs=["exposure", "outcome", "artifact:analysis_cohort", "table:adjusted_association_estimates"],
+        expected_outputs=["table:absolute_risk_context"],
+    )
+    plan = authority.bind_plan(plan.model_copy(update={"steps": [plan.steps[0], descriptive]}))
+    authority.validate_plan(plan)
+    step = plan.steps[1]
+    scope = None
+    raw_contracts = {"contracts": {"age": {"analysis_plausibility_range": {"minimum": 0, "maximum": 120}, "plausibility_policy": {"range_policy": "flag_only", "out_of_range_action": "retain_and_flag"}}}}
+    if mutation == "plausibility":
+        from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
+        digest = hashlib.sha256(json.dumps(raw_contracts, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        raw_contracts["contracts_sha256"] = digest
+        scope = FlagOnlyPlausibilityScope(step_id=step.step_id, expected_columns=("age",), source_contracts_sha256=digest, authority_kind="test")
+    selected = select_standard_executor(step, plan=plan, current_case_scientific_runtime_authority=authority, scientific_runtime_projection_sha256="b" * 64, plausibility_scope=scope)
+    assert selected is not None
+    assert selected.analysis_kind == "primary_population_absolute_risk_context"
+    rng = np.random.default_rng(42)
+    frame = pd.DataFrame({"exposure": rng.uniform(1, 9, 60), "outcome": [int(i % 3 == 0) for i in range(60)], "age": rng.uniform(20, 80, 60), "event_hours": 100., "followup_hours": 120.})
+    frame.loc[:4, ["outcome", "event_hours"]] = [1, 12.]
+    frame.loc[5:9, "followup_hours"] = 12.
+    frame.loc[10:14, "age"] = np.nan
+    cohort_path = tmp_path / "cohort.parquet"
+    frame.to_parquet(cohort_path, index=False)
+    run_landmark_spline_association(frame=frame, authority=authority, runtime_projection_sha256="b" * 64, out_dir=tmp_path / "primary")
+    parent_path = tmp_path / "primary" / f"{authority.linear_sensitivity_product.partition(':')[2]}.csv"
+    if mutation == "different_population":
+        data = pd.read_csv(parent_path)
+        data.loc[0, "n"] += 1
+        data.to_csv(parent_path, index=False)
+    manifest = {"step_id": step.step_id, "inputs": {}, "raw_input_contracts": raw_contracts}
+    for key, path in [("artifact:analysis_cohort", cohort_path), (authority.linear_sensitivity_product, parent_path)]:
+        data = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        manifest["inputs"][key] = {
+            "relative_path": str(path.relative_to(tmp_path)), "sha256": digest,
+            "declared_kind": key.partition(':')[0], "evidence_kind": "table", "product": key.partition(':')[2], "evidence_id": key,
+            "product_contract": {"columns": list(data.columns), "row_count": len(data)},
+            "consumption_contract": {"input_key": key, "mode": "all_rows", "artifact_sha256": digest},
+        }
+    if mutation == "cohort_digest":
+        frame.assign(age=frame.age + 1).to_parquet(cohort_path, index=False)
+    if mutation == "missing_parent":
+        manifest["inputs"].pop(authority.linear_sensitivity_product)
+    if mutation == "wrong_step":
+        manifest["step_id"] = "another_step"
+    (tmp_path / "resolved_inputs.json").write_text(json.dumps(manifest))
+    (tmp_path / "analysis_plan.json").write_text(plan.model_dump_json())
+    (tmp_path / "manifest_partial.json").write_text(json.dumps({"plan_path": "analysis_plan.json"}))
+    (tmp_path / "research_context.json").write_text(context.model_dump_json())
+    out = tmp_path / "risk"
+    for key, value in {"EASYICU_RUN_DIR": tmp_path, "EASYICU_STEP_ID": step.step_id, "COHORT_PARQUET": cohort_path, "EASYICU_RESOLVED_INPUTS_JSON": tmp_path / "resolved_inputs.json", "STEP_OUT_DIR": out, "OUTCOME_COL": "outcome"}.items():
+        monkeypatch.setenv(key, str(value))
+    if mutation not in (None, "plausibility"):
+        reason = {"cohort_digest": "digest_mismatch", "missing_parent": "binding_absent", "wrong_step": "manifest_step_mismatch", "different_population": "does not match"}[mutation]
+        with pytest.raises((TypedInputBindingError, ValueError), match=reason):
+            exec(compile(selected.code, "<primary_population_risk>", "exec"), {})
+        assert not (out / "step_summary.json").exists()
+        return
+    exec(compile(selected.code, "<primary_population_risk>", "exec"), {})
+    summary = json.loads((out / "step_summary.json").read_text())
+    assert summary["n_total"] == 45
+    assert summary["population_binding"]["source_cohort_n"] == 60
+    assert summary["population_binding"]["event_n"] == 15
+    assert summary["exposure_columns"] == ["exposure"]
+    assert len(summary["input_bindings"]) == 2
+    table = pd.read_csv(out / "absolute_risk_context.csv")
+    assert set(table["population_scope"]) == {"primary_model_complete_cases"}
+    assert set(table["population_n"]) == {45}
+
+    if mutation == "plausibility":
+        assert summary["plausibility_audit"]["age"]["compared_n"] == 55
+
+
+def test_unbound_primary_population_cannot_pass_scientific_review():
+    from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+    authority, context, plan = _landmark_shaping_case()
+    step = AnalysisStep(step_id="risk", method="primary_population_absolute_risk_context", planned_analysis_role="secondary", intent="Use primary population", inputs=["artifact:analysis_cohort", "table:adjusted_association_estimates"], expected_outputs=["table:absolute_risk_context"])
+    plan = plan.model_copy(update={"steps": [plan.steps[0], step]})
+    review = build_plan_scientific_review(context=context, plan=plan)
+    assert not review.approval_allowed
+    assert "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING" in {f.code for f in review.findings}
+    bound = authority.bind_plan(plan)
+    review = build_plan_scientific_review(context=context, plan=bound)
+    assert "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING" not in {f.code for f in review.findings}

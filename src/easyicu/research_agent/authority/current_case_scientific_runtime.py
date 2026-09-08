@@ -1399,6 +1399,23 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             if step is candidate:
                 steps.append(bound)
                 continue
+            if (
+                step.method == "primary_population_absolute_risk_context"
+                and generic_parent in step.inputs
+            ):
+                population_inputs = self.absolute_risk_population_inputs(cohort_input)
+                steps.append(step.model_copy(update={
+                    "inputs": list(population_inputs),
+                    "input_consumption_contracts": [
+                        ArtifactConsumptionContract(input_key=key, mode="all_rows")
+                        for key in population_inputs if ":" in key
+                    ],
+                    "runtime_outcome_contract": RuntimeOutcomeContract(
+                        owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                    ),
+                    "icu_rule_refs": list(dict.fromkeys([*step.icu_rule_refs, self.plan_rule_ref])),
+                }))
+                continue
             if composite_step_id is not None and step.step_id == composite_step_id:
                 assert composite_inputs is not None
                 figure_output = step.expected_outputs[0]
@@ -1484,6 +1501,9 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             update={"steps": steps, "robustness_specs": robustness_specs}
         )
 
+    def absolute_risk_population_inputs(self, cohort_input: str) -> tuple[str, ...]:
+        return (cohort_input, *self.required_columns, self.linear_sensitivity_product)
+
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
@@ -1523,6 +1543,16 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     def validate_plan(self, plan: AnalysisPlan) -> None:
         primary = self.governed_step(plan)
         for step in plan.steps:
+            if step.method == "primary_population_absolute_risk_context":
+                expected = self.absolute_risk_population_inputs(sole_typed_cohort_input(primary))
+                if tuple(step.inputs) != expected or step.runtime_outcome_contract != RuntimeOutcomeContract(
+                    owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                ) or any(
+                    not any(c.input_key == key and c.mode == "all_rows" for c in step.input_consumption_contracts)
+                    for key in expected if ":" in key
+                ):
+                    raise CurrentCaseScientificAuthorityError("absolute-risk population drifted from its primary runtime owner")
+                self._require_rule_ref(step)
             if step.functional_form_spec is None and step.method not in RCS_LINEAR_SENSITIVITY_METHODS:
                 if (
                     step.planned_analysis_role == "sensitivity" and step.scientific_capability is None

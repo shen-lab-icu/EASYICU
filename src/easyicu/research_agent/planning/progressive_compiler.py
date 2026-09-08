@@ -1804,7 +1804,15 @@ def _compile_inputs(
         # those steps, but its table/report product must not become a second
         # data-frame input that the executor neither reads nor receipts.
         parsed_reference = typed_product(reference.product_id)
-        if step.module_id not in _COHORT_FRAME_ONLY_MODULES and not (
+        primary_population_reference = (
+            step.module_id == "absolute_risk_context"
+            and reference.product_id == "table:adjusted_association_estimates"
+            and any(
+                source.step_id == owner and source.planned_analysis_role == "primary"
+                for source in skeleton.steps
+            )
+        )
+        if (step.module_id not in _COHORT_FRAME_ONLY_MODULES or primary_population_reference) and not (
             step.module_id == "report"
             and parsed_reference is not None
             and parsed_reference[0] == "figure"
@@ -2160,6 +2168,8 @@ def _compile_one_step(
         if _is_ungrouped_baseline_summary(step)
         else step.custom_method or _METHOD_BY_MODULE[step.module_id]
     )
+    if step.module_id == "absolute_risk_context" and "table:adjusted_association_estimates" in inputs:
+        method = "primary_population_absolute_risk_context"
     sensitivity_spec_ids = list(step.sensitivity_spec_ids)
     if step.module_id == "robustness_replay":
         # Foundation robustness intents are already validated, typed host
