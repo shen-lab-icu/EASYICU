@@ -841,6 +841,11 @@ def run_exposure_outcome_distribution_figure(
         parent_contrast.insert(0, "source_row_index", [int(total.name)])
         parent_contrast.to_csv(contrast_source, index=False)
 
+    # This renderer also runs in report-revision worker threads on desktop
+    # hosts. Never let backend auto-selection create a native GUI window.
+    import matplotlib
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style()
