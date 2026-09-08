@@ -106,6 +106,7 @@ class PreparedWriterOnlyMigration:
     plan_validation_status: str = "validated"
     plan_validation_error_sha256: str = ""
     host_result_facts: tuple[DescriptiveReportFact, ...] = ()
+    evidence_digest_origin: str = "saved_writer_input"
 
 
 @dataclass(frozen=True)
@@ -381,6 +382,7 @@ def prepare_writer_only_migration(
     run_dir: Path,
     *,
     migration_draft: Optional[Path] = None,
+    host_verified_evidence_digest: Optional[str] = None,
 ) -> PreparedWriterOnlyMigration:
     """Load and audit one sealed run without changing it."""
 
@@ -408,8 +410,9 @@ def prepare_writer_only_migration(
                 detail=str(draft_path),
             )
         manuscript = _read_regular(draft_path).decode("utf-8")
-    evidence_digest = (source / "writer_evidence_digest.md").read_text(
-        encoding="utf-8"
+    evidence_digest = (
+        host_verified_evidence_digest if host_verified_evidence_digest is not None
+        else (source / "writer_evidence_digest.md").read_text(encoding="utf-8")
     )
     try:
         context = parse_research_context_json(
@@ -504,6 +507,8 @@ def prepare_writer_only_migration(
         removed_unknown_literature_sentences=int(removed_sentences),
         plan_validation_status=plan_validation_status,
         plan_validation_error_sha256=plan_validation_error_sha256,
+        evidence_digest_origin=("verified_current_output_envelopes"
+                                if host_verified_evidence_digest is not None else "saved_writer_input"),
     )
 
 
@@ -517,6 +522,8 @@ def writer_only_preflight_payload(
         "mode": "preflight",
         "source_run_dir": str(prepared.source_run_dir),
         "source_hashes": dict(prepared.source_hashes),
+        "writer_evidence_digest_sha256": _sha256(prepared.evidence_digest.encode("utf-8")),
+        "writer_evidence_digest_origin": prepared.evidence_digest_origin,
         "migration_draft_path": (
             str(prepared.migration_draft_path)
             if prepared.migration_draft_path is not None
@@ -920,6 +927,7 @@ def publish_writer_only_result(
             detail=bound_literature.message,
         )
     _atomic_write(output / "manuscript_scaffold.md", result.manuscript.encode("utf-8"))
+    _atomic_write(output / "writer_evidence_digest.md", prepared.evidence_digest.encode("utf-8"))
     _atomic_write(
         output / "manuscript_bound.md",
         bound_manuscript.encode("utf-8"),
@@ -948,6 +956,8 @@ def publish_writer_only_result(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_run_dir": str(prepared.source_run_dir),
         "source_hashes": dict(prepared.source_hashes),
+        "writer_evidence_digest_sha256": _sha256(prepared.evidence_digest.encode("utf-8")),
+        "writer_evidence_digest_origin": prepared.evidence_digest_origin,
         "plan_validation_status": prepared.plan_validation_status,
         "plan_validation_error_sha256": prepared.plan_validation_error_sha256,
         "source_manuscript_sha256": _sha256(
