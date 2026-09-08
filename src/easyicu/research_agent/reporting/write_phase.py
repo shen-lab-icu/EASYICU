@@ -1158,6 +1158,10 @@ def _preserve_rejected_writer_candidate(exc, *, evidence, per_step_records):
             "publication_authorized": False,
         },
     )
+    evidence.update_record(
+        record.evidence_id, finding_severity="error",
+        finding_messages=["Rejected manuscript candidate; not a source for scientific claims."],
+    )
     return record.evidence_id
 
 

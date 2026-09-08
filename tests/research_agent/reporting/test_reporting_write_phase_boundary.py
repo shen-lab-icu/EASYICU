@@ -24,6 +24,8 @@ def test_rejected_writer_candidate_only_resumes_as_verified_repair(tmp_path, cha
     eid = write_phase._preserve_rejected_writer_candidate(exc, evidence=store, per_step_records=records)
     record = store.get(eid)
     assert record.metadata['publication_authorized'] is False
+    assert record.finding_severity == 'error'
+    assert eid not in write_phase._preferred_writer_evidence_names(store, records)
     assert store.get('manuscript_scaffold_raw') is None
     assert write_phase._verified_resume_writer_scaffold(
         resume_state={'per_step_records': records}, evidence=store,
