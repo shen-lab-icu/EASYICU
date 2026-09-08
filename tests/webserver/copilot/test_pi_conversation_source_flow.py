@@ -201,3 +201,28 @@ def test_revised_report_never_advertises_the_source_runs_old_pdf(revision):
     """)
     assert ('manuscript_scaffold.pdf' in html) is not revision
     assert 'data-gpi-run-outcome-retry="report_only"' in html
+
+
+@pytest.mark.parametrize('mismatch', [None, 'pdf_hash', 'revision_id', 'manuscript_hash', 'missing'])
+def test_revision_pdf_requires_the_exact_reader_revision_and_ledger(mismatch):
+    pdf = {'name': 'manuscript_revision.pdf', 'sha256': 'b' * 64,
+           'revision_id': 'revision_a', 'manuscript_sha256': 'a' * 64}
+    if mismatch == 'pdf_hash':
+        pdf['sha256'] = 'c' * 64
+    elif mismatch == 'revision_id':
+        pdf['revision_id'] = 'revision_old'
+    elif mismatch == 'manuscript_hash':
+        pdf['manuscript_sha256'] = 'c' * 64
+    review = {'ok': True, 'run_id': 'run_a', 'gate': {'checks': {'execution_complete': True, 'analysis_validated': True}},
+        'artifacts': [] if mismatch == 'missing' else [{'name': 'manuscript_revision.pdf', 'sha256': 'b' * 64}],
+        'artifact_payloads': {'manuscript_provenance.json': {
+            'manuscript_sha256': 'a' * 64,
+            'report_revision': {'schema_version': 'easyicu.web-report-revision/1',
+                'revision_id': 'revision_a', 'source_run_id': 'run_a', 'status': 'pass',
+                'analysis_steps_executed': 0, 'claim_ceiling': 'analysis_only',
+                'publication_authorized': False, 'output_sha256': 'a' * 64, 'pdf_artifact': pdf}}}}
+    result = project_run_outcome(review)
+    assert result['report_revision_pdf_ready'] is (mismatch is None)
+    assert any(row['artifact'] == 'manuscript_revision.pdf' for row in result['artifact_refs']) is (mismatch is None)
+    assert result['manuscript_ready'] is False
+    assert result['reportable'] is False

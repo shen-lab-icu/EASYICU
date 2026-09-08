@@ -40,3 +40,27 @@ def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, langua
         if term and not re.search(r"[\u3400-\u9fff]", term):
             result[key] = ("No recorded " if level == "0" else "Recorded ") + term
     return result
+
+
+def recorded_definition_section_errors(manuscript: str, context) -> dict[str, tuple[str, ...]]:
+    """Positive-only record membership must not become confirmed diagnosis."""
+    if context is None or not any(
+        getattr(getattr(variable, "observation_semantics", None), "kind", None) == "positive_only_event"
+        for variable in context.variables
+    ):
+        return {}
+    errors = {}
+    for match in re.finditer(r"(?ms)^## (Introduction|Discussion)\s*\n(.*?)(?=^## |\Z)", manuscript):
+        for sentence in re.split(r"(?<=[.!?])\s+", match.group(2)):
+            if re.search(r"diagnosis status|anchored to (?:that|the) clinical definition", sentence, re.I) and not re.search(
+                r"\brecorded\b|\boperational\b|\bproxy\b|not (?:a |an )?(?:independent|confirmed)", sentence, re.I,
+            ):
+                errors[match.group(1).lower()] = (
+                    "This section treats a positive-only source record as a clinical diagnosis. "
+                    "Make a limited correction using the existing source definitions: the executed grouping is recorded status, "
+                    "and no positive record does not establish clinical absence. Do not claim independent clinical confirmation. "
+                    "Retain the existing citations and other supported prose; do not add new analyses or literature. "
+                    "Describe source operationalization separately from the clinical definition used in background literature.",
+                )
+                break
+    return errors

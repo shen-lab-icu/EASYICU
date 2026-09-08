@@ -48,7 +48,7 @@
       'technical_report.json',
       'system_validation_report.html', 'system_validation_report.pdf',
       'system_validation_report.json', 'result_tables.json', 'figure_gallery.json',
-      'manuscript_scaffold.pdf', 'manuscript_draft.json', 'agent_plan.json',
+      'manuscript_scaffold.pdf', 'manuscript_revision.pdf', 'manuscript_draft.json', 'agent_plan.json',
       'literature_evidence.json', 'evidence_ledger.json', 'quality_gate.json',
     ];
     function rank(resource) {

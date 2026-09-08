@@ -388,6 +388,7 @@ def _document_resource(
     clean_run = stable_code(run_id)
     clean_name = str(document_name or "").strip()
     labels = {
+        "manuscript_revision.pdf": "Current report revision (PDF)",
         "manuscript_scaffold.pdf": "Rendered manuscript draft (PDF)",
         "manuscript_scaffold.tex": "LaTeX manuscript source",
         "manuscript_scaffold.bib": "BibTeX bibliography",
@@ -395,6 +396,7 @@ def _document_resource(
         "system_validation_report.pdf": "System validation dossier (PDF)",
     }
     media_types = {
+        "manuscript_revision.pdf": "application/pdf",
         "manuscript_scaffold.pdf": "application/pdf",
         "manuscript_scaffold.tex": "text/x-tex",
         "manuscript_scaffold.bib": "application/x-bibtex",

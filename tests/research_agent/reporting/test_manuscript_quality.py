@@ -937,3 +937,13 @@ def test_write_phase_persists_quality_gate_and_non_authoritative_reader(
         "source_sha256": audit_manuscript_quality(invalid).source_sha256,
     }
     assert "manuscript_quality" in _MANUSCRIPT_ERROR_VALIDATORS
+
+
+def test_section_connector_repair_does_not_change_scientific_statements_or_interior_logic():
+    from easyicu.research_agent.reporting.manuscript_quality import repair_section_opening_connectors
+    text = '## Introduction\n\nA definition is therefore important [@definition].\n\nThe later paragraph therefore retains its context.\n\n## Results\n\nThe estimate therefore remains unchanged.\n\n## Discussion\n\nThe findings therefore provide context [@study].\n'
+    result = repair_section_opening_connectors(text)
+    assert 'A definition is important [@definition].' in result
+    assert 'The findings provide context [@study].' in result
+    assert result.count('therefore') == 2
+    assert repair_section_opening_connectors(result) == result

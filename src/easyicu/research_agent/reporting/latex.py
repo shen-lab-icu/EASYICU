@@ -110,6 +110,10 @@ _LATEX_SPECIAL = {
     "\\": r"\textbackslash{}",
     "<": r"\textless{}",
     ">": r"\textgreater{}",
+    "≥": r"\ensuremath{\geq}",
+    "≤": r"\ensuremath{\leq}",
+    "−": r"\ensuremath{-}",
+    "≠": r"\ensuremath{\neq}",
 }
 
 
@@ -388,6 +392,11 @@ def scaffold_to_latex(
     # Rebuild as LaTeX
     parts: List[str] = []
     parts.append(latex_template_preamble(venue_template))
+    display_text = " ".join([markdown, title, *authors,
+                             *(str(cell) for table in tables for row in table.rows for cell in row),
+                             *(figure.caption for figure in figures)])
+    if re.search(r"[\u3400-\u9fff]", display_text):
+        parts.append(r"\usepackage[fontset=fandol]{ctex}")
     parts.append("")
     parts.append(r"\title{" + _escape_latex(title) + "}")
     parts.append(r"\author{" + r" \and ".join(_escape_latex(a) for a in authors) + "}")
@@ -444,7 +453,6 @@ def scaffold_to_latex(
         if inline_bibliography:
             block = render_thebibliography_block(bibliography)
             if block:
-                parts.append(r"\section*{References}")
                 parts.append(block)
                 parts.append("")
         else:

@@ -39,7 +39,7 @@
       const artifact = String((descriptor && descriptor.artifact) || '');
       if (artifact === 'result_tables.json') return 'review_result_tables';
       if (artifact === 'figure_gallery.json') return 'review_figures';
-      if (['manuscript_provenance.json', 'manuscript_scaffold.pdf', 'article_report.json'].includes(artifact)) {
+      if (['manuscript_provenance.json', 'manuscript_scaffold.pdf', 'manuscript_revision.pdf', 'article_report.json'].includes(artifact)) {
         return 'review_manuscript';
       }
       if (artifact === 'scientific_readiness.json') return 'review_scientific_review';

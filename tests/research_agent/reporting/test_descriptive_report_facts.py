@@ -370,3 +370,36 @@ def test_full_write_boundary_projects_only_after_model_grammar_and_preserves_cla
     assert "[^claim_" in output.bound
     assert not any(f.validator == "manuscript_result_sufficiency" for f in findings)
     assert not any(f.validator == "manuscript_numeric_auditor" and f.severity == "error" for f in findings)
+
+
+def test_conclusion_compacts_only_same_endpoint_registered_claims():
+    from easyicu.research_agent.authority.scientific_claims import bind_scientific_claim_drafts
+    from easyicu.research_agent.authority.scientific_claims import derive_scientific_claim_drafts
+    records, evidence = _inputs()
+    claims = bind_scientific_claim_drafts(
+        [draft.model_dump(mode='json') for draft in derive_scientific_claim_drafts(records[0]['step_summary'])],
+        step_id='distribution', evidence_id='summary',
+    )
+    facts = compile_counts_only_report_facts(records, evidence=evidence,
+        reader_display_labels={'exposure=0': 'Reference category', 'exposure=1': 'Other category'}, scientific_claims=claims)
+    risks = facts[2:]
+    text = '## Conclusion\n\n' + '\n\n'.join('{claim:' + fact.replaces_claim_ref + '}' for fact in risks)
+    result = render_descriptive_report_claims(text, facts)
+    assert '10.00% in the “Reference category” group; 20.00% in the “Other category” group' in result
+    assert '6 of 60' not in result and '8 of 40' not in result
+    assert 'adjusted or causal effect' in result and '{evidence:summary}' in result
+    assert render_descriptive_report_claims(result, facts) == result
+    mixed = [*facts[:3], replace(facts[3], outcome_label='different endpoint')]
+    assert 'proportions were' not in render_descriptive_report_claims(text, mixed)
+
+
+def test_prior_revision_binding_cache_is_rebuilt_without_trusting_changed_counts():
+    from easyicu.research_agent.reporting.descriptive_report_facts import DescriptiveReportFact, restore_descriptive_revision_claims
+    fact = DescriptiveReportFact('Primary outcome', 'Observed endpoint was 6 of 60 (10.00%)', 'summary', 'a' * 64, (), 'distribution.risk')
+    text = '## Conclusion\n\nObserved endpoint was 6[^claim_1] of 60 (10.00%) {evidence:summary}. This was a descriptive, unadjusted, noncausal estimate.\n\n[^claim_1]: value=6; evidence=summary'
+    restored = restore_descriptive_revision_claims(text, [fact])
+    assert '{claim:distribution.risk}' in restored
+    assert '[^claim_' not in restored
+    changed = restore_descriptive_revision_claims(text.replace('6[^claim_1]', '7[^claim_1]'), [fact])
+    assert '{claim:distribution.risk}' not in changed
+    assert '7 of 60' in changed  # subject to the normal authority filter and strict numeric binding

@@ -215,11 +215,11 @@
       const current = context();
       const file = (item, index) => {
         const resource = { kind: /\.(pdf|html)$/i.test(item.name) ? 'research_document' : 'research_artifact', run_id: review.run_id, artifact: item.name,
-          label: window.AGENT_RENDER.artifactTitle(item.name), media_type: /\.pdf$/i.test(item.name) ? 'application/pdf' : /\.html$/i.test(item.name) ? 'text/html' : 'application/json' };
+          label: window.AGENT_RENDER.artifactTitle(item.name), sha256: item.sha256, media_type: /\.pdf$/i.test(item.name) ? 'application/pdf' : /\.html$/i.test(item.name) ? 'text/html' : 'application/json' };
         const canPreview = current.projectId && review.engine === 'easyicu.research_agent.pipeline' && /\.(json|pdf|html)$/i.test(item.name);
         return `<div class="gpi-run-file">${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}<small>${esc(item.name)}</small><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></div>`;
       };
-      const primaryNames = ['manuscript_provenance.json', 'result_tables.json', 'figure_gallery.json', 'manuscript_scaffold.pdf', 'agent_plan.json', 'literature_evidence.json'];
+      const primaryNames = ['manuscript_provenance.json', 'manuscript_revision.pdf', 'result_tables.json', 'figure_gallery.json', 'agent_plan.json', 'literature_evidence.json'];
       const primary = primaryNames.map(name => artifacts.findIndex(item => item.name === name)).filter(index => index >= 0).map(index => file(artifacts[index], index)).join('');
       const other = artifacts.map((item, index) => primaryNames.includes(item.name) ? '' : file(item, index)).join('');
       const signable = review.readiness && review.readiness.signable === true && !review.signed && !state.selected.readOnly;

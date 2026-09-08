@@ -180,3 +180,27 @@ def test_revision_reader_mismatch_is_rejected_before_any_wrapper_write(tmp_path,
         )
     assert sentinel.read_bytes() == before
     assert list(wrapper.iterdir()) == [sentinel]
+
+
+@pytest.mark.parametrize('mismatch', ['hash', 'revision', 'manuscript', 'missing'])
+def test_pdf_binding_failure_preserves_previous_reader_and_historical_pdf(tmp_path, mismatch):
+    import hashlib
+    wrapper = tmp_path / 'wrapper'
+    wrapper.mkdir()
+    for name, content in [('evidence_ledger.json', '{"artifacts":[]}'),
+                          ('manuscript_draft.json', '{"markdown_preview":"Previous report"}'),
+                          ('manuscript_scaffold.pdf', '%PDF-original')]:
+        (wrapper / name).write_text(content)
+    before = {p.name: p.read_bytes() for p in wrapper.iterdir()}
+    path = tmp_path / 'revision.pdf'
+    path.write_bytes(b'%PDF-current')
+    pdf = {'name': 'manuscript_revision.pdf', 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+           'revision_id': 'new', 'manuscript_sha256': 'a' * 64}
+    pdf[{'hash': 'sha256', 'revision': 'revision_id', 'manuscript': 'manuscript_sha256', 'missing': 'name'}[mismatch]] = 'wrong'
+    revision = {'revision_id': 'new', 'output_sha256': 'a' * 64, 'pdf_artifact': pdf}
+    provenance = {'schema_version': 'easyicu.manuscript-provenance/1', 'manuscript_sha256': 'a' * 64,
+                  'claim_ceiling': 'analysis_only', 'publication_authorized': False}
+    with pytest.raises(manuscript_repair.WriterOnlyMigrationError, match='PDF_BINDING_FAILED'):
+        manuscript_repair._project_revision(SimpleNamespace(wrapper_dir=wrapper), {'id': 'study'},
+            'New report', revision, {}, provenance=provenance, pdf_path=None if mismatch == 'missing' else path)
+    assert {p.name: p.read_bytes() for p in wrapper.iterdir()} == before

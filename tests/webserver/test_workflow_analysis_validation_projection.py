@@ -4,6 +4,29 @@ from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
 
 
+def test_verified_report_revision_is_reviewable_without_promoting_source_gates():
+    run = {
+        "run_id": "run-report", "run_type": "full",
+        "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+        "gate_checks": {"execution_complete": True, "analysis_validated": True,
+                        "numeric_verified": True, "manuscript_ready": False},
+        "artifact_names": ["agent_plan.json", "evidence_ledger.json",
+                           "source_run_manifest.json", "result_tables.json",
+                           "manuscript_draft.json"],
+    }
+    snapshot = build_research_workflow_snapshot(
+        study={"id": "study-report", "question": "A descriptive question"},
+        active_export_present=False, active_job=None, latest_run=run,
+        report_revision_ready=True,
+    )
+    stages = {row.id: row for row in snapshot.stages}
+    assert stages["manuscript"].status == "review_required"
+    assert stages["manuscript"].reason_code == "report_revision_ready_for_review"
+    assert stages["interpretation"].status == "review_required"
+    assert snapshot.completed_required_stages < snapshot.required_stage_count
+    assert run["gate_checks"]["manuscript_ready"] is False
+
+
 def test_completed_numeric_outputs_project_validation_repair_without_replanning() -> None:
     study = {
         "id": "study-validation-repair",

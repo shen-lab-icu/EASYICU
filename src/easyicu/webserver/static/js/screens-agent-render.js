@@ -179,6 +179,8 @@
   function artifactTitle(name) {
     const n = String(name || '');
     const labels = {
+      'manuscript_revision.pdf': t('Current report revision (PDF)', '当前报告修订（PDF）'),
+      'manuscript_scaffold.pdf': t('Original run report (PDF)', '原运行报告（历史 PDF）'),
       'run_context.json': t('Run context', '运行上下文'),
       'cohort_summary.json': t('Cohort summary', '队列摘要'),
       'table1_summary.json': t('Table 1 summary', 'Table 1 摘要'),

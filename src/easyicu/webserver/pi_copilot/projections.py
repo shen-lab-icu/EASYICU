@@ -495,6 +495,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                     else "research_document"
                     if name in {
                         "manuscript_scaffold.pdf",
+                        "manuscript_revision.pdf",
                         "manuscript_scaffold.tex",
                         "manuscript_scaffold.bib",
                     }
@@ -581,6 +582,18 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         and re.fullmatch(r"[a-f0-9]{64}", str(revision.get("output_sha256") or ""))
         and revision.get("output_sha256") == provenance.get("manuscript_sha256")
     )
+    pdf = revision.get("pdf_artifact") if isinstance(revision, Mapping) else None
+    projection["report_revision_pdf_ready"] = bool(
+        projection["report_revision_ready"] and isinstance(pdf, Mapping)
+        and pdf.get("name") == "manuscript_revision.pdf"
+        and pdf.get("revision_id") == revision.get("revision_id")
+        and pdf.get("manuscript_sha256") == revision.get("output_sha256")
+        and any(row.get("artifact") == pdf.get("name") and row.get("sha256") == pdf.get("sha256")
+                for row in projection.get("artifact_refs", []))
+    )
+    if not projection["report_revision_pdf_ready"]:
+        projection["artifact_refs"] = [row for row in projection.get("artifact_refs", [])
+                                       if row.get("artifact") != "manuscript_revision.pdf"]
     figure_gallery = artifact_payloads.get("figure_gallery.json")
     if isinstance(figure_gallery, Mapping):
         figures = figure_gallery.get("figures")
@@ -609,6 +622,7 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 "evidence_complete",
                 "manuscript_ready",
                 "report_revision_ready",
+                "report_revision_pdf_ready",
                 "analysis_results_available",
                 "figure_count",
                 "reportable",

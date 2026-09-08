@@ -226,6 +226,21 @@ def render_reader_manuscript(bound_text: str) -> str:
     return cleaned.strip() + "\n"
 
 
+def repair_section_opening_connectors(manuscript: str) -> str:
+    """Remove an unanchored inference connector, without supplying a premise.
+
+    Only the first sentence of Introduction/Discussion is eligible. Interior
+    causal reasoning, numeric statements and source citations stay untouched.
+    """
+    pattern = r"(^## (?:Introduction|Discussion)[ \t]*\n\s*)([^\n.!?]+)"
+    def repair(match):
+        sentence = re.sub(r"\b(?:therefore|thus|consequently)\b[, ]*", "", match.group(2), count=1, flags=re.I)
+        if sentence and match.group(2)[0].isupper():
+            sentence = sentence[0].upper() + sentence[1:]
+        return match.group(1) + sentence
+    return re.sub(pattern, repair, manuscript, flags=re.M)
+
+
 def _replace_section_body(text: str, section: str, body: str) -> str:
     pattern = re.compile(
         rf"(^##\s+{re.escape(section)}\s*$)(.*?)(?=^##\s+|\Z)",
