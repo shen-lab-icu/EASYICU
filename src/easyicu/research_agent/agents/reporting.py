@@ -17,6 +17,7 @@ from ..authority.provider_budget import (
 )
 from ..authority.manuscript_claim_policy import SCIENTIFIC_CLAIM_WRITER_RULES
 from ..schema import (
+    AnalysisPlan,
     AnalysisStep,
     ResearchContext,
 )
@@ -207,6 +208,7 @@ class WriterAgent:
         reader_display_labels: Optional[Mapping[str, str]] = None,
         language: Optional[str] = None,
         max_tokens: int = 2048,
+        analysis_plan: AnalysisPlan | None = None,
     ) -> str:
         lang_inst = _writer_display.writer_language_instruction(language or self.language)
         evidence_list = ", ".join(str(eid) for eid in evidence_ids) or "(none)"
@@ -378,11 +380,13 @@ class WriterAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
     ) -> str:
         return render_manuscript_sections(
             call_section=self._call_section,
             common={
                 "context": context,
+                "analysis_plan": analysis_plan,
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
@@ -402,12 +406,14 @@ class WriterAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return repair_existing_manuscript_sections(
             manuscript,
             call_section=self._call_section,
             common={
                 "context": context,
+                "analysis_plan": analysis_plan,
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
@@ -428,6 +434,7 @@ class WriterAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         """Repair section owners rejected by an adjacent deterministic gate."""
 
@@ -437,6 +444,7 @@ class WriterAgent:
             call_section=self._call_section,
             common={
                 "context": context,
+                "analysis_plan": analysis_plan,
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,

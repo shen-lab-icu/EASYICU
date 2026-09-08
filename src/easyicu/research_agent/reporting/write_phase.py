@@ -557,11 +557,13 @@ def _persist_manuscript_quality_artifacts(
     expected_display_labels: Sequence[str] = (),
     expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
     expected_primary_result_facts: Sequence = (),
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[ManuscriptQualityFinding, ...]:
     """Persist a non-authoritative reader view and its deterministic audit."""
 
     audit = audit_manuscript_quality(
         bound,
+        analysis_plan=analysis_plan,
         expected_primary_result_facts=expected_primary_result_facts,
         expected_display_labels=expected_display_labels,
         expected_baseline_mentions=expected_baseline_mentions,
@@ -1185,6 +1187,7 @@ def _render_or_resume_writer_scaffold(
     )
     if migration_scaffold is None:
         return writer.run(
+            analysis_plan=execute_result.plan,
             context=agent_context,
             evidence_ids=preferred_evidence_names,
             evidence_digest=writer_evidence_digest,
@@ -1197,6 +1200,7 @@ def _render_or_resume_writer_scaffold(
     try:
         scaffold, repaired_section_keys = writer.repair_existing(
             prior_scaffold,
+            analysis_plan=execute_result.plan,
             context=agent_context,
             evidence_ids=preferred_evidence_names,
             evidence_digest=writer_evidence_digest,
@@ -2208,6 +2212,7 @@ def _bind_and_review_manuscript(
 
     manuscript_quality_errors = _persist_manuscript_quality_artifacts(
         bound=bound,
+        analysis_plan=plan,
         expected_primary_result_facts=primary_result_facts,
         bound_evidence_id=bound_evidence_id,
         run_dir=run_dir,

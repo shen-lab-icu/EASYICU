@@ -300,14 +300,23 @@ def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveR
             seen.add(line.strip())
         lines.append(line)
     body = "\n".join(lines) + ("\n" if body.endswith("\n") else "")
-    for subsection in dict.fromkeys(fact.subsection for fact in facts):
+    # Modern descriptive reports have one primary result section. Keep the
+    # same registered facts together there instead of filling a false
+    # association section with a figure pointer. Legacy layouts stay readable.
+    descriptive_heading = re.search(r"^### Descriptive results[ \t]*$", body, re.M)
+    destinations = (
+        {"Descriptive results": facts} if descriptive_heading is not None else
+        {name: tuple(fact for fact in facts if fact.subsection == name)
+         for name in dict.fromkeys(fact.subsection for fact in facts)}
+    )
+    for subsection, subsection_facts in destinations.items():
         heading = re.search(rf"^### {re.escape(subsection)}[ \t]*$", body, re.M)
         if heading is None:
             continue
         next_heading = re.search(r"^###\s+", body[heading.end():], re.M)
         stop = heading.end() + next_heading.start() if next_heading else len(body)
         existing = body[heading.end():stop].splitlines()
-        missing = [fact.scaffold for fact in facts if fact.subsection == subsection and fact.scaffold not in existing]
+        missing = [fact.scaffold for fact in subsection_facts if fact.scaffold not in existing]
         if missing:
             body = body[:heading.end()] + "\n\n" + "\n\n".join(missing) + "\n" + body[heading.end():]
     return manuscript[:section.end()] + body + manuscript[end:]

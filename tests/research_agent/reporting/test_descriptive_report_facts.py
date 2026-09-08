@@ -116,6 +116,21 @@ def test_numeric_fact_adapter_does_not_claim_other_analysis_families():
     assert compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={}) == ()
 
 
+def test_modern_descriptive_results_contain_all_registered_primary_facts_once():
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    manuscript = (
+        "## Results\n\n### Cohort characteristics\nRecorded cohort.\n\n"
+        "### Descriptive results\nSee Figure 1.\n\n"
+        "## Discussion\nExisting discussion remains unchanged."
+    )
+    placed = place_descriptive_report_facts(manuscript, facts)
+    primary = placed.split("### Descriptive results", 1)[1].split("## Discussion", 1)[0]
+    assert all(primary.count(fact.scaffold) == 1 for fact in facts)
+    assert place_descriptive_report_facts(placed, facts) == placed
+    assert placed.endswith("## Discussion\nExisting discussion remains unchanged.")
+
+
 def test_legacy_claim_is_replaced_once_by_its_source_fact_not_duplicate_numbers():
     from easyicu.research_agent.authority.scientific_claims import (
         bind_scientific_claim_drafts, derive_scientific_claim_drafts,

@@ -258,7 +258,7 @@ def _allow_current_scientific_review(monkeypatch: pytest.MonkeyPatch) -> None:
         agent_pipeline_runs,
         "_load_pending_scientific_review",
         lambda *_args, **_kwargs: {
-            "schema_version": "easyicu.plan_scientific_review/11",
+            "schema_version": agent_pipeline_runs.CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION,
             "approval_allowed": True,
         },
     )
@@ -6944,7 +6944,7 @@ def test_pending_plan_without_current_review_projects_stale_policy_reason(
     )
 
 
-@pytest.mark.parametrize("version", [10, 11])
+@pytest.mark.parametrize("version", [10, 11, 12])
 def test_digest_valid_archived_review_is_not_current_approval_policy(tmp_path, monkeypatch, version) -> None:
     review = PlanScientificReview(
         status="analysis_only", approval_allowed=True, top_journal_candidate=False,
@@ -6963,11 +6963,11 @@ def test_digest_valid_archived_review_is_not_current_approval_policy(tmp_path, m
     allowed = agent_pipeline_runs._pending_plan_approval_allowed(
         run_dir=tmp_path, pending=pending, plan_recommendation_complete=True,
     )
-    assert allowed is (version == 11)
+    assert allowed is (version == 12)
     reason = agent_pipeline_runs._pending_review_reason_code(
         request=request, plan_recommendation_complete=True, scientific_plan_review=review,
     )
-    assert reason == ("operator_plan_approval_required" if version == 11 else "scientific_plan_review_policy_stale")
+    assert reason == ("operator_plan_approval_required" if version == 12 else "scientific_plan_review_policy_stale")
     assert path.read_bytes() == raw
 
 

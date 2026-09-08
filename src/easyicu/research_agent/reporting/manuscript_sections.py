@@ -9,7 +9,7 @@ model-facing class from also becoming a manuscript workflow coordinator.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import re
@@ -20,6 +20,8 @@ from .administrative_authority import (
     render_manuscript_administrative_sections,
 )
 from .manuscript_baseline import baseline_reporting_mentions
+from .manuscript_result_structure import required_result_subsections, result_section_instruction
+from ..schema import AnalysisPlan
 
 
 @dataclass(frozen=True)
@@ -347,7 +349,20 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "16"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "17"
+
+
+def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
+    """Share the exact plan-derived Results contract across all Writer paths."""
+    if analysis_plan is None:
+        return MANUSCRIPT_SECTION_SPECS
+    return tuple(
+        replace(
+            spec, instruction=result_section_instruction(analysis_plan),
+            required_subsections=required_result_subsections(analysis_plan),
+        ) if spec.key == "results" else spec
+        for spec in MANUSCRIPT_SECTION_SPECS
+    )
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -455,12 +470,13 @@ def _quality_repair_specs(
     expected_display_labels: tuple[str, ...] = (),
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     expected_primary_result_facts: Sequence = (),
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[tuple[ManuscriptSectionSpec, str], ...]:
     """Map deterministic manuscript findings to their section owners."""
 
     from .manuscript_quality import audit_manuscript_quality
 
-    by_key = {spec.key: spec for spec in MANUSCRIPT_SECTION_SPECS}
+    by_key = {spec.key: spec for spec in manuscript_section_specs(analysis_plan)}
     section_keys = {
         "Title": ("title",),
         "Abstract": ("abstract",),
@@ -476,6 +492,7 @@ def _quality_repair_specs(
     for finding in audit_manuscript_quality(
         scientific,
         expected_primary_result_facts=expected_primary_result_facts,
+        analysis_plan=analysis_plan,
         expected_display_labels=expected_display_labels,
         expected_baseline_mentions=expected_baseline_mentions,
         require_administrative_sections=False,
@@ -505,6 +522,7 @@ def quality_repair_section_keys(
     *,
     expected_display_labels: tuple[str, ...] = (),
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[str, ...]:
     """Return the Writer section owners selected by the quality contract.
 
@@ -517,6 +535,7 @@ def quality_repair_section_keys(
         spec.key
         for spec, _detail in _quality_repair_specs(
             manuscript,
+            analysis_plan=analysis_plan,
             expected_display_labels=expected_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
         )
@@ -529,6 +548,7 @@ def quality_repair_section_errors(
     expected_display_labels: tuple[str, ...] = (),
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     expected_primary_result_facts: Sequence = (),
+    analysis_plan: AnalysisPlan | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Use the same quality-to-owner mapping for adjacent evidence repair."""
 
@@ -536,6 +556,7 @@ def quality_repair_section_errors(
         spec.key: (detail,)
         for spec, detail in _quality_repair_specs(
             manuscript,
+            analysis_plan=analysis_plan,
             expected_primary_result_facts=expected_primary_result_facts,
             expected_display_labels=expected_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
@@ -548,6 +569,7 @@ def _remaining_quality_errors(
     *,
     expected_display_labels: tuple[str, ...] = (),
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
     from .manuscript_quality import audit_manuscript_quality
 
@@ -564,6 +586,7 @@ def _remaining_quality_errors(
         )
         for finding in audit_manuscript_quality(
             scientific,
+            analysis_plan=analysis_plan,
             expected_display_labels=expected_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
             require_administrative_sections=False,
@@ -641,6 +664,7 @@ def repair_existing_manuscript_sections(
     for attempt in range(2):
         repair_specs = _quality_repair_specs(
             scientific,
+            analysis_plan=common.get("analysis_plan"),
             expected_display_labels=display_labels,
             expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
@@ -702,6 +726,7 @@ def repair_existing_manuscript_sections(
 
     remaining = _remaining_quality_errors(
         scientific,
+        analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
@@ -727,14 +752,14 @@ def repair_named_manuscript_sections(
     """
 
     sections = _existing_scientific_sections(manuscript)
-    specs = {spec.key: spec for spec in MANUSCRIPT_SECTION_SPECS}
+    specs = {spec.key: spec for spec in manuscript_section_specs(common.get("analysis_plan"))}
     unknown = sorted(set(section_errors) - set(specs))
     if unknown:
         raise ValueError(
             "unknown manuscript section owner keys: " + ", ".join(unknown)
         )
     repaired_keys: list[str] = []
-    for spec in MANUSCRIPT_SECTION_SPECS:
+    for spec in specs.values():
         errors = tuple(section_errors.get(spec.key) or ())
         if not errors:
             continue
@@ -790,6 +815,7 @@ def repair_named_manuscript_sections(
     )
     remaining = _remaining_quality_errors(
         scientific,
+        analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
@@ -821,7 +847,7 @@ def render_manuscript_sections(
     display_labels = expected_manuscript_display_labels(
         tuple(common.get("evidence_ids") or ())
     )
-    for spec in MANUSCRIPT_SECTION_SPECS:
+    for spec in manuscript_section_specs(common.get("analysis_plan")):
         section = _ensure_section_heading(
             spec,
             call_section(
@@ -894,6 +920,7 @@ def render_manuscript_sections(
     for attempt in range(2):
         repair_specs = _quality_repair_specs(
             scientific,
+            analysis_plan=common.get("analysis_plan"),
             expected_display_labels=display_labels,
             expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
@@ -945,6 +972,7 @@ def render_manuscript_sections(
 
     remaining = _remaining_quality_errors(
         scientific,
+        analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )

@@ -472,6 +472,7 @@ def prepare_writer_only_migration(
     )
     source_quality = audit_manuscript_quality(
         manuscript,
+        analysis_plan=plan,
         expected_display_labels=labels,
         expected_baseline_mentions=baseline_reporting_mentions(context, plan.display_labels if plan else None),
     )
@@ -495,6 +496,7 @@ def prepare_writer_only_migration(
         source_literature_audit=source_literature,
         planned_section_keys=quality_repair_section_keys(
             manuscript,
+            analysis_plan=plan,
             expected_display_labels=labels,
             expected_baseline_mentions=baseline_reporting_mentions(context, plan.display_labels if plan else None),
         ),
@@ -579,6 +581,7 @@ def repair_writer_only(
     try:
         manuscript, repaired_keys = writer.repair_existing(
             source_manuscript,
+            analysis_plan=prepared.plan,
             context=prepared.context,
             evidence_ids=prepared.evidence_ids,
             evidence_digest=prepared.evidence_digest,
@@ -663,6 +666,7 @@ def repair_writer_only(
         canonical = remove_empty_optional_subsections(canonical)
         canonical_quality = audit_manuscript_quality(
             canonical,
+            analysis_plan=prepared.plan,
             expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
             expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
@@ -687,6 +691,7 @@ def repair_writer_only(
             )
         repair_errors = quality_repair_section_errors(
             canonical,
+            analysis_plan=prepared.plan,
             expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
             expected_baseline_mentions=baseline_reporting_mentions(
@@ -722,6 +727,7 @@ def repair_writer_only(
         try:
             manuscript, repaired_authority_keys = repair_sections(
                 canonical,
+                analysis_plan=prepared.plan,
                 section_errors=repair_errors,
                 context=prepared.context,
                 evidence_ids=prepared.evidence_ids,
@@ -740,6 +746,7 @@ def repair_writer_only(
                 authority_repaired.append(key)
     quality = audit_manuscript_quality(
         manuscript,
+        analysis_plan=prepared.plan,
         expected_primary_result_facts=prepared.host_result_facts,
         expected_display_labels=prepared.expected_display_labels,
         expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
@@ -894,6 +901,7 @@ def publish_writer_only_result(
     )
     bound_quality = audit_manuscript_quality(
         bound_manuscript,
+        analysis_plan=prepared.plan,
         expected_display_labels=prepared.expected_display_labels,
         expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
     )

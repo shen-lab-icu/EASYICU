@@ -34,6 +34,7 @@ from ..contracts.association_execution import (
 )
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+    exposure_outcome_distribution_execution_verdict,
 )
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
@@ -51,6 +52,7 @@ from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority
+from .analysis_types import canonical_analysis_family
 from .baseline_requirements import (
     baseline_requirement_coverage,
     baseline_requirement_projection,
@@ -102,7 +104,7 @@ class PlanScientificFinding(BaseModel):
     authorization_question: Optional[str] = None
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/11"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/12"
 
 
 class PlanScientificReview(BaseModel):
@@ -110,9 +112,12 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived /10 reviews remain readable, but cannot substitute for a /11
+    # Archived reviews remain readable, but cannot substitute for a /12
     # execution review (the resume gate also binds the review version).
-    schema_version: Literal["easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11"] = (
+    schema_version: Literal[
+        "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
+        "easyicu.plan_scientific_review/12",
+    ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
@@ -199,6 +204,20 @@ def planned_model_outcomes(
             outcome = str(requirement.outcome or "").strip()
             if outcome and outcome not in values:
                 values.append(outcome)
+        # A descriptive question requires its declared summary, not a new
+        # regression. Conversely a summary cannot substitute for a requested
+        # model merely because it reads the same outcome column.
+        if (
+            canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
+            and exposure_outcome_distribution_execution_verdict(step).claimed
+        ):
+            spec = step.exposure_outcome_distribution_spec
+            if (
+                spec is not None
+                and {spec.exposure, spec.outcome}.issubset(step.inputs)
+                and spec.outcome not in values
+            ):
+                values.append(spec.outcome)
         if context is not None and is_ordered_stratified_analysis_step(step):
             for input_key in step.inputs:
                 descriptor = context.variable(str(input_key or "").strip())
@@ -1887,14 +1906,20 @@ def build_plan_scientific_review(
                 authorization_question="Please confirm the intended clinical endpoint and time horizon in a new study version.",
             )
         )
-    if association_study(plan) and missing_model_outcomes:
+    endpoint_result_required = association_study(plan) or canonical_analysis_family(
+        plan.analysis_type
+    ) in {
+        "descriptive_epidemiology", "prediction_model", "dynamic_prediction",
+        "ordinal_dose_response", "survival",
+    }
+    if endpoint_result_required and missing_model_outcomes:
         findings.append(
             PlanScientificFinding(
                 code="REQUESTED_OUTCOME_COVERAGE_INCOMPLETE",
                 severity="blocker",
                 dimension="statistical_design",
                 message=(
-                    "The association plan does not provide an executable model "
+                    "The plan does not provide an outcome-appropriate executable "
                     "contract for every outcome identified from the research "
                     "question: "
                     + ", ".join(missing_model_outcomes)
@@ -1902,13 +1927,16 @@ def build_plan_scientific_review(
                 ),
                 evidence_refs=[
                     "research_context.json.cohort.requested_outcome_columns",
-                    "analysis_plan.json.steps.model_requirements",
+                    "analysis_plan.json.steps",
                 ],
                 remediation=(
-                    "Add one outcome-appropriate executable model requirement "
-                    "for each missing typed outcome, with its own estimand and "
-                    "uncertainty; do not silently reduce a multi-outcome question "
-                    "to the primary endpoint."
+                    "Add an executable analysis contract for every missing typed "
+                    "outcome, preserving the reviewed analysis family. Descriptive "
+                    "questions need typed summaries, not an added regression or "
+                    "uncertainty; model questions need their declared model result. "
+                    "Readable inputs, baseline tables and figure labels alone do "
+                    "not answer an endpoint. Do not reduce a multi-outcome question "
+                    "to its primary endpoint."
                 ),
                 remediation_route="agent_plan_revision",
             )
