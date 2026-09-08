@@ -27,6 +27,7 @@ def _literature(**changes):
 @pytest.mark.parametrize("tail", [
     " [@definition_2016].", ". [@definition_2016]",
     ", with the source criteria retained for this analysis [@definition_2016].",
+    ", which specifies the source criteria. {evidence:clinical_semantics_resolution} [@definition_2016]",
 ])
 def test_explicit_definition_year_uses_cited_metadata_not_result_claim(tmp_path, tail, qualifier):
     text = f"We used the {qualifier} 2016 Example-3 definition" + tail
@@ -65,6 +66,8 @@ def test_definition_year_requires_matching_source_metadata(tmp_path, changes):
     "We used the recorded 2016 Example-3 definition. Another assertion [@definition_2016].",
     "We used the recorded 2016 Example-3 definition;\nanother assertion [@definition_2016].",
     "We used the recorded 2016 Example-3 definition [@unrelated], then discussed [@definition_2016].",
+    "We used the 2016 Example-3 definition. {evidence:clinical_semantics_resolution}\n\n[@definition_2016]",
+    "We used the 2016 Example-3 definition. {evidence:clinical_semantics_resolution} Another claim [@definition_2016].",
 ])
 def test_citation_cannot_exempt_study_numbers_or_cross_paragraphs(tmp_path, text):
     with pytest.raises(EvidenceEnforcementError):
