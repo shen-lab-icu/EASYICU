@@ -92,7 +92,7 @@
                   ${[
                     ['extraction', 'extract', t('I have local ICU data', '我有本地 ICU 数据'), t('Validate and extract analysis-ready tables', '校验并抽取可分析数据表'), 'extraction'],
                     ['patient', 'viz', t('Patient Review', '患者审阅'), t('Review patients, tables, and trends from an export', '审阅导出中的患者、表格与趋势'), ''],
-                    ['agent', 'agent', t('Project Monitor', '项目监控'), t('Review runs, outputs, evidence, and sign-off', '查看运行、产出、证据与签署'), ''],
+                    ['agent', 'agent', t('Copilot history & results', 'Copilot 历史与成果'), t('Review runs, outputs, evidence, and sign-off', '查看运行、产出、证据与签署'), ''],
                   ].map(([nav, ic, title, detail, newStudy]) => `
                     <button type="button" class="col-entry" data-nav="${nav}" ${newStudy ? `data-home-new-study="${newStudy}"` : ''}>
                       <span class="ce-ico">${icon(ic, 15)}</span>
@@ -205,7 +205,7 @@
             guided: t('Guided Copilot', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
             extraction: t('Data Extraction', '数据抽取'), patient: t('Patient Review', '患者审阅'),
             cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-database comparison', '跨库对比'),
-            agent: t('Project Monitor', '项目监控'),
+            agent: t('Copilot history & results', 'Copilot 历史与成果'),
           };
           const rawTime = usingContext ? Date.parse(activeContext.updated_at || '') : Number(legacyStudy.ts || 0);
           const when = (() => {

@@ -15,6 +15,7 @@
   function normRoute(r) {
     if (r === 'help') return 'tutorial';
     if (r === 'assistant') return 'guided';
+    if (r === 'agent') { window.__euHistoryRequested = true; window.__euAlias = true; return 'guided'; }
     if (r === 'audit')       { window.__euCohortPanel = 'coverage'; window.__euAlias = true; return 'cohort'; }
     if (r === 'sofareclass') { window.__euCohortPanel = 'sofa';     window.__euAlias = true; return 'cohort'; }
     if (r === 'icd')         { window.__euExtractFocusICD = true;   window.__euAlias = true; return 'extraction'; }
@@ -34,7 +35,10 @@
   }
   function resolveRoute(raw, opts = {}) {
     const id = normRoute(raw || FALLBACK_ROUTE);
-    if (window.SCREENS[id]) return { id, fallback: false };
+    if (window.SCREENS[id]) {
+      if (opts.rewrite && raw === 'agent') replaceHash(id);
+      return { id, fallback: false };
+    }
     const fallback = window.SCREENS[FALLBACK_ROUTE] ? FALLBACK_ROUTE : Object.keys(window.SCREENS)[0];
     if (opts.rewrite && fallback) replaceHash(fallback);
     return { id: fallback, fallback: true };
@@ -114,7 +118,6 @@
     { id: 'ideas', label: ['Ideas', '想法'], ico: 'target' },
     { id: 'extraction', label: ['Extract', '抽取'], ico: 'extract' },
     { id: 'patient', label: ['Review', '审阅'], ico: 'patient' },
-    { id: 'agent', label: ['Monitor', '监控'], ico: 'agent' },
   ];
   const L = (v) => Array.isArray(v) ? t(v[0], v[1]) : v;
   /* A button's accessible name is its concatenated text content, so a title
@@ -266,12 +269,6 @@
             </button>`).join('')}
         </div>` : ''}
       </div>
-      ${navSection('analysis', 'Analysis & Evidence', '分析与证据', progress)}
-      <button type="button" class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent" aria-label="${navLabel(t('Project Monitor', '项目监控'), t('runs · outputs · evidence · review', '运行 · 产出 · 证据 · 审阅'))}">
-        <span class="cp-ico">${icon('agent', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Project Monitor', '项目监控')}</span><span class="cp-d">${t('runs · outputs · evidence · review', '运行 · 产出 · 证据 · 审阅')}</span></span>
-        <span class="cp-go">${icon('arrow', 14)}</span>
-      </button>
       ${progress.planOnly ? `<div class="shared-note plan-only"><span class="ico">${icon('shield', 11)}</span><span>${t('Cross-DB comparison is plan-only: it can shape an analysis plan, but a reviewed cohort is still required before a draft.', '跨库对比仅用于制定计划：它可以塑造分析方案，但出草稿前仍需要一个已审阅的队列。')}</span></div>` : ''}
       <div class="sec-label" style="margin:16px 0 6px;">${t('Reference', '参考')}</div>
       <div class="nav" style="padding-top:0;">
@@ -385,6 +382,11 @@
         </div>`;
     }
     if (scr.afterRender) scr.afterRender(app);
+    if (route === 'guided' && window.__euHistoryRequested) {
+      window.__euHistoryRequested = false;
+      const owner = window.EasyICU.guidedPi.optional('history');
+      if (owner) owner.open(window.EasyICU.guidedPi.require('shell').historyContext());
+    }
     syncShellAccessibility(app, !!scr.full);
     const title = routeTitleOf(scr);
     document.title = routeDocumentTitle(title);
@@ -441,7 +443,7 @@
   });
 
   /* ---- global keyboard shortcuts (advertised on Get Started) ---- */
-  const SHORTCUT_SECTIONS = ['ideas', 'extraction', 'patient', 'crossdb', 'agent'];
+  const SHORTCUT_SECTIONS = ['ideas', 'extraction', 'patient', 'crossdb', 'guided'];
   function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; render({ resetScroll: true }); } }
   document.addEventListener('keydown', (e) => {
     const tgt = e.target;

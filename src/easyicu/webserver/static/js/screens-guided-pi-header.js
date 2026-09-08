@@ -25,6 +25,7 @@
           <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${options.workspace}">${tr('Workspace', '工作区')}</button>
         </div>
         <button class="gpi-model-binding" type="button" data-gpi-config title="${esc(tr('Change model connection; changes apply to a new conversation', '更改模型连接；变更将在新会话中生效'))}" aria-label="${esc(tr('Change model connection', '更改模型连接'))}"><span>${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</button>
+        <button class="gpi-head-new" type="button" data-gpi-history>${icon('history', 13)} ${tr('History & results', '历史与成果')}</button>
         <button class="gpi-head-new" type="button" data-gpi-new>${icon('plus', 13)} ${tr('New conversation', '新会话')}</button>
         <details class="gpi-head-overflow">
           <summary>${tr('More', '更多')}<span aria-hidden="true">⌄</span></summary>
