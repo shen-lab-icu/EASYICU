@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
@@ -381,8 +381,10 @@ class WriterAgent:
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
         analysis_plan: AnalysisPlan | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> str:
         return render_manuscript_sections(
+            checkpoint=checkpoint,
             call_section=self._call_section,
             common={
                 "context": context,
@@ -407,9 +409,11 @@ class WriterAgent:
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
         analysis_plan: AnalysisPlan | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return repair_existing_manuscript_sections(
             manuscript,
+            checkpoint=checkpoint,
             call_section=self._call_section,
             common={
                 "context": context,

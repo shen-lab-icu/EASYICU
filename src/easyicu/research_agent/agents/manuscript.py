@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from ..providers.protocol import LLMClient
 from ..reporting.administrative_authority import ManuscriptAdministrativeAuthority
@@ -60,6 +60,7 @@ class ManuscriptAgent:
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
         analysis_plan: AnalysisPlan | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> str:
         return WriterAgent(
             self.llm,
@@ -67,6 +68,7 @@ class ManuscriptAgent:
             nature_writing_enabled=self.nature_writing_enabled,
             user_writing_advisory=self.user_writing_advisory,
         ).run(
+            checkpoint=checkpoint,
             analysis_plan=analysis_plan,
             context=context,
             evidence_ids=evidence_ids,
@@ -87,6 +89,7 @@ class ManuscriptAgent:
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
         analysis_plan: AnalysisPlan | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return WriterAgent(
             self.llm,
@@ -95,6 +98,7 @@ class ManuscriptAgent:
             user_writing_advisory=self.user_writing_advisory,
         ).repair_existing(
             manuscript,
+            checkpoint=checkpoint,
             analysis_plan=analysis_plan,
             context=context,
             evidence_ids=evidence_ids,
