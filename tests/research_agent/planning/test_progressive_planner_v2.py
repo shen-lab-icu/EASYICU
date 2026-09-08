@@ -4550,6 +4550,31 @@ def test_step_materialization_contract_projects_closed_envelope() -> None:
     assert "flatten step fields into the root" not in contract
 
 
+@pytest.mark.parametrize("module", ["adjusted_association", "measurement_audit", "absolute_risk_context"])
+def test_text_materialization_template_scopes_population_field_to_its_owner(module):
+    outline = ProgressiveOutlineStep(
+        step_id="current_step", planned_analysis_role="secondary", module_id=module,
+        objective="Materialize the prespecified analysis step.",
+        variable_names=["exposure_flag", "outcome_flag"],
+    )
+    contract = _step_materialization_shape_contract(
+        outline_step=outline, outline_step_sha256="a" * 64,
+    )
+    template = json.loads(contract.splitlines()[1])
+    assert ("population_scope" in template["step"]) == (module == "absolute_risk_context")
+
+
+def test_non_risk_population_decoration_remains_invalid():
+    step = next(step for step in _payload()["steps"] if step["module_id"] == "adjusted_association")
+    materialization = {
+        "outline_step_sha256": "a" * 64, "foundation": None, "step": step,
+    }
+    for scope in ("analysis_cohort", "primary_model"):
+        step["population_scope"] = scope
+        with pytest.raises(ValueError, match="population_scope belongs only"):
+            _parse_step_materialization(json.dumps(materialization))
+
+
 def test_compiler_projects_measurement_output_role_vocabulary() -> None:
     assert progressive_output_roles_for_module("measurement_audit") == (
         "analytic_denominators",
