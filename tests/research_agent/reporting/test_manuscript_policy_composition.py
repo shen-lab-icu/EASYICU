@@ -36,6 +36,35 @@ def test_host_display_repairs_survive_strict_findings_grammar() -> None:
     ) == (repaired, ())
 
 
+@pytest.mark.parametrize("family", (
+    "descriptive_epidemiology", "prediction_model", "dynamic_prediction",
+    "trajectory_clustering", "survival", "association_study", "ordinal_dose_response",
+))
+def test_every_plan_required_heading_survives_the_claim_policy(family):
+    from easyicu.research_agent.reporting.manuscript_result_structure import required_result_subsections
+    from .test_plan_driven_result_structure import _plan
+
+    headings = required_result_subsections(_plan(family, ("primary", "secondary", "sensitivity")))
+    draft = "## Results\n\n" + "\n\n".join(f"### {heading}" for heading in headings)
+    filtered = _filter(draft)
+
+    assert filtered.filtered_sentences == ()
+    assert all(f"### {heading}" in filtered.scaffold for heading in headings)
+
+
+@pytest.mark.parametrize("heading", (
+    "Descriptive results show lower mortality",
+    "Model performance improved",
+    "Cluster characteristics predict death",
+    "Survival results showed benefit",
+    "Secondary analyses confirmed robustness",
+))
+def test_a_known_structure_prefix_cannot_admit_a_finding(heading):
+    filtered = _filter(f"## Results\n\n### {heading} {{evidence:result}}")
+    assert filtered.unsupported_scientific_claim_sentences
+    assert heading not in filtered.scaffold
+
+
 def test_display_repairs_do_not_bypass_current_evidence_membership() -> None:
     repaired, _ = repair_registered_display_callouts(
         "## Results\n\n### Cohort characteristics\n",
@@ -75,4 +104,3 @@ def test_recorded_result_count_is_not_a_claim_of_success_or_stability() -> None:
 ))
 def test_plain_vocabulary_never_authorizes_a_scientific_conclusion(sentence: str) -> None:
     assert _filter("## Results\n\n" + sentence).unsupported_scientific_claim_sentences
-

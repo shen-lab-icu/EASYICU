@@ -7,34 +7,25 @@ No plan means legacy structure remains readable without inferring a new family.
 
 from ..planning.analysis_types import canonical_analysis_family
 from ..schema import AnalysisPlan
-
-
-PRIMARY_RESULT_HEADINGS = (
-    "Descriptive results", "Model performance", "Cluster characteristics",
-    "Survival results", "Primary results", "Primary association",
+from ..contracts.manuscript_result_structure import (
+    COHORT_RESULT_HEADING,
+    DEFAULT_PRIMARY_RESULT_HEADING,
+    PRIMARY_RESULT_HEADINGS,
+    PRIMARY_RESULT_HEADINGS_BY_FAMILY,
+    RESULT_HEADINGS_BY_ROLE,
 )
-_PRIMARY_BY_FAMILY = {
-    "descriptive_epidemiology": "Descriptive results",
-    "prediction_model": "Model performance",
-    "dynamic_prediction": "Model performance",
-    "trajectory_clustering": "Cluster characteristics",
-    "survival": "Survival results",
-    "association_study": "Primary association",
-    "ordinal_dose_response": "Primary association",
-}
+
+__all__ = ["PRIMARY_RESULT_HEADINGS", "required_result_subsections", "result_section_instruction"]
 
 
 def required_result_subsections(plan: AnalysisPlan) -> tuple[str, ...]:
     """Derive headings from explicit plan family and scientific step roles."""
-    primary = _PRIMARY_BY_FAMILY.get(
-        canonical_analysis_family(plan.analysis_type), "Primary results",
+    primary = PRIMARY_RESULT_HEADINGS_BY_FAMILY.get(
+        canonical_analysis_family(plan.analysis_type), DEFAULT_PRIMARY_RESULT_HEADING,
     )
-    sections = ["Cohort characteristics", primary]
+    sections = [COHORT_RESULT_HEADING, primary]
     roles = {step.planned_analysis_role for step in plan.steps}
-    if "secondary" in roles:
-        sections.append("Secondary analyses")
-    if "sensitivity" in roles:
-        sections.append("Sensitivity and subgroup analyses")
+    sections.extend(heading for role, heading in RESULT_HEADINGS_BY_ROLE.items() if role in roles)
     return tuple(sections)
 
 

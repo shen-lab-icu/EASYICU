@@ -15,6 +15,7 @@ from typing import Callable, Optional, Sequence
 from .reader_numeric_display import round_reader_numeric_display
 from .scientific_claims import ScientificClaim
 from .manuscript_method_facts import ManuscriptMethodFact, is_method_fact_candidate
+from ..contracts.manuscript_result_structure import PLAN_RESULT_HEADINGS
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
 EvidenceResolver = Callable[[str], bool]
@@ -159,12 +160,15 @@ _CONTEXT_HEADINGS = frozenset({
     "funding", "conflicts of interest", "acknowledgments", "ethics approval",
     "背景", "引言", "方法", "讨论", "局限性", "参考文献",
 })
-_RESULT_STRUCTURE_HEADINGS = _FINDINGS_HEADINGS | frozenset({
-    "cohort", "cohort construction", "cohort characteristics", "primary outcome",
-    "primary association", "primary model", "model performance", "missingness",
-    "sensitivity analyses", "subgroup analyses", "sensitivity and subgroup analyses",
-    "robustness", "icu-specific quality control", "calibration", "discrimination",
-})
+_RESULT_STRUCTURE_HEADINGS = (
+    _FINDINGS_HEADINGS
+    | frozenset(name.casefold() for name in PLAN_RESULT_HEADINGS)
+    | frozenset({
+        "cohort", "cohort construction", "primary outcome", "primary model", "missingness",
+        "sensitivity analyses", "subgroup analyses", "robustness",
+        "icu-specific quality control", "calibration", "discrimination",
+    })
+)
 RESULT_ORGANIZATION_SENTENCES = (
     "This study describes baseline characteristics.",
     "This section explains the prespecified study design.",

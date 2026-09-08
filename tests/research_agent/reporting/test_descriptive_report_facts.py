@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -55,6 +56,7 @@ def test_counts_and_outcomes_are_host_copied_with_separate_metric_owners():
     assert "Reference category" in facts[0].scaffold
     assert "Observed endpoint" in facts[2].scaffold
     assert facts[0].subsection == "Cohort characteristics"
+    assert facts[0].cohort_n == 100
     assert facts[2].subsection == "Primary outcome"
     assert all(fact.evidence_id == "summary" and fact.source_sha256 == "a" * 64 for fact in facts)
     assert facts[0].source_fields == tuple(
@@ -129,6 +131,43 @@ def test_modern_descriptive_results_contain_all_registered_primary_facts_once():
     assert all(primary.count(fact.scaffold) == 1 for fact in facts)
     assert place_descriptive_report_facts(placed, facts) == placed
     assert placed.endswith("## Discussion\nExisting discussion remains unchanged.")
+
+
+def test_modern_report_keeps_a_source_bound_cohort_count_after_claim_filtering():
+    from easyicu.research_agent.authority.manuscript_claim_policy import filter_evidence_bound_scaffold
+    from easyicu.research_agent.reporting.manuscript_quality import audit_manuscript_quality, repair_registered_display_callouts
+    from .test_plan_driven_result_structure import _plan
+
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    draft = "## Results\n\n### Cohort characteristics\n\n### Descriptive results\n"
+    canonical = filter_evidence_bound_scaffold(
+        draft, resolve_claim=lambda _ref: None, resolve_evidence=lambda _ref: True,
+    ).scaffold
+    canonical = place_descriptive_report_facts(canonical, facts)
+    canonical, _ = repair_registered_display_callouts(canonical, expected_display_labels=("Table 1", "Figure 1"))
+    assert "The analysis cohort comprised 100 observations {evidence:summary}." in canonical.split("### Descriptive results")[0]
+    assert not [finding for finding in audit_manuscript_quality(canonical, analysis_plan=_plan()).findings
+                if finding.section == "Results"]
+    assert place_descriptive_report_facts(canonical, facts) == canonical
+
+
+def test_different_recorded_cohorts_do_not_become_one_cohort_count():
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    mixed = (replace(facts[0], cohort_n=200), *facts[1:])
+    draft = "## Results\n\n### Cohort characteristics\n\n### Descriptive results\n"
+    placed = place_descriptive_report_facts(draft, mixed)
+    assert "analysis cohort comprised" not in placed
+
+
+@pytest.mark.parametrize("invalid", (0, True))
+def test_invalid_recorded_cohort_count_is_not_rendered(invalid):
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    invalid_facts = (replace(facts[0], cohort_n=invalid), *facts[1:])
+    with pytest.raises(ValueError, match="recorded integer count"):
+        place_descriptive_report_facts("## Results\n\n### Descriptive results\n", invalid_facts)
 
 
 def test_legacy_claim_is_replaced_once_by_its_source_fact_not_duplicate_numbers():
