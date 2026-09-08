@@ -10,6 +10,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 import easyicu.research_agent as research_agent
 from easyicu.research_agent import agents
 from easyicu.research_agent.agents import core
@@ -107,3 +109,40 @@ def test_manuscript_facade_forwards_reader_display_labels(monkeypatch) -> None:
     assert captured["reader_display_labels"] == {
         "raw_column": "Clinical label"
     }
+
+
+@pytest.mark.parametrize("method", ("run", "repair_existing"))
+def test_manuscript_facade_preserves_approved_plan_for_draft_and_repair(
+    monkeypatch, method,
+) -> None:
+    from easyicu.research_agent.agents import manuscript
+
+    plan = object()
+    captured = {}
+
+    def invoke(self, *args, **kwargs):
+        captured.update(kwargs)
+        return "draft" if method == "run" else (args[0], ("methods",))
+
+    monkeypatch.setattr(manuscript.WriterAgent, method, invoke)
+    agent = manuscript.ManuscriptAgent(object())
+    args = () if method == "run" else ("prior draft",)
+
+    getattr(agent, method)(
+        *args, context=object(), evidence_ids=("sealed_result",), analysis_plan=plan,
+    )
+
+    assert captured["analysis_plan"] is plan
+    assert captured["evidence_ids"] == ("sealed_result",)
+
+
+@pytest.mark.parametrize("method", ("run", "repair_existing"))
+def test_manuscript_facade_accepts_the_writer_keyword_contract(method) -> None:
+    from easyicu.research_agent.agents.manuscript import ManuscriptAgent
+    from easyicu.research_agent.agents.reporting import WriterAgent
+
+    expected = inspect.signature(getattr(WriterAgent, method)).parameters
+    actual = inspect.signature(getattr(ManuscriptAgent, method)).parameters
+    assert {
+        name for name, param in expected.items() if param.kind == param.KEYWORD_ONLY
+    } <= set(actual)
