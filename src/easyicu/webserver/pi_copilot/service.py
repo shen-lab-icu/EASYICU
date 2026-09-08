@@ -99,6 +99,7 @@ ALLOWED_TURN_ACTIONS = frozenset(
         "extract",
         "run",
         "provider_run",
+        "report_revision",
         "cancel",
         "workspace_write",
         "mcp_read",

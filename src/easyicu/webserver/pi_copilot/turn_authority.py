@@ -150,6 +150,11 @@ def infer_explicit_turn_actions(message: str) -> frozenset[str]:
     text = _normalize(message)
     if not text or any(marker in text for marker in _DENIAL_MARKERS):
         return frozenset()
+    report_action = r"(?:修订|修复|修正|修改|更新|重新生成)(?:当前|这份|现有|的|版本|研究|报告|\s){0,12}(?:报告|稿件|论文|pdf)|\b(?:repair|revise|update|regenerate)\s+(?:(?:the|current|existing|research)\s+)*(?:report|manuscript|pdf)\b"
+    report_non_action = r"(?:不要|暂不|先别|无需|不必|如何|怎么|是否|能否)[^。.!！?？;；]{0,32}(?:修订|修复|修正|修改|更新|重新生成)[^。.!！?？;；]{0,24}(?:报告|稿件|论文|pdf)|\b(?:do not|don't|never|how|whether|should i)[^.!?;]{0,60}\b(?:repair|revise|update|regenerate)\b[^.!?;]{0,40}\b(?:report|manuscript|pdf)\b"
+    if re.search(report_action, text) and not re.search(report_non_action, text):
+        # Report-only authority cannot start a Planner or analysis run.
+        return frozenset({"report_revision"})
     if (
         any(re.search(pattern, text) for pattern in _PROVIDER_REPLAN_PATTERNS)
         and not any(re.search(pattern, text) for pattern in _NON_ACTION_PLAN_PATTERNS)

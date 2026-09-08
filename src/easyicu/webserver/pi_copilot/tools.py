@@ -3712,6 +3712,7 @@ def _run(
     planner_start_mode: str = "auto",
     run_intent: research_run_submission.RunIntent | None = None,
     plan_change_request: PlanChangeRequest | None = None,
+    report_source_run_id: str = "",
 ) -> Dict[str, Any]:
     planner_start_mode = str(planner_start_mode or "auto").strip().lower()
     if planner_start_mode not in {"auto", "fresh", "resume_checkpoint"}:
@@ -3823,7 +3824,8 @@ def _run(
             return account_error
 
         def authorize() -> None:
-            outcome = context.grant.consume_once("provider_run")
+            action = "report_revision" if report_source_run_id else "provider_run"
+            outcome = context.grant.consume_once(action)
             if outcome == "granted":
                 return
             code = (
@@ -3835,9 +3837,9 @@ def _run(
                 {
                     "error": code,
                     "message": (
-                        "The one-use provider_run grant for this message was already consumed."
+                        f"The one-use {action} grant for this message was already consumed."
                         if outcome == "consumed"
-                        else "This action requires a one-use provider_run grant for the current message."
+                        else f"This action requires a one-use {action} grant for the current message."
                     ),
                     "owner": "easyicu.webserver.pi_copilot",
                 }
@@ -3862,8 +3864,10 @@ def _run(
             intent=effective_run_intent,
             planner_start_mode=planner_start_mode,
             plan_revision_source_run_id=str(plan_revision_source_run_id),
-            literature_search_authorized=literature_search_authorized,
+            literature_search_authorized=literature_search_authorized and not report_source_run_id,
             plan_change_request=plan_change_request,
+            execution_resume_source_run_id=report_source_run_id,
+            report_only=bool(report_source_run_id),
         )
         try:
             receipt = research_run_submission.submit_research_run(
@@ -3896,6 +3900,9 @@ def _run(
             else "easyicu_run_submitted"
         ),
         summary=(
+            f"Submitted report-only repair job {submitted.get('job_id')} from sealed analysis {report_source_run_id}; no analysis rerun."
+            if report_source_run_id
+            else
             (
                 "Submitted an EasyICU Research Agent Planner continuation "
                 f"job {submitted.get('job_id')} from validated checkpoint job "
@@ -3923,7 +3930,8 @@ def _run(
             # A real ResearchAgentPipeline run id does not exist at submission
             # time.  This explicit state prevents a historical bound run id
             # from being presented as the identity of the new job.
-            "run_id_status": "pending_pipeline_start",
+            "run_id_status": "existing_analysis" if report_source_run_id else "pending_pipeline_start",
+            **({"source_run_id": report_source_run_id, "report_only": True} if report_source_run_id else {}),
             **(
                 {"planner_start_mode": planner_start_mode}
                 if run_type == "full"
@@ -3940,6 +3948,22 @@ def _run(
     )
     context.invalidate_authority("easyicu_run_submitted")
     return result
+
+
+def _repair_report(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
+    """Submit the existing report-quality repair owner for an exact bound run."""
+    row = _select_run(context, params.get("run_id"))
+    source_run_id = str((row or {}).get("run_id") or "")
+    if not source_run_id:
+        return _result(
+            context, status="blocked", code="report_repair_run_required",
+            summary="Choose an existing analysis from this study before repairing its report.",
+            owner="easyicu.webserver.manuscript_repair",
+        )
+    return _run(
+        context, {"run_type": "full"}, run_intent="reviewed_analysis",
+        report_source_run_id=source_run_id,
+    )
 
 
 def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
@@ -4679,6 +4703,7 @@ _DISPATCH = {
     "easyicu_prepare_demo_source": _prepare_demo_source,
     "easyicu_start_extraction": _start_extraction,
     "easyicu_run": _run,
+    "easyicu_repair_report": _repair_report,
     "easyicu_resume": _resume,
     "easyicu_cancel": _cancel,
     "easyicu_request_replan": _request_replan,
