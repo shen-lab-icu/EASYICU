@@ -43,6 +43,7 @@ from ...figures.publication import (
 )
 from ...schema import AnalysisStep
 from ...figures.display_labels import label_lookup, scoped_label_lookup
+from ...figures.presentation import wrap_figure_label as _wrap_category_label
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .exposure_outcome_distribution_executor import (
     COUNTS_ONLY_COVARIANCE,
@@ -750,40 +751,6 @@ def _labels(
     if level_labels is not None and len(values) == 2:
         return [str(level_labels[0]), str(level_labels[1])]
     return [str(value) for value in values]
-
-
-def _wrap_category_label(label: str, *, renderer: Any, font: Any, width: float) -> str:
-    """Fit full labels by rendered width, including unspaced Unicode text."""
-
-    lines: list[str] = []
-    line = ""
-    # Preserve ordinary words and versioned Latin terms inside CJK labels.
-    tokens = re.findall(r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*|[^\S\n]+|\n|.", label)
-    for token in tokens:
-        if token == "\n":
-            lines.append(line.rstrip())
-            line = ""
-            continue
-        candidate = line + token
-        measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
-        if line and measured > width:
-            lines.append(line.rstrip())
-            line = ""
-            token = token.lstrip()
-        elif measured <= width:
-            line = candidate
-            continue
-        # Only a token wider than the entire column may be split internally.
-        for character in token:
-            candidate = line + character
-            measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
-            if line and measured > width:
-                lines.append(line)
-                line = character
-            else:
-                line = candidate
-    lines.append(line.rstrip())
-    return "\n".join(lines)
 
 
 def run_exposure_outcome_distribution_figure(

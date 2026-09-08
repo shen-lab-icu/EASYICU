@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Sequence
 
 from ..contracts.figure_plan import FigurePresentationSpec, PlannedFigurePanelSpec
@@ -101,3 +102,37 @@ def finish_presented_figure(
     for axis in fig.axes:
         apply_presented_legend(axis, spec)
     fig.canvas.draw()
+
+
+def wrap_figure_label(label: str, *, renderer: Any, font: Any, width: float) -> str:
+    """Fit full labels by rendered width, including unspaced Unicode text."""
+
+    lines: list[str] = []
+    line = ""
+    # Preserve ordinary words and versioned Latin terms inside CJK labels.
+    tokens = re.findall(r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*|[^\S\n]+|\n|.", label)
+    for token in tokens:
+        if token == "\n":
+            lines.append(line.rstrip())
+            line = ""
+            continue
+        candidate = line + token
+        measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
+        if line and measured > width:
+            lines.append(line.rstrip())
+            line = ""
+            token = token.lstrip()
+        elif measured <= width:
+            line = candidate
+            continue
+        # Only a token wider than the entire column may be split internally.
+        for character in token:
+            candidate = line + character
+            measured, _, _ = renderer.get_text_width_height_descent(candidate, font, False)
+            if line and measured > width:
+                lines.append(line)
+                line = character
+            else:
+                line = candidate
+    lines.append(line.rstrip())
+    return "\n".join(lines)

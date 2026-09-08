@@ -27,6 +27,8 @@ import textwrap
 from typing import Any, Mapping
 
 import pandas as pd
+from ...figures.display_labels import display_label
+from ...figures.presentation import wrap_figure_label
 
 from ...figures.publication import (
     add_panel_label,
@@ -495,6 +497,7 @@ def missingness_measurement_figure_executor_code(
             figure_product={product!r},
             missingness_input={input_by_role['measurement_missingness']!r},
             process_input={input_by_role['measurement_process']!r},
+            display_labels={dict(getattr(plan, 'display_labels', {}) or {})!r},
         )
         """
     ).strip()
@@ -1113,6 +1116,7 @@ def run_missingness_measurement_figure(
     figure_product: str,
     missingness_input: str = MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     process_input: str = MEASUREMENT_PROCESS_AUDIT_INPUT,
+    display_labels: Mapping[str, str] | None = None,
 ) -> Mapping[str, Any]:
     """Render the verified missingness/measurement pair and write its contract."""
 
@@ -1178,6 +1182,14 @@ def run_missingness_measurement_figure(
         figsize=(183 / 25.4, height_mm / 25.4),
         gridspec_kw={"width_ratios": [1.0, 1.25]},
     )
+    canvas = fig.canvas.get_renderer()
+    font = ax_a.yaxis.label.get_fontproperties()
+    labels = {name: wrap_figure_label(display_label(name, display_labels), renderer=canvas,
+                                     font=font, width=fig.bbox.width * 0.16)
+              for name in set(variables) | set(grid_variables)}
+    max_lines = max(text.count("\n") + 1 for text in labels.values())
+    height_mm = max(height_mm, (max(len(variables), len(grid_variables)) * max_lines * 3.2 + 5) / 0.66)
+    fig.set_size_inches(183 / 25.4, height_mm / 25.4)
 
     positions = list(range(len(variables)))
     missing_pct = pd.to_numeric(missing_rows["value_missing_pct"]).to_numpy()
@@ -1222,7 +1234,7 @@ def run_missingness_measurement_figure(
     # were almost completely observed.
     ax_a.set_yticklabels(
         [
-            _reader_label(name)
+            labels[name]
             + (" †" if per_variable.get(name, {}).get("conditional") else "")
             for name in variables
         ]
@@ -1308,7 +1320,7 @@ def run_missingness_measurement_figure(
         ha="right",
     )
     ax_b.set_yticks(range(len(grid_variables)))
-    ax_b.set_yticklabels([_reader_label(name) for name in grid_variables])
+    ax_b.set_yticklabels([labels[name] for name in grid_variables])
     ax_b.set_title("Source-record coverage", loc="left", pad=4)
     cell_by_position = {
         (cell["variable"], cell["column"]): cell for cell in process_cells

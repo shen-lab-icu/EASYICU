@@ -14,20 +14,28 @@ from easyicu.research_agent.reporting.manuscript_quality import render_reader_ma
 from easyicu.research_agent.reporting.manuscript_labels import source_bound_manuscript_labels
 from easyicu.research_agent.reporting.registered_report_inputs import ReadOnlyReportEvidence
 from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
+from easyicu.research_agent.reporting.revision_figures import verify_revision_figure_bundle
 
 
-def build_revision_figure_gallery(prepared) -> dict:
+def build_revision_figure_gallery(prepared, *, figure_bundle=None) -> dict:
     """Use the same verified figure selection for the Web and PDF revision."""
     evidence = ReadOnlyReportEvidence(prepared.source_run_dir)
     execution = json.loads((evidence.root / "manifest.json").read_text())["per_step_records"]
     records = evidence.current_verified_records(execution)
     projection = build_manuscript_figures(evidence_records=records, run_dir=evidence.root, prefer_png=True)
+    figure_root = evidence.root
+    source_ids = {}
+    if figure_bundle is not None:
+        verify_revision_figure_bundle(figure_bundle, source_root=evidence.root)
+        projection, figure_root = figure_bundle.png, figure_bundle.root
+        source_ids = {item["evidence_id"]: item["source_evidence_id"]
+                      for entry in figure_bundle.receipt["entries"] for item in entry["exports"].values()}
     if projection.findings or projection.omitted_evidence_ids:
         raise WriterOnlyMigrationError(code="REPORT_EXPORT_FIGURE_INVALID", detail="Registered figures cannot be projected.")
     figures = []
     total = 0
     for figure in projection.figures:
-        path = evidence.root / figure.relative_path
+        path = figure_root / figure.relative_path
         content = path.read_bytes()
         total += len(content)
         if path.suffix.lower() != ".png" or total > 4_000_000 or hashlib.sha256(content).hexdigest() != figure.figure_sha256:
@@ -37,7 +45,8 @@ def build_revision_figure_gallery(prepared) -> dict:
             "caption": figure.caption, "placement": figure.placement,
             "name": path.name, "sha256": figure.figure_sha256,
             "contract_sha256": figure.contract_sha256,
-            "source_evidence_id": figure.evidence_id,
+            "source_evidence_id": source_ids.get(figure.evidence_id, figure.evidence_id),
+            "display_evidence_id": figure.evidence_id,
             "tier": "primary_publication" if figure.placement == "main" else "supporting_step",
             "data_url": "data:image/png;base64," + base64.b64encode(content).decode("ascii"),
         })
@@ -48,10 +57,11 @@ def build_revision_figure_gallery(prepared) -> dict:
         "supporting_count": sum(f["placement"] == "supplementary" for f in figures),
         "authority_ceiling": "analysis_only", "original_run_figures_preserved": True,
         "context_notes": list(projection.context_notes),
+        "figure_revision_sha256": figure_bundle.receipt_sha256 if figure_bundle else None,
     }
 
 
-def export_revision_pdf(*, prepared, output: Path, reader: str, revision: dict) -> dict:
+def export_revision_pdf(*, prepared, output: Path, reader: str, revision: dict, figure_bundle=None) -> dict:
     """Keep the original run/PDF untouched; bind the export to this revision."""
     bound = output / "manuscript_bound.md"
     if bound.is_symlink() or hashlib.sha256(bound.read_bytes()).hexdigest() != revision["output_sha256"]:
@@ -62,13 +72,17 @@ def export_revision_pdf(*, prepared, output: Path, reader: str, revision: dict) 
     execution = json.loads((evidence.root / "manifest.json").read_text())["per_step_records"]
     records = evidence.current_verified_records(execution)
     gallery = build_manuscript_figures(evidence_records=records, run_dir=evidence.root)
+    figure_root = evidence.root
+    if figure_bundle is not None:
+        verify_revision_figure_bundle(figure_bundle, source_root=evidence.root, revision_output=output)
+        gallery, figure_root = figure_bundle.pdf, figure_bundle.root
     if gallery.findings or gallery.omitted_evidence_ids:
         raise WriterOnlyMigrationError(code="REPORT_EXPORT_FIGURE_INVALID", detail="Registered figures cannot be exported.")
     export = output / "pdf"
     export.mkdir(exist_ok=False)
     figures = []
     for index, figure in enumerate(gallery.figures):
-        source = evidence.root / figure.relative_path
+        source = figure_root / figure.relative_path
         content = source.read_bytes()
         if source.is_symlink() or hashlib.sha256(content).hexdigest() != figure.figure_sha256:
             raise WriterOnlyMigrationError(code="REPORT_EXPORT_FIGURE_CHANGED", detail="Figure content changed.")
@@ -102,4 +116,5 @@ def export_revision_pdf(*, prepared, output: Path, reader: str, revision: dict) 
         "revision_id": revision["revision_id"],
         "manuscript_sha256": revision["output_sha256"],
         "receipt_sha256": hashlib.sha256((export / "manuscript_pdf_receipt.json").read_bytes()).hexdigest(),
+        "figure_revision_sha256": figure_bundle.receipt_sha256 if figure_bundle else None,
     }
