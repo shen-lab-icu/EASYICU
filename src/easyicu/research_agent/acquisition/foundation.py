@@ -158,6 +158,7 @@ class DataFoundationAgent:
         question: str,
         catalog: AvailableCatalog,
         target_outcome: Optional[str] = None,
+        planning_context: str = "",
     ) -> ConceptSelection:
         user = (
             f"RESEARCH QUESTION:\n{question}\n\n"
@@ -166,6 +167,8 @@ class DataFoundationAgent:
                 if target_outcome
                 else ""
             )
+            + (f"PLAN REVISION CONTEXT (not execution authority):\n{planning_context}\n\n"
+               if planning_context else "")
             + catalog.render_for_prompt()
             + '\n\nReturn JSON: {"selected_concepts": [concept_id, ...], '
             '"inclusion_exclusion": ["plain-text criterion", ...], '

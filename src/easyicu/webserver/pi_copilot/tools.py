@@ -39,7 +39,7 @@ from easyicu.webserver.copilot_data_workbench import (
     build_snapshot as build_data_workbench_snapshot,
     project_patient_snapshot_payload,
 )
-from easyicu.webserver.plan_change_request import PlanChangeRequest
+from easyicu.webserver.plan_change_request import PlanChangeRequest, ReferencedPlan, reference_plan_content
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.ideas import handoff as idea_handoff
 
@@ -465,6 +465,12 @@ def _plan_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
                     "evidence_ids",
                     "literature_citation_keys",
                     "output_type",
+                    "planned_analysis_role",
+                    "inputs",
+                    "expected_outputs",
+                    "table_one_spec",
+                    "model_requirements",
+                    "figure_panels",
                 )
                 if row.get(key) is not None
             }
@@ -4151,6 +4157,30 @@ def _cancel(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
     return result
 
 
+def _plan_change_references(
+    context: ToolExecutionContext, latest: Mapping[str, Any],
+) -> tuple[ReferencedPlan, ...]:
+    """Resolve explicit run references only inside this conversation's authority."""
+    named = re.findall(r"(?<![A-Za-z0-9_])run[-_][A-Za-z0-9_-]+", context.user_message)
+    ids = list(dict.fromkeys([str(latest["run_id"]), *named]))
+    rows = {str(row["run_id"]): row for row in _run_rows(context)}
+    if len(ids) > 4 or any(run_id not in rows for run_id in ids):
+        raise PiCopilotError(
+            "plan_revision_reference_unavailable",
+            "A referenced plan is outside this bound conversation or exceeds the review context limit.",
+        )
+    references = []
+    for run_id in ids:
+        result = agent_runs.read_run_artifact(str(rows[run_id].get("project_dir") or ""), "agent_plan.json")
+        if not result.get("ok") or not isinstance(result.get("payload"), Mapping):
+            raise PiCopilotError("plan_revision_reference_unavailable", "A referenced plan could not be read safely.")
+        references.append(ReferencedPlan(
+            run_id=run_id, artifact_sha256=result["artifact"]["sha256"],
+            plan=reference_plan_content(result["payload"]),
+        ))
+    return tuple(references)
+
+
 def _request_replan(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -4231,6 +4261,7 @@ def _request_replan(
         plan_change_request = PlanChangeRequest(
             source_run_id=str(latest["run_id"]),
             user_message=prepared_message.provider_message,
+            reference_plans=_plan_change_references(context, latest),
         )
     fresh_run_required = bool(
         same_study_plan
