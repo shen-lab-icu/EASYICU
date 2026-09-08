@@ -553,6 +553,10 @@ class ProgressiveSkeletonStep(BaseModel):
         ]
     ] = None
     confidence_level: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
+    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Explicit population for absolute-risk context; primary_model reuses the preceding primary model's exact eligibility and complete cases.",
+    )
     sensitivity_spec_ids: list[str] = Field(default_factory=list)
     functional_form_spec: Optional[FunctionalFormSpec] = Field(default=None, exclude_if=lambda value: value is None)
     phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
@@ -599,6 +603,8 @@ class ProgressiveSkeletonStep(BaseModel):
             self.primary_exposure and self.outcome
         ):
             raise ValueError("absolute_risk_context requires exposure and outcome")
+        if self.population_scope is not None and self.module_id != "absolute_risk_context":
+            raise ValueError("population_scope belongs only to absolute_risk_context")
         if self.module_id == "exposure_outcome_distribution":
             required = (
                 self.primary_exposure,

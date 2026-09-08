@@ -318,6 +318,7 @@ def step_materialization_shape_contract(
         "primary_contrast_level_index": None, "denominator_policy": None,
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
+        "population_scope": None,
         "phenotyping_feature_columns": None,
         "phenotyping_comparison_variables": None,
         "literature_bindings": [],

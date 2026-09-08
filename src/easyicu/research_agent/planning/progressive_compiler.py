@@ -1818,6 +1818,30 @@ def _compile_inputs(
             and parsed_reference[0] == "figure"
         ):
             inputs.append(reference.product_id)
+    if step.module_id == "absolute_risk_context":
+        primary_product = "table:adjusted_association_estimates"
+        if step.population_scope == "analysis_cohort" and primary_product in inputs:
+            raise _fail(
+                "progressive_population_scope_conflict",
+                "analysis_cohort scope cannot also bind a primary-model population",
+                step=step, step_index=step_index, path="population_scope",
+            )
+        if step.population_scope == "primary_model":
+            owner = producers.get(primary_product)
+            primary = next((source for source in skeleton.steps if source.step_id == owner), None)
+            if primary is None or primary.planned_analysis_role != "primary":
+                raise _fail(
+                    "progressive_primary_population_owner_missing",
+                    "primary_model scope requires a preceding supported primary model result",
+                    step=step, step_index=step_index, path="population_scope",
+                )
+            if (step.primary_exposure, step.outcome) != (primary.primary_exposure, primary.outcome):
+                raise _fail(
+                    "progressive_primary_population_variables_mismatch",
+                    "the descriptive population adapter must use the primary model's exposure and outcome",
+                    step=step, step_index=step_index, path="population_scope",
+                )
+            inputs.append(primary_product)
     inputs = list(dict.fromkeys(inputs))
     if step.module_id == "visualization":
         invalid_sources = [
@@ -2197,6 +2221,10 @@ def _compile_one_step(
         "icu_rule_refs": [],
         "sensitivity_spec_ids": sensitivity_spec_ids,
         "functional_form_spec": step.functional_form_spec,
+        "population_scope": (
+            "primary_model" if method == "primary_population_absolute_risk_context"
+            else step.population_scope
+        ),
         "phenotyping_feature_columns": step.phenotyping_feature_columns,
         "phenotype_comparison_spec": _compile_phenotype_comparison_spec(context, step, step_index),
         "literature_citation_keys": citation_keys,

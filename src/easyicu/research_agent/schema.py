@@ -1742,6 +1742,10 @@ class AnalysisStep(BaseModel):
         exclude_if=lambda value: value is None,
         description="Exact target variable and basis for an RCS-versus-linear sensitivity; never inferred from prose or a sensitivity id.",
     )
+    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Declared descriptive population, bound by the compiler and execution owner; absence preserves historical serialization, not fresh approval.",
+    )
     phenotyping_feature_columns: Optional[List[str]] = Field(
         default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None,
         description="Exact clustering fit columns; readable profile, identity and outcome inputs are not fit features.",

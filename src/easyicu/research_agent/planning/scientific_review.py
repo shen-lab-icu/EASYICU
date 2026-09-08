@@ -104,7 +104,7 @@ class PlanScientificFinding(BaseModel):
     authorization_question: Optional[str] = None
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/12"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/13"
 
 
 class PlanScientificReview(BaseModel):
@@ -112,11 +112,12 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /12
+    # Archived reviews remain readable, but cannot substitute for a /13
     # execution review (the resume gate also binds the review version).
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
+        "easyicu.plan_scientific_review/13",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -1505,6 +1506,17 @@ def build_plan_scientific_review(
 
     findings: list[PlanScientificFinding] = []
     for step in plan.steps:
+        if step.method == "absolute_risk_context" and step.population_scope != "analysis_cohort":
+            findings.append(PlanScientificFinding(
+                code="DESCRIPTIVE_POPULATION_SCOPE_UNRESOLVED",
+                severity="blocker",
+                dimension="icu_clinical_design",
+                message="A descriptive risk step has no executable choice of population; its prose cannot establish the denominator.",
+                evidence_refs=["analysis_plan.json"],
+                remediation="Declare analysis_cohort or primary_model in the planning contract and bind the matching execution owner before approval.",
+                remediation_route="agent_plan_revision",
+                requires_user_authorization=False,
+            ))
         if step.method == "primary_population_absolute_risk_context" and step.runtime_outcome_contract is None:
             findings.append(PlanScientificFinding(
                 code="PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
