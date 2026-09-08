@@ -50,8 +50,10 @@ class ManuscriptSectionContractError(RuntimeError):
 class ManuscriptReaderQualityContractError(RuntimeError):
     """Bounded section repairs did not close deterministic reader errors."""
 
-    def __init__(self, *, findings: tuple[tuple[str, str, str], ...]):
+    def __init__(self, *, findings: tuple[tuple[str, str, str], ...], manuscript: str = ""):
         self.findings = findings
+        # Diagnostic candidate only; raising still blocks manuscript authority.
+        self.manuscript = manuscript
         detail = "; ".join(
             f"{code} ({section}): {message}" for code, section, message in findings
         )
@@ -356,7 +358,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "25"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "26"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
@@ -739,7 +741,7 @@ def repair_existing_manuscript_sections(
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining)
+        raise ManuscriptReaderQualityContractError(findings=remaining, manuscript=scientific)
     administrative = render_manuscript_administrative_sections(administrative_authority)
     return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
 
@@ -830,7 +832,7 @@ def repair_named_manuscript_sections(
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining)
+        raise ManuscriptReaderQualityContractError(findings=remaining, manuscript=scientific)
     administrative = render_manuscript_administrative_sections(administrative_authority)
     return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
 
@@ -987,7 +989,7 @@ def render_manuscript_sections(
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining)
+        raise ManuscriptReaderQualityContractError(findings=remaining, manuscript=scientific)
     administrative = render_manuscript_administrative_sections(administrative_authority)
     return "\n\n".join(part for part in (scientific, administrative) if part)
 

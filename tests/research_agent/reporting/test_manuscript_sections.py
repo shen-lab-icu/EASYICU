@@ -336,8 +336,10 @@ def test_reader_quality_fails_closed_when_targeted_retry_still_leaks_internal_te
     with pytest.raises(
         ManuscriptReaderQualityContractError,
         match="MANUSCRIPT_INTERNAL_TERM_EXPOSED",
-    ):
+    ) as raised:
         render_manuscript_sections(call_section=call_section, common={})
+    assert '## Methods' in raised.value.manuscript
+    assert 'host-bound' in raised.value.manuscript
 
 
 def test_reader_quality_final_bounded_repair_closes_repeated_internal_term() -> None:

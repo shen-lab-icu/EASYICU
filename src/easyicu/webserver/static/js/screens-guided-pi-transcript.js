@@ -337,8 +337,8 @@
         runner: completedSteps ? tr(`${completedSteps[0]}/${completedSteps[1]} approved steps completed.`, `已完成 ${completedSteps[0]}/${completedSteps[1]} 个批准步骤。`) : '',
         visual_qa: tr('Figure geometry was checked after rendering; the registered result tables remain the numeric source of truth.', '图件渲染后已核查版式；登记结果表仍是数值事实来源。'),
         figure: tr('The publication figure bundle was regenerated from registered run evidence without refitting the model.', '投稿图件包已从本轮登记证据重新生成，图件渲染器不会重新拟合模型。'),
-        writer: tr('The article scaffold was regenerated after the result and figure artifacts were available.', '结果与图件产物就绪后，文章骨架已重新生成。'),
-        latex: tr('LaTeX, bibliography, and PDF exports were rendered from the regenerated manuscript bundle.', 'LaTeX、参考文献和 PDF 已由重新生成的稿件包导出。'),
+        writer: tr('This stage drafts from registered results. Its completion alone does not establish that a usable article passed review.', '此阶段根据登记结果起草文章。流程结束不等于已生成通过审阅的完整文章。'),
+        latex: tr('This stage attempts manuscript exports. Available files and their validation status are listed with the results.', '此阶段尝试导出稿件。实际可用的文件及校验状态以结果列表为准。'),
       };
       progress.forEach((row, index) => {
         const step = String(row && row.step || '').trim();

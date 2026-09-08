@@ -1080,7 +1080,7 @@ def _verified_resume_writer_scaffold_for_quality_migration(
     run_dir: Path,
     per_step_records: Sequence[Dict[str, Any]],
 ) -> Optional[tuple[str, Dict[str, Any]]]:
-    """Return the newest verified older-contract scaffold for targeted repair."""
+    """Return a verified older-contract or rejected scaffold for targeted repair."""
 
     if not isinstance(resume_state, dict):
         return None
@@ -1103,12 +1103,17 @@ def _verified_resume_writer_scaffold_for_quality_migration(
         for record in evidence.current_verified_records(per_step_records)
         if record.evidence_id == "manuscript_scaffold_raw"
         or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
+        or (record.metadata or {}).get("writer_repair_candidate") is True
     ]
     for record in reversed(candidates):
         prior_contract = str(
             (record.metadata or {}).get("writer_contract_sha256") or ""
         )
-        if prior_contract == current_contract_sha256:
+        metadata = record.metadata or {}
+        rejected = metadata.get("writer_repair_candidate") is True
+        if rejected and metadata.get("execution_checkpoint_sha256") != current_digest:
+            continue
+        if prior_contract == current_contract_sha256 and not rejected:
             continue
         verified_path = verified_run_evidence_path(run_dir, record)
         if verified_path is None:
@@ -1129,6 +1134,31 @@ def _verified_resume_writer_scaffold_for_quality_migration(
             "target_writer_contract_sha256": current_contract_sha256,
         }
     return None
+
+
+def _preserve_rejected_writer_candidate(exc, *, evidence, per_step_records):
+    """Seal a failed quality candidate for diagnosis/repair, never for publication."""
+    from uuid import uuid4
+    from .manuscript_sections import (
+        ManuscriptReaderQualityContractError, manuscript_writer_contract_sha256,
+    )
+
+    if not isinstance(exc, ManuscriptReaderQualityContractError) or not exc.manuscript.strip():
+        return None
+    record = evidence.register_text(
+        kind="log", description="Rejected Writer draft; requires quality and evidence revalidation.",
+        text=exc.manuscript, filename="writer_rejected_scaffold.md",
+        evidence_id="writer_rejected_scaffold_" + uuid4().hex,
+        producer="writer", generation_mode="llm", publish_aliases=False,
+        metadata={
+            "writer_repair_candidate": True,
+            "writer_contract_sha256": manuscript_writer_contract_sha256(),
+            "execution_checkpoint_sha256": _writer_execution_checkpoint_sha256(per_step_records),
+            "quality_findings": list(exc.findings),
+            "publication_authorized": False,
+        },
+    )
+    return record.evidence_id
 
 
 def _render_or_resume_writer_scaffold(
@@ -1494,6 +1524,9 @@ def _draft_manuscript(
         )
     except Exception as exc:
         writer_error_message = f"{type(exc).__name__}: {exc}"
+        rejected_candidate = _preserve_rejected_writer_candidate(
+            exc, evidence=evidence, per_step_records=per_step_records,
+        )
         scaffold = ""
         findings.append(
             ValidationFinding(
@@ -1506,6 +1539,7 @@ def _draft_manuscript(
                 detail={
                     "exception_type": type(exc).__name__,
                     "writer_digest_widened": bool(pipeline._writer_digest_widened),
+                    "rejected_candidate_evidence_id": rejected_candidate,
                 },
             )
         )

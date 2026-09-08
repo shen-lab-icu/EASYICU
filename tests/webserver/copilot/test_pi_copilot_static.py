@@ -101,7 +101,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-replay.js?v=20260907-report-only1" in index
     assert "js/screens-guided-pi-resources.js?v=20260908-source-conversation1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260908-e1-review2" in index
-    assert "js/screens-guided-pi-activity.js?v=20260908-e1-review1" in index
+    assert "js/screens-guided-pi-activity.js?v=20260908-writer-status1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index
@@ -6336,7 +6336,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20260908-source-conversation1" in index
+    assert "screens-guided-pi-transcript.js?v=20260908-writer-status1" in index
     assert "screens-guided-pi.js?v=20260908-source-receipt1" in index
 
 
