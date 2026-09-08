@@ -4939,6 +4939,39 @@ def test_functional_form_sensitivity_requires_an_exact_executable_method() -> No
     assert caught.value.step_id == "06_sensitivity"
 
 
+@pytest.mark.parametrize("diagnostic_name", ["shape_diagnostics", "age_model_comparison"])
+def test_robustness_figure_keeps_functional_form_diagnostics_in_report(diagnostic_name):
+    payload = _payload()
+    diagnostic = payload["steps"][5]
+    diagnostic.update(custom_method="restricted_cubic_spline_sensitivity",
+                      functional_form_spec={"target_column": "age_years", "knot_quantiles": [0.1, 0.5, 0.9]},
+                      sensitivity_spec_ids=["age_restricted_cubic_spline_vs_linear"],
+                      outputs=[{"product_id": f"table:{diagnostic_name}", "semantic_role": "scientific_sensitivity"}])
+    replay = deepcopy(diagnostic)
+    replay.update(step_id="06_replay", module_id="robustness_replay", custom_method=None,
+                  functional_form_spec=None, sensitivity_spec_ids=["complete_case"], outputs=[])
+    payload["steps"].insert(6, replay)
+    figure = payload["steps"][7]
+    figure["depends_on"] = [replay["step_id"], diagnostic["step_id"]]
+    figure["product_inputs"] = [
+        {"producer_step_id": replay["step_id"], "product_id": "table:robustness_matrix"},
+        {"producer_step_id": diagnostic["step_id"], "product_id": f"table:{diagnostic_name}"},
+    ]
+    with pytest.raises(ProgressivePlanCompileError, match="functional-form diagnostics are not effect estimates"):
+        compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+    figure["product_inputs"].pop()
+    # The report keeps the requested sensitivity result; it is not dropped.
+    payload["steps"].append({
+        "step_id": "08_report", "module_id": "report", "planned_analysis_role": "auxiliary",
+        "objective": "Report the prespecified functional-form comparison.",
+        "depends_on": [diagnostic["step_id"]],
+        "product_inputs": [{"producer_step_id": diagnostic["step_id"], "product_id": f"table:{diagnostic_name}"}],
+        "outputs": [{"product_id": "report:study_report", "semantic_role": "report"}],
+    })
+    plan, _ = compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+    assert f"table:{diagnostic_name}" in plan.steps[-1].inputs
+
+
 def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:
     payload = _payload()
     payload["steps"][2]["comparison_exposure_level_index"] = 0

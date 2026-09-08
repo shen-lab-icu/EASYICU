@@ -2974,6 +2974,13 @@ class ProgressivePlannerAgent:
                 "figure and must retain its own independently traceable "
                 "source-data projection; move other article roles to separate "
                 "rendering steps instead of binding unused context."
+                " A robustness_matrix display uses a specification grid; a "
+                "common forest axis requires verified shared estimand, contrast "
+                "and unit. Functional-form comparison products contain model "
+                "diagnostics (nonlinearity test and information criteria), not "
+                "effect estimates: keep those products in the report as a "
+                "diagnostic table, outside the robustness_matrix figure. Never "
+                "turn their P values or information criteria into effect sizes."
             )
             if (
                 len(executors) == 1

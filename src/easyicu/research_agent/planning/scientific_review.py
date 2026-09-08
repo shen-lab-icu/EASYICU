@@ -1505,7 +1505,22 @@ def build_plan_scientific_review(
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
+    diagnostic_products = {
+        product for source in plan.steps if source.functional_form_spec is not None
+        for product in source.expected_outputs
+    }
     for step in plan.steps:
+        if ("table:robustness_matrix" in step.inputs
+                and diagnostic_products.intersection(step.inputs)
+                and any(product.startswith("figure:") for product in step.expected_outputs)):
+            findings.append(PlanScientificFinding(
+                code="ROBUSTNESS_DIAGNOSTIC_DISPLAY_MISMATCH",
+                severity="blocker", dimension="figures",
+                message="The robustness figure binds functional-form diagnostics that are not effect estimates.",
+                evidence_refs=["analysis_plan.json"],
+                remediation="Keep the functional-form comparison as a report diagnostic table; bind only supported robustness results to the specification-grid figure. Preserve the requested sensitivity analysis.",
+                remediation_route="agent_plan_revision", requires_user_authorization=False,
+            ))
         if step.method == "absolute_risk_context" and step.population_scope != "analysis_cohort":
             findings.append(PlanScientificFinding(
                 code="DESCRIPTIVE_POPULATION_SCOPE_UNRESOLVED",
