@@ -97,6 +97,11 @@ def _project_writer_evidence_digest(
         # boundary so every method, claim, and numeric owner remains available
         # without paying twice for the same study coordinates.
         digest = digest[execution_start:]
+    digest = "".join(
+        line
+        for line in digest.splitlines(keepends=True)
+        if not line.startswith("Writer instruction:")
+    )
     if str(section_name).strip().casefold() in {"abstract", "results"}:
         # Abstract methods and result interpretation need the same execution
         # boundary and owner-issued claims as Methods. Repetition of citation
@@ -106,6 +111,17 @@ def _project_writer_evidence_digest(
     if marker not in digest:
         return digest
     return digest.split(marker, 1)[0].rstrip() + "\n"
+
+
+def _project_writer_literature_digest(
+    section_name: str,
+    literature_digest: Optional[str],
+) -> str:
+    """Keep prior-study material out of the current-study Results section."""
+
+    if str(section_name).strip().casefold() == "results":
+        return ""
+    return str(literature_digest or "")
 
 
 class ReportingPromptBudgetError(RuntimeError):
@@ -254,6 +270,10 @@ class WriterAgent:
             section_name,
             evidence_digest,
         )
+        section_literature_digest = _project_writer_literature_digest(
+            section_name,
+            literature_digest,
+        )
         display_labels = _writer_display.normalise_reader_display_labels(
             reader_display_labels
         )
@@ -396,7 +416,7 @@ class WriterAgent:
                     "MACHINE EVIDENCE DIGEST:\n"
                     + (section_evidence_digest or "(none)")
                     + "\n\nRUN-BOUND LITERATURE DIGEST:\n"
-                    + (literature_digest or "(none)")
+                    + (section_literature_digest or "(none required for this section)")
                     + "\n\nRESEARCH CONTEXT:\n"
                     + format_outbound_safe_context(
                         reporting_context,
