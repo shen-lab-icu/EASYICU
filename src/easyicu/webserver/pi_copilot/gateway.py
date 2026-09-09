@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import collections
 import json
+import logging
 import os
 import re
+import select
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +40,8 @@ from .tools import MUTATING_HOST_TOOLS, execute_tool
 
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 15 * 60
+STARTUP_READY_TIMEOUT_SECONDS = 15.0
+_LOG = logging.getLogger(__name__)
 MIN_NODE_VERSION = (22, 19, 0)
 _CHILD_ENV_KEYS = frozenset(
     {
@@ -81,6 +86,7 @@ class _PendingRequest:
     tool_context: Optional[ToolExecutionContext] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[PiCopilotError] = None
+    process: Optional[subprocess.Popen[str]] = None
 
 
 class PiGatewayClient:
@@ -169,6 +175,12 @@ class PiGatewayClient:
         self._process: Optional[subprocess.Popen[str]] = None
         self._write_lock = threading.Lock()
         self._state_lock = threading.RLock()
+        self._startup_lock = threading.Lock()
+        self._ready_process: Optional[subprocess.Popen[str]] = None
+        self._startup_diagnostic: Dict[str, Any] = {}
+        # Bookkeeping never shares a lock with process startup or pipe I/O:
+        # timed-out requests must be removed without waiting on either.
+        self._pending_lock = threading.Lock()
         self._pending: Dict[str, _PendingRequest] = {}
         self._stderr_tail: Deque[str] = collections.deque(maxlen=20)
         self._reader_thread: Optional[threading.Thread] = None
@@ -337,7 +349,86 @@ class PiGatewayClient:
             self.environ.update(provider_environment)
             self._provider_file_enabled = True
 
-    def _start(self) -> None:
+    @staticmethod
+    def _remaining_before_deadline(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PiCopilotError(
+                "pi_gateway_timeout", "The Pi readiness deadline expired.", status_code=504,
+            )
+        return remaining
+
+    def _acquire_before_deadline(self, lock: Any, deadline: Optional[float]) -> None:
+        if deadline is None:
+            lock.acquire()
+        elif not lock.acquire(timeout=self._remaining_before_deadline(deadline)):
+            raise PiCopilotError(
+                "pi_gateway_timeout", "The Pi readiness lock deadline expired.", status_code=504,
+            )
+
+    def _start(self) -> subprocess.Popen[str]:
+        started = time.monotonic()
+        deadline = started + STARTUP_READY_TIMEOUT_SECONDS
+        if not self._startup_lock.acquire(timeout=STARTUP_READY_TIMEOUT_SECONDS):
+            raise PiCopilotError(
+                "pi_gateway_startup_timeout",
+                "The Pi runtime did not become ready within its startup budget.",
+                status_code=504,
+                details={"phase": "startup_lock", "budget_seconds": STARTUP_READY_TIMEOUT_SECONDS,
+                         "elapsed_seconds": round(time.monotonic() - started, 3)},
+            )
+        process = None
+        try:
+            self._acquire_before_deadline(self._state_lock, deadline)
+            try:
+                self._spawn_process()
+                process = self._process
+                self._remaining_before_deadline(deadline)
+                if process is not None and self._ready_process is process:
+                    return process
+            finally:
+                self._state_lock.release()
+            ready = self._request_started(
+                "runtime.status", {}, deadline=deadline, expected_process=process,
+            )
+            if ready.get("gateway") != "ready":
+                raise PiCopilotError(
+                    "pi_gateway_not_ready", "The Pi runtime did not confirm readiness.", status_code=502,
+                )
+            self._acquire_before_deadline(self._state_lock, deadline)
+            try:
+                self._remaining_before_deadline(deadline)
+                if self._process is not process or process is None or process.poll() is not None:
+                    raise PiCopilotError("pi_gateway_exited", "The Pi runtime exited during startup.", status_code=503)
+                self._ready_process = process
+                self._startup_diagnostic = {
+                    "status": "ready", "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "budget_seconds": STARTUP_READY_TIMEOUT_SECONDS,
+                }
+            finally:
+                self._state_lock.release()
+            _LOG.info("Pi startup readiness pid=%s elapsed_seconds=%.3f", process.pid, time.monotonic() - started)
+            return process
+        except PiCopilotError as exc:
+            elapsed = round(time.monotonic() - started, 3)
+            code = "pi_gateway_startup_timeout" if exc.code == "pi_gateway_timeout" else exc.code
+            diagnostic = {"status": "failed", "code": code, "elapsed_seconds": elapsed,
+                          "budget_seconds": STARTUP_READY_TIMEOUT_SECONDS}
+            # Publish a replacement snapshot without waiting again on a lock
+            # whose acquisition may be the reason readiness already timed out.
+            self._startup_diagnostic = diagnostic
+            _LOG.warning("Pi startup readiness failed code=%s elapsed_seconds=%.3f", code, elapsed)
+            raise PiCopilotError(
+                code,
+                "The Pi runtime did not become ready within its startup budget."
+                if code == "pi_gateway_startup_timeout" else str(exc),
+                status_code=exc.status_code,
+                details={**exc.details, "phase": "startup_readiness", **diagnostic},
+            ) from exc
+        finally:
+            self._startup_lock.release()
+
+    def _spawn_process(self) -> None:
         with self._state_lock:
             if self._process and self._process.poll() is None:
                 return
@@ -384,6 +475,7 @@ class PiGatewayClient:
                 errors="replace",
                 bufsize=1,
             )
+            self._ready_process = None
             if self._tool_dispatcher is None or self._tool_dispatcher.closed:
                 self._tool_dispatcher = self._new_tool_dispatcher()
             self._reader_thread = threading.Thread(
@@ -399,7 +491,40 @@ class PiGatewayClient:
             self._reader_thread.start()
             self._stderr_thread.start()
 
-    def _write(self, payload: Mapping[str, Any]) -> None:
+    def _write_before_deadline(
+        self, process: subprocess.Popen[str], encoded: str, deadline: float,
+    ) -> None:
+        """Only the read-only readiness probe uses nonblocking pipe I/O.
+
+        The caller holds the write lock. Restore the original descriptor mode
+        before ordinary requests can write; no background sender survives timeout.
+        """
+        assert process.stdin is not None
+        fd = process.stdin.fileno()
+        blocking = os.get_blocking(fd)
+        os.set_blocking(fd, False)
+        try:
+            pending = memoryview((encoded + "\n").encode("utf-8"))
+            while pending:
+                self._remaining_before_deadline(deadline)
+                try:
+                    written = os.write(fd, pending)
+                except BlockingIOError:
+                    select.select([], [fd], [], self._remaining_before_deadline(deadline))
+                    continue
+                if written <= 0:
+                    raise BrokenPipeError("Pi readiness pipe closed")
+                pending = pending[written:]
+            self._remaining_before_deadline(deadline)
+        finally:
+            os.set_blocking(fd, blocking)
+
+    def _write(
+        self, payload: Mapping[str, Any], *,
+        expected_process: Optional[subprocess.Popen[str]] = None,
+        require_ready: bool = False,
+        deadline: Optional[float] = None,
+    ) -> None:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > MAX_PROTOCOL_LINE_BYTES:
             raise PiCopilotError(
@@ -407,27 +532,46 @@ class PiGatewayClient:
                 "The Pi gateway request exceeds the protocol size limit.",
                 status_code=500,
             )
-        with self._write_lock:
-            process = self._process
-            if (
-                process is None
-                or process.poll() is not None
-                or process.stdin is None
-            ):
-                raise PiCopilotError(
-                    "pi_gateway_unavailable",
-                    "The Pi gateway process is not running.",
-                    status_code=503,
-                )
+        self._acquire_before_deadline(self._write_lock, deadline)
+        try:
+            self._acquire_before_deadline(self._state_lock, deadline)
             try:
-                process.stdin.write(encoded + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as exc:
+                process = self._process
+                if (
+                    expected_process is not None
+                    and (process is not expected_process
+                         or (require_ready and self._ready_process is not expected_process))
+                ):
+                    raise PiCopilotError(
+                        "pi_gateway_process_changed",
+                        "The ready Pi process changed before the request could be sent.",
+                        status_code=503,
+                    )
+                if process is None or process.poll() is not None or process.stdin is None:
+                    raise PiCopilotError(
+                        "pi_gateway_unavailable", "The Pi gateway process is not running.",
+                        status_code=503,
+                    )
+            finally:
+                self._state_lock.release()
+            # Pin this object through I/O; close may detach/stop it, but the
+            # request must never look up or write to a replacement mid-send.
+            # Keep the state lock free during pipe I/O so readiness queueing can
+            # time out even while an ordinary synchronous writer is blocked.
+            try:
+                if deadline is None:
+                    process.stdin.write(encoded + "\n")
+                    process.stdin.flush()
+                else:
+                    self._write_before_deadline(process, encoded, deadline)
+            except (OSError, ValueError) as exc:
                 raise PiCopilotError(
                     "pi_gateway_pipe_closed",
                     "The Pi gateway process closed its input channel.",
                     status_code=503,
                 ) from exc
+        finally:
+            self._write_lock.release()
 
     def request(
         self,
@@ -438,13 +582,32 @@ class PiGatewayClient:
         event_sink: Optional[EventSink] = None,
         tool_context: Optional[ToolExecutionContext] = None,
     ) -> Dict[str, Any]:
-        self._start()
+        process = self._start()
+        return self._request_started(
+            method, params, timeout=timeout, event_sink=event_sink, tool_context=tool_context,
+            expected_process=process, require_ready=True,
+        )
+
+    def _request_started(
+        self,
+        method: str,
+        params: Optional[Mapping[str, Any]] = None,
+        *,
+        timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        event_sink: Optional[EventSink] = None,
+        tool_context: Optional[ToolExecutionContext] = None,
+        expected_process: Optional[subprocess.Popen[str]] = None,
+        require_ready: bool = False,
+        deadline: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """One transport attempt; readiness calls this without recursively starting."""
         request_id = uuid.uuid4().hex
         pending = _PendingRequest(
             event_sink=event_sink,
             tool_context=tool_context,
+            process=expected_process,
         )
-        with self._state_lock:
+        with self._pending_lock:
             self._pending[request_id] = pending
         try:
             self._write(
@@ -454,9 +617,15 @@ class PiGatewayClient:
                     "request_id": request_id,
                     "method": str(method),
                     "params": dict(params or {}),
-                }
+                },
+                expected_process=expected_process, require_ready=require_ready,
+                deadline=deadline,
             )
-            if not pending.done.wait(timeout=max(0.1, float(timeout))):
+            wait_timeout = (
+                self._remaining_before_deadline(deadline)
+                if deadline is not None else max(0.1, float(timeout))
+            )
+            if not pending.done.wait(timeout=wait_timeout):
                 if method == "session.prompt":
                     session_id = str((params or {}).get("session_id") or "")
                     if session_id:
@@ -469,9 +638,11 @@ class PiGatewayClient:
                 )
             if pending.error is not None:
                 raise pending.error
+            if deadline is not None:
+                self._remaining_before_deadline(deadline)
             return dict(pending.result or {})
         finally:
-            with self._state_lock:
+            with self._pending_lock:
                 self._pending.pop(request_id, None)
 
     def _recover_timed_out_prompt(self, session_id: str) -> None:
@@ -506,7 +677,7 @@ class PiGatewayClient:
                             "pi_protocol_line_too_large",
                             "The Pi gateway emitted an oversized protocol line.",
                             status_code=502,
-                        )
+                        ), process=process,
                     )
                     continue
                 try:
@@ -517,7 +688,7 @@ class PiGatewayClient:
                             "pi_protocol_invalid_json",
                             "The Pi gateway emitted invalid JSON.",
                             status_code=502,
-                        )
+                        ), process=process,
                     )
                     continue
                 if not isinstance(payload, dict):
@@ -528,6 +699,7 @@ class PiGatewayClient:
             dispatcher: Optional[HostToolDispatcher] = None
             with self._state_lock:
                 if self._process is process:
+                    self._ready_process = None
                     self._installed_runtime_integrity = None
                     dispatcher = self._tool_dispatcher
                     self._tool_dispatcher = None
@@ -539,7 +711,7 @@ class PiGatewayClient:
             )
             # Preserve the precise process-exit cause before dispatcher
             # shutdown attempts any final response writes to the dead pipe.
-            self._fail_all(gateway_exit)
+            self._fail_all(gateway_exit, process=process)
             if dispatcher is not None:
                 dispatcher.shutdown()
 
@@ -567,7 +739,7 @@ class PiGatewayClient:
             self._handle_tool_request(payload)
             return
         request_id = str(payload.get("request_id") or "")
-        with self._state_lock:
+        with self._pending_lock:
             pending = self._pending.get(request_id)
         if pending is None:
             return
@@ -678,7 +850,7 @@ class PiGatewayClient:
         unknown = sorted(set(payload) - allowed)
         request_id = str(payload.get("request_id") or "")
         parent_request_id = str(payload.get("parent_request_id") or "")
-        with self._state_lock:
+        with self._pending_lock:
             pending = self._pending.get(parent_request_id)
         if (
             unknown
@@ -723,7 +895,7 @@ class PiGatewayClient:
             return
 
         def execute() -> Dict[str, Any]:
-            with self._state_lock:
+            with self._pending_lock:
                 current_parent = self._pending.get(parent_request_id)
             if current_parent is not pending or pending.done.is_set():
                 raise PiCopilotError(
@@ -828,9 +1000,15 @@ class PiGatewayClient:
         except PiCopilotError:
             pass
 
-    def _fail_all(self, error: PiCopilotError) -> None:
-        with self._state_lock:
-            pending = list(self._pending.values())
+    def _fail_all(
+        self, error: PiCopilotError, *, process: Optional[subprocess.Popen[str]] = None,
+    ) -> None:
+        with self._pending_lock:
+            # A late EOF/close from an old child must not fail its replacement.
+            pending = [
+                row for row in self._pending.values()
+                if process is None or row.process is process
+            ]
         for row in pending:
             if not row.done.is_set():
                 row.error = error
@@ -860,6 +1038,8 @@ class PiGatewayClient:
         else:
             status.update(runtime)
             status["running"] = True
+        with self._state_lock:
+            status["startup_readiness"] = dict(self._startup_diagnostic)
         return status
 
     def maintain_sessions(self, *, exclude_session_id: str = "") -> Dict[str, Any]:
@@ -888,24 +1068,32 @@ class PiGatewayClient:
             process = self._process
             dispatcher = self._tool_dispatcher
             self._process = None
+            self._ready_process = None
             self._tool_dispatcher = None
             self._installed_runtime_integrity = None
         if dispatcher is not None:
             dispatcher.shutdown()
+        if process is None:
+            return
         self._fail_all(
             PiCopilotError(
                 "pi_gateway_closed",
                 "The Pi gateway was closed before the request completed.",
                 status_code=503,
-            )
+            ), process=process,
         )
-        if process is None:
-            return
-        try:
-            if process.stdin:
-                process.stdin.close()
-        except OSError:
-            pass
+        # Never wait on a writer blocked in the child's full stdin pipe.
+        # Closing its TextIOWrapper can also wait on that active write, so send
+        # EOF only when idle; otherwise stop the pinned child before closing it.
+        writer_idle = self._write_lock.acquire(blocking=False)
+        if writer_idle:
+            try:
+                if process.stdin:
+                    process.stdin.close()
+            except OSError:
+                pass
+            finally:
+                self._write_lock.release()
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
@@ -914,6 +1102,14 @@ class PiGatewayClient:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
+                process.wait(timeout=2)
+        finally:
+            if not writer_idle and process.poll() is not None:
+                try:
+                    if process.stdin:
+                        process.stdin.close()
+                except OSError:
+                    pass
 
 
 __all__ = ["PiGatewayClient"]
