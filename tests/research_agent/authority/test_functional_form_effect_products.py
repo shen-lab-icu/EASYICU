@@ -196,7 +196,13 @@ def test_full_plan_to_native_effects_robustness_claims_and_strict_numbers(effect
     claims = derive_scientific_claim_drafts(summary)
     assert len(claims) == 7
     assert [c.analysis_role for c in claims] == ["primary", "primary", "sensitivity", "sensitivity", "sensitivity", "sensitivity", "sensitivity"]
-    assert all("shape_" in claim.estimand for claim in claims[3:])
+    assert all("shape_" not in claim.estimand for claim in claims[3:])
+    for target in ("age", "charlson_first"):
+        reader_target = target.replace("_", " ")
+        assert any(
+            f"prespecified sensitivity: {reader_target} modeled with its reviewed restricted cubic spline"
+            in claim.estimand for claim in claims[3:]
+        )
     scaffold = "## Results\n\n" + "\n\n".join(claim.placeholder for claim in effects.store.scientific_claims())
     bound = effects.store.bind_manuscript(scaffold, per_step_records=effects.records)
     _, bindings, untraced = bind_numeric_values(bound, evidence=effects.store, per_step_records=effects.records)
@@ -208,7 +214,9 @@ def test_full_plan_to_native_effects_robustness_claims_and_strict_numbers(effect
     for forbidden in ("covariance_matrix", "parameter_values", "contrast_vector", "functional_form_effects_json"):
         assert forbidden not in digest
         assert all(forbidden not in claim.source_field for claim in effects.store.numeric_claims())
-    assert "shape_age" in digest and "shape_charlson_first" in digest
+    assert "shape_age" not in digest and "shape_charlson_first" not in digest
+    assert "prespecified sensitivity: age modeled" in digest
+    assert "prespecified sensitivity: charlson first modeled" in digest
     assert len(digest.encode()) < 64 * 1024
     (effects.root / "writer-digest.txt").write_text(digest)
     (effects.root / "projection-receipt.json").write_text(json.dumps({

@@ -187,9 +187,9 @@ def derive_model_contrast_claim_payloads(summary: dict) -> list[dict]:
             if point else "prespecified linear functional-form sensitivity"
         )
         if contrast.kind == "covariate_form_point":
+            reader_target = contrast.target_column.replace("_", " ")
             scope = (
-                f"prespecified sensitivity {contrast.sensitivity_spec_id}: "
-                f"{contrast.target_column} modeled with its reviewed restricted cubic spline "
+                f"prespecified sensitivity: {reader_target} modeled with its reviewed restricted cubic spline "
                 "instead of a linear adjustment term; this exposure point contrast only"
             )
         variance = report.variance_estimator.replace("_", " ")

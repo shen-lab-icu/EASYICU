@@ -194,6 +194,49 @@ def verified_descriptive_source_records(projected, evidence):
     return records
 
 
+def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
+    """Copy the source-cohort count from a verified grouped Table 1 result."""
+
+    from .writer_evidence import _verified_evidence_json
+
+    facts = []
+    for row in projected:
+        summary = row.get("step_summary", {})
+        if not (
+            row.get("status") == "ok"
+            and isinstance(summary, dict)
+            and summary.get("status") == "ok"
+            and summary.get("analysis_family") == "grouped_table_one"
+        ):
+            continue
+        source_id = str(row.get("step_summary_evidence_id") or "")
+        source = _verified_evidence_json(
+            evidence, source_id, exact_evidence_id=True, expected_kind="statistic",
+        )
+        if source.get("analysis_family") != "grouped_table_one":
+            raise ValueError("Grouped Table 1 source lost its analysis family")
+        cohort_n = _count(source.get("cohort_n"), positive=True)
+        variables = source.get("variables")
+        outputs = source.get("output_files")
+        if (
+            not isinstance(variables, list) or not variables
+            or any(not isinstance(name, str) or not name.strip() for name in variables)
+            or not isinstance(outputs, dict) or not outputs.get("table:table_one")
+        ):
+            raise ValueError("Grouped Table 1 source lacks its reviewed roster or output")
+        record = evidence.get(source_id)
+        if record is None or record.produced_by_step != row.get("step_id"):
+            raise ValueError("Grouped Table 1 source does not belong to the verified step")
+        facts.append(DescriptiveReportFact(
+            subsection="Cohort characteristics",
+            text=f"The source cohort included {cohort_n:,} ICU stays",
+            evidence_id=record.evidence_id,
+            source_sha256=record.sha256,
+            source_fields=("cohort_n",),
+        ))
+    return tuple(facts)
+
+
 def compile_primary_counts_only_report_facts(records, *, evidence, reader_display_labels,
                                            context=None, manuscript_language="en"):
     """Shared full-run/report-only admission; loose wrapper counts are not facts."""
@@ -203,11 +246,15 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
     projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
         records, evidence_store=evidence,
     )
-    return compile_counts_only_report_facts(
+    descriptive_facts = compile_counts_only_report_facts(
         verified_descriptive_source_records(projected, evidence), evidence=evidence,
         reader_display_labels=reader_display_labels,
         context=context, manuscript_language=manuscript_language,
         scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
+    )
+    return (
+        *_compile_grouped_table_one_cohort_report_facts(projected, evidence),
+        *descriptive_facts,
     )
 
 
@@ -391,20 +438,24 @@ def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveR
         {name: tuple(fact for fact in facts if fact.subsection == name)
          for name in dict.fromkeys(fact.subsection for fact in facts)}
     )
+    cohort_heading = re.search(r"^### Cohort characteristics[ \t]*$", body, re.M)
     cohort_sources = tuple(fact for fact in facts if fact.cohort_n is not None)
-    if descriptive_heading is not None and cohort_sources:
+    if (descriptive_heading is not None or cohort_heading is not None) and cohort_sources:
         # Copy the recorded cohort_n, not a number parsed from prose or an
         # outcome denominator. Different analysis cohorts cannot be collapsed
         # into one unqualified cohort count.
         counts = {_count(fact.cohort_n, positive=True) for fact in cohort_sources}
         if len(counts) == 1:
             source = cohort_sources[0]
-            destinations["Cohort characteristics"] = (DescriptiveReportFact(
+            cohort_fact = DescriptiveReportFact(
                 subsection="Cohort characteristics",
                 text=f"The analysis cohort comprised {source.cohort_n:,} observations",
                 evidence_id=source.evidence_id, source_sha256=source.source_sha256,
                 source_fields=("cohort_n",),
-            ),)
+            )
+            destinations["Cohort characteristics"] = (
+                *destinations.get("Cohort characteristics", ()), cohort_fact,
+            )
     for subsection, subsection_facts in destinations.items():
         heading = re.search(rf"^### {re.escape(subsection)}[ \t]*$", body, re.M)
         if heading is None:
