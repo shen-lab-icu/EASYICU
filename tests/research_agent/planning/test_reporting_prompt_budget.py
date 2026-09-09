@@ -133,9 +133,16 @@ def test_writer_non_result_section_uses_role_scoped_evidence_projection() -> Non
     )
     projected = _project_writer_evidence_digest("Methods", digest)
 
+    assert "RUN_CONTEXT" not in projected
+    assert "x" * 20_000 not in projected
+    assert "## EXECUTED METHOD BOUNDARY" in projected
+    assert "methods-only" in projected
     assert "{claim:step.result}" in projected
+    assert "## numeric citation authority" in projected
     assert "## secondary numbers" not in projected
     results_projection = _project_writer_evidence_digest("Results", digest)
+    assert "RUN_CONTEXT" not in results_projection
+    assert "x" * 20_000 not in results_projection
     assert "## EXECUTED METHOD BOUNDARY" in results_projection
     assert "methods-only" in results_projection
     assert "{claim:step.result}" in results_projection
@@ -152,7 +159,30 @@ def test_writer_non_result_section_uses_role_scoped_evidence_projection() -> Non
     )
 
     assert len(llm.calls) == 1
+    assert "RUN_CONTEXT" not in llm.calls[0][0][1].content
     assert "## secondary numbers" not in llm.calls[0][0][1].content
+
+
+def test_writer_projection_removes_only_redundant_uncited_preamble() -> None:
+    digest = (
+        "RUN_CONTEXT\n"
+        + "redundant study coordinates " * 50
+        + "\n## EXECUTED METHOD BOUNDARY\n"
+        + "Preserve the fitted model. {claim:step.result}\n"
+        + "## numeric citation authority\n"
+        + "odds_ratio=1.24; cite={evidence:primary_result}\n"
+        + "## secondary numbers\n"
+        + "sensitivity_odds_ratio=1.18; cite={evidence:sensitivity_result}\n"
+    )
+
+    projected = _project_writer_evidence_digest("Results", digest)
+
+    assert "RUN_CONTEXT" not in projected
+    assert "redundant study coordinates" not in projected
+    assert projected.startswith("## EXECUTED METHOD BOUNDARY")
+    assert "{claim:step.result}" in projected
+    assert "{evidence:primary_result}" in projected
+    assert "{evidence:sensitivity_result}" in projected
 
 
 def test_numeric_citation_grouping_preserves_values_and_owner_boundaries() -> None:

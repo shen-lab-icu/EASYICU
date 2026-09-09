@@ -89,6 +89,14 @@ def _project_writer_evidence_digest(
     """Project the lossless evidence subset required by one manuscript role."""
 
     digest = str(evidence_digest or "")
+    execution_marker = "## EXECUTED METHOD BOUNDARY"
+    execution_start = digest.find(execution_marker)
+    if execution_start >= 0:
+        # The digest preamble repeats the separately supplied reporting context
+        # and carries no evidence citations.  Start at the host-issued execution
+        # boundary so every method, claim, and numeric owner remains available
+        # without paying twice for the same study coordinates.
+        digest = digest[execution_start:]
     if str(section_name).strip().casefold() in {"abstract", "results"}:
         # Abstract methods and result interpretation need the same execution
         # boundary and owner-issued claims as Methods. Repetition of citation
