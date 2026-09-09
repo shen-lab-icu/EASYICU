@@ -4589,7 +4589,11 @@ def make_research_pipeline_run_runner(
             if execution.plan_change_request is not None else None
         )
         source_agent_plan_revision_codes: tuple[str, ...] = ()
-        if source_run_id:
+        if prepared_revision is not None and prepared_revision.failed_execution_replan:
+            bound_plan_revision_contract = prepared_revision.prior_plan_contract or ""
+            bound_baseline_requirements = prepared_revision.baseline_requirements
+            bound_population_requirements = prepared_revision.population_requirements
+        elif source_run_id:
             candidate_authority = _load_candidate_plan_materialization_authority(
                 study=study,
                 project_root=project_root,

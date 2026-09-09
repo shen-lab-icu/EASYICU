@@ -96,7 +96,7 @@ def source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(
         owner.PipelineConfig, "from_recovery_payload", lambda *a, **kw: config
     )
-    monkeypatch.setattr(owner, "load_checkpoint", lambda path: checkpoint)
+    monkeypatch.setattr(owner, "load_checkpoint", lambda path, **kw: checkpoint)
     monkeypatch.setattr(
         owner,
         "load_verified_run_input_capsule",
@@ -129,6 +129,89 @@ def load(source: SimpleNamespace):
     return owner.load_prepared_plan_revision(
         study=source.study, project_root=str(source.root), source_run_id="run_inner"
     )
+
+
+@pytest.fixture
+def failed_source(source):
+    import pandas as pd
+    from tests.research_agent.planning.scientific_review_fixtures import _traditional_table_one_step
+
+    step = _traditional_table_one_step().model_dump(mode="json")
+    names = [v["name"] for v in step["table_one_spec"]["variables"]]
+    group = step["table_one_spec"]["group_by"]
+    plan = {"steps": [step, {
+        "step_id": "risk", "population_scope": "primary_model",
+        "expected_outputs": ["table:risk_context"],
+    }]}
+    source.review.update(approval_allowed=True, findings=[], plan_sha256=owner.canonical_sha256(plan))
+    source.record.artifact_payloads["agent_plan.json"] = plan
+    source.row.update(run_status="blocked", gate_reason="research_agent_pipeline_failed_closed")
+    source.checkpoint.state = "completed"
+    source.checkpoint.approved_decisions = [{"decision": "approved"}]
+    source.checkpoint.execution_start_receipt = {"existing": "receipt"}
+    source.checkpoint.plan_handoff = {"plan": plan}
+    source.capsule.write_text(json.dumps({
+        "scientific_identity": {"target_outcome": "death"},
+        "cohort_relative_path": "cohort.parquet",
+    }))
+    source.checkpoint.run_input_capsule_sha256 = hashlib.sha256(source.capsule.read_bytes()).hexdigest()
+    pd.DataFrame({name: [] for name in [group, *names]}).to_parquet(source.run_dir / "cohort.parquet")
+    source.status_path = source.run_dir / "run_status.json"
+    source.status_path.write_text(json.dumps({"gates": {"failed_steps": [{"step_id": "baseline"}]}}))
+    return source
+
+
+def test_failed_execution_replan_preserves_source_inputs_and_full_requirements(failed_source):
+    source = failed_source
+    before = source.capsule.read_bytes()
+    result = load(source)
+    assert result.failed_execution_replan is True
+    assert result.run_dir == source.run_dir
+    assert result.budget_mode == "full_reviewed"
+    assert result.baseline_requirements.source_plan_sha256 == source.review["plan_sha256"]
+    assert result.population_requirements.populations[0].population_scope == "primary_model"
+    assert json.loads(result.prior_plan_contract.split("- source_plan_json: ")[1]) == source.record.artifact_payloads["agent_plan.json"]
+    assert source.capsule.read_bytes() == before
+    assert source.checkpoint.approved_decisions == [{"decision": "approved"}]
+    assert not hasattr(result, "approved_decisions")
+    assert not hasattr(result, "runner_image")
+
+
+@pytest.mark.parametrize("mutation", [
+    "running", "successful", "other_gate", "no_failure", "unapproved", "no_execution",
+    "rejected", "checkpoint_running", "plan", "handoff", "missing_column", "capsule",
+])
+def test_failed_execution_replan_rejects_unbound_or_nonterminal_source(failed_source, mutation):
+    import pandas as pd
+
+    source = failed_source
+    if mutation == "running":
+        source.row["run_status"] = "running"
+    elif mutation == "successful":
+        source.row["run_status"] = "completed"
+    elif mutation == "other_gate":
+        source.row["gate_reason"] = "independent_signoff_required"
+    elif mutation == "no_failure":
+        source.status_path.write_text('{"gates":{"execution_complete":true}}')
+    elif mutation == "unapproved":
+        source.checkpoint.approved_decisions = []
+    elif mutation == "no_execution":
+        source.checkpoint.execution_start_receipt = None
+    elif mutation == "rejected":
+        source.checkpoint.approved_decisions = [{"decision": "rejected"}]
+    elif mutation == "checkpoint_running":
+        source.checkpoint.state = "executing"
+    elif mutation == "plan":
+        source.review["plan_sha256"] = "0" * 64
+    elif mutation == "handoff":
+        source.checkpoint.plan_handoff = {"plan": {"steps": []}}
+    elif mutation == "missing_column":
+        pd.DataFrame({"unrelated": []}).to_parquet(source.run_dir / "cohort.parquet")
+    elif mutation == "capsule":
+        source.capsule.write_text("{}")
+    with pytest.raises(owner.ResearchPipelineRunError) as raised:
+        load(source)
+    assert raised.value.code == "prepared_plan_revision_source_invalid"
 
 
 @pytest.mark.parametrize("nonconvergent", [False, True])

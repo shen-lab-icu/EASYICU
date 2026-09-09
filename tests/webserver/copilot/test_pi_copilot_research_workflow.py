@@ -7923,8 +7923,9 @@ def test_execution_retry_preserves_sealed_coordinates_and_prior_projection(
             assert payload["exception_types"] == ["RunInputIdentityError"]
 
 
+@pytest.mark.parametrize("failed_execution", [False, True])
 def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_execution: bool,
 ) -> None:
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.acquisition import foundation
@@ -7973,6 +7974,19 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
     def forbidden(*a, **kw):
         pytest.fail("Prepared plan revision must not reselect concepts, extract or resume execution")
 
+    if failed_execution:
+        from dataclasses import replace
+        from easyicu.research_agent.planning.baseline_requirements import AcceptedBaselineRequirements
+        from easyicu.research_agent.planning.population_requirements import PlanPopulationRequirements
+
+        scope = replace(
+            scope, failed_execution_replan=True,
+            baseline_requirements=AcceptedBaselineRequirements.model_validate(baseline),
+            population_requirements=PlanPopulationRequirements.model_validate(population),
+        )
+        monkeypatch.setattr(agent_pipeline_runs, "_load_candidate_plan_materialization_authority", forbidden)
+        monkeypatch.setattr(agent_pipeline_runs, "_load_plan_revision_source_review", forbidden)
+
     monkeypatch.setattr(foundation, "acquire_universe_for_question", forbidden)
     monkeypatch.setattr(agent_pipeline_runs, "_metadata_only_planning_acquisition", forbidden)
     monkeypatch.setattr(agent_pipeline_runs, "_resolve_execution_resume_wrapper", forbidden)
@@ -8011,7 +8025,7 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
     assert thaw_payload(config.bound_baseline_requirements) == baseline
     assert thaw_payload(config.bound_population_requirements) == population
     assert "48-hour" in config.bound_plan_revision_contract
-    assert "ACCEPTED_BASELINE_CONTENT_MISSING" in config.bound_plan_revision_contract
+    assert ("ACCEPTED_BASELINE_CONTENT_MISSING" in config.bound_plan_revision_contract) is not failed_execution
     assert all(path.read_bytes() == content for path, content in before.items())
 
 

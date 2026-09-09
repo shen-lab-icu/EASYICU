@@ -4335,7 +4335,9 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
         "基线特征表",
         "测量覆盖与缺失审计",
         "主关联分析（landmark 起点）",
-        "敏感性分析 · 暴露形式设定",
+        # Without a bound variable the reader must not infer an exposure
+        # from the historical internal step id.
+        "敏感性分析 · 函数形式",
         "绝对风险背景",
         "稳健性复核",
         "稳健性分析图",
