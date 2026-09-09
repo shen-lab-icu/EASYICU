@@ -340,8 +340,17 @@ def format_outbound_safe_context(
     context: ResearchContext,
     *,
     variable_names: Optional[Iterable[str]] = None,
+    include_exploratory_profiles: bool = True,
 ) -> str:
     payload = outbound_safe_context_payload(context, variable_names=variable_names)
+    if not include_exploratory_profiles:
+        # Manuscript numbers come from the verified execution digest. Source
+        # profiling counts and planner CTAS hints are neither model-population
+        # results nor proof of an executed method. Keep definitions, windows,
+        # units, observation/missingness semantics and every selected variable.
+        for row in payload.get("variables", []):
+            for key in ("observed_shape", "missingness", "aggregation_hint"):
+                row.pop(key, None)
     selected = (
         None
         if variable_names is None
