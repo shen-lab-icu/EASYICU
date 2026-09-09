@@ -340,6 +340,10 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
     interpretation_class = str(summary.get("interpretation_class") or "").strip()
     if interpretation_class == "adjusted_association":
         return True
+    if interpretation_class == "absolute_risk_context":
+        # Legacy summaries without the versioned reporting envelope remain
+        # readable; they cannot acquire scientific authority from a label.
+        return "reportable_descriptive_results" in summary
     if interpretation_class != "exposure_outcome_distribution":
         return False
     # Historical auxiliary distribution summaries did not carry qualitative
@@ -367,6 +371,12 @@ def derive_scientific_claim_drafts(
     if not scientific_claim_compilation_requested(summary):
         return []
     assert isinstance(summary, dict)
+
+    if summary.get("interpretation_class") == "absolute_risk_context":
+        from .absolute_risk_scientific_claims import derive_absolute_risk_claim_payloads
+
+        return [ScientificClaimDraft.model_validate(payload)
+                for payload in derive_absolute_risk_claim_payloads(summary)]
 
     if str(summary.get("interpretation_class") or "").strip() == (
         "exposure_outcome_distribution"
