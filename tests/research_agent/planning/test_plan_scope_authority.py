@@ -87,6 +87,10 @@ def test_every_public_step_field_has_exactly_one_authority_class() -> None:
 
 
 @pytest.mark.parametrize("field, initial, changed", [
+    ("population_scope", "analysis_cohort", "primary_model"),
+    ("population_scope_change_reason",
+     "Restore the requested primary model population.",
+     "Describe the broader eligible population instead."),
     ("phenotyping_feature_columns", ["age"], ["age", "severity"]),
     ("functional_form_spec",
      FunctionalFormSpec(target_column="age", knot_quantiles=(0.1, 0.5, 0.9)),
