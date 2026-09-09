@@ -4260,6 +4260,8 @@ def _request_replan(
         )
         plan_change_request = PlanChangeRequest(
             source_run_id=str(latest["run_id"]),
+            source_scientific_configuration_sha256=planned_digest or None,
+            target_scientific_configuration_sha256=current_digest if planned_digest else None,
             user_message=prepared_message.provider_message,
             reference_plans=_plan_change_references(context, latest),
         )
