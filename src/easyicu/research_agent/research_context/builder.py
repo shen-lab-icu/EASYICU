@@ -803,9 +803,23 @@ def build_research_context(
             provenance=legacy_materialization_provenance,
         )
     descriptors = compile_wide_representation_semantics(descriptors)
+    prefs_obj = (
+        user_preferences
+        if isinstance(user_preferences, UserPreferences)
+        else UserPreferences.model_validate(user_preferences) if user_preferences else None
+    )
+    # A declared landmark event time belongs to the target event, irrespective
+    # of its physical column name. Validate that representation before ordinary
+    # missingness screens or downstream audit/figure generation.
+    event_time_bindings = {
+        spec.event_time_variable: target_outcome
+        for spec in (prefs_obj.sensitivity_specs if prefs_obj else ())
+        if spec.strategy == "landmark" and spec.event_time_variable and target_outcome
+    }
     descriptors = compile_observation_semantics(
         frame=df,
         descriptors=descriptors,
+        event_time_bindings=event_time_bindings,
     )
     # Resolve structural absence before choosing a common-population MCAR
     # panel. A conditional event/observation time has another applicable
@@ -829,16 +843,6 @@ def build_research_context(
         else descriptor
         for descriptor in descriptors
     ]
-
-    prefs_obj = (
-        user_preferences
-        if isinstance(user_preferences, UserPreferences)
-        else (
-            UserPreferences.model_validate(user_preferences)
-            if user_preferences
-            else None
-        )
-    )
 
     # --- time windows + deterministic temporal semantics
     inferred_windows, temporal_constraints = TemporalAlignmentEngine().infer(
