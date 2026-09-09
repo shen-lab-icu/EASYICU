@@ -250,6 +250,10 @@ def run_landmark_spline_robustness(
 
     matrix_columns = [
         "spec_id",
+        "spec_label",
+        "contrast_id",
+        "contrast_label",
+        "effect_unit",
         "effect_scale",
         "point_estimate",
         "ci_low",
@@ -271,6 +275,7 @@ def run_landmark_spline_robustness(
     ]
     base = {
         "effect_scale": "OR",
+        "effect_unit": "recorded exposure units",
         "modeled_analytic_n": complete_case_n,
         "converged": True,
         "model_contract_n": complete_case_n,
@@ -285,6 +290,9 @@ def run_landmark_spline_robustness(
         {
             **base,
             "spec_id": "signed_upper_boundary_contrast",
+            "spec_label": "Nonlinear model, upper contrast",
+            "contrast_id": f"{sealed.exposure_column}:{coordinate_value:.17g}_vs_{reference_value:.17g}",
+            "contrast_label": f"{coordinate_value:g} vs {reference_value:g}",
             "point_estimate": primary_or,
             "ci_low": primary_low,
             "ci_high": primary_high,
@@ -301,6 +309,9 @@ def run_landmark_spline_robustness(
         {
             **base,
             "spec_id": "signed_linear_functional_form_sensitivity",
+            "spec_label": "Linear sensitivity model",
+            "contrast_id": f"{sealed.exposure_column}:per_{sealed.linear_sensitivity_per_unit:g}_unit_increase",
+            "contrast_label": f"Per {sealed.linear_sensitivity_per_unit:g} unit increase",
             "point_estimate": coerce_finite_float(
                 linear["adjusted_odds_ratio"], label="linear sensitivity OR"
             ),
@@ -319,6 +330,9 @@ def run_landmark_spline_robustness(
         {
             **base,
             "spec_id": complete_case_spec_id,
+            "spec_label": "Primary complete-case set",
+            "contrast_id": f"{sealed.exposure_column}:{coordinate_value:.17g}_vs_{reference_value:.17g}",
+            "contrast_label": f"{coordinate_value:g} vs {reference_value:g}",
             "point_estimate": primary_or,
             "ci_low": primary_low,
             "ci_high": primary_high,

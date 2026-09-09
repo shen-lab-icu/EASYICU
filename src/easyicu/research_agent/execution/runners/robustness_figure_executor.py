@@ -721,18 +721,27 @@ def _reader_label(value: str) -> str:
     return str(value).replace("_", " ").strip()
 
 
+def _declared_label(row, key, fallback):
+    value = str(row.get(key, "")).strip()
+    return value if value and value.lower() not in {"nan", "none"} else fallback
+
+
 def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value):
     """Show each source estimate without implying a common contrast or axis."""
     records = []
     for _, row in rows.iterrows():
         estimate = (_interval_text(row["__estimate"], row["__low"], row["__high"])
                     if row["__drawable"] else "Not estimable")
-        identity = [str(row.get(key, "")).strip() for key in ("contrast_id", "effect_unit")]
+        identity = [
+            _declared_label(row, "contrast_label", _declared_label(row, "contrast_id", "")),
+            _declared_label(row, "effect_unit", ""),
+        ]
         identity = [value for value in identity if value and value.lower() != "nan"]
         basis = "; ".join(identity) if len(identity) == 2 else "Contrast / unit not declared"
         if str(row.get("independent_variant", "")).lower() == "false":
             basis += "; not an independent variant"
-        records.append((textwrap.fill(_reader_label(row["__label"]), 28), estimate,
+        label = _declared_label(row, "spec_label", row["__label"])
+        records.append((textwrap.fill(_reader_label(label), 28), estimate,
                         textwrap.fill(_reader_label(basis), 34)))
     line_counts = [max(value.count("\n") + 1 for value in record) for record in records]
     total = 1.8 + sum(lines + 0.6 for lines in line_counts) + (1.5 if anchor_bound else 0)
@@ -751,7 +760,18 @@ def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value
         y += lines + 0.6
     if anchor_bound:
         value = f"{anchor_value:.6g}" if anchor_value is not None else "not reported"
-        ax.text(columns[0], y, f"Bound primary estimate: {value}", va="top", fontsize=7)
+        # Do not add a detached scalar when its exact value is already shown
+        # by the primary row with the producer's declared contrast.
+        primary = rows.loc[rows["axis"].eq("primary")] if "axis" in rows else rows.iloc[0:0]
+        already_shown = (
+            len(primary) == 1
+            and bool(primary.iloc[0]["__drawable"])
+            and primary.iloc[0]["__estimate"] == anchor_value
+            and bool(_declared_label(primary.iloc[0], "contrast_label", ""))
+        )
+        if not already_shown:
+            ax.text(columns[0], y, f"Primary estimate: {value} (contrast not declared)",
+                    va="top", fontsize=7)
 
 
 def run_robustness_figure(
