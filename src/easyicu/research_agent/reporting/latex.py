@@ -521,7 +521,7 @@ def scaffold_to_latex(
             parts.append(r"\begin{figure}[htbp]")
             parts.append(r"\centering")
             parts.append(
-                r"\includegraphics[width=\textwidth]{"
+                r"\includegraphics[width=\textwidth,height=0.70\textheight,keepaspectratio]{"
                 + _escape_latex(normalized_figure_path)
                 + "}"
             )
@@ -555,7 +555,7 @@ def scaffold_to_latex(
             parts.append(r"\begin{figure}[htbp]")
             parts.append(r"\centering")
             parts.append(
-                r"\includegraphics[width=\textwidth]{"
+                r"\includegraphics[width=\textwidth,height=0.58\textheight,keepaspectratio]{"
                 + _escape_latex(normalized_figure_path)
                 + "}"
             )
