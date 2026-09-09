@@ -3479,6 +3479,22 @@ class ProgressivePlannerAgent:
         )
         for step_index in range(len(prefix_state.steps), len(outline.steps)):
             outline_step = outline.steps[step_index]
+            step_planning_contract_context, step_revision_projection = (
+                project_plan_revision_prompt(
+                    planning_contract_context,
+                    stage="step",
+                    step_id=outline_step.step_id,
+                )
+            )
+            if step_revision_projection:
+                self._attempt.prompt_metrics.setdefault(
+                    "step_plan_revision_projection", []
+                ).append(
+                    {
+                        "step_id": outline_step.step_id,
+                        "receipts": step_revision_projection,
+                    }
+                )
             visible_product_refs = product_refs_for_materialization_coordinate(
                 outline_step,
                 prefix_state.available_product_refs,
@@ -3612,7 +3628,7 @@ class ProgressivePlannerAgent:
                     action_rows=action_rows,
                     allowed_literature_citation_keys=step_citations,
                     know_how_context="",
-                    planning_contract_context=planning_contract_context,
+                    planning_contract_context=step_planning_contract_context,
                     prefix_summary=prefix_state.prompt_summary,
                     available_product_refs=visible_product_refs,
                     compiler_observation=compiler_observation,
@@ -4005,7 +4021,16 @@ class ProgressivePlannerAgent:
             required_method_layers=required_method_layers_for_context(context),
         )
         resolved_planning_contract_context, revision_projection = (
-            project_plan_revision_prompt(sealed_planning_contract_context)
+            project_plan_revision_prompt(
+                sealed_planning_contract_context,
+                stage="outline",
+            )
+        )
+        foundation_planning_contract_context, foundation_revision_projection = (
+            project_plan_revision_prompt(
+                sealed_planning_contract_context,
+                stage="foundation",
+            )
         )
         self._attempt.prompt_metrics["plan_revision_projection"] = revision_projection
         required_custom_products = _required_separate_analysis_products(context)
@@ -4104,6 +4129,9 @@ class ProgressivePlannerAgent:
             )
         current_prompt_metrics = {
             "plan_revision_projection": revision_projection,
+            "foundation_plan_revision_projection": (
+                foundation_revision_projection
+            ),
             "message_payload_bytes": message_bytes,
             "structured_output_payload_bytes": schema_bytes,
             "structured_output_authority_sha256": (
@@ -4325,7 +4353,7 @@ class ProgressivePlannerAgent:
             outline_sha256=outline_sha256,
             variables=variables,
             know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
+            planning_contract_context=foundation_planning_contract_context,
             host_cohort=host_cohort,
             required_cohort_selection_mode=required_primary_cohort_selection_mode,
             required_cohort_name=(
@@ -4571,7 +4599,7 @@ class ProgressivePlannerAgent:
             allowed_literature_citation_keys=allowed_citations,
             allowed_know_how_decisions=allowed_know_how_decisions,
             reporting_method_source_keys=reporting_source_keys,
-            planning_contract_context=resolved_planning_contract_context,
+            planning_contract_context=sealed_planning_contract_context,
             progress_callback=progress_callback,
             checkpoint_emitter=checkpoint_emitter,
             resumed=resume_checkpoint is not None,
@@ -4591,7 +4619,7 @@ class ProgressivePlannerAgent:
             direct_comparator_literature_keys=direct_keys,
             allowed_know_how_decisions=allowed_know_how_decisions,
             enforce_article_contract=enforce_article_contract,
-            planning_contract_context=resolved_planning_contract_context,
+            planning_contract_context=sealed_planning_contract_context,
             progress_callback=progress_callback, checkpoint_emitter=checkpoint_emitter,
             resumed=resume_checkpoint is not None,
         )

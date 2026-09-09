@@ -35,6 +35,7 @@ from easyicu.webserver import (
     dataio,
     literature_authority,
     provider_adapter,
+    plan_change_requirements,
     research_launch_resume,
     research_launch_scientific,
     research_pipeline_run_preparation,
@@ -1896,6 +1897,15 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             plan={"steps": [{"step_id": "risk", "population_scope": "primary_model",
                              "expected_outputs": ["table:absolute_risk_context"]}]}),),
     ) if requested_changes else None
+    if change is not None:
+        # Exact source binding has its own owner tests. This runner test uses a
+        # deliberately synthetic reference and owns only the metadata-only
+        # launch contract, so do not make it fabricate a source run on disk.
+        monkeypatch.setattr(
+            plan_change_requirements,
+            "bind_plan_change_requirements",
+            lambda request, **_kwargs: request,
+        )
 
     actual_run = tmp_path / "actual-planner-run"
     _write_real_pipeline_fixture(

@@ -106,6 +106,57 @@ def test_seed_minify_only_changes_whitespace_and_order():
     assert receipts[0]["reason"] == "canonical_json_only"
 
 
+def test_later_progressive_stages_keep_global_plan_and_exact_matching_step():
+    payload = _plan()
+    payload["display_labels"] = {"age": "Patient age"}
+    payload["steps"].append(
+        AnalysisStep(
+            step_id="functional_form_age",
+            intent="Refit age with restricted cubic splines.",
+            method="restricted_cubic_spline_sensitivity",
+            planned_analysis_role="sensitivity",
+            expected_outputs=["table:functional_form_age_sensitivity"],
+            sensitivity_spec_ids=["age_rcs"],
+        ).model_dump(mode="json")
+    )
+    raw = json.dumps(payload, ensure_ascii=False)
+    contract = "- source_plan_json: " + raw
+
+    foundation, foundation_receipts = project_plan_revision_prompt(
+        contract, stage="foundation"
+    )
+    foundation_projection = json.loads(foundation.split(": ", 1)[1])
+    assert "source_plan_foundation_projection_json" in foundation
+    assert foundation_projection["plan_globals"]["display_labels"] == {
+        "age": "Patient age"
+    }
+    assert foundation_projection["selected_source_steps"] == []
+    assert [
+        row["step_id"] for row in foundation_projection["source_step_roster"]
+    ] == ["describe", "functional_form_age"]
+    assert foundation_receipts[0]["status"] == "stage_projected"
+
+    step, step_receipts = project_plan_revision_prompt(
+        contract, stage="step", step_id="functional_form_age"
+    )
+    step_projection = json.loads(step.split(": ", 1)[1])
+    assert "source_plan_step_projection_json" in step
+    assert step_projection["source_plan_sha256"] == sha256_bytes(
+        canonical_json_bytes(payload)
+    )
+    assert step_projection["selected_source_steps"] == [payload["steps"][1]]
+    assert step_receipts[0]["step_id"] == "functional_form_age"
+
+
+def test_stage_projection_retains_unrecognized_source_verbatim():
+    source = '- source_plan_json: {"unknown_science_requirement":"keep me"}'
+    projected, receipts = project_plan_revision_prompt(
+        source, stage="step", step_id="anything"
+    )
+    assert projected == source
+    assert receipts[0]["status"] == "retained"
+
+
 class _NoProvider:
     supports_strict_json_schema = False
 
