@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .numeric_claim_identity import NumericEffectScale, NumericEstimand
+
 
 class ModelContrast(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -80,6 +82,31 @@ class ModelContrastReporting(BaseModel):
         ) != len(points):
             raise ValueError("model contrast points require unique values and a shared reference")
         return self
+
+
+def model_contrast_numeric_identities(summary: dict) -> dict[
+    str, tuple[NumericEffectScale, NumericEstimand]
+]:
+    """Map exact sealed result fields to the scale declared by this owner.
+
+    The /1 contract uses generic estimate/lower/upper keys. Their OR and
+    confidence-limit identities come from the validated Wald-log-odds
+    contract, not field-name guessing or another result in the summary.
+    """
+
+    derive_model_contrast_claim_payloads(summary)
+    roles = {
+        "estimate": NumericEstimand.POINT_ESTIMATE,
+        "lower": NumericEstimand.CONFIDENCE_INTERVAL_LOWER,
+        "upper": NumericEstimand.CONFIDENCE_INTERVAL_UPPER,
+    }
+    return {
+        f"reportable_model_contrasts.contrasts[{index}].{field}": (
+            NumericEffectScale.ODDS_RATIO, role,
+        )
+        for index, _ in enumerate(summary["reportable_model_contrasts"]["contrasts"])
+        for field, role in roles.items()
+    }
 
 
 def derive_model_contrast_claim_payloads(summary: dict) -> list[dict]:

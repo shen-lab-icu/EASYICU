@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from ..contracts.analysis_design import validate_analysis_family_ceiling
+from ..contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
 
 from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
@@ -74,6 +74,30 @@ class _AnalysisDesign(BaseModel):
         return self
 
 
+def _parse_analysis_design(design: Mapping) -> _AnalysisDesign:
+    # Check the machine-readable sibling conflict before Pydantic wraps it in
+    # a generic validation error. Preserve host authority; never pick an
+    # estimator on behalf of the researcher to make a model family executable.
+    try:
+        validate_analysis_family_ceiling(
+            analysis_family=design.get("analysis_family"),
+            variance_estimator=design.get("variance_estimator"),
+        )
+    except AnalysisDesignConflict as exc:
+        raise DependenceAuthorityError(
+            "The host analysis_design combines an inferential family with "
+            "none_counts_only; a host design revision is required before planning.",
+            code="counts_only_family_incompatible",
+        ) from exc
+    try:
+        return _AnalysisDesign.model_validate(dict(design))
+    except ValueError as exc:
+        raise DependenceAuthorityError(
+            "analysis_design does not match the closed repeated-unit contract: "
+            + str(exc)
+        ) from exc
+
+
 def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | None:
     preferences = context.user_preferences
     raw = getattr(preferences, "data_constraints", None)
@@ -91,13 +115,7 @@ def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | Non
         return None
     if not isinstance(design, Mapping):
         raise DependenceAuthorityError("analysis_design must be a typed object")
-    try:
-        parsed = _AnalysisDesign.model_validate(dict(design))
-    except ValueError as exc:
-        raise DependenceAuthorityError(
-            "analysis_design does not match the closed repeated-unit contract: "
-            + str(exc)
-        ) from exc
+    parsed = _parse_analysis_design(design)
     if parsed.variance_estimator == "cluster_robust" and parsed.cluster_unit is None:
         raise DependenceAuthorityError(
             "cluster_robust analysis_design requires cluster_unit"
@@ -128,13 +146,7 @@ def _counts_only_design(context: ResearchContext) -> bool:
         payload.get("analysis_design"), Mapping
     ):
         return False
-    try:
-        parsed = _AnalysisDesign.model_validate(dict(payload["analysis_design"]))
-    except ValueError as exc:
-        raise DependenceAuthorityError(
-            "analysis_design does not match the closed repeated-unit contract: "
-            + str(exc)
-        ) from exc
+    parsed = _parse_analysis_design(payload["analysis_design"])
     return parsed.variance_estimator == "none_counts_only"
 
 

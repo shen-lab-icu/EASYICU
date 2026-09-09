@@ -107,3 +107,30 @@ class ManuscriptAgent:
             reader_display_labels=reader_display_labels,
             administrative_authority=administrative_authority,
         )
+
+    def repair_sections(
+        self,
+        manuscript: str,
+        *,
+        section_errors: dict[str, tuple[str, ...]],
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        """Repair only the section owners rejected by final manuscript checks."""
+
+        return WriterAgent(
+            self.llm,
+            language=self.language,
+            nature_writing_enabled=self.nature_writing_enabled,
+            user_writing_advisory=self.user_writing_advisory,
+        ).repair_sections(
+            manuscript, section_errors=section_errors, analysis_plan=analysis_plan,
+            context=context, evidence_ids=evidence_ids, evidence_digest=evidence_digest,
+            literature_digest=literature_digest, reader_display_labels=reader_display_labels,
+            administrative_authority=administrative_authority,
+        )

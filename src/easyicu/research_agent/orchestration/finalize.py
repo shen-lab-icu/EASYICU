@@ -1191,6 +1191,12 @@ def finalise_success(
         execution_paper_eligible=execution_identity.paper_eligible,
         plan_authority_verified=True,
         plan_authority_sha256=current_plan_authority.sha256,
+        current_case_scientific_runtime_authority=getattr(
+            getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None,
+        ),
+        scientific_runtime_projection_sha256=getattr(
+            pipeline, "_scientific_runtime_projection_sha256", None,
+        ),
     )
 
     report_path.write_text(

@@ -115,7 +115,7 @@ from ..robustness.panel import load_robustness_panel, unexecuted_locked_spec_ids
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..planning.figure_step_contract import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
-from .reviewer import run_reviewer_round
+from .reviewer import derive_reviewer_primary_result_bindings, run_reviewer_round
 from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
@@ -1725,32 +1725,19 @@ def _plan_truncation_status(
     }
 
 
-def _compute_readiness_gates(
-    *,
-    context: ResearchContext,
-    plan: Optional[AnalysisPlan],
-    per_step_records: Sequence[Dict[str, Any]],
-    findings: Sequence[ValidationFinding],
-    evidence: EvidenceStore,
-    run_dir: Path,
-    manuscript_path: Path,
-    stop_after_analysis: bool,
-    writer_probe_mode: bool = False,
-    writer_probe_failed_steps: Optional[Sequence[str]] = None,
-    force_diagnostic_only: bool = False,
-    execution_paper_eligible: bool = False,
-    plan_authority_verified: bool = False,
-    plan_authority_sha256: Optional[str] = None,
-) -> Dict[str, Any]:
-    execution = execution_gate_status(
-        plan=plan, per_step_records=per_step_records, run_dir=run_dir
-    )
-    manuscript_text = ""
-    if manuscript_path.exists():
-        try:
-            manuscript_text = manuscript_path.read_text(encoding="utf-8")
-        except Exception:
-            manuscript_text = ""
+def current_validation_findings(
+    *, plan: Optional[AnalysisPlan], per_step_records: Sequence[Dict[str, Any]],
+    findings: Sequence[ValidationFinding], evidence: EvidenceStore, run_dir: Path,
+    manuscript_text: str, stop_after_analysis: bool = False,
+    writer_probe_mode: bool = False, execution: Optional[Dict[str, Any]] = None,
+) -> tuple[list[ValidationFinding], list[ValidationFinding], Dict[str, bool]]:
+    """Resolve current versus historical findings for readiness and review.
+
+    Both consumers use the same current artifacts, attempt identities and
+    supersession policy. Historical failures remain in the persisted ledger.
+    """
+    if execution is None:
+        execution = execution_gate_status(plan=plan, per_step_records=per_step_records, run_dir=run_dir)
     missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
     # General supersession rule: if a step eventually succeeded
     # (status="ok" in per_step_records), any earlier ValidationFinding
@@ -1877,6 +1864,42 @@ def _compute_readiness_gates(
         known_step_ids=known_step_ids,
         gate_state=current_gate_state,
         latest_publication_audit=latest_publication_audit,
+    )
+    return active_findings, superseded_findings, current_gate_state
+
+
+def _compute_readiness_gates(
+    *,
+    context: ResearchContext,
+    plan: Optional[AnalysisPlan],
+    per_step_records: Sequence[Dict[str, Any]],
+    findings: Sequence[ValidationFinding],
+    evidence: EvidenceStore,
+    run_dir: Path,
+    manuscript_path: Path,
+    stop_after_analysis: bool,
+    writer_probe_mode: bool = False,
+    writer_probe_failed_steps: Optional[Sequence[str]] = None,
+    force_diagnostic_only: bool = False,
+    execution_paper_eligible: bool = False,
+    plan_authority_verified: bool = False,
+    plan_authority_sha256: Optional[str] = None,
+) -> Dict[str, Any]:
+    execution = execution_gate_status(
+        plan=plan, per_step_records=per_step_records, run_dir=run_dir
+    )
+    manuscript_text = ""
+    if manuscript_path.exists():
+        try:
+            manuscript_text = manuscript_path.read_text(encoding="utf-8")
+        except Exception:
+            manuscript_text = ""
+    missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
+    active_findings, superseded_findings, current_gate_state = current_validation_findings(
+        plan=plan, per_step_records=per_step_records, findings=findings,
+        evidence=evidence, run_dir=run_dir, manuscript_text=manuscript_text,
+        stop_after_analysis=stop_after_analysis, writer_probe_mode=writer_probe_mode,
+        execution=execution,
     )
     numeric_errors = [
         f.message
@@ -2196,6 +2219,8 @@ def write_readiness_artifacts(
     execution_paper_eligible: bool = False,
     plan_authority_verified: bool = False,
     plan_authority_sha256: Optional[str] = None,
+    current_case_scientific_runtime_authority: Any = None,
+    scientific_runtime_projection_sha256: Optional[str] = None,
 ) -> tuple[Dict[str, Any], Dict[str, str]]:
     gates = _compute_readiness_gates(
         context=context,
@@ -2526,9 +2551,23 @@ def write_readiness_artifacts(
                 "scientific_maturity_score": gates["scientific_maturity_score"],
             },
         )
+        active_review_findings, _, _ = current_validation_findings(
+            plan=plan, per_step_records=per_step_records, findings=findings,
+            evidence=evidence, run_dir=run_dir,
+            manuscript_text=manuscript_path.read_text(encoding="utf-8") if manuscript_path.exists() else "",
+            stop_after_analysis=stop_after_analysis, writer_probe_mode=writer_probe_mode,
+        )
+        primary_bindings = derive_reviewer_primary_result_bindings(
+            evidence_store=evidence, per_step_records=per_step_records,
+            current_case_scientific_runtime_authority=current_case_scientific_runtime_authority,
+            scientific_runtime_projection_sha256=scientific_runtime_projection_sha256,
+        )
         final_reviewer_report = run_reviewer_round(
             evidence_records=evidence.current_verified_records(per_step_records),
-            findings=[*findings, final_gate_finding],
+            findings=[*active_review_findings, final_gate_finding],
+            per_step_records=per_step_records,
+            primary_result_bindings=primary_bindings,
+            run_dir=run_dir,
             round_index=1,
         )
         final_reviewer_md = run_dir / "reviewer_report_post_readiness.md"

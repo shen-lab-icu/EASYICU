@@ -908,8 +908,11 @@ def test_write_phase_persists_quality_gate_and_non_authoritative_reader(
         def get(self, evidence_id: str):
             return self.records.get(evidence_id)
 
-        def register_file(self, **kwargs: object) -> None:
+        def register_file(self, **kwargs: object):
+            from types import SimpleNamespace
+
             self.records[str(kwargs["evidence_id"])] = dict(kwargs)
+            return SimpleNamespace(evidence_id=str(kwargs["evidence_id"]))
 
     evidence = EvidenceStub()
     findings = []

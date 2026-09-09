@@ -69,10 +69,42 @@ def test_structured_abstract_label_preserves_known_claim_authority(prefix) -> No
 
     assert filtered.scaffold == scaffold + "\n"
     assert filtered.filtered_sentences == ()
-    assert expanded.scaffold.startswith(prefix + claim.render_reader_text())
+    assert expanded.scaffold.startswith(prefix + claim.render_reader_text(
+        include_estimate="Conclusions" not in prefix,
+    ))
     assert f"{{evidence:{claim.evidence_id}}}" in expanded.scaffold
     assert expanded.missing_claim_refs == ()
     assert expanded.malformed_sentences == ()
+
+
+@pytest.mark.parametrize("direction", ["positive", "negative", "no_clear_association"])
+def test_conclusion_projects_bounded_interpretation_without_repeating_estimate(direction):
+    claim = _claim().model_copy(update={
+        "direction": direction, "point_estimate": 1.7,
+        "interval_lower": 1.2, "interval_upper": 2.4,
+        "exposure": "oxygen_index at 5 versus 2 mmHg",
+        "population": "the complete-case records at the 24-hour landmark",
+        "estimand": "odds ratio; this point contrast only, not a summary of the nonlinear curve; noncausal association",
+    })
+    sealed = claim.model_dump_json()
+    raw = (
+        "## Abstract\n\n**Results:** " + claim.placeholder
+        + "\n\n**Conclusions:**\n\n" + claim.placeholder
+        + "\n\n## Results\n\n" + claim.placeholder
+        + "\n\n## Conclusion\n\n" + claim.placeholder
+        + "\n\n## Supplementary results\n\n" + claim.placeholder
+    )
+    expanded = expand_scientific_claim_tokens(raw, resolve_claim=lambda _: claim).scaffold
+    results = expanded.split("## Results\n", 1)[1].split("## Conclusion", 1)[0]
+    conclusion = expanded.split("## Conclusion\n", 1)[1].split("## Supplementary", 1)[0]
+    abstract = expanded.split("## Results\n", 1)[0]
+    assert "1.7" in results and "95% CI" in results
+    assert "1.7" not in conclusion and "95% CI" not in conclusion
+    assert "1.7" not in abstract.split("**Conclusions:**", 1)[1]
+    for coordinate in ("5 versus 2 mmHg", "24-hour landmark", "age, sex", "this point contrast only"):
+        assert coordinate in conclusion
+    assert "1.7" in expanded.split("## Supplementary results", 1)[1]
+    assert claim.model_dump_json() == sealed
 
 
 @pytest.mark.parametrize(

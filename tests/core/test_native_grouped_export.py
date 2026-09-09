@@ -7,6 +7,8 @@ import hashlib
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from easyicu.api import extraction as api
@@ -40,7 +42,7 @@ def test_native_sofa1_recomputes_total_after_hour_key_consolidation(
             "_native_export_pandas_fallback_is_bounded",
             lambda _size: False,
         )
-    pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "stay_id": [1, 1, 1],
             "charttime": [0.0, 0.0, 0.0],
@@ -52,7 +54,14 @@ def test_native_sofa1_recomputes_total_after_hour_key_consolidation(
             "sofa_cns": [0.0, 0.0, 0.0],
             "sofa_renal": [0.0, 0.0, 0.0],
         }
-    ).to_parquet(tmp_path / "sofa1_score.parquet", index=False)
+    )
+    # These synthetic same-hour states are already callback-windowed organs.
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    table = table.replace_schema_metadata({
+        **(table.schema.metadata or {}),
+        api._SOFA1_TIME_BASIS_KEY: api._SOFA1_TIME_BASIS,
+    })
+    pq.write_table(table, tmp_path / "sofa1_score.parquet")
 
     api._publish_native_export_v2(
         database="eicu",

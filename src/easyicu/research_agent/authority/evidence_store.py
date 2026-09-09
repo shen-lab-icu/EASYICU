@@ -91,7 +91,6 @@ from .numeric_claim_identity import (
     NumericClaim as NumericClaim,
     NumericEffectScale as NumericEffectScale,
     NumericEstimand as NumericEstimand,
-    infer_numeric_claim_identity as _infer_numeric_claim_identity,
 )
 from .scientific_claims import (
     ScientificClaim,
@@ -2420,14 +2419,15 @@ class EvidenceStore:
             ):
                 if len(value) > len(claim.value):
                     claim.value = value
-                inferred_scale, inferred_estimand = _infer_numeric_claim_identity(
-                    source_field,
-                    declared_effect_scale=effect_scale,
+                identity = NumericClaim(
+                    value=value, canonical=canonical, evidence_id=evidence_id,
+                    step_id=step_id, source_field=source_field, tolerance=tolerance,
+                    effect_scale=effect_scale, estimand=estimand,
                 )
                 if claim.effect_scale is None:
-                    claim.effect_scale = inferred_scale
+                    claim.effect_scale = identity.effect_scale
                 if claim.estimand is None:
-                    claim.estimand = estimand or inferred_estimand
+                    claim.estimand = identity.estimand
                 return claim
         claim = NumericClaim(
             value=value,
@@ -2518,6 +2518,11 @@ class EvidenceStore:
                 summary=summary,
                 drafts=scientific_claim_drafts,
             )
+        numeric_identities = {}
+        if scientific_claim_drafts and "reportable_model_contrasts" in summary:
+            from .model_contrast_scientific_claims import model_contrast_numeric_identities
+
+            numeric_identities = model_contrast_numeric_identities(summary)
         declared_effect_scale = (
             summary.get("effect_scale") if isinstance(summary, Mapping) else None
         )
@@ -2536,6 +2541,9 @@ class EvidenceStore:
         registered: List[NumericClaim] = []
         with self._lock:
             for path, literal, canonical, local_effect_scale in leaves:
+                effect_scale, estimand = numeric_identities.get(
+                    path, (local_effect_scale, None),
+                )
                 registered.append(
                     self._upsert_numeric_claim_in_memory(
                         value=literal,
@@ -2544,7 +2552,8 @@ class EvidenceStore:
                         step_id=step_id,
                         source_field=path,
                         tolerance=tolerance,
-                        effect_scale=local_effect_scale,
+                        effect_scale=effect_scale,
+                        estimand=estimand,
                     )
                 )
             if truncated:
@@ -3118,6 +3127,7 @@ class EvidenceStore:
             for record in self.current_verified_records(per_step_records)
         }
         current_identity_scales: Dict[Tuple[str, str, str], Any] = {}
+        current_identity_roles: Dict[Tuple[str, str, str], NumericEstimand] = {}
         for raw in per_step_records:
             step_id = str(raw.get("step_id") or "").strip()
             evidence_id = str(raw.get("step_summary_evidence_id") or "").strip()
@@ -3131,6 +3141,22 @@ class EvidenceStore:
                 )
             ):
                 current_identity_scales[(step_id, evidence_id, path)] = effect_scale
+            record = records_by_id.get(evidence_id)
+            if (
+                record is not None
+                and record.generation_mode == "deterministic_standard"
+                and "reportable_model_contrasts" in summary
+            ):
+                from .model_contrast_scientific_claims import model_contrast_numeric_identities
+
+                validate_scientific_claim_registration(
+                    root=self.root, record=record, step_id=step_id,
+                    summary=summary, drafts=derive_scientific_claim_drafts(summary),
+                )
+                for path, (scale, role) in model_contrast_numeric_identities(summary).items():
+                    key = (step_id, evidence_id, path)
+                    current_identity_scales[key] = scale
+                    current_identity_roles[key] = role
         active_ids_by_step = active_step_evidence_ids_by_step(per_step_records)
         run_level_contracts = {
             "research_context": ("log", "pipeline"),
@@ -3159,6 +3185,8 @@ class EvidenceStore:
                         current_scale = current_identity_scales[identity_key]
                         if current_scale not in (None, ""):
                             payload["effect_scale"] = current_scale
+                        if identity_key in current_identity_roles:
+                            payload["estimand"] = current_identity_roles[identity_key]
                         claim = NumericClaim.from_dict(payload)
                     authoritative.append(claim)
                 continue
