@@ -3046,7 +3046,7 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
 
 
 @pytest.mark.parametrize("primary_population", [False, True])
-@pytest.mark.parametrize("declaration", ["legacy", "explicit", "without_reference", "conflict", "wrong_variables"])
+@pytest.mark.parametrize("declaration", ["legacy", "explicit", "without_reference", "conflict", "wrong_variables", "bound_same", "bound_drift", "bound_amendment"])
 def test_absolute_risk_context_module_compiles_existing_deterministic_owner(primary_population, declaration) -> None:
     payload = json.loads(json.dumps(_payload()))
     step = next(
@@ -3095,14 +3095,34 @@ def test_absolute_risk_context_module_compiles_existing_deterministic_owner(prim
         with pytest.raises(ProgressivePlanCompileError, match="primary model's exposure and outcome"):
             compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
         return
+    context = _context()
+    if declaration.startswith("bound_"):
+        from easyicu.research_agent.planning.population_requirements import bind_population_requirements
+        expected_scope = step["population_scope"]
+        if declaration != "bound_same":
+            expected_scope = "analysis_cohort" if primary_population else "primary_model"
+        context = bind_population_requirements(context, {
+            "source_plan_sha256": "a" * 64,
+            "populations": [{"source_step_id": "historical_different_id",
+                             "output_product": "table:absolute_risk_context",
+                             "population_scope": expected_scope}],
+        })
+        if declaration == "bound_drift":
+            with pytest.raises(ProgressivePlanCompileError, match="Preserve table:absolute_risk_context"):
+                compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context)
+            return
+        if declaration == "bound_amendment":
+            step["population_scope_change_reason"] = "The requested scope change compares the alternative population explicitly."
     plan, _receipt = compile_progressive_plan(
         skeleton=ProgressivePlanSkeleton.model_validate(payload),
-        context=_context(),
+        context=context,
     )
 
     compiled = next(
         item for item in plan.steps if item.step_id == "03_absolute_risk_context"
     )
+    if declaration == "bound_amendment":
+        assert compiled.population_scope_change_reason == step["population_scope_change_reason"]
     assert compiled.method == ("primary_population_absolute_risk_context" if primary_population else "absolute_risk_context")
     assert compiled.inputs == [
         "exposure_flag",

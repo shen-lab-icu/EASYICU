@@ -53,6 +53,7 @@ from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority
 from .analysis_types import canonical_analysis_family
+from .population_requirements import context_population_requirements
 from .baseline_requirements import (
     baseline_requirement_coverage,
     baseline_requirement_projection,
@@ -1543,6 +1544,37 @@ def build_plan_scientific_review(
                 remediation_route="runtime_capability",
                 requires_user_authorization=False,
             ))
+    population_requirements = context_population_requirements(context)
+    population_changes = []
+    population_labels = {
+        "primary_model": "the primary model's eligible complete-case population",
+        "analysis_cohort": "the broader analysis cohort",
+    }
+    if population_requirements is not None:
+        for required in population_requirements.populations:
+            matches = [step for step in plan.steps if required.output_product in step.expected_outputs]
+            if len(matches) == 1 and matches[0].population_scope == required.population_scope:
+                continue
+            step = matches[0] if len(matches) == 1 else None
+            reason = step.population_scope_change_reason if step is not None else None
+            declared = bool(step is not None and step.population_scope is not None and reason)
+            population_changes.append({
+                "product": required.output_product, "previous_scope": required.population_scope,
+                "proposed_scope": step.population_scope if step is not None else None,
+                "reason": reason, "explicit_amendment": declared,
+            })
+            findings.append(PlanScientificFinding(
+                code="POPULATION_SCOPE_AMENDMENT_DECLARED" if declared else "PLAN_POPULATION_REQUIREMENT_DRIFT",
+                severity="major" if declared else "blocker", dimension="icu_clinical_design",
+                message=(f"The descriptive result changes its population from {population_labels[required.population_scope]} "
+                         f"to {population_labels.get(step.population_scope if step else None, 'a missing or ambiguous population')}. "
+                         f"Declared amendment: {reason or 'none'}."),
+                evidence_refs=["research_context", "analysis_plan"],
+                remediation=("Review this explicit scientific scope change in the complete new plan; the reason is not execution approval."
+                             if declared else "Restore the source-bound population or declare an intentional scientific amendment for complete-plan review."),
+                remediation_route="study_authority_change" if declared else "agent_plan_revision",
+                requires_user_authorization=declared,
+            ))
     baseline_coverage = baseline_requirement_coverage(context, plan)
     accepted_baseline = context_baseline_requirements(context)
     for table in baseline_coverage["tables"]:
@@ -2546,6 +2578,8 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            "plan_population_requirements": population_requirements.model_dump(mode="json") if population_requirements else None,
+            "population_scope_changes": population_changes,
             "accepted_baseline_coverage": baseline_coverage,
             # Carry the exact host contract into a subsequent plan-revision
             # request; a failed first replan must not erase its own requirements.

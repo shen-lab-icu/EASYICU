@@ -1830,6 +1830,16 @@ def _compile_inputs(
         ):
             inputs.append(reference.product_id)
     if step.module_id == "absolute_risk_context":
+        from .population_requirements import validate_population_choice
+
+        try:
+            validate_population_choice(
+                context, product="table:absolute_risk_context",
+                scope=step.population_scope, change_reason=step.population_scope_change_reason,
+            )
+        except ValueError as exc:
+            raise _fail("progressive_population_requirement_drift", str(exc),
+                        step=step, step_index=step_index, path="population_scope") from exc
         primary_product = "table:adjusted_association_estimates"
         if step.population_scope == "analysis_cohort" and primary_product in inputs:
             raise _fail(
@@ -2244,6 +2254,7 @@ def _compile_one_step(
         "icu_rule_refs": [],
         "sensitivity_spec_ids": sensitivity_spec_ids,
         "functional_form_spec": step.functional_form_spec,
+        "population_scope_change_reason": step.population_scope_change_reason,
         "population_scope": (
             "primary_model" if method == "primary_population_absolute_risk_context"
             else step.population_scope

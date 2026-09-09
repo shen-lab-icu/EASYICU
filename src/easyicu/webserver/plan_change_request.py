@@ -40,7 +40,7 @@ def reference_plan_content(plan: Mapping[str, Any]) -> dict[str, Any]:
         {key: step[key] for key in (
             "step_id", "planned_analysis_role", "intent", "method", "inputs", "expected_outputs",
             "table_one_spec", "model_requirements", "cohort_definition_spec", "functional_form_spec",
-            "population_scope", "scientific_action_id", "literature_citation_keys",
+            "population_scope", "population_scope_change_reason", "scientific_action_id", "literature_citation_keys",
         ) if key in step}
         for step in plan.get("steps", ()) if isinstance(step, Mapping)
     ]
@@ -88,6 +88,17 @@ class PlanChangeRequest(BaseModel):
                 if isinstance(step, Mapping):
                     coordinates.update(value for value in step.get("inputs", ()) if isinstance(value, str))
         return tuple(sorted(coordinates & catalog_ids))
+
+    def population_requirements(self):
+        """Bind the discussed current plan, not a guessed historical winner."""
+        from easyicu.research_agent.planning.population_requirements import candidate_population_requirements
+
+        reference = next((r for r in self.reference_plans if r.run_id == self.source_run_id), None)
+        if reference is None:
+            if self.reference_plans:
+                raise ValueError("current source plan is absent from revision references")
+            return None
+        return candidate_population_requirements(reference.plan, reference.artifact_sha256, source_digest_kind="artifact_sha256")
 
     def planner_context(self) -> str:
         """Keep requested amendments distinct from reviewed plan authority."""

@@ -426,6 +426,7 @@ class PipelineConfig:
     # from the prompt seed. Persisted/hashed so fresh planning and recovery
     # cannot silently forget a baseline requirement.
     bound_baseline_requirements: Optional[Dict[str, Any]] = None
+    bound_population_requirements: Optional[Dict[str, Any]] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5
@@ -633,6 +634,13 @@ class PipelineConfig:
         return cls(**kwargs)
 
     def __post_init__(self) -> None:
+        if self.bound_population_requirements is not None:
+            from ..planning.population_requirements import PlanPopulationRequirements
+
+            if not self.require_human_plan_review:
+                raise ValueError("bound_population_requirements requires require_human_plan_review")
+            parsed = PlanPopulationRequirements.model_validate(self.bound_population_requirements)
+            object.__setattr__(self, "bound_population_requirements", parsed.model_dump(mode="json"))
         if self.bound_baseline_requirements is not None:
             from ..planning.baseline_requirements import AcceptedBaselineRequirements
 
@@ -1019,7 +1027,7 @@ class PipelineConfig:
             for key, value in sorted(self._field_values().items())
             # An absent additive contract must not invalidate archived config
             # digests; once present it is part of the immutable run identity.
-            if key != "bound_baseline_requirements" or value is not None
+            if key not in {"bound_baseline_requirements", "bound_population_requirements"} or value is not None
         }
 
     def recovery_payload(self) -> Dict[str, Any]:

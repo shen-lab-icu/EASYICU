@@ -42,3 +42,24 @@ def test_amendments_cannot_modify_analysis_or_frozen_resume(overrides: dict) -> 
     with pytest.raises(ValidationError, match="plan_changes_require_fresh_candidate"):
         ResearchRunSubmissionRequest(**{**request, **overrides})
 
+
+
+def test_population_constraint_uses_host_bound_current_plan_not_another_reference():
+    from easyicu.webserver.plan_change_request import ReferencedPlan
+
+    def reference(run_id, scope, digest):
+        return ReferencedPlan(run_id=run_id, artifact_sha256=digest, plan={"steps": [{
+            "step_id": "risk", "population_scope": scope,
+            "expected_outputs": ["table:absolute_risk_context"],
+        }]})
+    request = PlanChangeRequest(
+        source_run_id="current", user_message="Revise figures and retain the scientific population.",
+        reference_plans=(reference("older", "analysis_cohort", "a" * 64), reference("current", "primary_model", "b" * 64)),
+    )
+    requirement = request.population_requirements()
+    assert requirement.source_plan_sha256 == "b" * 64
+    assert requirement.source_digest_kind == "artifact_sha256"
+    assert requirement.populations[0].population_scope == "primary_model"
+    assert PlanChangeRequest(source_run_id="legacy", user_message="Revise the plan.").population_requirements() is None
+    with pytest.raises(ValueError, match="current source plan is absent"):
+        request.model_copy(update={"source_run_id": "missing"}).population_requirements()
