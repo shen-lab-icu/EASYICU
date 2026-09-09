@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from ..providers.protocol import LLMClient, LLMMessage
@@ -11,6 +12,7 @@ from ..research_context.prompt_scope import (
     scoped_coder_context,
     scoped_reporting_context,
 )
+from ..research_context.outbound import format_outbound_safe_context
 from ..authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
@@ -47,6 +49,36 @@ _ANALYZER_PROMPT_BYTE_LIMIT = 48_000
 _WRITER_PROMPT_BYTE_LIMIT = 64_000
 
 
+def _group_writer_numeric_citations(digest: str) -> str:
+    """Factor consecutive identical owners without dropping any numeric fact."""
+
+    lines = digest.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    pattern = re.compile(r"^  (\S[^\n]*); cite=(\{evidence:[^{}\s]+\})(\n?)$")
+    while index < len(lines):
+        match = pattern.fullmatch(lines[index])
+        if match is None:
+            output.append(lines[index])
+            index += 1
+            continue
+        end = index + 1
+        rows = [match]
+        while end < len(lines):
+            following = pattern.fullmatch(lines[end])
+            if following is None or following[2] != match[2]:
+                break
+            rows.append(following)
+            end += 1
+        if len(rows) > 1:
+            output.append(f"  Citation for every value in this block: {match[2]}\n")
+            output.extend(f"    {row[1]}{row[3]}" for row in rows)
+        else:
+            output.append(lines[index])
+        index = end
+    return "".join(output)
+
+
 def _project_writer_evidence_digest(
     section_name: str,
     evidence_digest: Optional[str],
@@ -55,17 +87,10 @@ def _project_writer_evidence_digest(
 
     digest = str(evidence_digest or "")
     if str(section_name).strip().casefold() in {"abstract", "results"}:
-        methods_marker = "\n## EXECUTED METHOD BOUNDARY"
-        numeric_marker = "\n## numeric citation authority"
-        if methods_marker in digest and numeric_marker in digest:
-            before_methods, methods_and_after = digest.split(methods_marker, 1)
-            _, numeric_and_after = methods_and_after.split(numeric_marker, 1)
-            return (
-                before_methods.rstrip()
-                + numeric_marker
-                + numeric_and_after
-            )
-        return digest
+        # Abstract methods and result interpretation need the same execution
+        # boundary and owner-issued claims as Methods. Repetition of citation
+        # owners can be factored; the methods themselves must not be removed.
+        return _group_writer_numeric_citations(digest)
     marker = "\n## secondary numbers"
     if marker not in digest:
         return digest
@@ -361,9 +386,9 @@ class WriterAgent:
                     + "\n\nRUN-BOUND LITERATURE DIGEST:\n"
                     + (literature_digest or "(none)")
                     + "\n\nRESEARCH CONTEXT:\n"
-                    + _format_context(
+                    + format_outbound_safe_context(
                         reporting_context,
-                        include_method_constraints=False,
+                        include_exploratory_profiles=False,
                     )
                 ),
             ),
