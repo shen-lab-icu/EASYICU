@@ -38,7 +38,7 @@ def test_scaffold_uses_run_relative_figure_path_without_duplicate_evidence_prefi
     )
 
     assert (
-        r"\includegraphics[width=\textwidth]{evidence/figure\_primary\_\_primary\_association.pdf}"
+        r"\includegraphics[width=\textwidth,height=0.70\textheight,keepaspectratio]{evidence/figure\_primary\_\_primary\_association.pdf}"
         in tex
     )
     assert "evidence/evidence/" not in tex
@@ -68,6 +68,8 @@ def test_scaffold_separates_main_and_supplementary_figures() -> None:
     assert r"\section*{Supplementary figures}" in tex
     assert "figures/main/figure1.png" in tex
     assert "figures/supplementary/figure\\_s1.png" in tex
+    assert tex.count(r"height=0.70\textheight,keepaspectratio") == 1
+    assert tex.count(r"height=0.58\textheight,keepaspectratio") == 1
 
 
 def test_latex_figure_selection_uses_one_compile_safe_export_per_figure() -> None:
