@@ -276,8 +276,11 @@ def build_revision_figure_bundle(*, prepared, output: Path) -> RevisionFigureBun
                                                        "source_evidence_id": figure.evidence_id}
         entry["files"] = {p.relative_to(directory).as_posix(): _digest(p) for p in sorted(target.iterdir()) if p.is_file()}
         entries.append(entry)
-    pdf = replace(pdf, figures=tuple(projected[0]))
-    png = replace(png, figures=tuple(projected[1]))
+    # Every admitted source finding is the legacy missing-caption finding checked
+    # above, and each projected figure now carries its verified revision caption.
+    # Do not propagate the resolved source finding into Web/PDF consumers.
+    pdf = replace(pdf, figures=tuple(projected[0]), findings=())
+    png = replace(png, figures=tuple(projected[1]), findings=())
     receipt = {"schema_version": "easyicu.report_figure_revision/1", "revision_id": output.name,
                "source_run_id": root.name, "source_plan_sha256": _digest(root / "analysis_plan.json"),
                "source_context_sha256": _digest(root / "research_context.json"),
