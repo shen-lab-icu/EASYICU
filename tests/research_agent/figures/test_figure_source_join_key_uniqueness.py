@@ -240,6 +240,38 @@ def test_a_long_form_positional_projection_is_not_a_many_to_many_join(
     assert result["n_source_rows"] == 4
 
 
+def test_positional_projection_compares_float_keys_with_tolerance(
+    tmp_path: Path,
+) -> None:
+    """One-ulp CSV drift in a numeric level is a value check, not a join miss."""
+
+    upstream = pd.DataFrame(
+        {
+            "exposure": ["lact_max", "lact_max"],
+            "exposure_value": [2.3650000333786014, 3.1450000524520876],
+            "adjusted_odds_ratio": [1.08, 1.29],
+        }
+    )
+    source = pd.DataFrame(
+        {
+            "source_row_index": [0, 1],
+            "exposure": ["lact_max", "lact_max"],
+            "exposure_value": [2.365000033378601, 3.145000052452088],
+            "adjusted_odds_ratio": [1.08, 1.29],
+        }
+    )
+
+    result = _compare(source, upstream, tmp_path)
+
+    assert result["ok"], result.get("reason")
+    assert result["key_column"] == "source_row_index"
+
+    source.loc[1, "adjusted_odds_ratio"] = 9.99
+    rejected = _compare(source, upstream, tmp_path)
+    assert rejected["ok"] is False
+    assert rejected["reason"] == "source_values_disagree"
+
+
 def test_a_key_that_cannot_be_made_unique_says_so(tmp_path: Path) -> None:
     """Refusing beats comparing cross-matched rows and blaming the figure.
 

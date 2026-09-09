@@ -4076,7 +4076,21 @@ class FigureSourceDataValidator:
             upstream[join_col] = pd.Series(
                 range(len(upstream)), index=upstream.index, dtype=int
             ).astype(str)
-            key_cols = (join_col, *(key_cols or ()))
+            # The validated row position already identifies one exact parent
+            # row.  Keep shared text identity columns as an additional guard,
+            # but compare fully numeric columns below with the validator's
+            # tolerance instead of placing them in an exact-string join key.
+            # CSV round-trips can move an IEEE-754 value by one ulp; treating
+            # that harmless representation drift as a missing parent row
+            # falsely rejects a value-identical source-data projection.
+            text_identity_cols = []
+            for col in key_cols or ():
+                source_numeric = pd.to_numeric(source[col], errors="coerce")
+                upstream_numeric = pd.to_numeric(upstream[col], errors="coerce")
+                if source_numeric.notna().all() and upstream_numeric.notna().all():
+                    continue
+                text_identity_cols.append(col)
+            key_cols = (join_col, *text_identity_cols)
         if key_cols is None:
             # Structural fallback: no composite / named / positional key matched,
             # but a faithfully-derived figure often preserves the parent's OWN key
