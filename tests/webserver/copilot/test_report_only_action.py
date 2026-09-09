@@ -45,6 +45,8 @@ def test_explicit_click_sends_report_only_scope_without_plan_or_approval(report_
 @pytest.mark.parametrize("reason,code,expected", [
     ("restore", "WRITER_ONLY_REGISTERED_INPUT_CHANGED", [True, False]),
     ("report_only", "WRITER_ONLY_REGISTERED_INPUT_CHANGED", [True]),
+    ("restore", "WRITER_ONLY_REPORT_PROJECTION_REFRESH_REQUIRED", [True, False]),
+    ("report_only", "WRITER_ONLY_REPORT_PROJECTION_REFRESH_REQUIRED", [True]),
     ("restore", "WRITER_ONLY_STUDY_CHANGED", [True]),
     ("restore", "provider_auth_failed", [True]),
 ])
