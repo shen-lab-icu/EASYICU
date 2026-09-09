@@ -499,6 +499,85 @@ def test_adjusted_association_gets_source_bound_absolute_risk_composite() -> Non
     assert repeated == []
 
 
+@pytest.mark.parametrize("display_id", ["visualization", "clinical_results"])
+def test_absolute_risk_composite_reuses_closed_unpanelled_result_pair(display_id):
+    sources = ["table:adjusted_association_estimates", "table:absolute_risk_context"]
+    producers = [
+        AnalysisStep(
+            step_id="primary",
+            planned_analysis_role="primary",
+            intent="Estimate association",
+            method="adjusted_association_models",
+            expected_outputs=[sources[0]],
+        ),
+        AnalysisStep(
+            step_id="risk",
+            intent="Describe risk",
+            method="absolute_risk_context",
+            expected_outputs=[sources[1]],
+        ),
+        AnalysisStep(
+            step_id="checks",
+            intent="Check robustness",
+            method="robustness_sensitivity",
+            expected_outputs=["table:robustness_matrix", "table:robustness_summary"],
+        ),
+    ]
+    display = AnalysisStep(
+        step_id=display_id,
+        planned_analysis_role="auxiliary",
+        intent="Show association and risk",
+        method="visualization",
+        inputs=sources,
+        expected_outputs=[f"figure:{display_id}"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=s, mode="all_rows") for s in sources
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question="Continuous exposure and mortality",
+        steps=[*producers, display],
+    )
+    shaped, findings = ensure_absolute_risk_association_composite_figure_step(plan=plan)
+    assert len(shaped.steps) == len(plan.steps)
+    assert shaped.steps[:-1] == producers
+    assert shaped.steps[-1].step_id == display_id
+    assert shaped.steps[-1].expected_outputs == display.expected_outputs
+    assert len(shaped.steps[-1].figure_panels) == 4
+    assert {c.input_key for c in shaped.steps[-1].input_consumption_contracts} == set(
+        shaped.steps[-1].inputs
+    )
+    assert (
+        findings[0].detail["reason_code"]
+        == "absolute_risk_association_composite_figure_rebound"
+    )
+    assert ensure_absolute_risk_association_composite_figure_step(plan=shaped) == (
+        shaped,
+        [],
+    )
+
+    other = display.model_copy(
+        update={
+            "step_id": "another_display",
+            "expected_outputs": ["figure:another_display"],
+        }
+    )
+    ambiguous = plan.model_copy(update={"steps": [*plan.steps, other]})
+    result, _ = ensure_absolute_risk_association_composite_figure_step(plan=ambiguous)
+    assert result.steps[: len(ambiguous.steps)] == ambiguous.steps
+
+    # Partial-row selections and explicitly authored panels are different displays.
+    for protected in [
+        display.model_copy(update={"input_consumption_contracts": []}),
+        display.model_copy(
+            update={"figure_panels": shaped.steps[-1].figure_panels[:1]}
+        ),
+    ]:
+        guarded = plan.model_copy(update={"steps": [*producers, protected]})
+        result, _ = ensure_absolute_risk_association_composite_figure_step(plan=guarded)
+        assert result.steps[: len(guarded.steps)] == guarded.steps
+
+
 def test_signed_landmark_association_gets_source_bound_composite_renderer() -> None:
     steps = [
         AnalysisStep(

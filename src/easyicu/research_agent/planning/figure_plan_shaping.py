@@ -599,8 +599,28 @@ def ensure_absolute_risk_association_composite_figure_step(
         return plan, []
 
     steps = list(plan.steps)
-    step_id = _next_step_id(steps, "absolute_risk_association_figure")
-    figure_output = _next_figure_output(steps, "figure:absolute_risk_association")
+    # A closed result-pair placeholder already declares the same display
+    # purpose. Bind it before native runtime migration rather than leaving
+    # an untyped Coder figure beside a newly appended deterministic figure.
+    reusable = [
+        index
+        for index, step in enumerate(steps)
+        if step.planned_analysis_role == "auxiliary"
+        and not step.figure_panels
+        and len(step.expected_outputs) == 1
+        and _dedicated_renderer_consumes_exact_sources([step], sources=sources[:2])
+    ]
+    reusable_index = reusable[0] if len(reusable) == 1 else None
+    step_id = (
+        str(steps[reusable_index].step_id)
+        if reusable_index is not None
+        else _next_step_id(steps, "absolute_risk_association_figure")
+    )
+    figure_output = (
+        str(steps[reusable_index].expected_outputs[0])
+        if reusable_index is not None
+        else _next_figure_output(steps, "figure:absolute_risk_association")
+    )
     figure_step = AnalysisStep(
         step_id=step_id,
         planned_analysis_role="auxiliary",
@@ -623,7 +643,22 @@ def ensure_absolute_risk_association_composite_figure_step(
             for panel in absolute_risk_association_composite_panels(sources)
         ],
     )
-    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+    if reusable_index is None:
+        steps.append(figure_step)
+    else:
+        original = steps[reusable_index]
+        steps[reusable_index] = original.model_copy(
+            update={
+                "intent": figure_step.intent,
+                "inputs": figure_step.inputs,
+                "input_consumption_contracts": figure_step.input_consumption_contracts,
+                "figure_panels": figure_step.figure_panels,
+                "icu_rule_refs": list(
+                    dict.fromkeys([*original.icu_rule_refs, "visualization_rule"])
+                ),
+            }
+        )
+    return plan.model_copy(update={"steps": steps}), [
         ValidationFinding(
             validator="absolute_risk_association_figure_contract",
             severity="warning",
@@ -632,8 +667,14 @@ def ensure_absolute_risk_association_composite_figure_step(
                 "absolute-risk and robustness article figure."
             ),
             detail={
-                "reason_code": "absolute_risk_association_composite_figure_bound",
-                "appended_step_id": step_id,
+                "reason_code": (
+                    "absolute_risk_association_composite_figure_rebound"
+                    if reusable_index is not None
+                    else "absolute_risk_association_composite_figure_bound"
+                ),
+                "rebound_step_id"
+                if reusable_index is not None
+                else "appended_step_id": step_id,
                 "inputs": list(sources),
                 "producer_step_ids": owners,
                 "figure_output": figure_output,
