@@ -659,7 +659,9 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind="robustness_figure",
             selection_reason="robustness_figure_contract_preflight",
             progress_message="Using planner-scoped robustness figure executor",
-            consumed_input_keys=lambda c: robustness_figure_consumed_input_keys(c.step),
+            consumed_input_keys=lambda c: robustness_figure_consumed_input_keys(
+                c.resolved_bindings
+            ),
             host_sealed_renderer=True,
             blocks_on_plausibility_receipt=True,
         ),
