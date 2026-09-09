@@ -19,11 +19,52 @@ from easyicu.research_agent.reporting.writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
     _normalize_claim_token_sentences,
+    _normalize_structured_abstract_labels,
     _repair_abstract_conclusion_boundary,
     _remove_unresolved_evidence_tokens,
     publish_writer_only_result,
     repair_writer_only,
 )
+
+
+def test_structured_abstract_labels_are_separated_from_filterable_prose():
+    source = (
+        "## Abstract\n\n"
+        "**Background:** Context remains.\n\n"
+        "**Results:** Unsupported result.\n\n"
+        "**Conclusions:** Caution remains.\n\n"
+        "## Introduction\n\n**Results:** This is not an abstract label.\n"
+    )
+
+    normalized = _normalize_structured_abstract_labels(source)
+
+    assert "**Background:**\nContext remains." in normalized
+    assert "**Results:**\nUnsupported result." in normalized
+    assert "**Conclusions:**\nCaution remains." in normalized
+    assert "## Introduction\n\n**Results:** This is not an abstract label." in normalized
+    assert _normalize_structured_abstract_labels(normalized) == normalized
+
+
+def test_claim_projection_keeps_abstract_result_label_when_body_is_rejected(
+    tmp_path, monkeypatch,
+):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    authority = owner._ReadOnlyAuthority(records=(), aliases={}, claims_by_ref={})
+    monkeypatch.setattr(owner, "_read_only_authority", lambda _run: authority)
+    monkeypatch.setattr(owner, "load_manuscript_method_facts", lambda **_kwargs: ())
+    source = (
+        "## Abstract\n\n"
+        "**Results:** Treatment prevented mortality.\n\n"
+        "**Conclusions:** Independent validation is required.\n\n"
+        "## Introduction\n\nContext remains.\n"
+    )
+
+    projected, section_errors = owner._claim_policy_projection(tmp_path, source)
+
+    assert "**Results:**\n" in projected
+    assert "Treatment prevented mortality." not in projected
+    assert "abstract" in section_errors
 
 
 def _manuscript(*, leak: bool = False) -> str:

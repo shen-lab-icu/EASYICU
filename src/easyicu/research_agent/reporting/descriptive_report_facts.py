@@ -27,6 +27,7 @@ class DescriptiveReportFact:
     outcome_label: str | None = None
     group_label: str | None = None
     estimate_pct: float | None = None
+    required_result_sections: tuple[str, ...] = ("Abstract", "Results")
 
     @property
     def scaffold(self) -> str:
@@ -233,6 +234,7 @@ def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
             evidence_id=record.evidence_id,
             source_sha256=record.sha256,
             source_fields=("cohort_n",),
+            required_result_sections=("Results",),
         ))
     return tuple(facts)
 
@@ -296,7 +298,11 @@ def missing_primary_result_facts(manuscript: str, facts: Sequence[DescriptiveRep
     regions = {section: manuscript[start:end] for section, start, end in _primary_result_regions(manuscript)}
     return {
         section: missing for section in ("Abstract", "Results")
-        if (missing := tuple(fact for fact in facts if not _fact_present(regions.get(section, ""), fact)))
+        if (missing := tuple(
+            fact for fact in facts
+            if section in fact.required_result_sections
+            and not _fact_present(regions.get(section, ""), fact)
+        ))
     }
 
 
@@ -309,7 +315,12 @@ def place_primary_result_summaries(manuscript: str, facts: Sequence[DescriptiveR
     """
     if not facts:
         return manuscript
-    owned = {fact.scaffold for fact in facts}
+    abstract_facts = tuple(
+        fact for fact in facts if "Abstract" in fact.required_result_sections
+    )
+    if not abstract_facts:
+        return manuscript
+    owned = {fact.scaffold for fact in abstract_facts}
     for section, start, end in reversed(tuple(_primary_result_regions(manuscript))):
         if section == "Results":  # The existing subsection owner handles Results.
             continue
@@ -323,7 +334,10 @@ def place_primary_result_summaries(manuscript: str, facts: Sequence[DescriptiveR
                 seen.add(line.strip())
             lines.append(line)
         body = "\n".join(lines) + ("\n" if body.endswith("\n") else "")
-        missing = [fact.scaffold for fact in facts if not _fact_present(body, fact)]
+        missing = [
+            fact.scaffold for fact in abstract_facts
+            if not _fact_present(body, fact)
+        ]
         if missing:
             body = "\n\n" + "\n\n".join(missing) + "\n\n" + body.lstrip()
         manuscript = manuscript[:start] + body + manuscript[end:]

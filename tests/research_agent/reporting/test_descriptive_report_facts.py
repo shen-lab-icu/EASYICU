@@ -195,7 +195,17 @@ def test_grouped_table_one_supplies_plan_driven_source_cohort_fact(tmp_path):
 
     assert len(facts) == 1
     assert facts[0].source_fields == ("cohort_n",)
+    assert facts[0].required_result_sections == ("Results",)
     assert "The source cohort included 94,418 ICU stays {evidence:baseline_summary}." in placed
+
+    abstract = (
+        "## Abstract\n\n**Results:**\n\nA registered primary result.\n\n"
+        "## Results\n\n### Cohort characteristics\n\n"
+    )
+    projected = place_primary_result_summaries(abstract, facts)
+    assert facts[0].scaffold not in projected.split("## Results", 1)[0]
+    assert missing_primary_result_facts(projected, facts)["Results"] == facts
+    assert "Abstract" not in missing_primary_result_facts(projected, facts)
 
 
 def test_different_recorded_cohorts_do_not_become_one_cohort_count():
