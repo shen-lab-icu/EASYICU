@@ -13,6 +13,10 @@ from ..planning.analysis_types import (
     planner_analysis_family_authority_guide, validate_host_authorized_analysis_family,
 )
 from ..planning import scientific_action_catalog as _scientific_actions
+from ..planning.prompt_projection import (
+    planner_prompt_byte_limit,
+    project_plan_revision_prompt,
+)
 from ..planning.primary_result_contract import (
     primary_result_contract_guide,
     validate_required_primary_result as _validate_required_primary_result,
@@ -1559,7 +1563,9 @@ class PlannerAgent:
         direct_comparator_keys = _payload.normalize_literature_citation_keys(
             direct_comparator_literature_keys
         )
-        resolved_planning_contract_context = planning_contract_context
+        resolved_planning_contract_context, revision_projection = (
+            project_plan_revision_prompt(planning_contract_context)
+        )
         if enforce_article_contract and not resolved_planning_contract_context:
             from ..reporting.article_contract import (
                 build_article_analysis_contract,
@@ -1623,11 +1629,12 @@ class PlannerAgent:
         self.last_prompt_metrics["total_bytes"] = (
             message_payload_bytes + structured_output_bytes
         )
-        if self.last_prompt_metrics["total_bytes"] > _PLANNER_PROMPT_BYTE_LIMIT:
+        self.last_prompt_metrics["plan_revision_projection"] = revision_projection
+        if self.last_prompt_metrics["total_bytes"] > planner_prompt_byte_limit(self.llm):
             raise PlannerPromptBudgetError(
                 "Planner prompt transport budget exceeded: "
                 f"{self.last_prompt_metrics['total_bytes']} > "
-                f"{_PLANNER_PROMPT_BYTE_LIMIT} bytes. No protocol claim, typed "
+                f"{planner_prompt_byte_limit(self.llm)} bytes. No protocol claim, typed "
                 "input, or scientific coordinate was truncated; reduce selected "
                 "know-how cards or split the research context."
             )

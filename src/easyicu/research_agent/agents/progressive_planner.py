@@ -119,7 +119,11 @@ from ..planning.scientific_action_catalog import scientific_actions_for_analysis
 from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
-from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
+from ..planning.prompt_projection import (
+    planner_prompt_byte_limit,
+    project_plan_revision_prompt,
+    retry_shape_reminder,
+)
 from ..providers.prompts import load_prompt_pack
 from ..providers.protocol import LLMClient, LLMMessage, StructuredOutputRequest
 from ..providers.structured_retry import call_llm_with_structured_retry
@@ -184,7 +188,6 @@ _NON_REPAIRABLE_COORDINATE_FINDINGS = frozenset(
 _MAX_OUTLINE_OUTPUT_TOKENS = 4_000
 _MAX_FOUNDATION_OUTPUT_TOKENS = 4_000
 _MAX_STEP_OUTPUT_TOKENS = 8_000
-_MAX_REQUEST_BYTES = DEFAULT_MAX_PROMPT_TOKENS * 4
 _TYPED_PRODUCT_TOKEN = re.compile(
     r"\b(?:artifact|dataset|model|statistic|table):[a-z][a-z0-9_]*\b"
 )
@@ -3629,11 +3632,11 @@ class ProgressivePlannerAgent:
                 step_payload_bytes = sum(
                     len(item.content.encode("utf-8")) for item in step_messages
                 ) + (step_schema.payload_bytes if step_schema is not None else 0)
-                if step_payload_bytes > _MAX_REQUEST_BYTES:
+                if step_payload_bytes > planner_prompt_byte_limit(self.llm):
                     raise ProgressivePlanCompileError(
                         "progressive_step_prompt_budget_exceeded",
                         f"current-step request uses {step_payload_bytes} bytes; "
-                        f"limit={_MAX_REQUEST_BYTES}",
+                        f"limit={planner_prompt_byte_limit(self.llm)}",
                         step_id=outline_step.step_id,
                         step_index=step_index,
                         path="planner_request",
@@ -3995,12 +3998,16 @@ class ProgressivePlannerAgent:
             )
         )
         continuous_domain_variables = _continuous_planning_variable_names(context)
-        resolved_planning_contract_context = bind_literature_citation_authority(
+        sealed_planning_contract_context = bind_literature_citation_authority(
             planning_contract_context,
             allowed_citations,
             direct_comparator_keys=direct_keys,
             required_method_layers=required_method_layers_for_context(context),
         )
+        resolved_planning_contract_context, revision_projection = (
+            project_plan_revision_prompt(sealed_planning_contract_context)
+        )
+        self._attempt.prompt_metrics["plan_revision_projection"] = revision_projection
         required_custom_products = _required_separate_analysis_products(context)
         required_visualization_step = _requires_visualization_step(context)
         available_ordered_trend = _available_ordered_trend_action(
@@ -4021,7 +4028,7 @@ class ProgressivePlannerAgent:
             "comparison_literature_keys": list(comparison_keys),
             "allowed_know_how_decisions": dict(allowed_know_how_decisions or {}),
             "know_how_context": know_how_context,
-            "planning_contract_context": resolved_planning_contract_context,
+            "planning_contract_context": sealed_planning_contract_context,
             "required_primary_cohort_selection_mode": (
                 required_primary_cohort_selection_mode
             ),
@@ -4088,13 +4095,15 @@ class ProgressivePlannerAgent:
         message_bytes = sum(len(item.content.encode("utf-8")) for item in messages)
         schema_bytes = outline_schema.payload_bytes if outline_schema else 0
         total_bytes = message_bytes + schema_bytes
-        if total_bytes > _MAX_REQUEST_BYTES:
+        if total_bytes > planner_prompt_byte_limit(self.llm):
             raise ProgressivePlanCompileError(
                 "progressive_prompt_budget_exceeded",
-                f"initial request uses {total_bytes} bytes; limit={_MAX_REQUEST_BYTES}",
+                f"initial request uses {total_bytes} bytes; "
+                f"limit={planner_prompt_byte_limit(self.llm)}",
                 path="planner_request",
             )
         current_prompt_metrics = {
+            "plan_revision_projection": revision_projection,
             "message_payload_bytes": message_bytes,
             "structured_output_payload_bytes": schema_bytes,
             "structured_output_authority_sha256": (
@@ -4204,14 +4213,17 @@ class ProgressivePlannerAgent:
                 include_failed_response_on_retry=False,
                 progress_callback=progress_callback,
                 structured_output=outline_schema,
-                format_reminder=_outline_shape_contract(
-                    analysis_types=analysis_types,
-                    module_ids_by_analysis_type={
-                        analysis_type: progressive_module_ids_for_analysis_types(
-                            (analysis_type,)
-                        )
-                        for analysis_type in analysis_types
-                    },
+                format_reminder=retry_shape_reminder(
+                    messages,
+                    _outline_shape_contract(
+                        analysis_types=analysis_types,
+                        module_ids_by_analysis_type={
+                            analysis_type: progressive_module_ids_for_analysis_types(
+                                (analysis_type,)
+                            )
+                            for analysis_type in analysis_types
+                        },
+                    ),
                 )
                 + "\nReturn one concise ProgressivePlanOutline only. Do not "
                 "include executable step-detail fields. Never use "
@@ -4334,11 +4346,11 @@ class ProgressivePlannerAgent:
             foundation_schema.payload_bytes if foundation_schema is not None else 0
         )
         foundation_total_bytes = foundation_message_bytes + foundation_schema_bytes
-        if foundation_total_bytes > _MAX_REQUEST_BYTES:
+        if foundation_total_bytes > planner_prompt_byte_limit(self.llm):
             raise ProgressivePlanCompileError(
                 "progressive_foundation_prompt_budget_exceeded",
                 f"foundation request uses {foundation_total_bytes} bytes; "
-                f"limit={_MAX_REQUEST_BYTES}",
+                f"limit={planner_prompt_byte_limit(self.llm)}",
                 path="planner_request",
             )
         current_foundation_authority = (

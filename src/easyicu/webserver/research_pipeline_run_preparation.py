@@ -403,6 +403,13 @@ def _prepare_launch_execution(
             "plan_changes_require_fresh_candidate",
             "New plan amendments require fresh candidate planning, not analysis or checkpoint reuse.",
         )
+    bound_change_request = request.plan_change_request
+    if bound_change_request is not None:
+        from easyicu.webserver.plan_change_requirements import bind_plan_change_requirements
+
+        bound_change_request = bind_plan_change_requirements(
+            bound_change_request, study=scientific.study, project_root=project_root,
+        )
     if selected_resume_source:
         development_resume_binding = _development_progressive_resume_binding(
             project_root=project_root,
@@ -535,7 +542,7 @@ def _prepare_launch_execution(
                 160,
             ),
             runner_image=selected_runner_image,
-            plan_change_request=request.plan_change_request,
+            plan_change_request=bound_change_request,
             development_resume_scope=development_resume_scope,
         ),
     )

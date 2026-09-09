@@ -1143,6 +1143,18 @@ def _metadata_only_planning_acquisition(
             "EasyICU has no metadata-only concept catalog for this database.",
             details={"database": database},
         )
+    if plan_change_request is not None and plan_change_request.source_requirements is not None:
+        required = plan_change_request.source_requirements
+        required_coverage = assess_coverage(required.planning_concepts, catalog)
+        if required_coverage.missing:
+            raise ResearchPipelineRunError(
+                "plan_change_required_concepts_unavailable",
+                "The source-bound amendment requirements are not supported by the current planning catalog; "
+                "do not silently drop them or read old patient inputs.",
+                details={"concepts": sorted(required_coverage.missing)},
+            )
+        required_concepts = (*required_concepts, *required_coverage.available)
+        operationalized_columns = (*operationalized_columns, *required.operationalized_columns)
     selection = DataFoundationAgent(llm).select_concepts(
         question=question,
         catalog=catalog,
@@ -4553,6 +4565,15 @@ def make_research_pipeline_run_runner(
         publication_skill_flags = authority.publication_skill_flags
         user_extension_activation = authority.user_extension_activation
         research_provider_environment = authority.provider_environment
+        bound_change_request = execution.plan_change_request
+        if bound_change_request is not None:
+            from easyicu.webserver.plan_change_requirements import bind_plan_change_requirements
+
+            # Recheck before directory/Provider side effects: preparation is
+            # not permission to continue after source or configuration drift.
+            bound_change_request = bind_plan_change_requirements(
+                bound_change_request, study=study, project_root=project_root,
+            )
         source_run_id = execution.plan_revision_source_run_id
         execution_resume_run_id = execution.execution_resume_source_run_id
         selected_runner_image = execution.runner_image
@@ -4612,17 +4633,20 @@ def make_research_pipeline_run_runner(
         )
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         bound_plan_revision_contract = (
-            execution.plan_change_request.planner_context()
-            if execution.plan_change_request is not None
+            bound_change_request.planner_context()
+            if bound_change_request is not None
             else ""
         )
         candidate_outcome_concepts = explicit_outcome_concepts(question)
         candidate_exposure_aggregation: Optional[str] = None
         candidate_authority: Optional[_CandidatePlanMaterializationAuthority] = None
-        bound_baseline_requirements: Optional[AcceptedBaselineRequirements] = None
+        bound_baseline_requirements = (
+            bound_change_request.baseline_requirements()
+            if bound_change_request is not None else None
+        )
         bound_population_requirements = (
-            execution.plan_change_request.population_requirements()
-            if execution.plan_change_request is not None else None
+            bound_change_request.population_requirements()
+            if bound_change_request is not None else None
         )
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if prepared_revision is not None and prepared_revision.failed_execution_replan:
@@ -4785,7 +4809,7 @@ def make_research_pipeline_run_runner(
                     question=question,
                     llm=acquisition_client,
                     output_dir=wrapper_dir / "pipeline_input",
-                    plan_change_request=execution.plan_change_request,
+                    plan_change_request=bound_change_request,
                     target_outcome=metadata_planning_coordinates.get("target_outcome"),
                     endpoint=metadata_planning_coordinates.get("endpoint"),
                     required_concepts=(
