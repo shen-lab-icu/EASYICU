@@ -479,7 +479,7 @@ def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):
 
     assert summary["anchor_input_bound"] is True
     assert summary["anchor_line_drawn"] is False
-    assert "Bound primary estimate: 1.566" in (tmp_path / "out" / "robustness_plot.svg").read_text()
+    assert "Primary estimate: 1.566 (contrast not declared)" in (tmp_path / "out" / "robustness_plot.svg").read_text()
     source = pd.read_csv(
         tmp_path / "out" / "robustness_plot_bound_statistics_source_data.csv"
     )
@@ -610,3 +610,44 @@ def test_it_refuses_a_grid_that_mixes_two_effect_scales(tmp_path):
             step_id="07_robustness_sensitivity_figure",
             figure_product="robustness_plot",
         )
+
+
+def test_specification_table_retains_declared_contrasts_and_omits_duplicate_scalar():
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        _draw_specification_table, _validated_rows,
+    )
+    from easyicu.research_agent.figures.robustness import assess_robustness_effect_comparability
+
+    frame = pd.DataFrame([
+        dict(spec_id='internal_primary', spec_label='Nonlinear model, upper contrast',
+             axis='primary', point_estimate=1.96, ci_low=1.89, ci_high=2.03,
+             contrast_id='x:4.9_vs_2', contrast_label='4.9 vs 2',
+             independent_variant=True),
+        dict(spec_id='internal_linear', spec_label='Linear sensitivity model',
+             axis='functional_form', point_estimate=1.27, ci_low=1.25, ci_high=1.28,
+             contrast_id='x:per_1_unit', contrast_label='Per 1 unit increase',
+             independent_variant=True),
+        dict(spec_id='internal_missing', spec_label='Primary complete-case set',
+             axis='missing', point_estimate=1.96, ci_low=1.89, ci_high=2.03,
+             contrast_id='x:4.9_vs_2', contrast_label='4.9 vs 2',
+             independent_variant=False),
+    ]).assign(effect_scale='OR', converged=True, effect_unit='recorded exposure units')
+    assert not assess_robustness_effect_comparability(frame).authorized
+    rows, scale, _ = _validated_rows(frame)
+    fig, ax = plt.subplots()
+    try:
+        _draw_specification_table(ax, rows, scale, True, 1.96)
+        rendered = '\n'.join(t.get_text() for t in ax.texts)
+        assert '4.9 vs 2' in rendered
+        assert 'Per 1 unit increase' in rendered
+        assert 'not an independent variant' in rendered.replace('\n', ' ')
+        assert 'Nonlinear model, upper contrast' in rendered.replace('\n', ' ')
+        assert 'internal' not in rendered
+        assert 'not declared' not in rendered
+        assert 'Bound primary estimate' not in rendered
+        assert 'Primary estimate:' not in rendered
+        assert '1.96 [1.89, 2.03]' in rendered
+        assert '1.27 [1.25, 1.28]' in rendered
+    finally:
+        plt.close(fig)

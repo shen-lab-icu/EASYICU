@@ -1175,6 +1175,17 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     assert summary["complete_case_n"] == 44095
     assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
+    primary_row = matrix.loc[matrix["axis"] == "primary"].iloc[0]
+    linear_row = matrix.loc[matrix["axis"] == "functional_form"].iloc[0]
+    missing_row = matrix.loc[matrix["axis"] == "missing"].iloc[0]
+    assert primary_row["contrast_label"] == f"{upper_coordinate:g} vs 2.1"
+    assert linear_row["contrast_label"] == "Per 1 unit increase"
+    assert primary_row["contrast_id"] != linear_row["contrast_id"]
+    assert primary_row["contrast_id"] == missing_row["contrast_id"]
+    assert set(matrix["effect_unit"]) == {"recorded exposure units"}
+    assert set(matrix["spec_label"]) == {
+        "Nonlinear model, upper contrast", "Linear sensitivity model", "Primary complete-case set",
+    }
     assert set(matrix["axis"]) == {"primary", "functional_form", "missing"}
     assert (
         matrix.loc[matrix["axis"] == "missing", "spec_id"].item()
