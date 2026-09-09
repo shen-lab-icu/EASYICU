@@ -162,8 +162,8 @@ def test_writer_can_only_select_a_host_rendered_scientific_claim(
     assert removed == []
     bound = store.bind_manuscript(filtered)
 
-    assert "the prespecified exposure was positively associated" in bound
-    assert "the prespecified analysis cohort" in bound
+    assert "Lactate was positively associated" in bound
+    assert "the primary cohort analysis set" in bound
     assert "04_association_summary" in bound
     assert "{claim:" not in bound
 
@@ -222,7 +222,7 @@ def test_scientific_claim_authority_survives_store_reload(ra, tmp_path: Path) ->
     assert [claim.claim_ref for claim in claims] == [
         "04_association.adjusted_association"
     ]
-    assert "the prespecified exposure was positively associated" in reopened.bind_manuscript(
+    assert "Lactate was positively associated" in reopened.bind_manuscript(
         claims[0].placeholder
     )
 
@@ -410,9 +410,9 @@ def test_host_association_claim_renders_registered_estimate_and_interval() -> No
 
     reader = claim.render_reader_text()
     assert reader == (
-        "In the covariate-adjusted model, the prespecified exposure was "
-        "positively associated with the study outcome in the prespecified "
-        "analysis cohort (adjusted odds ratio, 1.606; 95% CI, 1.538 to 1.677)."
+        "After adjustment for age, exposure was positively associated with "
+        "mortality in the primary cohort analysis set "
+        "(adjusted odds ratio, 1.606; 95% CI, 1.538 to 1.677)."
     )
     assert all(
         term not in reader.casefold()

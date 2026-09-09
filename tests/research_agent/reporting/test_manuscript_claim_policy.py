@@ -389,7 +389,7 @@ def test_claim_expansion_preserves_markdown_prefix_and_binds_evidence() -> None:
     )
 
     assert result.scaffold.startswith(
-        "> In the covariate-adjusted model, the prespecified exposure"
+        "> After adjustment for age, sex, Lactate"
     )
     assert "{evidence:04_association_summary}" in result.scaffold
     assert result.missing_claim_refs == ()

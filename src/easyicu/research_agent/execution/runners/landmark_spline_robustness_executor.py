@@ -228,8 +228,11 @@ def run_landmark_spline_robustness(
     )
     primary_low = coerce_finite_float(upper["ci_low"], label="upper contrast CI low")
     primary_high = coerce_finite_float(upper["ci_high"], label="upper contrast CI high")
-    complete_case_n = int(coerce_finite_float(linear["n"], label="complete-case n"))
-    events = int(coerce_finite_float(linear["events"], label="event count"))
+    complete_case_count = coerce_finite_float(linear["n"], label="complete-case n")
+    event_count = coerce_finite_float(linear["events"], label="event count")
+    if not complete_case_count.is_integer() or not event_count.is_integer():
+        raise ValueError("signed landmark model counts must be integers")
+    complete_case_n, events = int(complete_case_count), int(event_count)
     coordinate_value = coerce_finite_float(
         upper[coordinate], label="upper contrast coordinate"
     )
@@ -247,6 +250,46 @@ def run_landmark_spline_robustness(
     reference_value = coerce_finite_float(
         upper[reference_column], label="reference contrast coordinate"
     )
+    increment_columns = [key for key in ("exposure_increment", "per_unit") if key in linear]
+    if not increment_columns or any(coerce_finite_float(
+        linear[key], label="linear exposure increment"
+    ) != sealed.linear_sensitivity_per_unit for key in increment_columns):
+        raise ValueError("signed linear sensitivity increment disagrees with authority")
+    # Reporting projection only: the signed parent fit remains untouched.
+    # Keep every point contrast, including the lower boundary, separate from
+    # the linear sensitivity and from any secondary risk-set analysis.
+    from ...authority.model_contrast_scientific_claims import ModelContrastReporting
+
+    reportable_contrasts = ModelContrastReporting.model_validate({
+        "schema_version": "easyicu.model_contrast_reporting/1",
+        "execution_owner": "landmark_spline_robustness_executor_v1",
+        "interpretation": sealed.interpretation,
+        "runtime_projection_sha256": runtime_projection_sha256,
+        "exposure": sealed.exposure_column,
+        "outcome": sealed.outcome_column,
+        "exposure_unit": (variable_display.unit if variable_display else None) or "recorded exposure units",
+        "landmark_hours": sealed.landmark_hours,
+        "population_rule": "alive_and_under_observation_at_landmark_with_valid_exposure",
+        "n": complete_case_n,
+        "events": events,
+        "adjustment_columns": list(sealed.required_adjustment_columns),
+        "confidence_level": 0.95,
+        "interval_method": "wald_log_odds",
+        "variance_estimator": "patient_cluster_robust" if sealed.dependence else "model_based",
+        "contrasts": [
+            {
+                "kind": "spline_point", "source_evidence_id": contrast_evidence_id,
+                "value": row[coordinate], "reference": row[reference_column],
+                "estimate": row["adjusted_odds_ratio"],
+                "lower": row["ci_low"], "upper": row["ci_high"],
+            } for row in ordered.to_dict(orient="records")
+        ] + [{
+            "kind": "linear_increment", "source_evidence_id": linear_evidence_id,
+            "value": sealed.linear_sensitivity_per_unit,
+            "estimate": linear["adjusted_odds_ratio"],
+            "lower": linear["ci_low"], "upper": linear["ci_high"],
+        }],
+    }).model_dump(mode="json")
     primary_effect_label = (
         f"upper signed curve-boundary contrast at {coordinate}={coordinate_value:g} "
         f"vs {reference_column}={reference_value:g}"
@@ -440,6 +483,7 @@ def run_landmark_spline_robustness(
         "analysis_family": "robustness_sensitivity",
         "authority_kind": LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
         "runtime_projection_sha256": runtime_projection_sha256,
+        "reportable_model_contrasts": reportable_contrasts,
         "primary_effect": primary_or,
         "primary_estimate": primary_or,
         "primary_or": primary_or,
