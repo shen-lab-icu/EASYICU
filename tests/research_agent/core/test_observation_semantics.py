@@ -11,6 +11,79 @@ from easyicu.research_agent.research_context.observation_semantics import (
 from easyicu.research_agent.schema import ConceptDescriptor, MissingnessProfile
 
 
+@pytest.mark.parametrize("time_column,event_column", [
+    ("event_elapsed", "event_flag"), ("failure_day", "failed"),
+    ("outcome_recorded_at", "outcome_status"),
+])
+def test_declared_event_time_uses_event_denominator_without_name_inference(time_column, event_column):
+    frame = pd.DataFrame({event_column: [0, 1, 1, 1], time_column: [np.nan, 30.0, np.nan, -2.0]})
+    original = frame.copy(deep=True)
+    descriptors = [_descriptor(event_column, is_binary=True), _descriptor(time_column, n_missing=2)]
+    result = compile_observation_semantics(
+        frame=frame, descriptors=descriptors, event_time_bindings={time_column: event_column},
+    )[-1]
+    assert result.role.value == "time"
+    assert result.observation_semantics.event_status_column == event_column
+    assert result.missingness.eligible_n == 3
+    assert result.missingness.not_applicable_n == 1
+    assert result.missingness.raw_n_missing == 2
+    assert result.missingness.n_missing == 1
+    assert result.missingness.fraction_missing == pytest.approx(1 / 3)
+    assert any("precede the declared time origin" in note for note in result.clinical_caveats)
+    pd.testing.assert_frame_equal(frame, original)
+    assert compile_observation_semantics(frame=frame, descriptors=descriptors)[-1].observation_semantics is None
+
+
+@pytest.mark.parametrize("events,times", [
+    ([0, 1], [2.0, 3.0]), ([None, 1], [None, 3.0]),
+    ([2, 1], [None, 3.0]), ([0, 1], [None, "invalid"]),
+])
+def test_invalid_declared_event_time_fails_instead_of_reverting_to_raw_missingness(events, times):
+    with pytest.raises(ValueError):
+        compile_observation_semantics(
+            frame=pd.DataFrame({"flag": events, "elapsed": times}),
+            descriptors=[_descriptor("flag"), _descriptor("elapsed")],
+            event_time_bindings={"elapsed": "flag"},
+        )
+
+
+def test_landmark_declared_event_time_is_excluded_from_ordinary_mcar_screen(monkeypatch):
+    from easyicu.research_agent.research_context import builder
+
+    seen = []
+    def screen(frame):
+        seen.append(list(frame.columns))
+        return {"name": "not_run", "columns": []}
+    monkeypatch.setattr(builder, "_compute_missingness_test_metadata", screen)
+    context = builder.build_research_context(
+        research_question="Assess exposure and the binary event after a landmark.",
+        cohort=pd.DataFrame({"stay_id": [1, 2, 3, 4], "event_flag": [0, 1, 0, 1],
+            "event_elapsed": [np.nan, 30.0, np.nan, np.nan], "observed_hours": [48.0] * 4}),
+        cohort_name="test", database="miiv", target_outcome="event_flag",
+        user_preferences={"sensitivity_specs": [{
+            "spec_id": "landmark", "axis": "timing", "strategy": "landmark",
+            "execution_variables": ["event_elapsed", "observed_hours"], "landmark_hours": 24,
+            "event_time_variable": "event_elapsed", "observation_duration_variable": "observed_hours",
+            "observation_duration_unit": "hours", "require_alive_at_landmark": True,
+        }]},
+    )
+    assert "event_elapsed" not in seen[0]
+    time = context.variable("event_elapsed")
+    assert time.role.value == "time"
+    assert time.missingness.n_missing == 1
+    assert time.missingness.not_applicable_n == 2
+
+
+def test_declared_event_time_cannot_rebind_an_existing_verified_event():
+    frame = pd.DataFrame({"event_a": [0, 1], "event_b": [0, 1], "event_a_time": [np.nan, 3.0]})
+    with pytest.raises(ValueError, match="verified representation"):
+        compile_observation_semantics(
+            frame=frame, descriptors=[_descriptor("event_a", is_binary=True),
+                _descriptor("event_b", is_binary=True), _descriptor("event_a_time", n_missing=1)],
+            event_time_bindings={"event_a_time": "event_b"},
+        )
+
+
 def _descriptor(
     name: str,
     *,
