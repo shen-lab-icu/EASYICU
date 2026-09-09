@@ -61,6 +61,7 @@ This README is the front door. Each major layer keeps a focused README next to i
 
 | Read this | For |
 |-----------|-----|
+| [Product goals and design agreement](docs/EASYICU_PRODUCT_AGREEMENT.md) (Chinese) | Research-agent development intent, reliability and flexibility tradeoffs, acceptance evidence, and explicitly unresolved criteria. Read before changing priorities; this is a design agreement, not a claim of completed capabilities. |
 | [`src/easyicu/README.md`](src/easyicu/README.md) | Package module map — concept abstraction, conversion, APIs, scores, Web, and Research Agent owners. Start here as a code contributor. |
 | [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | The maintained native FastAPI WebApp path and local route/API QA commands. |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | The evidence-bound research-agent layer: four-layer design, readiness gates, replication protocol. |

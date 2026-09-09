@@ -58,6 +58,7 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 
 | 阅读 | 用于 |
 |------|------|
+| [产品目标与设计共识](docs/EASYICU_PRODUCT_AGREEMENT.md) | 接续 Research Agent 开发前阅读：用户目标、可靠性与灵活性的取舍、验收证据及待定标准。本文不代表能力已全部实现。 |
 | [`src/easyicu/README.md`](src/easyicu/README.md) | 包级模块地图——概念、转换、API、评分、Web 和 Research Agent 的职责。代码贡献者从这里开始。 |
 | [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | 当前维护的 FastAPI 原生 WebApp 路径与本地 route/API QA 命令。 |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | 证据绑定的 research-agent 层:四层设计、就绪检查、跨库复现协议。 |
