@@ -68,14 +68,15 @@ class ManuscriptReaderQualityContractError(RuntimeError):
 
 
 def completed_section_repair_candidate(
-    exc: Exception, *, expected_section_keys: Sequence[str],
+    exc: Exception, *, expected_section_keys: Sequence[str] | None = None,
 ) -> tuple[str, tuple[str, ...]] | None:
     """Return a completed draft only for the caller's final binding and audits."""
     if (
         isinstance(exc, ManuscriptReaderQualityContractError)
         and exc.manuscript.strip()
         and exc.repaired_section_keys
-        and set(exc.repaired_section_keys) == set(expected_section_keys)
+        and (expected_section_keys is None
+             or set(exc.repaired_section_keys) == set(expected_section_keys))
     ):
         return exc.manuscript, exc.repaired_section_keys
     return None
@@ -113,6 +114,10 @@ MANUSCRIPT_SECTION_SPECS = (
             "results, report observed events, denominators, and proportions "
             "without inferential or causal comparisons. Do not invent missing "
             "estimates, uncertainty, tests, or supporting findings.\n"
+            "  When the digest supplies complete primary-result claim tokens, "
+            "place those tokens as standalone paragraphs within Results. Do not "
+            "replace their numeric effects or uncertainty with free-form prose. "
+            "Use a supplied descriptive claim for its own population and denominator.\n"
             "- **Conclusions:** 1-2 sentences using supplied complete claim tokens. "
             "Match the approved analysis: descriptive evidence is not an association. "
             "A validation caveat alone is incomplete.\n"
@@ -376,7 +381,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "28"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "29"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
@@ -766,10 +771,14 @@ def repair_existing_manuscript_sections(
         expected_display_labels=display_labels,
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
-    if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining, manuscript=scientific)
     administrative = render_manuscript_administrative_sections(administrative_authority)
-    return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
+    candidate = "\n\n".join((scientific, administrative))
+    if remaining:
+        raise ManuscriptReaderQualityContractError(
+            findings=remaining, manuscript=candidate,
+            repaired_section_keys=tuple(repaired_keys),
+        )
+    return candidate, tuple(repaired_keys)
 
 
 def repair_named_manuscript_sections(
@@ -804,11 +813,12 @@ def repair_named_manuscript_sections(
             "EVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
             + "The adjacent deterministic claim policy rejected these sentences "
             + f"owned by this section:\n{detail}\n"
-            + "Regenerate the complete section. Every current-study method or "
-            + "numeric fact must carry an exact allowed `{evidence:<id>}` token. "
-            + "A qualitative scientific conclusion is allowed only as the exact "
-            + "standalone `{claim:<step>.<claim>}` sentence supplied by the digest. "
-            + "Do not append a claim token to prose. Omit a sentence when no such "
+            + "Regenerate the complete section. For a numeric result or scientific "
+            + "conclusion represented by a supplied claim, emit only its exact "
+            + "standalone `{claim:<step>.<claim>}` sentence; the host supplies its "
+            + "evidence citation. Other current-study methods or numeric facts "
+            + "require an exact allowed `{evidence:<id>}` token. Do not paraphrase "
+            + "a supplied result claim or append its token to prose. Omit a sentence when no such "
             + "authority exists. Preserve required headings and do not mention "
             + "this repair."
         )
@@ -976,8 +986,7 @@ def render_manuscript_sections(
             break
         for spec, error_detail in repair_specs:
             repair_instruction = (
-                spec.instruction
-                + "\n\nREADER-QUALITY CONTRACT REPAIR:\n"
+                "READER-QUALITY CONTRACT REPAIR:\n"
                 + "The assembled draft failed these deterministic checks owned by "
                 + f"this section:\n{error_detail}\n"
                 + "Regenerate the complete section from the same machine evidence. "
@@ -995,7 +1004,8 @@ def render_manuscript_sections(
                 spec,
                 call_section(
                     section_name=spec.section_name,
-                    instruction=repair_instruction,
+                    instruction=spec.instruction,
+                    repair_feedback=repair_instruction,
                     max_tokens=spec.max_tokens,
                     **common,
                 ),
@@ -1026,10 +1036,14 @@ def render_manuscript_sections(
         expected_display_labels=display_labels,
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
-    if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining, manuscript=scientific)
     administrative = render_manuscript_administrative_sections(administrative_authority)
-    return "\n\n".join(part for part in (scientific, administrative) if part)
+    candidate = "\n\n".join(part for part in (scientific, administrative) if part)
+    if remaining:
+        raise ManuscriptReaderQualityContractError(
+            findings=remaining, manuscript=candidate,
+            repaired_section_keys=tuple(sections),
+        )
+    return candidate
 
 
 __all__ = [

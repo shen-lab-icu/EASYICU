@@ -1569,26 +1569,37 @@ def _draft_manuscript(
                 detail={"reason_code": "post_binding_section_repair", "section_keys": list(repaired_keys)},
             ))
     except Exception as exc:
-        writer_error_message = f"{type(exc).__name__}: {exc}"
-        rejected_candidate = _preserve_rejected_writer_candidate(
-            exc, evidence=evidence, per_step_records=per_step_records,
-        )
-        scaffold = ""
-        findings.append(
-            ValidationFinding(
-                validator="writer_agent",
-                severity="error",
-                message=(
-                    "WriterAgent failed before producing a manuscript scaffold: "
-                    f"{writer_error_message}"
-                ),
-                detail={
-                    "exception_type": type(exc).__name__,
-                    "writer_digest_widened": bool(pipeline._writer_digest_widened),
-                    "rejected_candidate_evidence_id": rejected_candidate,
-                },
+        from .manuscript_sections import completed_section_repair_candidate
+
+        candidate = completed_section_repair_candidate(exc)
+        if candidate is not None:
+            scaffold, repaired_keys = candidate
+            findings.append(ValidationFinding(
+                validator="writer_recovery", severity="info",
+                message="Completed Writer draft retained for authoritative claim expansion and final manuscript audits.",
+                detail={"reason_code": "completed_draft_requires_final_audit", "section_keys": list(repaired_keys)},
+            ))
+        else:
+            writer_error_message = f"{type(exc).__name__}: {exc}"
+            rejected_candidate = _preserve_rejected_writer_candidate(
+                exc, evidence=evidence, per_step_records=per_step_records,
             )
-        )
+            scaffold = ""
+            findings.append(
+                ValidationFinding(
+                    validator="writer_agent",
+                    severity="error",
+                    message=(
+                        "WriterAgent failed before producing a manuscript scaffold: "
+                        f"{writer_error_message}"
+                    ),
+                    detail={
+                        "exception_type": type(exc).__name__,
+                        "writer_digest_widened": bool(pipeline._writer_digest_widened),
+                        "rejected_candidate_evidence_id": rejected_candidate,
+                    },
+                )
+            )
     scaffold = _repair_robustness_reader_prose(
         scaffold=scaffold,
         run_dir=run_dir,

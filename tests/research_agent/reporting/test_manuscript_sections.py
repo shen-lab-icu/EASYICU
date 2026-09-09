@@ -309,9 +309,9 @@ def test_reader_quality_retries_only_abstract_with_missing_label() -> None:
 **Results:** Bounded results.
 
 **Conclusions:**"""
-        assert "READER-QUALITY CONTRACT REPAIR" in str(kwargs["instruction"])
+        assert "READER-QUALITY CONTRACT REPAIR" in str(kwargs["repair_feedback"])
         assert "MANUSCRIPT_ABSTRACT_LABEL_MISSING_OR_EMPTY" in str(
-            kwargs["instruction"]
+            kwargs["repair_feedback"]
         )
         return _minimal_valid_section("Abstract")
 
@@ -383,7 +383,7 @@ def test_reader_quality_final_bounded_repair_closes_repeated_internal_term() -> 
         discussion_calls += 1
         if discussion_calls < 3:
             return "## Discussion\n\nThe result remained host-bound at 1.234567."
-        assert "final bounded repair attempt" in str(kwargs["instruction"])
+        assert "final bounded repair attempt" in str(kwargs["repair_feedback"])
         return "## Discussion\n\nThe descriptive result requires cautious interpretation."
 
     rendered = render_manuscript_sections(call_section=call_section, common={})

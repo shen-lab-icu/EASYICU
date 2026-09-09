@@ -57,10 +57,15 @@ def _source_fingerprint(root: Path) -> str:
 
 def _report_only_limits(limits: ProviderHardStopLimits) -> ProviderHardStopLimits:
     """Narrow the approved budget; a report revision cannot expand it."""
+    from easyicu.research_agent.reporting.manuscript_sections import MANUSCRIPT_SECTION_SPECS
+
+    # Fund the existing two reader passes and two final-authority passes across
+    # all section owners, within the user's already reviewed run ceilings.
+    attempts = 4 * len(MANUSCRIPT_SECTION_SPECS)
     narrowed = replace(
         limits,
-        max_provider_attempts_per_run=min(6, limits.max_provider_attempts_per_run),
-        max_provider_attempts_per_batch=min(6, limits.max_provider_attempts_per_batch),
+        max_provider_attempts_per_run=min(attempts, limits.max_provider_attempts_per_run),
+        max_provider_attempts_per_batch=min(attempts, limits.max_provider_attempts_per_batch),
         max_wall_clock_seconds_per_task=min(600, limits.max_wall_clock_seconds_per_task),
     )
     # Preserve approved token ceilings: transports without an enforceable

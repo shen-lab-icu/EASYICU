@@ -446,6 +446,74 @@ def test_replay_mismatch_keeps_identity_through_writer_owner(tmp_path, monkeypat
     assert caught.value is drift
 
 
+def _claim_reader_authority(monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+    from easyicu.research_agent.authority.scientific_claims import ScientificClaim, derive_scientific_claim_drafts
+    from ..authority.test_model_contrast_scientific_claims import _summary
+
+    summary = _summary(exposure="lactate", outcome="mortality")
+    summary["reportable_model_contrasts"]["adjustment_columns"] = ["age"]
+    draft = derive_scientific_claim_drafts(summary)[0]
+    claim = ScientificClaim(**draft.model_dump(), step_id="primary", evidence_id="verified_summary")
+    authority = SimpleNamespace(
+        records=(SimpleNamespace(evidence_id=claim.evidence_id),),
+        claims_by_ref={claim.claim_ref: claim},
+    )
+    monkeypatch.setattr(owner, "_read_only_authority", lambda _run: authority)
+    return claim, authority
+
+
+@pytest.mark.parametrize("initial_reader_failure", [False, True])
+def test_reader_quality_uses_verified_claim_text_and_keeps_canonical_tokens(tmp_path, monkeypatch, initial_reader_failure):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+    from easyicu.research_agent.reporting.manuscript_sections import ManuscriptReaderQualityContractError
+
+    claim, _ = _claim_reader_authority(monkeypatch)
+    manuscript = _manuscript().replace(
+        "**Results:** Sepsis status was associated with mortality.",
+        "**Results:**\n\n" + claim.placeholder,
+    ).replace("### Primary association\nSepsis status was associated with mortality.",
+              "### Primary association\n\n" + claim.placeholder)
+    prepared = _prepared(tmp_path, manuscript)
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+
+    class Writer:
+        def repair_existing(self, text, **kwargs):
+            if initial_reader_failure:
+                raise ManuscriptReaderQualityContractError(
+                    findings=(("MANUSCRIPT_SECTION_EMPTY", "Results", "Raw claim-only section"),),
+                    manuscript=text, repaired_section_keys=("abstract", "results"),
+                )
+            return text, ()
+
+        def repair_sections(self, *args, **kwargs):
+            pytest.fail("A verified claim-only subsection must not trigger a prose rewrite")
+
+    result = repair_writer_only(prepared, writer=Writer())
+    assert result.quality_audit.status == "pass"
+    assert claim.placeholder in result.manuscript
+    assert claim.placeholder not in result.reader_manuscript
+    assert "0.8" in result.reader_manuscript
+
+
+@pytest.mark.parametrize("change", ["missing", "malformed", "stale_evidence"])
+def test_claim_reader_view_rejects_unresolved_authority(tmp_path, monkeypatch, change):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    claim, authority = _claim_reader_authority(monkeypatch)
+    text = claim.placeholder
+    if change == "missing":
+        text = "{claim:primary.unknown}"
+    elif change == "malformed":
+        text = "Unsupported prose " + text
+    else:
+        authority.records = (SimpleNamespace(evidence_id="another_summary"),)
+    with pytest.raises(WriterOnlyMigrationError, match="SCIENTIFIC_CLAIM_BINDING_FAILED"):
+        owner._claim_reader_view(tmp_path, text)
+
+
 @pytest.mark.parametrize("separator", [",", ", ", ";", "; "])
 def test_exact_registered_citation_groups_are_normalized_before_unknown_removal(tmp_path, monkeypatch, separator):
     from types import SimpleNamespace
