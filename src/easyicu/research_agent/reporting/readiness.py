@@ -1865,6 +1865,28 @@ def current_validation_findings(
         gate_state=current_gate_state,
         latest_publication_audit=latest_publication_audit,
     )
+    # A new review must evaluate validators, not inherit its own previous
+    # reject. Retire older derived verdicts only after a review bound to these
+    # exact manuscript bytes exists; current validator errors remain active.
+    from hashlib import sha256
+
+    source_digest = sha256(manuscript_text.encode("utf-8")).hexdigest()
+    reviewer_findings = [f for f in active_findings if f.validator == "reviewer_round"]
+    if reviewer_findings:
+        latest = reviewer_findings[-1]
+        records = [evidence.get(identifier) for identifier in latest.evidence_ids]
+        current_review = any(
+            record is not None and record.producer == "pipeline"
+            and record.generation_mode == "system"
+            and record.evidence_id.startswith("reviewer_report_json")
+            and record.metadata.get("source_manuscript_sha256") == source_digest
+            and verified_run_evidence_path(run_dir, record) is not None
+            for record in records
+        )
+        if current_review and latest.detail.get("source_manuscript_sha256") == source_digest:
+            historical = [f for f in reviewer_findings if f is not latest]
+            superseded_findings.extend(historical)
+            active_findings = [f for f in active_findings if all(f is not old for old in historical)]
     return active_findings, superseded_findings, current_gate_state
 
 
@@ -2564,7 +2586,7 @@ def write_readiness_artifacts(
         )
         final_reviewer_report = run_reviewer_round(
             evidence_records=evidence.current_verified_records(per_step_records),
-            findings=[*active_review_findings, final_gate_finding],
+            findings=[*[f for f in active_review_findings if f.validator != "reviewer_round"], final_gate_finding],
             per_step_records=per_step_records,
             primary_result_bindings=primary_bindings,
             run_dir=run_dir,

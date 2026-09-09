@@ -1918,7 +1918,7 @@ def _persist_literature_audit(
     audit = audit_manuscript_literature(scaffold, literature)
     path = run_dir / "manuscript_literature_audit.json"
     path.write_text(audit.model_dump_json(indent=2), encoding="utf-8")
-    evidence.register_file(
+    audit_record = evidence.register_file(
         kind="log",
         description="Exact run-bound manuscript literature citation audit.",
         source_path=path,
@@ -1932,7 +1932,7 @@ def _persist_literature_audit(
             validator="manuscript_literature",
             severity="error",
             message=audit.message,
-            evidence_ids=["manuscript_literature_audit"],
+            evidence_ids=[audit_record.evidence_id],
             detail=audit.model_dump(mode="json"),
         ))
 
@@ -2897,7 +2897,7 @@ def _run_drafting_reviewer_round(
     )
     reviewer_report = run_reviewer_round(
         evidence_records=reviewer_evidence_records,
-        findings=active_review_findings,
+        findings=[f for f in active_review_findings if f.validator != "reviewer_round"],
         per_step_records=per_step_records,
         primary_result_bindings=primary_bindings,
         run_dir=run_dir,
@@ -2905,12 +2905,15 @@ def _run_drafting_reviewer_round(
     )
     reviewer_md = run_dir / "reviewer_report.md"
     reviewer_json = run_dir / "reviewer_report.json"
+    from hashlib import sha256
+
+    source_digest = sha256(bound.encode("utf-8")).hexdigest()
     reviewer_md.write_text(reviewer_report.to_markdown(), encoding="utf-8")
     reviewer_json.write_text(
-        json.dumps(reviewer_report.to_json(), indent=2, default=str),
+        json.dumps({**reviewer_report.to_json(), "source_manuscript_sha256": source_digest}, indent=2, default=str),
         encoding="utf-8",
     )
-    evidence.register_file(
+    reviewer_record = evidence.register_file(
             kind="log",
             description=(
                 "Three-role simulated reviewer report (O15): "
@@ -2922,7 +2925,7 @@ def _run_drafting_reviewer_round(
             generation_mode="system",
             on_sha_change="new_id",
         )
-    evidence.register_file(
+    reviewer_json_record = evidence.register_file(
             kind="log",
             description="Structured reviewer report (O15).",
             source_path=reviewer_json,
@@ -2930,6 +2933,7 @@ def _run_drafting_reviewer_round(
             producer="pipeline",
             generation_mode="system",
             on_sha_change="new_id",
+            metadata={"source_manuscript_sha256": source_digest},
         )
     summary = reviewer_report.summary()
     rec = summary["aggregated_recommendation"]
@@ -2950,8 +2954,8 @@ def _run_drafting_reviewer_round(
                 f"major={summary['counts'].get('major', 0)}, "
                 f"reject={summary['counts'].get('reject', 0)})."
             ),
-            evidence_ids=["reviewer_report"],
-            detail=summary,
+            evidence_ids=[reviewer_record.evidence_id, reviewer_json_record.evidence_id],
+            detail={**summary, "source_manuscript_sha256": source_digest},
         )
     )
 
