@@ -93,6 +93,7 @@ def test_drafting_reviewer_sees_current_errors_and_preserves_recovered_history(t
                           detail={"step_id": "model", "attempt_id": "old"}),
         ValidationFinding(validator="current_runtime", severity="error", message="Unresolved current runtime error",
                           detail={"step_id": "model", "attempt_id": "current"}),
+        ValidationFinding(validator="reviewer_round", severity="error", message="Prior derived reject"),
     ]
     records = [
         {"step_id": "model", "attempt_id": "old", "status": "error"},
@@ -106,4 +107,23 @@ def test_drafting_reviewer_sees_current_errors_and_preserves_recovered_history(t
     review = json.dumps(json.loads((tmp_path / "reviewer_report.json").read_text()))
     assert "current_runtime" in review
     assert "recovered_runtime" not in review
+    assert "reviewer_round" not in review
     assert len([f for f in findings if f.validator.endswith("_runtime")]) == 2
+    active, historical, _ = write_phase.current_validation_findings(
+        plan=plan, per_step_records=records, findings=findings, evidence=evidence,
+        run_dir=tmp_path, manuscript_text=_valid_manuscript(),
+    )
+    assert any(f.message == "Prior derived reject" for f in historical)
+    assert any(f.validator == "current_runtime" for f in active)
+
+    # Another manuscript version must link its own report, retaining version 1.
+    first_json = [r for r in evidence.records() if r.evidence_id.startswith("reviewer_report_json")][0]
+    write_phase._run_drafting_reviewer_round(
+        SimpleNamespace(), plan=plan, per_step_records=records,
+        evidence=evidence, findings=findings, bound=_valid_manuscript() + "\n",
+        repro_envelope=None, run_dir=tmp_path,
+    )
+    latest_id = findings[-1].evidence_ids[-1]
+    assert latest_id != first_json.evidence_id
+    assert evidence.get(latest_id).sha256 == sha256_of_file(tmp_path / "reviewer_report.json")
+    assert sha256_of_file(tmp_path / first_json.relative_path) == first_json.sha256
