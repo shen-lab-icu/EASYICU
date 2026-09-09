@@ -566,6 +566,23 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
                         f"verified baseline roster for {step_id} is invalid"
                     )
                 canonical_summary["variables"] = list(variables)
+            if record.get("deterministic_standard_analysis") == "signed_landmark_spline_association":
+                # Scalar reconstruction loses the adjustment roster, population
+                # rules, and interval semantics. Their typed runtime receipt is
+                # sealed by the same exact source-summary digest checked above.
+                from ..contracts.landmark_spline_validation import LandmarkSplineRuntimeReceipt
+
+                try:
+                    receipt = LandmarkSplineRuntimeReceipt.model_validate(
+                        record["step_summary"].get("scientific_runtime_receipt")
+                    )
+                except ValueError as exc:
+                    raise RegisteredOutputAuthorityError(
+                        f"verified landmark method receipt for {step_id} is invalid"
+                    ) from exc
+                canonical_summary["scientific_runtime_receipt"] = receipt.model_dump(
+                    mode="json", exclude_none=True,
+                )
             record["step_summary"] = canonical_summary
             record["writer_result_envelope_evidence_id"] = loaded.evidence_id
             record["writer_artifact_bindings"] = self._writer_artifact_bindings(

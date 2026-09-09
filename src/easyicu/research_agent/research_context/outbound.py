@@ -341,6 +341,7 @@ def format_outbound_safe_context(
     *,
     variable_names: Optional[Iterable[str]] = None,
     include_exploratory_profiles: bool = True,
+    compact_variables: bool = False,
 ) -> str:
     payload = outbound_safe_context_payload(context, variable_names=variable_names)
     if not include_exploratory_profiles:
@@ -376,12 +377,45 @@ def format_outbound_safe_context(
         payload["fixed_window_trajectory_columns"] = list(
             compact_projection.variable_lines
         )
+    if compact_variables:
+        payload = compact_variable_field_names(payload)
     return json.dumps(
         payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def compact_variable_field_names(payload: dict) -> dict:
+    """Factor repeated keys, retaining every variable value and its position.
+
+    This transport representation is for Writer only. It does not alter the
+    ResearchContext or give absent fields the meaning of explicit JSON nulls.
+    Small contexts keep their original representation when it is shorter.
+    """
+
+    variables = payload.get("variables")
+    if "variables_table" in payload or not isinstance(variables, list) or not variables or not all(
+        isinstance(row, dict) for row in variables
+    ):
+        return payload
+    field_sets: list[list[str]] = []
+    rows = []
+    for variable in variables:
+        fields = sorted(variable)
+        if fields not in field_sets:
+            field_sets.append(fields)
+        rows.append([field_sets.index(fields), [variable[field] for field in fields]])
+    candidate = {key: value for key, value in payload.items() if key != "variables"}
+    candidate["variables_table"] = {
+        "encoding": "Each row is [column_set_index, values]. Pair values in order with that column set to recover one variable. All fields are binding; absent fields remain absent.",
+        "column_sets": field_sets,
+        "rows": rows,
+    }
+    def size(value: dict) -> int:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+    return candidate if size(candidate) < size(payload) else payload
 
 
 _SAFE_RECORD_KEYS = frozenset(

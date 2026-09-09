@@ -7,6 +7,7 @@ import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.scientific_claims import derive_scientific_claim_drafts
+from easyicu.research_agent.audits.model_contrast_reporting import model_contrast_reporting_findings
 
 
 def _summary(exposure="oxygen_index", outcome="icu_readmission"):
@@ -51,6 +52,10 @@ def test_bounded_claims_preserve_coordinates_population_adjustment_and_roles(exp
     summary = _summary(exposure, outcome)
     before = copy.deepcopy(summary)
     claims = derive_scientific_claim_drafts(summary)
+    assert model_contrast_reporting_findings(
+        step_record={"deterministic_standard_analysis": "signed_landmark_spline_robustness"},
+        step_summary=summary,
+    ) == []
     assert summary == before
     assert [c.direction for c in claims] == ["negative", "positive", "no_clear_association"]
     assert [c.analysis_role for c in claims] == ["primary", "primary", "sensitivity"]
