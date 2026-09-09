@@ -127,6 +127,10 @@ def test_revision_projects_legacy_caption_from_registered_panel_contract(
     )
     assert bundle.pdf.figures[0].caption == expected
     assert bundle.png.figures[0].caption == expected
+    assert bundle.pdf.findings == ()
+    assert bundle.png.findings == ()
+    assert bundle.receipt['pdf']['findings'] == []
+    assert bundle.receipt['png']['findings'] == []
     assert bundle.receipt['entries'][0]['caption_origin'] == (
         'registered_panel_contract_projection'
     )
