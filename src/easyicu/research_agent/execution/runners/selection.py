@@ -470,6 +470,7 @@ def _build_registry() -> StepExecutorRegistry:
             ),
             render=lambda c: landmark_spline_robustness_executor_code(
                 c.step,
+                plan=c.plan,
                 authority=c.current_case_scientific_runtime_authority,
                 runtime_projection_sha256=c.scientific_runtime_projection_sha256,
             ),

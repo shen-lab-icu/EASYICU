@@ -35,7 +35,9 @@ from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import landmark_association_composite_panels
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.model_terms import ModelTermSpec
-from ..contracts.functional_form import FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS
+from ..contracts.functional_form import (
+    FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS, functional_form_products,
+)
 from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import (
     AnalysisPlan,
@@ -1161,7 +1163,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
         return products[0] if products else None
 
-    def require_functional_form_spec(self, step: AnalysisStep) -> FunctionalFormSpec:
+    def require_functional_form_spec(self, step: AnalysisStep, *, allow_draft_outputs: bool = False) -> FunctionalFormSpec:
         """Validate the target, not the wording of a sensitivity's step id."""
 
         spec = step.functional_form_spec
@@ -1170,7 +1172,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             or step.planned_analysis_role != "sensitivity"
             or len(step.sensitivity_spec_ids) != 1
             or step.robustness_replay_spec is not None
-            or len(step.expected_outputs) != 1
+            or not step.expected_outputs
             or not step.expected_outputs[0].startswith("table:")
         ):
             raise CurrentCaseScientificAuthorityError(
@@ -1181,7 +1183,42 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             raise CurrentCaseScientificAuthorityError("functional-form target is not a continuous governed model term")
         if spec.target_column == self.exposure_column and spec.knot_quantiles != self.spline_knot_quantiles:
             raise CurrentCaseScientificAuthorityError("functional-form projection cannot change the primary spline knots")
+        expected_outputs = self.functional_form_outputs(step)
+        if tuple(step.expected_outputs) != expected_outputs and not (
+            allow_draft_outputs and tuple(step.expected_outputs) == expected_outputs[:1]
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "covariate functional-form requires reviewed curve/contrast products; revise the complete plan"
+            )
         return spec
+
+    def functional_form_outputs(self, step: AnalysisStep) -> tuple[str, ...]:
+        if step.functional_form_spec is None or not step.expected_outputs:
+            raise CurrentCaseScientificAuthorityError("functional-form output has no exact target")
+        return functional_form_products(
+            step.expected_outputs[0],
+            include_effects=step.functional_form_spec.target_column != self.exposure_column,
+        )
+
+    def functional_form_effect_parents(self, steps, *, consumer: AnalysisStep) -> tuple[AnalysisStep, ...]:
+        """Select declared covariate refits; their effects must precede this consumer."""
+
+        positions = {step.step_id: index for index, step in enumerate(steps)}
+        if consumer.step_id not in positions or len(positions) != len(steps):
+            raise CurrentCaseScientificAuthorityError("functional-form dependency step identity is ambiguous")
+        parents = []
+        for parent in steps:
+            if parent.functional_form_spec is None or parent.functional_form_spec.target_column == self.exposure_column:
+                continue
+            self.require_functional_form_spec(parent)
+            if positions[parent.step_id] >= positions[consumer.step_id]:
+                raise CurrentCaseScientificAuthorityError("functional-form effect producer must precede robustness consumption")
+            parents.append(parent)
+        spec_ids = [parent.sensitivity_spec_ids[0] for parent in parents]
+        products = [key for parent in parents for key in parent.expected_outputs[1:]]
+        if len(set(spec_ids)) != len(spec_ids) or len(set(products)) != len(products):
+            raise CurrentCaseScientificAuthorityError("functional-form effect parents repeat a spec or product")
+        return tuple(parents)
 
     def functional_form_inputs(self, step: AnalysisStep, *, cohort_input: str) -> tuple[str, ...]:
         spec = self.require_functional_form_spec(step)
@@ -1456,6 +1493,10 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 and step.robustness_replay_spec is not None
             )
             signed_result_projection = functional_form or signed_robustness_projection
+            if functional_form:
+                # Mechanical product expansion occurs only before plan review.
+                self.require_functional_form_spec(step, allow_draft_outputs=True)
+                step = step.model_copy(update={"expected_outputs": list(self.functional_form_outputs(step))})
             inputs = [
                 replacement if value == generic_parent else value
                 for value in step.inputs
@@ -1497,6 +1538,19 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     }
                 )
             )
+        for index, step in enumerate(steps):
+            if step.planned_analysis_role != "sensitivity" or step.robustness_replay_spec is None:
+                continue
+            parents = self.functional_form_effect_parents(steps, consumer=step)
+            inputs = [replacement, self.linear_sensitivity_product, *(
+                key for parent in parents for key in parent.expected_outputs[1:]
+            )]
+            steps[index] = step.model_copy(update={
+                "inputs": inputs,
+                "input_consumption_contracts": [
+                    ArtifactConsumptionContract(input_key=key, mode="all_rows") for key in inputs
+                ],
+            })
         return plan.model_copy(
             update={"steps": steps, "robustness_specs": robustness_specs}
         )
@@ -1543,6 +1597,15 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     def validate_plan(self, plan: AnalysisPlan) -> None:
         primary = self.governed_step(plan)
         for step in plan.steps:
+            if step.planned_analysis_role == "sensitivity" and step.robustness_replay_spec is not None:
+                parents = self.functional_form_effect_parents(plan.steps, consumer=step)
+                expected_effects = (
+                    self.downstream_parent_product, self.linear_sensitivity_product,
+                    *(key for parent in parents for key in parent.expected_outputs[1:]),
+                )
+                contracts = {item.input_key: item.mode for item in step.input_consumption_contracts}
+                if tuple(step.inputs) != expected_effects or any(contracts.get(key) != "all_rows" for key in expected_effects):
+                    raise CurrentCaseScientificAuthorityError("robustness omits a reviewed covariate-form effect product")
             if step.method == "primary_population_absolute_risk_context":
                 expected = self.absolute_risk_population_inputs(sole_typed_cohort_input(primary))
                 if tuple(step.inputs) != expected or step.runtime_outcome_contract != RuntimeOutcomeContract(

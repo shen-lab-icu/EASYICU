@@ -102,6 +102,8 @@ from ..planning.progressive_artifacts import (
     ProgressivePlannerCheckpointEmitter,
 )
 from ..planning.progressive_resume import (
+    article_role_repair_owners,
+    final_acceptance_repair_start,
     ProgressivePrefixState,
     assemble_progressive_skeleton,
     build_progressive_checkpoint_authorities,
@@ -1244,14 +1246,23 @@ def _accept_compiled_plan(
                     "progressive article contract is missing required role(s): "
                     + ", ".join(missing_roles)
                 )
-                index = _step_index_from_error(plan, message)
+                role_owners = article_role_repair_owners(plan, contract, missing_roles)
+                located = all(role_owners.get(role) for role in missing_roles)
+                index = min(i for indices in role_owners.values() for i in indices) if located else 0
                 raise ProgressivePlanCompileError(
                     "progressive_article_required_roles_missing",
                     message,
                     step_id=plan.steps[index].step_id if plan.steps else None,
                     step_index=index if plan.steps else None,
                     path=f"article_analysis_contract.{missing_roles[0]}",
-                    findings=({"missing_roles": missing_roles},),
+                    findings=({
+                        "missing_roles": missing_roles,
+                        "role_owner_indices": role_owners,
+                        "repair_localization": (
+                            "declared_article_products" if located
+                            else "unlocated_full_materialization"
+                        ),
+                    },),
                 )
         if not llm_is_mockish(llm):
             gate = "typed_product_specs"
@@ -3335,6 +3346,107 @@ class ProgressivePlannerAgent:
         )
         return plan, receipt
 
+    def _accept_materialized_plan(
+        self, prefix_state: ProgressivePrefixState, *,
+        context: ResearchContext, article_context: ResearchContext,
+        outline: ProgressivePlanOutline,
+        foundation_materialization: ProgressiveFoundationMaterialization,
+        allowed_literature_citation_keys: Sequence[str],
+        direct_comparator_literature_keys: Sequence[str],
+        allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
+        enforce_article_contract: bool, planning_contract_context: str,
+        progress_callback: Optional[Callable[[Any], None]],
+        checkpoint_emitter: ProgressivePlannerCheckpointEmitter, resumed: bool,
+    ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt, ProgressivePlanSkeleton]:
+        """Recheck a complete plan, repairing only a bounded unaccepted suffix."""
+        foundation = foundation_materialization.foundation
+        selected_action_ids, selected_action_rows = _action_catalog((outline.analysis_type,))
+        reporting_source_keys = _article_reporting_source_keys(
+            article_context=article_context, analysis_type=outline.analysis_type,
+            enforce_article_contract=enforce_article_contract,
+        )
+        for final_revision in range(_MAX_COMPILE_REVISIONS + 1):
+            skeleton = assemble_progressive_skeleton(
+                outline=outline, foundation=foundation, steps=prefix_state.steps,
+            )
+            try:
+                plan, receipt = self._compile_and_accept(
+                    skeleton,
+                    agent_context=context,
+                    article_context=article_context,
+                    allowed_literature_citation_keys=allowed_literature_citation_keys,
+                    direct_comparator_literature_keys=direct_comparator_literature_keys,
+                    allowed_know_how_decisions=allowed_know_how_decisions,
+                    enforce_article_contract=enforce_article_contract,
+                )
+            except ProgressivePlanCompileError as exc:
+                start = final_acceptance_repair_start(exc, outline)
+                if (
+                    start is None or final_revision >= _MAX_COMPILE_REVISIONS
+                    or len(self._attempt.prompt_metrics.get("final_acceptance_repairs", []))
+                    >= _MAX_COMPILE_REVISIONS
+                ):
+                    raise
+                previous_suffix = {
+                    m.step.step_id: m for m in prefix_state.materializations[start:]
+                }
+                retained = prefix_state.materializations[:start]
+                prefix_state = ProgressivePrefixState()
+                for materialization in retained:
+                    prefix_state = compile_progressive_prefix(
+                        prefix_state, materialization, outline=outline,
+                        foundation=foundation, context=context,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        allowed_know_how_decisions=allowed_know_how_decisions,
+                        reporting_method_source_keys=reporting_source_keys,
+                    )
+                self._attempt.materializations = list(retained)
+                # Historical call/schema counters remain append-only. Resume
+                # must bind the revised active prefix to its own request schemas.
+                metrics = self._attempt.prompt_metrics
+                metrics["active_step_materialization_schema_sha256"] = list(
+                    metrics.get("active_step_materialization_schema_sha256",
+                                metrics["step_materialization_schema_sha256"])
+                )[:start]
+                self._attempt.prompt_metrics["suffix_revision_count"] += 1
+                self._attempt.prompt_metrics.setdefault("final_acceptance_repairs", []).append({
+                    **exc.easyicu_safe_diagnostic,
+                    "findings": (
+                        exc.details.get("findings", [])
+                        if exc.reason_code == "progressive_article_required_roles_missing" else []
+                    ),
+                    "repair_localization": (
+                        (exc.details.get("findings") or [{}])[0].get("repair_localization")
+                        or (
+                            "unlocated_full_materialization"
+                            if exc.reason_code == "progressive_article_required_roles_missing"
+                            else "validator_step_coordinate"
+                        )
+                    ),
+                    "retained_step_count": start,
+                    "retained_materializations_sha256": canonical_sha256(
+                        [m.model_dump(mode="json") for m in retained]
+                    ),
+                })
+                prefix_state = self._materialize_remaining_steps(
+                    prefix_state, context=context, outline=outline,
+                    foundation_materialization=foundation_materialization,
+                    scientific_action_ids=selected_action_ids,
+                    action_rows=selected_action_rows,
+                    allowed_literature_citation_keys=allowed_literature_citation_keys,
+                    allowed_know_how_decisions=allowed_know_how_decisions,
+                    reporting_method_source_keys=reporting_source_keys,
+                    planning_contract_context=planning_contract_context,
+                    progress_callback=progress_callback,
+                    checkpoint_emitter=checkpoint_emitter,
+                    resumed=resumed,
+                    acceptance_observation=exc.details,
+                    previous_suffix=previous_suffix,
+                )
+                continue
+            break
+        return plan, receipt, skeleton
+
     def _materialize_remaining_steps(
         self,
         prefix_state: ProgressivePrefixState,
@@ -3351,6 +3463,8 @@ class ProgressivePlannerAgent:
         progress_callback: Optional[Callable[[Any], None]],
         checkpoint_emitter: ProgressivePlannerCheckpointEmitter,
         resumed: bool,
+        acceptance_observation: Mapping[str, Any] | None = None,
+        previous_suffix: Mapping[str, ProgressiveStepMaterialization] | None = None,
     ) -> ProgressivePrefixState:
         """Materialize and locally repair only the uncompiled suffix."""
 
@@ -3385,7 +3499,26 @@ class ProgressivePlannerAgent:
                     allowed_literature_citation_keys=step_citations,
                     available_product_refs=visible_product_refs,
                 )
-            compiler_observation: Mapping[str, Any] | None = None
+            compiler_observation: Mapping[str, Any] | None = (
+                {
+                    **acceptance_observation,
+                    "repair_scope": "unaccepted_suffix",
+                    "current_step_id": outline_step.step_id,
+                    "previous_materialization": (
+                        previous_suffix[outline_step.step_id].model_dump(mode="json")
+                        if previous_suffix and outline_step.step_id in previous_suffix
+                        else None
+                    ),
+                    "preservation_contract": (
+                        "Repair the reported final-plan contract in this current "
+                        "step only, using the preceding valid product references. "
+                        "Preserve its scientific requirements and all sealed "
+                        "outline/foundation coordinates; do not invent results "
+                        "or remove requirements to satisfy a missing role."
+                    ),
+                }
+                if acceptance_observation is not None else None
+            )
             self._attempt.compile_failure_attempts = []
             host_materialization = (
                 None
@@ -3440,6 +3573,8 @@ class ProgressivePlannerAgent:
                     self._attempt.prompt_metrics[
                         "step_materialization_schema_sha256"
                     ].append(None)
+                    if "active_step_materialization_schema_sha256" in self._attempt.prompt_metrics:
+                        self._attempt.prompt_metrics["active_step_materialization_schema_sha256"].append(None)
                     self._attempt.prompt_metrics.setdefault(
                         "host_step_materialization_count", 0
                     )
@@ -3701,6 +3836,10 @@ class ProgressivePlannerAgent:
                 self._attempt.prompt_metrics[
                     "step_materialization_schema_sha256"
                 ].append(step_schema.authority_sha256 if step_schema else None)
+                if "active_step_materialization_schema_sha256" in self._attempt.prompt_metrics:
+                    self._attempt.prompt_metrics["active_step_materialization_schema_sha256"].append(
+                        step_schema.authority_sha256 if step_schema else None
+                    )
                 self._attempt.prompt_metrics["step_materialization_count"] += 1
                 if resumed:
                     self._attempt.prompt_metrics[
@@ -4424,23 +4563,25 @@ class ProgressivePlannerAgent:
             progress_callback=progress_callback,
             checkpoint_emitter=checkpoint_emitter,
             resumed=resume_checkpoint is not None,
+            acceptance_observation=(
+                (resume_checkpoint.prompt_metrics.get("final_acceptance_repairs") or [None])[-1]
+                if resume_checkpoint is not None and resume_checkpoint.revision_offset is not None
+                else None
+            ),
         )
 
         if prefix_state.plan is None or prefix_state.receipt is None:
             raise RuntimeError("progressive outline produced no materialized steps")
-        skeleton = assemble_progressive_skeleton(
-            outline=outline,
-            foundation=foundation,
-            steps=prefix_state.steps,
-        )
-        plan, receipt = self._compile_and_accept(
-            skeleton,
-            agent_context=context,
-            article_context=article_context,
+        plan, receipt, skeleton = self._accept_materialized_plan(
+            prefix_state, context=context, article_context=article_context,
+            outline=outline, foundation_materialization=foundation_materialization,
             allowed_literature_citation_keys=allowed_citations,
             direct_comparator_literature_keys=direct_keys,
             allowed_know_how_decisions=allowed_know_how_decisions,
             enforce_article_contract=enforce_article_contract,
+            planning_contract_context=resolved_planning_contract_context,
+            progress_callback=progress_callback, checkpoint_emitter=checkpoint_emitter,
+            resumed=resume_checkpoint is not None,
         )
         self._attempt.skeleton = skeleton
         self._attempt.compile_receipt = receipt

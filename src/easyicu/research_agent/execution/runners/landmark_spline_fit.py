@@ -163,6 +163,17 @@ def compare_covariate_functional_form(*, frame, authority, form, primary_diagnos
         statistic = max(statistic, 0.0)
         p_value = float(chi2.sf(statistic, df))
         method, ic_basis = "nested_logistic_likelihood_ratio_test", "independent_loglikelihood"
+    from .landmark_spline_effects import fitted_exposure_curve, model_rows_digest
+
+    grid = np.linspace(exposure_knots[0], exposure_knots[-1], authority.curve_points)
+    primary_curve = fitted_exposure_curve(
+        fit=base_fit, spline=exposure, knots=exposure_knots, grid=grid,
+        exposure_column=authority.exposure_column,
+    )
+    alternative_curve = fitted_exposure_curve(
+        fit=full_fit, spline=exposure, knots=exposure_knots, grid=grid,
+        exposure_column=authority.exposure_column,
+    )
     return {
         "method": method, "target_column": target, "statistic": float(statistic),
         "information_criteria_basis": ic_basis, "n_complete_case": n, "event_n": events,
@@ -175,6 +186,15 @@ def compare_covariate_functional_form(*, frame, authority, form, primary_diagnos
         "target_knots": _json_knots(target_knots),
         "primary_exposure_knots": _json_knots(exposure_knots),
         "cluster_count": cluster_counts[0],
+        "effect_bundle": {
+            "reproduced_primary_cluster_count": cluster_counts[0],
+            "curve": alternative_curve,
+            "primary_contrasts": [primary_curve[0], primary_curve[-1]],
+            "parameter_columns": list(full_fit.params.index),
+            "parameter_values": full_fit.params.tolist(),
+            "covariance_matrix": full_fit.cov_params().to_numpy().tolist(),
+            "model_rows_sha256": model_rows_digest(population.working.loc[data.index]),
+        },
     }
 
 

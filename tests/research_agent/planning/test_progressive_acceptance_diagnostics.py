@@ -229,12 +229,14 @@ def test_missing_article_roles_reach_safe_diagnostic_without_candidate_text(monk
     monkeypatch.setattr(planner, "validate_literature_citation_bindings", lambda *a, **k: None)
     monkeypatch.setattr(planner, "build_article_analysis_contract", lambda *a, **k: SimpleNamespace(
         required_roles=("causal_protocol", "balance_positivity"),
+        requirements=(),
     ))
     monkeypatch.setattr(planner, "validate_plan_against_article_contract", lambda **k: [
         SimpleNamespace(detail={"missing_roles": ["causal_protocol", "balance_positivity"]}),
     ])
     plan = SimpleNamespace(
-        steps=[SimpleNamespace(step_id="effect_plan", planned_analysis_role="primary")],
+        steps=[SimpleNamespace(step_id="effect_plan", planned_analysis_role="primary",
+                               expected_outputs=[], scientific_action_id=None, method="custom")],
         robustness_specs=[], analysis_type="causal_inference",
     )
     with pytest.raises(ProgressivePlanCompileError) as caught:
@@ -248,4 +250,7 @@ def test_missing_article_roles_reach_safe_diagnostic_without_candidate_text(monk
     assert diagnostic["path"] == "article_analysis_contract.balance_positivity"
     assert caught.value.details["findings"] == [{
         "missing_roles": ["balance_positivity", "causal_protocol"],
+        "role_owner_indices": {"balance_positivity": [], "causal_protocol": []},
+        "repair_localization": "unlocated_full_materialization",
     }]
+    assert caught.value.step_index == 0

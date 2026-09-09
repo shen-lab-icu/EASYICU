@@ -2,7 +2,8 @@
 
 This owner does not fit another model. It projects the digest-bound contrast
 and linear-sensitivity tables produced by ``LandmarkSplineRuntimeAuthority``
-into the generic robustness products required by downstream renderers.
+and explicitly planned covariate-form effect products into the generic
+robustness products required by downstream renderers.
 """
 
 from __future__ import annotations
@@ -57,10 +58,17 @@ def landmark_spline_robustness_executor_owns_step(
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         return False
     sealed.governed_step(plan)
+    if step.robustness_replay_spec is None:
+        return False
+    parents = sealed.functional_form_effect_parents(plan.steps, consumer=step)
+    expected = (
+        sealed.downstream_parent_product, sealed.linear_sensitivity_product,
+        *(key for parent in parents for key in parent.expected_outputs[1:]),
+    )
     return bool(
         step.planned_analysis_role == "sensitivity"
-        and sealed.downstream_parent_product in step.inputs
-        and sealed.linear_sensitivity_product in step.inputs
+        and tuple(step.inputs) == expected
+        and all(any(c.input_key == key and c.mode == "all_rows" for c in step.input_consumption_contracts) for key in expected)
         and robustness_replay_spec_is_emittable(step)
         and _declared_replay_outputs(step) == _REQUIRED_REPLAY_OUTPUTS
     )
@@ -71,12 +79,20 @@ def landmark_spline_robustness_executor_code(
     *,
     authority: LandmarkSplineRuntimeAuthority | Mapping[str, Any],
     runtime_projection_sha256: str,
+    plan: AnalysisPlan | None = None,
 ) -> str:
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         raise TypeError("landmark robustness executor requires landmark authority")
     authority_json = json.dumps(sealed.model_dump(mode="json"), sort_keys=True)
     step_json = json.dumps(step.model_dump(mode="json"), sort_keys=True)
+    parents = sealed.functional_form_effect_parents(plan.steps, consumer=step) if plan is not None else ()
+    expected = (sealed.downstream_parent_product, sealed.linear_sensitivity_product, *(
+        key for parent in parents for key in parent.expected_outputs[1:]
+    ))
+    if tuple(step.inputs) != expected:
+        raise ValueError("landmark robustness scaffold lacks the exact reviewed effect parents")
+    parents_json = json.dumps([parent.model_dump(mode="json") for parent in parents], sort_keys=True)
     return textwrap.dedent(
         f"""
         import json
@@ -92,6 +108,7 @@ def landmark_spline_robustness_executor_code(
             step=AnalysisStep.model_validate(json.loads({json.dumps(step_json)})),
             authority=json.loads({json.dumps(authority_json)}),
             runtime_projection_sha256={runtime_projection_sha256!r},
+            functional_form_parents=tuple(AnalysisStep.model_validate(item) for item in json.loads({json.dumps(parents_json)})),
             run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             out_dir=Path(os.environ["STEP_OUT_DIR"]),
@@ -126,15 +143,16 @@ def _summary_rows(matrix: Any) -> Any:
     import pandas as pd
 
     rows = []
-    for axis, group in matrix.groupby("axis", sort=False, dropna=False):
+    for (axis, contrast_id), group in matrix.groupby(["axis", "contrast_id"], sort=False, dropna=False):
         converged = group[group["converged"].astype(bool)]
         rows.append(
             {
                 "axis": axis,
-                "total_specs": int(len(group)),
-                "converged_specs": int(len(converged)),
+                "contrast_id": contrast_id,
+                "total_specs": int(group["spec_id"].nunique()),
+                "converged_specs": int(converged["spec_id"].nunique()),
                 "non_independent_specs": int(
-                    (group["independent_variant"] == False).sum()  # noqa: E712
+                    group.loc[~group["independent_variant"].astype(bool), "spec_id"].nunique()
                 ),
                 "range_low": (
                     float(converged["ci_low"].min()) if not converged.empty else None
@@ -184,6 +202,7 @@ def run_landmark_spline_robustness(
     complete_case_spec_id: str,
     input_bindings: list[dict[str, Any]] | None = None,
     variable_display: BoundVariableDisplay | None = None,
+    functional_form_effects: tuple = (),
 ) -> dict[str, Any]:
     """Project already-fitted signed outputs into the robustness contract."""
 
@@ -288,7 +307,17 @@ def run_landmark_spline_robustness(
             "value": sealed.linear_sensitivity_per_unit,
             "estimate": linear["adjusted_odds_ratio"],
             "lower": linear["ci_low"], "upper": linear["ci_high"],
-        }],
+        }] + [
+            {
+                "kind": "covariate_form_point",
+                "source_evidence_id": effect.contrast_evidence_id,
+                "target_column": effect.contract.form.target_column,
+                "sensitivity_spec_id": effect.contract.spec_id,
+                "value": row["exposure_value"], "reference": row["reference_exposure_value"],
+                "estimate": row["adjusted_odds_ratio"], "lower": row["ci_low"], "upper": row["ci_high"],
+            }
+            for effect in functional_form_effects for row in effect.points.to_dict(orient="records")
+        ],
     }).model_dump(mode="json")
     primary_effect_label = (
         f"upper signed curve-boundary contrast at {coordinate}={coordinate_value:g} "
@@ -403,6 +432,42 @@ def run_landmark_spline_robustness(
             "evidence_id": contrast_evidence_id,
         },
     ]
+    if functional_form_effects:
+        lower = ordered.iloc[0]
+        rows.append({
+            **base,
+            "spec_id": "signed_lower_boundary_contrast",
+            "spec_label": "Primary exposure curve, lower contrast",
+            "contrast_id": f"{sealed.exposure_column}:{float(lower[coordinate]):.17g}_vs_{reference_value:.17g}",
+            "contrast_label": f"{float(lower[coordinate]):g} vs {reference_value:g}",
+            "point_estimate": float(lower["adjusted_odds_ratio"]),
+            "ci_low": float(lower["ci_low"]), "ci_high": float(lower["ci_high"]),
+            "axis": "primary", "model_id": "signed_landmark_spline_lower_boundary_contrast",
+            "independent_variant": True,
+            "notes": "Original lower exposure contrast, for comparison at the same coordinate.",
+            "evidence_id": contrast_evidence_id,
+        })
+    for effect in functional_form_effects:
+        contract = effect.contract
+        if contract.n != complete_case_n or contract.events != events:
+            raise ValueError("functional-form effect population differs from the robustness primary")
+        for point in effect.points.to_dict(orient="records"):
+            value, reference = point["exposure_value"], point["reference_exposure_value"]
+            rows.append({
+                **base, "spec_id": contract.spec_id,
+                "spec_label": f"{contract.form.target_column}: RCS instead of linear adjustment",
+                "contrast_id": f"{sealed.exposure_column}:{value:.17g}_vs_{reference:.17g}",
+                "contrast_label": f"{value:g} vs {reference:g}",
+                "point_estimate": point["adjusted_odds_ratio"],
+                "ci_low": point["ci_low"], "ci_high": point["ci_high"],
+                "axis": "model", "model_id": contract.step_id,
+                "independent_variant": True,
+                "notes": (
+                    f"Refitted {contract.form.target_column} with its reviewed RCS; primary exposure basis, "
+                    "reference, population and covariance policy retained. The full exposure curve was consumed."
+                ),
+                "evidence_id": effect.contrast_evidence_id,
+            })
     matrix = pd.DataFrame(rows, columns=matrix_columns)
     summary_table = _summary_rows(matrix)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -495,8 +560,21 @@ def run_landmark_spline_robustness(
         "complete_case_n": complete_case_n,
         "n_converged_results": int(matrix["converged"].sum()),
         "n_converged_variants": int(
-            (matrix["converged"] & matrix["independent_variant"] & matrix["axis"].ne("primary")).sum()
+            matrix.loc[
+                matrix["converged"] & matrix["independent_variant"] & matrix["axis"].ne("primary"),
+                "spec_id",
+            ].nunique()
         ),
+        "functional_form_effect_sources": [
+            {
+                "step_id": effect.contract.step_id, "spec_id": effect.contract.spec_id,
+                "target_column": effect.contract.form.target_column,
+                "curve_evidence_id": effect.curve_evidence_id,
+                "contrast_evidence_id": effect.contrast_evidence_id,
+                "model_rows_sha256": effect.contract.model_rows_sha256,
+                "primary_exposure_nonlinearity_p_value": effect.contract.primary_exposure_nonlinearity_p_value,
+            } for effect in functional_form_effects
+        ],
         "robustness_rows": rows,
         "robustness_panel": {"rows": rows},
         "limitations": [
@@ -525,8 +603,12 @@ def run_bound_landmark_spline_robustness(
     run_dir: Path,
     resolved_inputs: Path,
     out_dir: Path,
+    functional_form_parents: tuple[AnalysisStep, ...] = (),
 ) -> dict[str, Any]:
     from .typed_input_binding import load_typed_input
+    from .functional_form_effect_products import (
+        ConsumedFunctionalFormEffects, consume_functional_form_effects,
+    )
     from ...robustness.panel import load_locked_robustness_specs
 
     sealed = load_current_case_scientific_runtime_authority(authority)
@@ -540,9 +622,14 @@ def run_bound_landmark_spline_robustness(
     resolved = manifest.get("inputs") if isinstance(manifest, dict) else None
     if not isinstance(resolved, dict) or not resolved:
         raise ValueError("landmark robustness resolved-input manifest is empty")
+    expected = (sealed.downstream_parent_product, sealed.linear_sensitivity_product, *(
+        key for parent in functional_form_parents for key in sealed.functional_form_outputs(parent)[1:]
+    ))
+    if len(set(expected)) != len(expected) or tuple(step.inputs) != expected or set(resolved) != set(expected):
+        raise ValueError("landmark robustness manifest differs from the reviewed primary/effect inputs")
     loaded = {}
     receipts = []
-    for input_key in resolved:
+    for input_key in expected:
         bound = load_typed_input(
             input_key=input_key,
             run_dir=run_dir,
@@ -555,13 +642,7 @@ def run_bound_landmark_spline_robustness(
             minimum_row_count=(
                 2 if input_key == sealed.downstream_parent_product else 1
             ),
-            require_consumption_contract=(
-                input_key
-                in {
-                    sealed.downstream_parent_product,
-                    sealed.linear_sensitivity_product,
-                }
-            ),
+            require_consumption_contract=True,
         )
         loaded[input_key] = bound
         receipts.append(
@@ -580,6 +661,20 @@ def run_bound_landmark_spline_robustness(
         raise ValueError(
             "landmark robustness manifest lacks one signed parent product"
         ) from exc
+    effects = []
+    for parent in functional_form_parents:
+        _, curve_key, point_key = sealed.functional_form_outputs(parent)
+        curve, points = loaded[curve_key], loaded[point_key]
+        contract = consume_functional_form_effects(
+            step=parent, authority=sealed, runtime_projection_sha256=runtime_projection_sha256,
+            curve=curve.frame, points=points.frame,
+            contrasts=contrast.frame, linear_sensitivity=linear.frame,
+            primary_input_bindings=loaded,
+        )
+        effects.append(ConsumedFunctionalFormEffects(
+            contract=contract, points=points.frame,
+            curve_evidence_id=curve.evidence_id, contrast_evidence_id=points.evidence_id,
+        ))
     return run_landmark_spline_robustness(
         step=step,
         authority=sealed,
@@ -591,6 +686,7 @@ def run_bound_landmark_spline_robustness(
         out_dir=out_dir,
         input_bindings=receipts,
         complete_case_spec_id=complete_case_spec_id,
+        functional_form_effects=tuple(effects),
         variable_display=load_bound_variable_display(
             run_dir=run_dir, manifest=manifest, step_id=step.step_id,
             column=sealed.exposure_column,

@@ -8,6 +8,7 @@ refits both forms on the same primary model population and covariance policy.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import textwrap
 from pathlib import Path
@@ -64,8 +65,7 @@ def landmark_spline_functional_form_executor_owns_step(
         and step.scientific_capability is None
         and step.robustness_replay_spec is None
         and len(step.sensitivity_spec_ids) == 1
-        and len(outputs) == 1
-        and outputs[0].startswith("table:")
+        and outputs == sealed.functional_form_outputs(step)
         and tuple(step.inputs) == expected_inputs
         and all(contracts.get(value) == "all_rows" for value in expected_inputs if ":" in value)
     )
@@ -115,6 +115,7 @@ def run_landmark_spline_functional_form(
     out_dir: Path,
     input_bindings: list[dict[str, Any]] | None = None,
     cohort_frame: Any = None,
+    primary_contrasts: Any = None,
 ) -> dict[str, Any]:
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
@@ -127,7 +128,7 @@ def run_landmark_spline_functional_form(
     if len(linear_sensitivity) != 1:
         raise ValueError("signed linear sensitivity must contain exactly one row")
     if form.target_column != sealed.exposure_column:
-        if cohort_frame is None:
+        if cohort_frame is None or primary_contrasts is None:
             raise ValueError("covariate functional-form target requires a cohort refit, not exposure-result projection")
         from .landmark_spline_fit import compare_covariate_functional_form
 
@@ -135,8 +136,19 @@ def run_landmark_spline_functional_form(
             frame=cohort_frame, authority=sealed, form=form,
             primary_diagnostics=linear_sensitivity.iloc[0],
         )
-        return _write_result(step=step, row=result, out_dir=out_dir,
-                             source_evidence_id=linear_evidence_id, input_bindings=input_bindings or [])
+        from .functional_form_effect_products import seal_functional_form_effects
+
+        curve, points, contract = seal_functional_form_effects(
+            step=step, authority=sealed, runtime_projection_sha256=runtime_projection_sha256,
+            comparison=result, contrasts=primary_contrasts,
+            linear_sensitivity=linear_sensitivity, input_bindings=input_bindings or [],
+        )
+        diagnostics = {key: value for key, value in result.items() if key != "effect_bundle"}
+        return _write_result(
+            step=step, row=diagnostics, out_dir=out_dir,
+            source_evidence_id=linear_evidence_id, input_bindings=input_bindings or [],
+            effect_tables=(curve, points), effect_contract=contract,
+        )
     robust = sealed.schema_version.endswith("/4")
     comparison_columns = (
         {"nonlinearity_test", "nonlinearity_target_column", "nonlinearity_statistic", "information_criteria_basis"}
@@ -203,7 +215,8 @@ def run_landmark_spline_functional_form(
                          source_evidence_id=linear_evidence_id, input_bindings=input_bindings or [])
 
 
-def _write_result(*, step, row, out_dir, source_evidence_id, input_bindings):
+def _write_result(*, step, row, out_dir, source_evidence_id, input_bindings,
+                  effect_tables=(), effect_contract=None):
     import pandas as pd
 
     # Validate before writing CSV so non-finite diagnostics cannot leave a
@@ -238,6 +251,27 @@ def _write_result(*, step, row, out_dir, source_evidence_id, input_bindings):
         "input_bindings": input_bindings,
         "output_files": {output_product: output_path.name},
     }
+    if effect_contract is not None:
+        # Full parameters/covariance/lineage remain in both registered effect
+        # tables. The downstream native robustness owner reads those bytes and
+        # publishes its compact reportable_model_contrasts. Do not recursively
+        # expose model internals to the Writer's bounded numeric-leaf budget.
+        summary["functional_form_effect_products"] = {
+            "contract_sha256": hashlib.sha256(effect_contract.model_dump_json().encode("utf-8")).hexdigest(),
+            "spec_id": effect_contract.spec_id,
+            "target_column": effect_contract.form.target_column,
+            "exposure": effect_contract.exposure,
+            "analysis_role": effect_contract.analysis_role,
+            "independent_refit": effect_contract.independent_refit,
+            "model_rows_sha256": effect_contract.model_rows_sha256,
+            "curve_product": step.expected_outputs[1],
+            "contrast_product": step.expected_outputs[2],
+            "primary_exposure_nonlinearity_p_value": effect_contract.primary_exposure_nonlinearity_p_value,
+        }
+        for product, table in zip(step.expected_outputs[1:], effect_tables, strict=True):
+            name = product.partition(":")[2] + ".csv"
+            table.to_csv(out_dir / name, index=False)
+            summary["output_files"][product] = name
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
@@ -279,7 +313,9 @@ def run_bound_landmark_spline_functional_form(
             run_dir=run_dir,
             resolved_inputs=manifest,
             step_id=step.step_id,
-            expected_declared_kind=input_key.partition(":")[0],
+            # The shared loader validates canonical product identity; a
+            # published cohort: alias can be recorded under dataset:.
+            expected_declared_kind=None if input_key == cohort_input else "table",
             expected_evidence_kind=None if input_key == cohort_input else "table",
             # The cohort can contain additional audit/profile columns. The
             # loader validates its complete recorded schema; the shared model
@@ -309,6 +345,7 @@ def run_bound_landmark_spline_functional_form(
         out_dir=out_dir,
         input_bindings=receipts,
         cohort_frame=loaded[cohort_input].frame if cohort_input else None,
+        primary_contrasts=loaded[sealed.downstream_parent_product].frame,
     )
 
 

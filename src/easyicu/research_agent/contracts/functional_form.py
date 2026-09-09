@@ -16,6 +16,17 @@ RCS_LINEAR_SENSITIVITY_METHODS = frozenset({
 })
 
 
+def functional_form_products(diagnostic_product: str, *, include_effects: bool) -> tuple[str, ...]:
+    """Keep the planned comparison name and attach its model-effect products."""
+
+    kind, separator, name = diagnostic_product.partition(":")
+    if kind != "table" or not separator or not name or any(c in name for c in "/\\"):
+        raise ValueError("functional-form comparison requires a named table product")
+    if not include_effects:
+        return (diagnostic_product,)
+    return (diagnostic_product, f"table:{name}_exposure_curve", f"table:{name}_exposure_contrasts")
+
+
 class FunctionalFormSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

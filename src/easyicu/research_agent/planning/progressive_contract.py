@@ -761,9 +761,13 @@ class ProgressivePlannerCheckpoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.progressive_planner_checkpoint/1"] = (
+    schema_version: Literal[
+        "easyicu.progressive_planner_checkpoint/1", "easyicu.progressive_planner_checkpoint/2",
+    ] = (
         "easyicu.progressive_planner_checkpoint/1"
     )
+    revision_offset: Optional[int] = Field(default=None, gt=0, exclude_if=lambda v: v is None)
+    repair_start_index: Optional[int] = Field(default=None, ge=0, exclude_if=lambda v: v is None)
     sequence: int = Field(ge=0)
     stage: Literal["outline", "foundation", "step"]
     request_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -779,6 +783,14 @@ class ProgressivePlannerCheckpoint(BaseModel):
 
     @model_validator(mode="after")
     def _closed_checkpoint_chain(self) -> "ProgressivePlannerCheckpoint":
+        if self.schema_version.endswith("/1"):
+            if self.revision_offset is not None or self.repair_start_index is not None:
+                raise ValueError("legacy checkpoint cannot declare a suffix revision")
+        elif (
+            self.stage != "step" or self.revision_offset is None
+            or self.repair_start_index is None
+        ):
+            raise ValueError("revised checkpoint requires a typed suffix coordinate")
         if self.stage == "outline":
             if self.sequence != 0 or self.foundation is not None or self.materializations:
                 raise ValueError("outline checkpoint must be sequence 0 without suffix")
@@ -792,8 +804,24 @@ class ProgressivePlannerCheckpoint(BaseModel):
         else:
             if self.foundation is None or not self.materializations:
                 raise ValueError("step checkpoint requires foundation and prefix")
-            if self.sequence != len(self.materializations) + 1:
+            if self.sequence != len(self.materializations) + 1 + (self.revision_offset or 0):
                 raise ValueError("step checkpoint sequence must follow prefix length")
+            if self.repair_start_index is not None:
+                repairs = self.prompt_metrics.get("final_acceptance_repairs") or []
+                if not repairs or self.repair_start_index >= len(self.materializations):
+                    raise ValueError("revised checkpoint lacks its final acceptance finding")
+                schemas = self.prompt_metrics.get("active_step_materialization_schema_sha256")
+                if not isinstance(schemas, list) or len(schemas) != len(self.materializations):
+                    raise ValueError("revised checkpoint lacks active prefix schema authorities")
+                repair = repairs[-1]
+                retained = self.materializations[:self.repair_start_index]
+                if (
+                    repair.get("retained_step_count") != self.repair_start_index
+                    or repair.get("retained_materializations_sha256") != canonical_sha256(
+                        [m.model_dump(mode="json") for m in retained]
+                    )
+                ):
+                    raise ValueError("revised checkpoint changed the retained prefix")
         outline_sha256 = canonical_sha256(self.outline.model_dump(mode="json"))
         if self.prompt_metrics.get("outline_sha256") != outline_sha256:
             raise ValueError("checkpoint prompt metrics identify another outline")
