@@ -183,6 +183,9 @@ SCIENTIFIC_CLAIM_WRITER_RULES = (
     "block. For any current-study direction, comparison, or qualitative "
     "interpretation covered by that block, output the exact "
     "`{claim:<step>.<claim>}` token as the complete standalone sentence.\n"
+    "- In Conclusion and Abstract Conclusions, the host renders the same token "
+    "as its bounded interpretation without repeating the result estimate or "
+    "interval. It preserves the population, contrast and adjustment scope.\n"
     "- Do not paraphrase a host claim and do not replace `{claim:...}` with "
     "`{evidence:...}`. Evidence citations authorize numeric facts; they do not "
     "authorize independently worded scientific conclusions.\n"
@@ -792,8 +795,24 @@ def expand_scientific_claim_tokens(
     out: list[str] = []
     missing: list[str] = []
     malformed: list[str] = []
+    conclusion_depth: int | None = None
+    abstract_conclusion = False
     for raw_line in scaffold.splitlines():
         structure_prefix, content = _split_markdown_structure_prefix(raw_line)
+        heading_prefix, heading_content = _split_markdown_heading_prefix(content)
+        if heading_prefix:
+            depth = heading_prefix.count("#")
+            name = _normalized_heading(heading_content)
+            if name in {"conclusion", "conclusions", "结论"}:
+                conclusion_depth = depth
+            elif conclusion_depth is not None and depth <= conclusion_depth:
+                conclusion_depth = None
+            abstract_conclusion = False
+        label = _STRUCTURED_ABSTRACT_LABEL_RE.search(structure_prefix)
+        if label is not None:
+            abstract_conclusion = label.group("label").casefold() in {
+                "conclusion", "conclusions", "结论",
+            }
         token_match = _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(content.strip())
         if token_match is None:
             if _SCIENTIFIC_CLAIM_TOKEN_RE.search(
@@ -814,7 +833,9 @@ def expand_scientific_claim_tokens(
         # Format only this host-rendered reader sentence before numeric binding.
         # Never round the scaffold wholesale: canonical footnotes, evidence IDs
         # and source URLs are provenance, not display values.
-        reader_text, _ = round_reader_numeric_display(claim.render_reader_text())
+        reader_text, _ = round_reader_numeric_display(claim.render_reader_text(
+            include_estimate=not (conclusion_depth is not None or abstract_conclusion),
+        ))
         out.append(
             f"{structure_prefix}{reader_text} "
             f"{{evidence:{claim.evidence_id}}}"

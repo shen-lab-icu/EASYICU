@@ -268,7 +268,7 @@ def required_reader_display_label_keys(
         .casefold()
         for variable in context.variables
     }
-    return tuple(
+    keys = tuple(
         dict.fromkeys(
             str(value or "").strip()
             for value in getattr(selected, "required_variables", ()) or ()
@@ -277,6 +277,24 @@ def required_reader_display_label_keys(
             and variable_roles.get(str(value or "").strip()) != "id"
         )
     )
+    # Apply the same source boundary as raw-input compilation before asking
+    # the model to invent reader copy for a structurally unsupported input.
+    # Keep the selected roster intact: required endpoints need source repair
+    # or a reviewed design revision, never silent omission or substitution.
+    for key in keys:
+        descriptor = context.variable(key)
+        if descriptor is None:
+            continue  # The outline variable-binding owner handles absent keys.
+        try:
+            require_supported_variable_source(descriptor, context.cohort.database)
+        except ConceptSourceUnavailableError as exc:
+            raise _fail(
+                "progressive_design_input_structurally_unavailable",
+                str(exc),
+                path="design_selection.required_variables",
+                detail={"column": key},
+            ) from exc
+    return keys
 
 
 def _is_mechanical_identifier_label(key: str, value: str) -> bool:

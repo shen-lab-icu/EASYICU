@@ -134,3 +134,76 @@ def test_model_claim_registration_is_sealed_and_reader_retains_comparison(tmp_pa
     forged["reportable_model_contrasts"]["outcome"] = "another_outcome"
     with pytest.raises(ValueError, match="registered summary bytes"):
         store.register_step_summary_numerics(step_id="robustness", evidence_id=record.evidence_id, summary=forged)
+
+
+@pytest.mark.parametrize("legacy_numeric_registry", [False, True])
+def test_every_authorized_model_contrast_survives_strict_numeric_binding(
+    tmp_path, legacy_numeric_registry,
+):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        bind_numeric_values, drop_untraceable_numeric_sentences,
+    )
+
+    summary = _summary()
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    record = store.register_json(
+        kind="statistic", description="Native model reporting projection",
+        payload=summary, filename="summary.json", evidence_id="projection",
+        produced_by_step="model", generation_mode="deterministic_standard",
+    )
+    if legacy_numeric_registry:
+        # A resumed store already contains these exact values, but no OR/CI
+        # identity. Re-registration must repair metadata without changing bytes.
+        for i, contrast in enumerate(summary["reportable_model_contrasts"]["contrasts"]):
+            for field in ("estimate", "lower", "upper"):
+                store.register_numeric_claim(
+                    step_id="model", evidence_id=record.evidence_id,
+                    source_field=f"reportable_model_contrasts.contrasts[{i}].{field}",
+                    value=str(contrast[field]), canonical=contrast[field],
+                )
+    before = copy.deepcopy(summary)
+    store.register_step_summary_numerics(
+        step_id="model", evidence_id=record.evidence_id, summary=summary,
+    )
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    records = [{
+        "step_id": "model", "status": "ok", "generation_mode": "deterministic_standard",
+        "step_summary": summary, "step_summary_evidence_id": record.evidence_id,
+        "evidence_ids": [record.evidence_id],
+    }]
+    scaffold = "## Results\n\n" + "\n\n".join(
+        claim.placeholder for claim in store.scientific_claims()
+    )
+    bound = store.bind_manuscript(scaffold, per_step_records=records)
+    filtered, removed = drop_untraceable_numeric_sentences(
+        bound, evidence=store, per_step_records=records,
+    )
+    assert removed == []
+    assert filtered == bound
+    _, bindings, untraced = bind_numeric_values(
+        bound, evidence=store, per_step_records=records,
+    )
+    assert not untraced
+    assert {claim.estimand.value for claim in bindings.values() if claim.effect_scale} == {
+        "point_estimate", "confidence_interval_lower", "confidence_interval_upper",
+    }
+    assert summary == before
+    assert record.sha256 == store.get(record.evidence_id).sha256
+
+
+def test_llm_model_projection_does_not_acquire_native_numeric_identity(tmp_path):
+    summary = _summary()
+    store = EvidenceStore(tmp_path)
+    record = store.register_json(
+        kind="statistic", description="Unvalidated generated projection",
+        payload=summary, filename="summary.json", evidence_id="projection",
+        produced_by_step="model", generation_mode="llm",
+    )
+    registered = store.register_step_summary_numerics(
+        step_id="model", evidence_id=record.evidence_id, summary=summary,
+    )
+    assert not store.scientific_claims()
+    assert all(
+        claim.effect_scale is None for claim in registered
+        if claim.source_field.startswith("reportable_model_contrasts.contrasts")
+    )

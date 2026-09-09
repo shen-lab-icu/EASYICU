@@ -123,6 +123,7 @@ from ..providers.protocol import LLMClient, LLMMessage, StructuredOutputRequest
 from ..providers.structured_retry import call_llm_with_structured_retry
 from ..reporting.article_contract import (
     build_article_analysis_contract,
+    hinted_typed_products,
     validate_plan_against_article_contract,
 )
 from ..research_context.outbound import (
@@ -1198,9 +1199,14 @@ def _accept_compiled_plan(
 ) -> None:
     """Apply the same fresh-plan authorities after host compilation."""
 
+    # Retain a closed, host-owned gate coordinate when the lower-level
+    # validator only supplies a ValueError. Its text can contain private
+    # candidate values and must not become the public diagnostic.
+    gate = "robustness_specs"
     try:
         if plan.robustness_specs:
             validate_planner_robustness_specs(plan.robustness_specs)
+        gate = "literature_citation_bindings"
         validate_literature_citation_bindings(
             plan,
             allowed_literature_citation_keys,
@@ -1208,11 +1214,13 @@ def _accept_compiled_plan(
             direct_comparator_keys=direct_comparator_literature_keys,
         )
         if allowed_know_how_decisions is not None:
+            gate = "know_how_decisions"
             verify_know_how_decisions(
                 plan.know_how_decisions,
                 allowed_know_how_decisions,
             )
         if enforce_article_contract:
+            gate = "article_contract"
             contract = build_article_analysis_contract(
                 article_context,
                 analysis_type=plan.analysis_type,
@@ -1232,23 +1240,36 @@ def _accept_compiled_plan(
             if "robustness" in contract.required_roles and not plan.robustness_specs:
                 missing_roles = sorted({*missing_roles, "robustness_specs"})
             if missing_roles:
-                raise ValueError(
+                message = (
                     "progressive article contract is missing required role(s): "
                     + ", ".join(missing_roles)
                 )
+                index = _step_index_from_error(plan, message)
+                raise ProgressivePlanCompileError(
+                    "progressive_article_required_roles_missing",
+                    message,
+                    step_id=plan.steps[index].step_id if plan.steps else None,
+                    step_index=index if plan.steps else None,
+                    path=f"article_analysis_contract.{missing_roles[0]}",
+                    findings=({"missing_roles": missing_roles},),
+                )
         if not llm_is_mockish(llm):
+            gate = "typed_product_specs"
             validate_fresh_planner_typed_product_specs(
                 plan,
                 context=agent_context,
             )
+        gate = "context_bindings"
         validate_plan_typed_bindings_against_context(
             plan=plan,
             context=agent_context,
         )
+        gate = "adjustment_authority"
         validate_plan_against_adjustment_authority(
             plan=plan,
             context=agent_context,
         )
+        gate = "primary_cohort"
         cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)
         if cohort_findings:
             raise ValueError(
@@ -1259,6 +1280,7 @@ def _accept_compiled_plan(
                     default=str,
                 )
             )
+        gate = "primary_result"
         validate_required_primary_result(plan=plan, context=agent_context)
     except ProgressivePlanCompileError:
         raise
@@ -1267,11 +1289,11 @@ def _accept_compiled_plan(
         index = _step_index_from_error(plan, message)
         step = plan.steps[index] if plan.steps else None
         raise ProgressivePlanCompileError(
-            "progressive_fresh_plan_gate_failed",
+            f"progressive_{gate}_invalid",
             message,
             step_id=step.step_id if step is not None else None,
             step_index=index if step is not None else None,
-            path="fresh_plan_acceptance",
+            path=gate,
         ) from exc
 
 
@@ -1611,6 +1633,11 @@ class ProgressivePlannerAgent:
                 separators=(",", ":"),
             )
             + "\nanalysis_window is the exact physical observation coordinate. "
+            "A data card with source_unavailability is not an executable source: "
+            "do not add it to the selected design's required_variables or any "
+            "step as an optional input. Keep rejected alternatives auditable. "
+            "If the original question requires it, expose the source limitation; "
+            "do not remove or substitute a requested endpoint or exposure. "
             "An outer_observation_window is not the phenotype definition or "
             "outcome follow-up. Bind descriptive denominators and captions to "
             "that window; never relabel it whole-stay prevalence. A post-zero "
@@ -1903,6 +1930,23 @@ class ProgressivePlannerAgent:
                 f"outline selected unavailable analysis type {outline.analysis_type!r}",
                 path="analysis_type",
             )
+        if article_context is not None:
+            # Validate Planner-owned choices inside the outline parser's local
+            # retry, before sealing a foundation or spending step calls. A
+            # contradictory host envelope still raises its own authority error.
+            if (
+                context_counts_only_authority(article_context)
+                and outline.analysis_type != "descriptive_epidemiology"
+            ):
+                raise ProgressivePlanCompileError(
+                    "progressive_selected_family_counts_only_incompatible",
+                    "The host-bound none_counts_only ceiling cannot support "
+                    "the selected model/inferential family. Revise this unsealed "
+                    "selection only if a descriptive design answers the original "
+                    "question; otherwise request a host design revision. Never "
+                    "change the variance ceiling or the scientific question.",
+                    path="analysis_type",
+                )
         primary_clusters = [
             step.step_id for step in outline.steps
             if step.scientific_action_id == "phenotyping.cluster_solution"
@@ -1994,6 +2038,11 @@ class ProgressivePlannerAgent:
                 str(exc),
                 path=exc.path,
             ) from exc
+        if article_context is not None:
+            # The selected design can add an unavailable input without naming
+            # it in any step. Its source check belongs to outline repair, not
+            # the subsequent reader-label request outside that retry boundary.
+            required_reader_display_label_keys(article_context, outline.design_selection)
         if article_context is not None and descriptive_counts_only_required(
             article_context, analysis_type=outline.analysis_type,
         ):
@@ -2868,6 +2917,34 @@ class ProgressivePlannerAgent:
             )
         if know_how_context:
             blocks.append("Retrieved protocol know-how (binding):\n" + know_how_context)
+        if outline_step.module_id == "custom_analysis":
+            article_contract = build_article_analysis_contract(
+                context, analysis_type=outline.analysis_type,
+            )
+            blocks.append(
+                "Selected-family article product contract (final-plan coverage; "
+                "only materialize this current step's declared objective):\n"
+                + json.dumps(
+                    [{
+                        "role": requirement.role,
+                        "typed_products": hinted_typed_products(
+                            requirement.role, [requirement.module_id],
+                        ),
+                        "requires_primary_lineage": (
+                            requirement.role in article_contract.planner_owned_result_roles
+                        ),
+                    } for requirement in article_contract.requirements if requirement.required],
+                    ensure_ascii=False, separators=(",", ":"),
+                )
+                + "\nA protocol artifact or a plausible product name does not "
+                "itself declare an article display. Use the listed typed product "
+                "for a display this step actually owns. Preserve legitimate "
+                "intermediate artifacts and all sealed product dependencies. "
+                "A primary-lineage display must consume a typed product of "
+                "the primary result or its descendants; depends_on alone does "
+                "not establish result lineage. "
+                "Do not implement future steps or invent results to fill roles."
+            )
         if compiler_observation:
             if (
                 compiler_observation.get("path") == "literature_bindings"

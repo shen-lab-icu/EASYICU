@@ -1527,6 +1527,19 @@ def _module_arrow_null_type(concept: str, pyarrow_module):
     return pyarrow_module.float64()
 
 
+_SOFA1_TIME_BASIS_KEY = b"easyicu.sofa1_component_time_basis"
+_SOFA1_TIME_BASIS = b"sofa_score_rolled_components_v1"
+
+
+def _require_sofa1_time_basis(schema) -> None:
+    """Legacy point components cannot be relabelled as rolling score states."""
+    if (schema.metadata or {}).get(_SOFA1_TIME_BASIS_KEY) != _SOFA1_TIME_BASIS:
+        raise ValueError(
+            "SOFA-1 component time basis is unverified; re-extract the total "
+            "and rolled components together through the score module loader"
+        )
+
+
 def _module_arrow_table(
     frame,
     concepts,
@@ -1537,6 +1550,14 @@ def _module_arrow_table(
 ):
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
+    if (
+        module == "sofa1_score"
+        and frame.attrs.get(_SOFA1_TIME_BASIS_KEY.decode()) == _SOFA1_TIME_BASIS.decode()
+    ):
+        table = table.replace_schema_metadata({
+            **(table.schema.metadata or {}),
+            _SOFA1_TIME_BASIS_KEY: _SOFA1_TIME_BASIS,
+        })
     requested = _native_export_physical_value_columns(concepts)
     # Event-time companions are derived at the native-v2 publication boundary
     # from the event concept's source ``charttime``.  Do not invent an all-null
@@ -1823,6 +1844,35 @@ def _attach_stream_derived_columns(base, addition, value_columns):
     return base
 
 
+def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Dict):
+    """Keep SOFA's total and rolled organs from one registered callback call.
+
+    Requesting the six component concepts separately returns point states.
+    They must not overwrite the aggregate callback's trailing-window states
+    before publication or the Sepsis delta calculation.
+    """
+    kwargs = dict(load_kwargs)
+    concepts = list(kwargs["concepts"])
+    coherent_sofa1 = (
+        module_name == "sofa1_score"
+        and {"sofa", *_SOFA1_COMPONENT_NAMES}.issubset(concepts)
+    )
+    if coherent_sofa1:
+        kwargs["concepts"] = [c for c in concepts if c not in _SOFA1_COMPONENT_NAMES]
+        kwargs["keep_components"] = True
+        # The R-style display projection retains only requested concept names,
+        # discarding the callback's companion organs. Native publication owns
+        # identifier/schema normalization and can retain the full typed frame.
+        kwargs["r_compatible"] = False
+    result = load_concepts_fn(**kwargs)
+    if coherent_sofa1 and isinstance(result, pd.DataFrame) and not result.empty:
+        missing = {"sofa", *_SOFA1_COMPONENT_NAMES}.difference(result.columns)
+        if missing:
+            raise ValueError(f"SOFA-1 aggregate callback omitted rolled components: {sorted(missing)}")
+        result.attrs[_SOFA1_TIME_BASIS_KEY.decode()] = _SOFA1_TIME_BASIS.decode()
+    return result
+
+
 def _load_stream_module_batch(
     load_concepts_fn,
     *,
@@ -1838,7 +1888,11 @@ def _load_stream_module_batch(
         concept for concept in _VITAL_STREAM_DERIVED_CONCEPTS if concept in concepts
     ]
     if module_name != "vitals" or not requested_derived:
-        return load_concepts_fn(**load_kwargs, patient_ids=patient_ids)
+        return _load_module_concepts(
+            load_concepts_fn,
+            module_name=module_name,
+            load_kwargs={**load_kwargs, "patient_ids": patient_ids},
+        )
 
     base_concepts = [
         concept for concept in concepts if concept not in requested_derived
@@ -2319,7 +2373,7 @@ def _run_module_extraction(
             if stream_info is not None:
                 saved[module_name] = stream_info
         else:
-            result = _lc(**kwargs)
+            result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
     except MemoryError:
         traceback.print_exc()
         if streamed:
@@ -2351,7 +2405,7 @@ def _run_module_extraction(
             )
             kwargs["batch_size"] = fallback_bs
             try:
-                result = _lc(**kwargs)
+                result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
             except Exception as e:
                 traceback.print_exc()
                 errors.append(f"load_concepts({module_name}) batched: {e}")
@@ -2675,6 +2729,8 @@ def _stream_special_extraction_batches(
                 raise FileNotFoundError(f"missing streamed dependency module: {source}")
             return pd.DataFrame(columns=[id_col, *value_columns])
         dataset = ds.dataset(source, format="parquet")
+        if module_name == "sofa1_score" and dataset.count_rows() > 0:
+            _require_sofa1_time_basis(dataset.schema)
         # A selected-module refresh can combine a newly extracted producer
         # artifact (which still uses the database-native identifier) with a
         # hash-verified dependency copied from a sealed native-v2 package
@@ -4899,6 +4955,8 @@ def _try_publish_native_export_arrow_fast_path(
     if source_file.metadata.num_rows == 0:
         return None
     source_schema = source_file.schema_arrow
+    if module == "sofa1_score":
+        _require_sofa1_time_basis(source_schema)
     if len(set(source_schema.names)) != len(source_schema.names):
         raise ValueError("native export frame has duplicate physical columns")
     candidates = [
@@ -4913,6 +4971,11 @@ def _try_publish_native_export_arrow_fast_path(
         dictionary=dictionary,
     )
     target_schema = _native_export_arrow_schema(schema_frame)
+    if module == "sofa1_score":
+        target_schema = target_schema.with_metadata({
+            **(target_schema.metadata or {}),
+            _SOFA1_TIME_BASIS_KEY: _SOFA1_TIME_BASIS,
+        })
     read_columns = list(
         dict.fromkeys(
             [
@@ -5735,12 +5798,19 @@ def _publish_native_export_v2(
                     if not physical_output_missing
                     else "pandas_structural_placeholder"
                 )
-                frame.to_parquet(
-                    temporary_parquet,
-                    index=False,
-                    engine="pyarrow",
-                    compression="snappy",
-                )
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+
+                table = pa.Table.from_pandas(frame, preserve_index=False)
+                if module == "sofa1_score" and source_rows:
+                    # The Arrow preflight above verified the producer's basis
+                    # before choosing this bounded duplicate-key fallback.
+                    table = table.replace_schema_metadata({
+                        **(table.schema.metadata or {}),
+                        _SOFA1_TIME_BASIS_KEY: _SOFA1_TIME_BASIS,
+                    })
+                pq.write_table(table, temporary_parquet, compression="snappy")
+                del table
                 metadata_frame = frame
                 published_rows = int(frame.shape[0])
                 concept_non_null = {

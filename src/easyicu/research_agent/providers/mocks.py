@@ -1390,7 +1390,6 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
 
         contract = {
             "figure_id": product,
-            "title": product.replace("_", " ").title(),
             "core_claim": "Rendering of the registered upstream table without scientific recomputation.",
             "panels": [
                 {

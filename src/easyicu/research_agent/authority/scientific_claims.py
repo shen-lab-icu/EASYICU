@@ -237,7 +237,7 @@ class ScientificClaim(ScientificClaimDraft):
             f"{self.analysis_role})."
         )
 
-    def render_reader_text(self) -> str:
+    def render_reader_text(self, *, include_estimate: bool = True) -> str:
         """Render the same claim as publication-scale reader-facing prose.
 
         ``render_text`` remains the exact machine-authority representation used
@@ -256,6 +256,12 @@ class ScientificClaim(ScientificClaimDraft):
         if self.claim_type == "descriptive_absolute_risk":
             group = _reader_coordinate(self.exposure)
             outcome = _reader_coordinate(self.outcome)
+            if not include_estimate:
+                return (
+                    f"These findings describe {outcome} in the {group} group within "
+                    f"{_reader_coordinate(self.population)}; interpretation is "
+                    "descriptive and unadjusted and does not establish a causal effect."
+                )
             if (
                 self.point_estimate is None
                 and "counts only, no confidence interval" in self.estimand
@@ -277,6 +283,12 @@ class ScientificClaim(ScientificClaimDraft):
         if self.claim_type == "descriptive_risk_difference":
             contrast = _reader_coordinate(self.exposure)
             outcome = _reader_coordinate(self.outcome)
+            if not include_estimate:
+                return (
+                    f"The comparison of {outcome} for {contrast} within "
+                    f"{_reader_coordinate(self.population)} describes an unadjusted "
+                    "risk difference and does not establish a causal effect."
+                )
             point, lower, upper, confidence = self._reader_interval()
             assert lower is not None
             assert upper is not None
@@ -296,7 +308,7 @@ class ScientificClaim(ScientificClaimDraft):
         else:
             relation = "showed no clear association with"
         estimate_text = self.estimand
-        if self.point_estimate is not None:
+        if include_estimate and self.point_estimate is not None:
             assert self.interval_lower is not None
             assert self.interval_upper is not None
             estimate_text = (

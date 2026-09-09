@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 import easyicu
@@ -24,7 +26,13 @@ def _write_complete_score_dependencies(source: Path, time) -> None:
         }
     )
     sofa1["sofa"] = sofa1[sofa1_components].sum(axis=1)
-    sofa1.to_parquet(source / "sofa1_score.parquet", index=False)
+    # The two fixture states are rolling organs (baseline then a new peak).
+    table = pa.Table.from_pandas(sofa1, preserve_index=False)
+    table = table.replace_schema_metadata({
+        **(table.schema.metadata or {}),
+        api._SOFA1_TIME_BASIS_KEY: api._SOFA1_TIME_BASIS,
+    })
+    pq.write_table(table, source / "sofa1_score.parquet")
 
     sofa2_components = list(api.SOFA2_COMPONENT_NAMES)
     sofa2 = pd.DataFrame(
