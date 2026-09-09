@@ -521,9 +521,14 @@
           });
         } catch (error) {
           // A general Restore action may revalidate the same approved run
-          // when old report inputs were not sealed. Explicit report-only
+          // when old report inputs were not sealed or their aggregate
+          // reporting contract needs refresh. Explicit report-only
           // requests never widen scope, and all other failures stay closed.
-          if (!restore || String(error && (error.code || error.message) || '') !== 'WRITER_ONLY_REGISTERED_INPUT_CHANGED') throw error;
+          const restoreCode = String(error && (error.code || error.message) || '');
+          if (!restore || ![
+            'WRITER_ONLY_REGISTERED_INPUT_CHANGED',
+            'WRITER_ONLY_REPORT_PROJECTION_REFRESH_REQUIRED',
+          ].includes(restoreCode)) throw error;
           host.appendMessage({
             id: 'report-recovery-' + Date.now(), role: 'assistant', complete: true,
             text: tr(

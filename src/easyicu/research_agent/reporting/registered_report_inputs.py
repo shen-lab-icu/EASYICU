@@ -160,6 +160,25 @@ def prepare_registered_report_repair(run_dir: Path, *, migration_draft: Path | N
         records,
         evidence_store=evidence,
     )
+    # A historically validated fit can still lack the aggregate reporting
+    # contract required by the current Writer. Check only after the sidecars
+    # verify the exact source summaries. This read-only path never upgrades
+    # itself into execution; a general Restore action may separately request
+    # ordinary governed revalidation, while explicit report-only stays closed.
+    from ..audits.model_contrast_reporting import model_contrast_reporting_findings
+
+    refresh_steps = [
+        record["step_id"] for record in records
+        if model_contrast_reporting_findings(
+            step_record=record, step_summary=record.get("step_summary") or {},
+        )
+    ]
+    if refresh_steps:
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_REPORT_PROJECTION_REFRESH_REQUIRED",
+            detail="The sealed model results need an aggregate reporting projection refresh before Writer-only repair: "
+            + ", ".join(refresh_steps),
+        )
     digest = _render_writer_evidence_digest_v2(
         projected, context=context, run_dir=evidence.root, evidence=evidence,
     )
