@@ -269,15 +269,19 @@ def _verified_flow(path: Path, binding: Mapping[str, Any]) -> pd.DataFrame:
     labels = frame["predicate_kind"].fillna("").astype(str).str.strip()
     if labels.eq("").any():
         raise ValueError("cohort-flow has an empty predicate label")
-    if not (frame["n_before"] - frame["n_excluded"]).eq(
-        frame["n_remaining"]
-    ).all():
+    if not (frame["n_before"] - frame["n_excluded"]).eq(frame["n_remaining"]).all():
         raise ValueError("cohort-flow denominator arithmetic failed")
-    if len(frame) > 1 and not frame["n_before"].iloc[1:].reset_index(drop=True).eq(
-        frame["n_remaining"].iloc[:-1].reset_index(drop=True)
-    ).all():
+    if (
+        len(frame) > 1
+        and not frame["n_before"]
+        .iloc[1:]
+        .reset_index(drop=True)
+        .eq(frame["n_remaining"].iloc[:-1].reset_index(drop=True))
+        .all()
+    ):
         raise ValueError("cohort-flow denominator sequence is discontinuous")
-    return frame.reset_index(drop=True)
+    # Keep CSV row coordinates through display sorting for source-data joins.
+    return frame
 
 
 def _accounting_completeness(frame: pd.DataFrame) -> str:
@@ -326,7 +330,7 @@ def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
             else "Analysis denominator only"
         ]
     labels: list[str] = []
-    for index, row in frame.iterrows():
+    for index, (_, row) in enumerate(frame.iterrows()):
         kind = str(row.get("predicate_kind") or "").strip()
         if index == 0:
             labels.append("Source universe")
@@ -369,12 +373,17 @@ def run_cohort_flow_figure(
     complete = completeness == COHORT_ACCOUNTING_COMPLETE
     unfiltered_universe = (not complete) and _unfiltered_universe(frame)
     display_labels = _display_labels(frame, complete=complete)
-    source = frame.copy()
+    # The normalized columns above are plotting coordinates, not new emitted
+    # results. Preserve the upstream value columns exactly so every exported
+    # number remains independently verifiable against its bound source.
+    source = frame.loc[:, list(binding["product_contract"]["columns"])].copy()
+    if "row_role" not in source:
+        source["row_role"] = "cohort_stage"
     source.insert(0, "accounting_completeness", completeness)
     source.insert(0, "display_label", display_labels)
     source.insert(0, "source_step_id", binding.get("produced_by_step"))
     source.insert(0, "source_table", path.name)
-    source.insert(0, "source_row_index", range(len(source)))
+    source.insert(0, "source_row_index", frame.index.tolist())
     source_path = out_dir / f"{figure_product}_source_data.csv"
     source.to_csv(source_path, index=False)
 
@@ -418,9 +427,9 @@ def run_cohort_flow_figure(
         denominator = int(frame.iloc[0]["n_remaining"])
         # A lone bar drawn at the multi-stage height fills the panel; keep it
         # at the thickness a stage has when the ledger has several.
-        bar = ax.barh(
-            [0], [denominator], height=0.42, color=PALETTE_CLINICAL["blue"]
-        )[0]
+        bar = ax.barh([0], [denominator], height=0.42, color=PALETTE_CLINICAL["blue"])[
+            0
+        ]
         ax.set_yticks([0])
         ax.set_yticklabels(display_labels)
         ax.set_ylim(-0.9, 0.9)
@@ -490,9 +499,7 @@ def run_cohort_flow_figure(
                 "metadata": {
                     "article_role": COHORT_FLOW_FIGURE_PANELS[0].article_role,
                     "chart_type": COHORT_FLOW_FIGURE_PANELS[0].chart_type,
-                    "source_products": list(
-                        (source_input,)
-                    ),
+                    "source_products": list((source_input,)),
                     "source_data": [source_path.name],
                     "accounting_completeness": completeness,
                     "paper_grade_cohort_accounting": complete,
@@ -506,12 +513,15 @@ def run_cohort_flow_figure(
             "eligibility stage; no additional selection is applied by the figure. "
             "The ledger begins at the bound input universe, not necessarily the "
             "entire source database."
-            if complete else (
+            if complete
+            else (
                 "Analysis denominator. The single bar shows all bound input "
                 "records; no eligibility filter was applied within this ledger. "
-                if unfiltered_universe else "Analysis denominator. The single bar "
+                if unfiltered_universe
+                else "Analysis denominator. The single bar "
                 "shows the final number of bound analysis records. "
-            ) + "Earlier eligibility stages and exclusions are unavailable; "
+            )
+            + "Earlier eligibility stages and exclusions are unavailable; "
             "this is not a complete participant-flow diagram."
         ),
         statistics_note=(
