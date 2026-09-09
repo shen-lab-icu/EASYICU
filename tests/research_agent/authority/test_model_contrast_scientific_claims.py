@@ -137,8 +137,9 @@ def test_model_claim_registration_is_sealed_and_reader_retains_comparison(tmp_pa
 
 
 @pytest.mark.parametrize("legacy_numeric_registry", [False, True])
+@pytest.mark.parametrize("compact_writer_view", [False, True])
 def test_every_authorized_model_contrast_survives_strict_numeric_binding(
-    tmp_path, legacy_numeric_registry,
+    tmp_path, legacy_numeric_registry, compact_writer_view,
 ):
     from easyicu.research_agent.reporting.manuscript_post import (
         bind_numeric_values, drop_untraceable_numeric_sentences,
@@ -171,6 +172,13 @@ def test_every_authorized_model_contrast_survives_strict_numeric_binding(
         "step_summary": summary, "step_summary_evidence_id": record.evidence_id,
         "evidence_ids": [record.evidence_id],
     }]
+    if compact_writer_view:
+        # The read-only report adapter supplies numeric display views rather
+        # than the complete native execution/lineage contract.
+        records[0]["step_summary"] = {"reportable_model_contrasts": {
+            "contrasts": [{k: row[k] for k in ("estimate", "lower", "upper")}
+                          for row in summary["reportable_model_contrasts"]["contrasts"]],
+        }}
     scaffold = "## Results\n\n" + "\n\n".join(
         claim.placeholder for claim in store.scientific_claims()
     )
