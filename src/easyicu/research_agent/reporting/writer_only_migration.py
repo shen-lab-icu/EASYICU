@@ -274,6 +274,7 @@ def _claim_policy_projection(
         return authority.aliases.get(ref, ref) in records_by_id
 
     manuscript = _normalize_registered_evidence_groups(manuscript, authority)
+    manuscript = _normalize_structured_abstract_labels(manuscript)
     manuscript, _ = _normalize_claim_token_sentences(manuscript)
     facts = load_manuscript_method_facts(root=run_dir, records=authority.records)
     manuscript, _ = place_manuscript_method_facts(manuscript, facts)
@@ -350,6 +351,25 @@ def _normalize_claim_token_sentences(manuscript: str) -> tuple[str, int]:
     )
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
     return normalized.strip() + "\n", count
+
+
+def _normalize_structured_abstract_labels(manuscript: str) -> str:
+    """Keep a structured-abstract label separate from filterable prose."""
+
+    abstract = re.search(
+        r"(^##\s+Abstract\s*$)(?P<body>.*?)(?=^##\s+|\Z)",
+        manuscript,
+        flags=re.M | re.S | re.I,
+    )
+    if abstract is None:
+        return manuscript
+    body = re.sub(
+        r"(?mi)^(?P<label>\*\*(?:Background|Methods|Results|Conclusions|"
+        r"背景|方法|结果|结论)\s*[:：]\*\*)[ \t]+(?=\S)",
+        lambda match: match.group("label") + "\n",
+        abstract.group("body"),
+    )
+    return manuscript[: abstract.start("body")] + body + manuscript[abstract.end("body") :]
 
 
 def _repair_abstract_conclusion_boundary(
