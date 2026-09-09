@@ -2599,6 +2599,7 @@ def test_agent_selected_runtime_gap_routes_to_host_compiler() -> None:
             "remediation_buckets": {
                 "agent_plan_revision": ["ROBUSTNESS_AXES_TOO_NARROW"],
                 "runtime_capability": [
+                    "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
                     "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
                     "REPEATED_STAY_IDENTITY_UNAVAILABLE",
                 ],

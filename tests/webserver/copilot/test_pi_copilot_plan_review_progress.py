@@ -404,6 +404,7 @@ def test_agent_plan_configuration_is_compiled_without_a_user_choice(
                     "facts": {
                         "remediation_buckets": {
                             "runtime_capability": [
+                                "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
                                 "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
                                 "REPEATED_STAY_IDENTITY_UNAVAILABLE",
                             ]
@@ -433,6 +434,7 @@ def test_agent_plan_configuration_is_compiled_without_a_user_choice(
     assert result["next_action"] == "fresh_plan"
     assert result["runtime_finding_codes"] == [
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
     ]
     assert "question" not in seen_patch

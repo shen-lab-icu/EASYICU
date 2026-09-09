@@ -353,6 +353,7 @@
     workflow: () => state.workflow,
     busy: () => state.busy || Boolean(state.childJobId),
     sessionIsStale,
+    researchSourceReady: () => !DATA_CONSENT.requiresConfirmation(state.session),
     api, projectId, turnGrants, sendText, render, watchChildJob,
     recordHostAction,
     refreshSession: (...args) => refreshSession(...args),
