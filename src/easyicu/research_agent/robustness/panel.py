@@ -89,12 +89,20 @@ class RobustnessPanelRow:
     evidence_id: str
     converged: bool
     notes: str = ""
+    independent_variant: bool = True
+    effect_scale: str = ""
+    estimand_id: str = ""
+    contrast_id: str = ""
+    effect_unit: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RobustnessPanelRow":
+        independent = data.get("independent_variant", True)
+        if not isinstance(independent, bool):
+            raise RobustnessPlanError("independent_variant must be a JSON boolean")
         return cls(
             spec_id=str(data.get("spec_id") or "").strip(),
             axis=str(data.get("axis") or "").strip(),
@@ -106,6 +114,10 @@ class RobustnessPanelRow:
             evidence_id=str(data.get("evidence_id") or "").strip(),
             converged=bool(data.get("converged")),
             notes=str(data.get("notes") or ""),
+            independent_variant=independent,
+            **{key: str(data.get(key) or "").strip() for key in (
+                "effect_scale", "estimand_id", "contrast_id", "effect_unit",
+            )},
         )
 
 
@@ -127,7 +139,9 @@ class RobustnessPanel:
         locked_at: Optional[str] = None,
     ) -> "RobustnessPanel":
         row_tuple = tuple(rows)
-        claimable_rows = [row for row in row_tuple if _row_has_claimable_estimate(row)]
+        claimable_rows = [row for row in row_tuple if _row_has_claimable_estimate(row) and row.independent_variant]
+        if not _share_effect_identity(claimable_rows):
+            claimable_rows = []
         converged_lows = [r.ci_low for r in claimable_rows if r.ci_low is not None]
         converged_highs = [r.ci_high for r in claimable_rows if r.ci_high is not None]
         return cls(
@@ -135,7 +149,7 @@ class RobustnessPanel:
             rows=row_tuple,
             range_low=min(converged_lows) if converged_lows else None,
             range_high=max(converged_highs) if converged_highs else None,
-            n_variants=sum(1 for r in row_tuple if r.spec_id != primary_spec_id),
+            n_variants=sum(1 for r in row_tuple if r.spec_id != primary_spec_id and r.independent_variant),
             locked_at=locked_at or datetime.now(timezone.utc).isoformat(),
         )
 
@@ -630,10 +644,22 @@ def numeric_digest_for_panel(panel: RobustnessPanel) -> Dict[str, Any]:
     return {k: v for k, v in digest.items() if isinstance(v, (int, float))}
 
 
+def _share_effect_identity(rows: Sequence[RobustnessPanelRow]) -> bool:
+    """A scale name alone cannot authorize comparing different contrasts."""
+    if not rows:
+        return False
+    keys = ("effect_scale", "estimand_id", "contrast_id", "effect_unit")
+    identities = [tuple(getattr(row, key) for key in keys) for row in rows]
+    return all(all(identity) for identity in identities) and len(set(identities)) == 1
+
+
 def worst_rows_by_axis(panel: RobustnessPanel) -> Dict[str, RobustnessPanelRow]:
     selected: Dict[str, RobustnessPanelRow] = {}
+    eligible = [row for row in panel.rows if row.independent_variant and _row_has_claimable_estimate(row)]
+    if not _share_effect_identity(eligible):
+        return selected
     for row in panel.rows:
-        if row.spec_id == panel.primary_spec_id or not _row_has_claimable_estimate(row):
+        if row.spec_id == panel.primary_spec_id or not row.independent_variant or not _row_has_claimable_estimate(row):
             continue
         if row.point_estimate is None:
             continue
@@ -740,6 +766,11 @@ def _row_matches_summary_payload(
     payload: Dict[str, Any],
 ) -> bool:
     if row.spec_id == PRIMARY_SPEC_ID:
+        if payload.get("independent_variant", True) is not row.independent_variant:
+            return False
+        if any(getattr(row, key) and str(payload.get(key) or "").strip() != getattr(row, key)
+               for key in ("effect_scale", "estimand_id", "contrast_id", "effect_unit")):
+            return False
         from .primary_effect import (
             _extract_primary_effect_payload_from_summary,
             _primary_effect_payload_is_complete,
@@ -777,6 +808,10 @@ def _row_matches_summary_payload(
     candidate = matching[0]
     return bool(
         bool(candidate.get("converged"))
+        and candidate.get("independent_variant", True) is row.independent_variant
+        and all(str(candidate.get(key) or "").strip() == getattr(row, key) for key in (
+            "effect_scale", "estimand_id", "contrast_id", "effect_unit",
+        ))
         and int(candidate.get("n") or 0) == row.n
         and _same_number(candidate.get("point_estimate"), row.point_estimate)
         and _same_number(candidate.get("ci_low"), row.ci_low)

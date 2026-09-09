@@ -318,7 +318,7 @@ def test_executed_typed_robustness_supersedes_empty_legacy_panel(
     joined = "\n".join(lines)
 
     assert "EXECUTED ROBUSTNESS AUTHORITY" in joined
-    assert "n_converged=3" in joined
-    assert "n_independent=2" in joined
+    assert "n_converged=1" in joined
+    assert "n_independent=1" in joined
     assert "not a summary of the entire nonlinear curve" in joined
     assert "no robustness variants converged" not in joined

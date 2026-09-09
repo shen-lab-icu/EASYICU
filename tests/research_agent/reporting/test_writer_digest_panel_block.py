@@ -155,7 +155,7 @@ def test_digest_suppresses_generated_primary_effect_when_panel_is_canonical(
     assert '"p_value": 0.73' not in digest
 
 
-def test_digest_panel_block_shows_range_not_rows(ra, tmp_path: Path) -> None:
+def test_digest_panel_keeps_rows_when_comparability_is_undeclared(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
@@ -179,10 +179,10 @@ def test_digest_panel_block_shows_range_not_rows(ra, tmp_path: Path) -> None:
 
     digest = _render_writer_evidence_digest([], run_dir=tmp_path)
 
-    assert "range across variants point" in digest
+    assert "no common effect range is authorized" in digest
     assert "cohort_worst" in digest
-    assert "cohort_hidden" not in digest
-    assert "point=1.777" not in digest
+    assert "cohort_hidden" in digest
+    assert "point=1.777" in digest
 
 
 def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
@@ -237,7 +237,7 @@ def test_digest_empty_panel_does_not_claim_a_failed_primary_or_sensitivity(
     assert "CANONICAL PRIMARY EFFECT SOURCE" not in digest
     assert "primary: spec_id=" not in digest
     assert "no robustness variants converged" not in digest
-    assert "no sensitivity variant result rows were recorded" in digest
+    assert "no independent sensitivity variant result rows were recorded" in digest
     assert "not evidence of nonconvergence" in digest
 
 
@@ -339,7 +339,7 @@ def test_digest_suppresses_robustness_effect_when_outcome_gate_blocked(
     assert "primary: spec_id=primary" not in digest
 
 
-def test_digest_panel_block_lists_worst_per_axis(ra, tmp_path: Path) -> None:
+def test_digest_panel_keeps_each_axis_without_ranking_unknown_contrasts(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
@@ -366,9 +366,9 @@ def test_digest_panel_block_lists_worst_per_axis(ra, tmp_path: Path) -> None:
 
     digest = _render_writer_evidence_digest([], run_dir=tmp_path)
 
-    assert "worst on cohort axis: spec_id=cohort_worst, point=0.9" in digest
-    assert "worst on missing axis: spec_id=missing_worst, point=1" in digest
-    assert "worst on outcome axis: spec_id=outcome_worst, point=1.1" in digest
+    assert "spec_id=cohort_worst, axis=cohort, n=90, converged=True, point=0.9" in digest
+    assert "spec_id=missing_worst, axis=missing, n=95, converged=True, point=1" in digest
+    assert "spec_id=outcome_worst, axis=outcome, n=92, converged=True, point=1.1" in digest
 
 
 def test_digest_reads_immutable_panel_and_source_summary_after_raw_mutation(
