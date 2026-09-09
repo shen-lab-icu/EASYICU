@@ -2368,6 +2368,69 @@ def _interpretation_authority_is_applicable(
     )
 
 
+def _native_script_repair_error(
+    *,
+    checkpoint: Mapping[str, Any],
+    script: Mapping[str, Any],
+    records: Mapping[str, Dict[str, Any]],
+    run_dir: Path,
+) -> Optional[str]:
+    """Reject the old native label when its exact code has Coder provenance.
+
+    Older executors kept ``deterministic_standard`` after an LLM repair. A
+    valid file hash proves which code ran, not that the host authored it.
+    Follow digest-identical reuse links so another resume cannot erase that
+    contradiction. Host-only repairs and ordinary generated code remain valid.
+    """
+    payloads = [checkpoint]
+    native = checkpoint.get("generation_mode") == "deterministic_standard" or (
+        checkpoint.get("generation_mode") == "resumed_code_reuse"
+        and checkpoint.get("resumed_from_generation_mode") == "deterministic_standard"
+    )
+    seen: set[str] = set()
+    current = script
+    while True:
+        evidence_id = str(current.get("evidence_id") or "")
+        if evidence_id in seen:
+            return "successful checkpoint has cyclic script reuse provenance"
+        seen.add(evidence_id)
+        metadata = current.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        payloads.extend((current, metadata))
+        mode = current.get("generation_mode")
+        native = native or mode == "deterministic_standard" or (
+            mode == "resumed_code_reuse"
+            and metadata.get("resumed_from_generation_mode") == "deterministic_standard"
+        )
+        # A genuinely repaired script may retain its drafting source pointer;
+        # only exact code reuse claims authority from that source.
+        if mode != "resumed_code_reuse":
+            break
+        source_id = metadata.get("resumed_code_evidence_id")
+        if not source_id:
+            break
+        source = records.get(str(source_id))
+        if (
+            source is None
+            or source.get("kind") != "code"
+            or source.get("produced_by_step") != script.get("produced_by_step")
+            or source.get("sha256") != script.get("sha256")
+            or verified_run_evidence_path(run_dir, source) is None
+        ):
+            return "successful checkpoint has unverifiable script reuse provenance"
+        current = source
+    if native and any(payload.get("llm_repair_used") is True for payload in payloads):
+        return "successful native checkpoint contains Coder repair provenance"
+    if native and any(
+        "llm_repair_used" in payload
+        and payload["llm_repair_used"] is not None
+        and type(payload["llm_repair_used"]) is not bool
+        for payload in payloads
+    ):
+        return "successful native checkpoint has invalid repair provenance"
+    return None
+
+
 def _explicit_step_authority_error(
     *,
     record: Mapping[str, Any],
@@ -2442,6 +2505,12 @@ def _explicit_step_authority_error(
                 f"successful checkpoint {field} {evidence_id} has kind "
                 f"{actual_kind or '<missing>'}, expected {expected_kind}"
             )
+        if field == "script_evidence_id":
+            error = _native_script_repair_error(
+                checkpoint=record, script=authority, records=records, run_dir=run_dir,
+            )
+            if error is not None:
+                return error
     return None
 
 
