@@ -732,6 +732,51 @@ def test_failed_pipeline_never_renders_partial_cohort_decision() -> None:
     assert completed.stdout == ""
 
 
+@pytest.mark.parametrize("workflow_code,run_id,expected_source", [
+    ("failed_pipeline_execution_retry_available", "failed-approved", "failed-approved"),
+    ("failed_pipeline_execution_retry_available", "", None),
+    ("failed_pipeline_requires_fresh_plan", "failed-planning", ""),
+])
+def test_fresh_plan_after_failed_execution_binds_source(workflow_code, run_id, expected_source):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = _read("js/screens-guided-pi-plan-actions.js")
+    script = f"""
+      global.window = {{}};
+      eval({json.dumps(source)});
+      let submitted = null;
+      let error = null;
+      const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create({{
+        tr: (en, zh) => en,
+        session: () => ({{binding: {{run_id: {json.dumps(run_id)}, study_context_id: 'study'}},
+          research_provider: {{provider: 'openai'}}}}),
+        workflow: () => ({{next_action_code: {json.dumps(workflow_code)}}}),
+        busy: () => false, sessionIsStale: () => false,
+        nextActions: {{governedPlanGrants: () => ['provider_run']}},
+        api: () => ({{
+          loadStudyContext: async () => ({{context: {{question: 'question', data_source: {{path: '/prepared'}}}}}}),
+          startAgentRun: async value => {{submitted = value; return {{job_id: 'new-plan'}};}},
+        }}),
+        appendMessage: () => {{}}, setBusy: () => {{}}, render: () => {{}},
+        setError: value => {{error = value;}}, errorText: error => String(error),
+        recordHostAction: async () => {{}}, watchChildJob: () => {{}},
+      }});
+      actions.startFormalPlanGeneration('failed_pipeline_requires_fresh_plan')
+        .then(() => console.log(JSON.stringify({{submitted, error}})));
+    """
+    payload = json.loads(subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True,
+    ).stdout)
+    if expected_source is None:
+        assert payload["submitted"] is None
+        assert "source is unavailable" in payload["error"]
+    else:
+        assert payload["submitted"]["plan_revision_source_run_id"] == expected_source
+        assert payload["submitted"]["planner_start_mode"] == "auto"
+        assert "execution_resume_source_run_id" not in payload["submitted"]
+
+
 def test_failed_analysis_retry_submits_exact_resume_without_chat_roundtrip() -> None:
     node = shutil.which("node")
     if node is None:

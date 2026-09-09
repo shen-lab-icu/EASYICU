@@ -160,6 +160,8 @@
         || retryingStoppedPlan;
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
       const retryingFailedPlan = reasonCode === 'failed_pipeline_requires_fresh_plan';
+      const replanningFailedExecution = retryingFailedPlan
+        && workflowCode() === 'failed_pipeline_execution_retry_available';
       const staleScientificPolicy = reasonCode === 'scientific_plan_review_policy_stale';
       // Both a plan-owned revision and a candidate-to-package upgrade must be
       // bound to the exact reviewed run.  The server distinguishes the two by
@@ -168,9 +170,17 @@
       // only their exact materialization roster.
       const revisionSourceRunId = retryingStoppedPlan
         ? String(host.workflow().plan_review_summary.run_id).trim()
-        : revisingScientificPlan || executionUpgrade
+        : revisingScientificPlan || executionUpgrade || replanningFailedExecution
           ? String(binding.run_id || '').trim()
           : '';
+      if (replanningFailedExecution && !revisionSourceRunId) {
+        host.setError(tr(
+          'The failed plan source is unavailable. Refresh this project before generating a new plan.',
+          '失败计划的来源不可用，请刷新项目后再生成新计划。',
+        ));
+        host.render();
+        return false;
+      }
       // A user- or agent-initiated transition consumes only this exact
       // session/revision/run coordinate. A page can host several studies, so a
       // process-wide boolean would incorrectly suppress later conversations.

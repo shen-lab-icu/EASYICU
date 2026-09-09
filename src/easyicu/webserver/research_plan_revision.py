@@ -15,6 +15,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from easyicu.research_agent.authority.run_input import load_verified_run_input_capsule
+from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.contracts.frozen_payload import thaw_payload
+from easyicu.research_agent.planning.baseline_requirements import (
+    AcceptedBaselineRequirements, candidate_baseline_requirements,
+)
+from easyicu.research_agent.planning.population_requirements import (
+    PlanPopulationRequirements, candidate_population_requirements,
+)
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.human_review_checkpoint import load_checkpoint
 from easyicu.research_agent.planning.scientific_review import (
@@ -38,6 +46,9 @@ class PreparedPlanRevision:
     required_primary_cohort_selection_mode: str | None
     input_capsule_sha256: str = ""
     budget_mode: str = "full_reviewed"
+    failed_execution_replan: bool = False
+    baseline_requirements: AcceptedBaselineRequirements | None = None
+    population_requirements: PlanPopulationRequirements | None = None
 
 
 def load_prepared_plan_revision(
@@ -46,7 +57,7 @@ def load_prepared_plan_revision(
     project_root: str | None,
     source_run_id: str,
 ) -> PreparedPlanRevision | None:
-    """Select only an exact, unapproved prepared plan needing Planner repair.
+    """Select sealed inputs for a new plan, never an old execution approval.
 
     A metadata candidate (or an absent history row) supplies no prepared-input
     authority. The existing candidate/revision owner still validates it later.
@@ -56,6 +67,8 @@ def load_prepared_plan_revision(
 
     if not source_run_id:
         return None
+    from easyicu.webserver.pi_copilot.contracts import EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
+
     rows = agent_runs.list_run_history(
         study_id=str(study.get("id") or ""),
         project_root=project_root,
@@ -87,7 +100,14 @@ def load_prepared_plan_revision(
         review = PlanScientificReview.model_validate(
             record.artifact_payloads.get("scientific_plan_review.json")
         )
-        if review.approval_allowed or plan_revision_blocker_codes(review.findings):
+        failed_execution_replan = bool(
+            review.approval_allowed
+            and row.get("run_status") in {"blocked", "failed"}
+            and row.get("gate_reason") in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
+        )
+        if (review.approval_allowed and not failed_execution_replan) or (
+            plan_revision_blocker_codes(review.findings)
+        ):
             raise ValueError("source is not a Planner-owned repair")
         root = Path(str(project_root or "")).expanduser().resolve()
         wrapper = Path(str(row.get("project_dir") or "")).expanduser()
@@ -127,13 +147,36 @@ def load_prepared_plan_revision(
             or Path(config.workdir).resolve() != run_dir.parent.resolve()
         ):
             raise ValueError("source configuration does not require plan review")
-        checkpoint = load_checkpoint(run_dir / "human_review_checkpoint.json")
+        checkpoint = load_checkpoint(
+            run_dir / "human_review_checkpoint.json",
+            **({"require_pending": False} if failed_execution_replan else {}),
+        )
         if (
             checkpoint.run_id != source_run_id
             or checkpoint.pipeline_config_sha256 != seed.pipeline_config_sha256
-            or checkpoint.approved_decisions
-            or checkpoint.execution_start_receipt is not None
         ):
+            raise ValueError("source review configuration changed")
+        if failed_execution_replan:
+            if (
+                checkpoint.state != "completed"
+                or not checkpoint.approved_decisions
+                or any(item.get("decision") != "approved" for item in checkpoint.approved_decisions)
+                or checkpoint.execution_start_receipt is None
+            ):
+                raise ValueError("source is not a terminal approved execution")
+            status_path = run_dir / "run_status.json"
+            if status_path.is_symlink() or status_path.stat().st_size > 2 * 1024 * 1024:
+                raise ValueError("invalid execution status")
+            gates = json.loads(status_path.read_bytes()).get("gates", {})
+            if not (gates.get("failed_steps") or (
+                gates.get("execution_complete") is True
+                and any(gates.get(name) is False for name in (
+                    "artifact_valid", "evidence_complete", "numeric_verified",
+                    "analysis_validated", "manuscript_ready",
+                ))
+            )):
+                raise ValueError("source has no failed execution or validation")
+        elif checkpoint.approved_decisions or checkpoint.execution_start_receipt is not None:
             raise ValueError("source is not an unconsumed plan review")
         capsule_path = run_dir / "run_input_capsule.json"
         if capsule_path.is_symlink() or capsule_path.stat().st_size > 2 * 1024 * 1024:
@@ -154,13 +197,49 @@ def load_prepared_plan_revision(
             database=source.get("database"),
             expected_binding=seed.prepared_package_binding,
         )
+        prior_contract = config.bound_plan_revision_contract
+        baseline = population = None
+        if failed_execution_replan:
+            plan = thaw_payload(record.artifact_payloads.get("agent_plan.json"))
+            if (
+                not isinstance(plan, dict)
+                or canonical_sha256(plan) != review.plan_sha256
+                or canonical_sha256(checkpoint.plan_handoff["plan"]) != review.plan_sha256
+            ):
+                raise ValueError("source plan no longer matches its review and approval")
+            # Keep the full source plan as input to a NEW Planner pass. Do not
+            # truncate its tail or mistake a successful source step for an
+            # approval or reusable result in the new run.
+            rendered = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if len(rendered.encode("utf-8")) > 256 * 1024:
+                raise ValueError("source plan exceeds the replan transport limit")
+            prior_contract = "\n".join(filter(None, (
+                prior_contract,
+                "DIGEST-BOUND FAILED EXECUTION REPLAN (host-derived):",
+                f"- source_plan_sha256: {review.plan_sha256}",
+                "- Generate a new complete plan using the sealed input and the current runtime; new review is mandatory.",
+                "- Preserve the source question, cohort, all outcomes, methods, baseline variables, timing, sensitivity analyses and displays. Disclose any necessary divergence.",
+                "- The old approval and partial results grant no execution authority to this new run.",
+                "- source_plan_json: " + rendered,
+            )))
+            import pyarrow.parquet as pq
+
+            columns = pq.read_schema(run_dir / capsule["cohort_relative_path"]).names
+            baseline = candidate_baseline_requirements(
+                plan=plan, source_plan_sha256=review.plan_sha256,
+                selected_concepts=(), catalog_columns=columns,
+            )
+            population = candidate_population_requirements(plan, review.plan_sha256)
         return PreparedPlanRevision(
             run_dir=run_dir.resolve(),
             pipeline_config_sha256=seed.pipeline_config_sha256,
             prepared_package_binding=dict(seed.prepared_package_binding),
-            prior_plan_contract=config.bound_plan_revision_contract,
+            prior_plan_contract=prior_contract,
             required_primary_cohort_selection_mode=config.required_primary_cohort_selection_mode,
             input_capsule_sha256=checkpoint.run_input_capsule_sha256,
+            failed_execution_replan=failed_execution_replan,
+            baseline_requirements=baseline,
+            population_requirements=population,
         )
     except Exception as exc:
         # No raw paths, source contents or old Provider environment in errors.
