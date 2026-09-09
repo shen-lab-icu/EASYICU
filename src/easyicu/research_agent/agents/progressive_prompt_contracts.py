@@ -129,6 +129,8 @@ def outline_shape_contract(
                     "<sealed method key for every primary/secondary/sensitivity step>"
                 ],
                 "scientific_action_id": None,
+                "population_scope": None,
+                "population_scope_change_reason": None,
             }
         ],
         "rationale": "<8-1200 characters>",
@@ -154,6 +156,16 @@ def outline_shape_contract(
         "secondary, or sensitivity step must bind at least one sealed method "
         "key; only auxiliary steps may use an empty array. "
         "scientific_action_id must be a retrieved action id or null. "
+        "For absolute_risk_context, choose population_scope now: analysis_cohort "
+        "means the broader eligible cohort; primary_model means the preceding "
+        "primary model's exact eligibility and complete-case population. Align "
+        "the objective with this choice. Treat the current amendment request as "
+        "a proposed correction, not just prose to repeat: if it calls for changing "
+        "the source population, select the corrected scope and disclose why in "
+        "population_scope_change_reason for fresh complete-plan review. Otherwise "
+        "preserve the source-bound choice and leave the reason null. Both fields "
+        "are null for other modules. These choices will be immutable during "
+        "step materialization; they do not grant execution approval. "
         "If a phenotyping.cluster_solution question requests clinical outcome comparisons, plan one separate secondary "
         "phenotyping.outcome_by_cluster step, directly dependent on the cluster solution. Its variable_names must include "
         "all requested outcomes and the selected clinical descriptions; inputs to fitting, profiles or figures do not substitute for that analysis."
@@ -325,8 +337,8 @@ def step_materialization_shape_contract(
     # JSON-mode providers use this same template on initial and repair calls.
     # Do not advertise a population choice to modules that cannot own it.
     if outline_step.module_id == "absolute_risk_context":
-        step["population_scope"] = None
-        step["population_scope_change_reason"] = None
+        step["population_scope"] = outline_step.population_scope
+        step["population_scope_change_reason"] = outline_step.population_scope_change_reason
     template = {
         "schema_version": "easyicu.progressive_step_materialization/1",
         "outline_step_sha256": outline_step_sha256,
@@ -336,7 +348,7 @@ def step_materialization_shape_contract(
     return (
         "ProgressiveStepMaterialization shape template (preserve this root wrapper; emit only the step keys permitted by the current structured schema):\n"
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
-        + "\nCopy schema_version, outline_step_sha256, foundation=null, and the six outline-owned step coordinates exactly. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
+        + "\nCopy schema_version, outline_step_sha256, foundation=null, and the outline-owned step coordinates exactly, including an explicit outline population_scope and its population_scope_change_reason. Do not re-decide or erase these scientific choices. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
         "population_scope belongs exclusively to absolute_risk_context: that module must choose analysis_cohort or primary_model. Omit this field for every other module; primary-model eligibility is governed by its cohort and method contracts, not this descriptive-table selector.\n"
         "Nested item shapes, when used: product_inputs items are exactly "
         '{"producer_step_id":"<preceding step id>","product_id":"<kind:product>"}; outputs items are exactly '

@@ -1929,6 +1929,23 @@ class ProgressivePlannerAgent:
                     findings=({"required_outcomes": sorted(required_cluster_outcomes), "primary_step_ids": primary_clusters},),
                 )
         if article_context is not None:
+            from ..planning.population_requirements import validate_population_choice
+
+            for step_index, step in enumerate(outline.steps):
+                if step.population_scope is None:
+                    continue  # Legacy restored outlines have no typed choice.
+                try:
+                    validate_population_choice(
+                        article_context, product="table:absolute_risk_context",
+                        scope=step.population_scope,
+                        change_reason=step.population_scope_change_reason,
+                    )
+                except ValueError as exc:
+                    raise ProgressivePlanCompileError(
+                        "progressive_outline_population_requirement_drift",
+                        str(exc), step_id=step.step_id, step_index=step_index,
+                        path="population_scope",
+                    ) from exc
             baseline = baseline_outline_coverage(
                 article_context,
                 [step.model_dump(mode="json") for step in outline.steps],
@@ -3102,7 +3119,9 @@ class ProgressivePlannerAgent:
                 "cohort, or primary_model for the preceding primary model's "
                 "exact eligibility and complete-case population. The host binds "
                 "that primary result dependency; prose alone does not select "
-                "a population. Match the objective and interpretation to this "
+                "a population. If the outline declares population_scope, copy "
+                "it and population_scope_change_reason exactly; the whole-plan "
+                "stage already selected this population. Match the objective and interpretation to this "
                 "choice. Preserve source-bound plan_population_requirements in the context. "
                 "Only an intentional scientific scope amendment may depart from them; "
                 "then provide population_scope_change_reason explaining the requested "

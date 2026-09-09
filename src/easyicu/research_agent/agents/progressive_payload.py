@@ -114,7 +114,17 @@ def parse_progressive_model(raw: str, model: type[Any]) -> Any:
         raise ValueError("progressive Planner response root must be an object")
     if model is ProgressivePlanOutline:
         payload = _canonicalize_outline_coordinates(payload)
-    return model.model_validate(payload)
+    parsed = model.model_validate(payload)
+    if model is ProgressivePlanOutline:
+        for step in parsed.steps:
+            if step.module_id == "absolute_risk_context" and step.population_scope is None:
+                raise ValueError(
+                    "absolute_risk_context outline requires an explicit population_scope: "
+                    "analysis_cohort or primary_model. Choose it from the current requested "
+                    "study design, align the objective, and explain an intentional source "
+                    "population amendment in population_scope_change_reason."
+                )
+    return parsed
 
 
 def parse_progressive_foundation_materialization(
@@ -818,6 +828,16 @@ def _bind_materialization_coordinate(
         "const": outline_step.objective,
     }
     step_properties["depends_on"] = _exact_string_array(outline_step.depends_on)
+    if outline_step.population_scope is not None:
+        for field in ("population_scope", "population_scope_change_reason"):
+            value = getattr(outline_step, field)
+            step_properties[field] = (
+                {"type": "string", "const": value}
+                if value is not None else {"type": "null"}
+            )
+            if field == "population_scope":
+                # Module binding below removes null from required choices.
+                step_properties[field] = {"anyOf": [step_properties[field], {"type": "null"}]}
     step_properties["scientific_action_id"] = (
         {
             "type": "string",

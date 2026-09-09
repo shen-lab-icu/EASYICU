@@ -2111,7 +2111,9 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
     schema = json.loads(request.schema_json)
     encoded = request.canonical_payload_json
 
-    assert len(encoded.encode("utf-8")) < 4_000
+    # Population choice and amendment rationale now belong to the whole-plan
+    # stage; the outline still excludes executable details and stays bounded.
+    assert len(encoded.encode("utf-8")) < 4_500
     assert request.name == "easyicu_progressive_plan_outline_v1"
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
     step = schema["$defs"]["ProgressiveOutlineStep"]["properties"]
@@ -2124,6 +2126,8 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
         "variable_names",
         "literature_citation_keys",
         "scientific_action_id",
+        "population_scope",
+        "population_scope_change_reason",
     }
     for forbidden in (
         "raw_inputs",

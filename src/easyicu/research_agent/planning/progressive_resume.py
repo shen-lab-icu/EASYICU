@@ -319,6 +319,12 @@ def validate_progressive_materialization_coordinate(
         "depends_on": list(step.depends_on),
         "scientific_action_id": step.scientific_action_id,
     }
+    # Historical outlines have no population choice and retain their digest.
+    # New choices are sealed with the whole design, not re-decided per step.
+    if outline_step.population_scope is not None:
+        for field in ("population_scope", "population_scope_change_reason"):
+            expected[field] = getattr(outline_step, field)
+            actual[field] = getattr(step, field)
     if materialization.outline_step_sha256 != outline_step_sha256:
         raise ProgressivePlanCompileError(
             "progressive_step_outline_digest_mismatch",
