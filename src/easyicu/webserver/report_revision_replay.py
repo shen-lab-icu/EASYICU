@@ -1,7 +1,8 @@
 """Read-only reuse of a failed Writer's outputs after an owner repair.
 
 Every output still crosses current quality, claim, numeric and export gates.
-An incomplete replay cannot silently start another provider attempt.
+This reader never calls a provider. The governed report runner may explicitly
+continue an exhausted prefix under its separately authorized bounded budget.
 """
 from dataclasses import dataclass
 import hashlib
@@ -63,6 +64,14 @@ def load_failed_writer_replay(wrapper: Path, prepared) -> SavedWriterReplay | No
             if not all(isinstance(row.get(k), str) and row[k] for k in ("section", "instruction", "text")):
                 return None
             rows.append((candidate, hashlib.sha256(raw).hexdigest(), row))
-        if rows and len(rows) == receipt.get("provider_summary", {}).get("n_calls") and len(rows) <= 6:
+        summary = receipt.get("provider_summary", {})
+        generated = summary.get("n_calls", 0)
+        replayed = summary.get("replayed_sections", 0)
+        # Two quality passes plus two authority passes across eight section
+        # owners bound the complete repair; the live budget still caps new calls.
+        if (rows and isinstance(generated, int) and generated >= 0
+                and isinstance(replayed, int) and replayed >= 0
+                and len(rows) == generated + replayed and len(rows) <= 32
+                and sum(bool(row.get("replayed_from_revision")) for _, _, row in rows) == replayed):
             return SavedWriterReplay(path.parent.name, rows)
     return None
