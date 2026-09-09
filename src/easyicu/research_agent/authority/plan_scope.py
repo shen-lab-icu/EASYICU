@@ -278,6 +278,8 @@ _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "functional_form_spec",
         "phenotype_comparison_spec",
         "phenotyping_feature_columns",
+        "population_scope",
+        "population_scope_change_reason",
     }
 )
 _ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS = frozenset()
