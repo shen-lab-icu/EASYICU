@@ -2279,8 +2279,14 @@ def _candidate_failure_transition(
         run_log = (
             (state.run_result.stdout or "") + "\n" + (state.run_result.stderr or "")
         )
-    if attempt.is_trajectory_stability_standard:
-        # A timeout can interrupt the standard executor between its
+    if (
+        attempt.worker_progress.deterministic_standard_executor_used
+        and attempt.sealed_renderer_authorized_code_sha256 is None
+    ):
+        # Fixed native code must fail at its owner boundary. Letting Coder
+        # replace an imported helper would still label the repaired script as
+        # deterministic_standard and grant it the original trust path.
+        # A timeout can interrupt a standard executor between its
         # private streaming write and atomic rename.  That file is an
         # implementation detail, not a diagnostic product, and must
         # be gone before the generic output-directory scan below can
@@ -2288,12 +2294,8 @@ def _candidate_failure_transition(
         host._remove_standard_executor_pending_artifacts(state.run_result.out_dir)
         state.standard_executor_terminal_block = True
         state.standard_executor_terminal_reason = "executor_runtime_failure"
-        # This branch is already terminal and already spends no repair,
-        # so it is safe. It is not diagnosable: the executor with the
-        # largest wall clock in the pipeline reports the same generic
-        # reason whether it raised in its first second or was killed an
-        # hour in. Name the timeout in the vocabulary generated code
-        # already uses, and leave the terminal decision above untouched.
+        # Distinguish wall-clock termination from an implementation failure
+        # while retaining the same terminal decision for fixed executors.
         #
         # Only the timeout class is adopted. The classifier also reads a
         # plan/data contract failure out of the log text, and this
