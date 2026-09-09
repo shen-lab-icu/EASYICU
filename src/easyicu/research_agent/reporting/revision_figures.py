@@ -47,6 +47,57 @@ def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _caption_projection_allowed(projection: ManuscriptFigures) -> bool:
+    """A report revision may restore only a missing legacy reader caption."""
+
+    return not projection.omitted_evidence_ids and all(
+        finding.severity == "error"
+        and finding.detail.get("reason_code") == "MANUSCRIPT_FIGURE_CAPTION_MISSING"
+        for finding in projection.findings
+    )
+
+
+def _revision_caption(contract: FigureContract) -> tuple[str, str]:
+    """Project a reader legend from explicit, verified panel semantics."""
+
+    if contract.reader_caption:
+        return contract.reader_caption, "registered_reader_caption"
+    panels = list(contract.panels or [])
+    if not panels or any(not panel.title or not panel.claim for panel in panels):
+        _fail("Legacy figure contract cannot support a reader caption")
+    parts = [
+        f"({chr(65 + index)}) {panel.title}. {panel.claim}"
+        for index, panel in enumerate(panels)
+    ]
+    if contract.statistics_note:
+        parts.append(contract.statistics_note)
+    risks = [panel.review_risk for panel in panels if panel.review_risk]
+    if risks:
+        parts.append("Review note: " + " ".join(risks))
+    return " ".join(parts), "registered_panel_contract_projection"
+
+
+def _registered_figure_contract(figure, records, root) -> FigureContract:
+    matches = [
+        record for record in records
+        if record.evidence_id == figure.contract_evidence_id and record.kind == "log"
+    ]
+    if len(matches) != 1:
+        _fail("Figure has no unique registered source contract")
+    record = matches[0]
+    path = verified_run_evidence_path(root, record)
+    if (
+        path is None
+        or record.sha256 != figure.contract_sha256
+        or _digest(path) != record.sha256
+    ):
+        _fail("Registered figure contract changed")
+    try:
+        return FigureContract.model_validate_json(path.read_text())
+    except (OSError, ValueError):
+        _fail("Registered figure contract is invalid")
+
+
 def verify_revision_figure_bundle(bundle: RevisionFigureBundle, *, source_root=None, revision_output=None) -> None:
     """Both consumers must use the same unchanged revision receipt and files."""
     path = bundle.root / "figure_revision_receipt.json"
@@ -136,9 +187,15 @@ def build_revision_figure_bundle(*, prepared, output: Path) -> RevisionFigureBun
     records = evidence.current_verified_records(execution)
     projections = [build_manuscript_figures(evidence_records=records, run_dir=root, prefer_png=png)
                    for png in (False, True)]
-    if any(p.findings or p.omitted_evidence_ids for p in projections):
+    if any(not _caption_projection_allowed(p) for p in projections):
         _fail("Source figures are not valid for report projection")
     pdf, png = projections
+    missing_caption_ids = {
+        evidence_id
+        for projection in projections
+        for finding in projection.findings
+        for evidence_id in finding.evidence_ids
+    }
     if len(pdf.figures) != len(png.figures):
         _fail("Web and PDF figure membership differs")
     labels = source_bound_manuscript_labels(prepared.context, prepared.plan.display_labels, include_unlabeled=True)
@@ -179,15 +236,15 @@ def build_revision_figure_bundle(*, prepared, output: Path) -> RevisionFigureBun
             )
             contract_path = target / f"{product}.figure_contract.json"
             contract = FigureContract.model_validate_json(contract_path.read_text())
-            if not contract.reader_caption:
-                _fail("Re-rendered figure has no explanatory caption")
+            caption, caption_origin = _revision_caption(contract)
             entry.update(mode="deterministic_presentation", input_bindings=binding,
-                         display_labels=labels, renderer_sha256=_digest(Path(inspect.getfile(renderer))))
+                         display_labels=labels, renderer_sha256=_digest(Path(inspect.getfile(renderer))),
+                         caption_origin=caption_origin)
             for slot, suffix in enumerate(("pdf", "png")):
                 path = target / f"{product}.{suffix}"
                 figure = replace(pair[slot], evidence_id=f"report_figure_{index}_{suffix}",
                                  relative_path=path.relative_to(directory).as_posix(),
-                                 caption=contract.reader_caption, figure_sha256=_digest(path),
+                                 caption=caption, figure_sha256=_digest(path),
                                  contract_evidence_id=f"report_figure_{index}_contract",
                                  contract_sha256=_digest(contract_path))
                 projected[slot].append(figure)
@@ -196,6 +253,13 @@ def build_revision_figure_bundle(*, prepared, output: Path) -> RevisionFigureBun
         else:
             # Unsupported rendering families keep their verified original bytes.
             # They are not silently reinterpreted through another chart family.
+            if any(figure.evidence_id in missing_caption_ids for figure in pair):
+                contract = _registered_figure_contract(pair[0], records, root)
+                caption, caption_origin = _revision_caption(contract)
+            else:
+                caption = pair[0].caption
+                caption_origin = "registered_reader_caption"
+            entry["caption_origin"] = caption_origin
             for slot, figure in enumerate(pair):
                 source = root / figure.relative_path
                 content = source.read_bytes()
@@ -203,7 +267,11 @@ def build_revision_figure_bundle(*, prepared, output: Path) -> RevisionFigureBun
                     _fail("Source figure changed before copying")
                 path = target / source.name
                 path.write_bytes(content)
-                projected[slot].append(replace(figure, relative_path=path.relative_to(directory).as_posix()))
+                projected[slot].append(replace(
+                    figure,
+                    relative_path=path.relative_to(directory).as_posix(),
+                    caption=caption,
+                ))
                 entry["exports"][source.suffix[1:]] = {"evidence_id": figure.evidence_id,
                                                        "source_evidence_id": figure.evidence_id}
         entry["files"] = {p.relative_to(directory).as_posix(): _digest(p) for p in sorted(target.iterdir()) if p.is_file()}

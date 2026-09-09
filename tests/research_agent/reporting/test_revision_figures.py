@@ -9,7 +9,7 @@ import pytest
 
 from easyicu.research_agent.reporting import revision_figures as owner
 from easyicu.research_agent.reporting.manuscript_figures import ManuscriptFigure, ManuscriptFigures
-from easyicu.research_agent.schema import AnalysisStep, EvidenceRecord
+from easyicu.research_agent.schema import AnalysisStep, EvidenceRecord, ValidationFinding
 from easyicu.research_agent.figures.publication import make_figure_contract
 
 
@@ -78,6 +78,59 @@ def test_one_render_binds_both_exports_and_preserves_source(revision_source):
     (bundle.root / bundle.png.figures[0].relative_path).write_bytes(b'changed')
     with pytest.raises(owner.WriterOnlyMigrationError, match='export changed'):
         owner.verify_revision_figure_bundle(bundle)
+
+
+def test_revision_projects_legacy_caption_from_registered_panel_contract(
+    revision_source, monkeypatch
+):
+    source = revision_source
+    contract = make_figure_contract(
+        figure_id='display', core_claim='Observed summaries',
+        archetype='quantitative_grid',
+        panels=[{'panel_id': 'a', 'title': 'Result', 'role': 'distribution',
+                 'claim': 'Observed source values without model refitting.',
+                 'evidence_ids': [source.records[0].evidence_id]}],
+        statistics_note='No inferential uncertainty is shown.',
+    )
+    content = contract.model_dump_json().encode()
+    path = source.source / 'evidence' / 'legacy.figure_contract.json'
+    path.write_bytes(content)
+    contract_record = EvidenceRecord(
+        evidence_id='legacy_contract', kind='log',
+        relative_path='evidence/legacy.figure_contract.json',
+        sha256=hashlib.sha256(content).hexdigest(), description='Legacy contract',
+        produced_by_step='plot',
+    )
+    source.records.append(contract_record)
+
+    def projection(**kwargs):
+        row = source.records[2] if kwargs['prefer_png'] else source.records[1]
+        finding = ValidationFinding(
+            validator='manuscript_figure_projection', severity='error',
+            message='Reader caption missing', evidence_ids=[row.evidence_id],
+            detail={'reason_code': 'MANUSCRIPT_FIGURE_CAPTION_MISSING'},
+        )
+        figure = ManuscriptFigure(
+            row.evidence_id, row.relative_path, 'Requires review', 'main', row.sha256,
+            contract_record.evidence_id, contract_record.sha256,
+        )
+        return ManuscriptFigures((figure,), (), (finding,))
+
+    monkeypatch.setattr(owner, 'build_manuscript_figures', projection)
+    monkeypatch.setattr(owner, 'exposure_outcome_distribution_figure_owns_step', lambda _: False)
+    bundle = owner.build_revision_figure_bundle(
+        prepared=source.prepared, output=source.output
+    )
+    expected = (
+        '(A) Result. Observed source values without model refitting. '
+        'No inferential uncertainty is shown.'
+    )
+    assert bundle.pdf.figures[0].caption == expected
+    assert bundle.png.figures[0].caption == expected
+    assert bundle.receipt['entries'][0]['caption_origin'] == (
+        'registered_panel_contract_projection'
+    )
+    owner.verify_revision_figure_bundle(bundle)
 
 
 @pytest.mark.parametrize('mutation', ['digest', 'input_membership', 'consumption'])
