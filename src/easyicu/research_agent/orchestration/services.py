@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .runtime_revision import ExecutionRuntimeRevision
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,7 @@ class PipelineServices:
     runner_factory: Optional[Any] = None
     case_plugin_registry: Optional[Any] = None
     provider_hard_stop: Optional[Any] = None
+    execution_runtime_revision: Optional[ExecutionRuntimeRevision] = None
 
     @classmethod
     def split_legacy_kwargs(

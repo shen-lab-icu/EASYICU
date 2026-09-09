@@ -4467,6 +4467,18 @@ class ResearchAgentPipeline:
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
         )
+        runtime_revision = self._services.execution_runtime_revision
+        if runtime_revision is not None:
+            from .orchestration.runtime_revision import ExecutionRuntimeRevision
+
+            if not isinstance(runtime_revision, ExecutionRuntimeRevision) or not resume_run_id:
+                raise ValueError("An execution runtime revision requires its exact resumed run")
+            runtime_revision.validate(config=self._config, run_dir=self.workdir / run_id)
+            run_environment_identity["execution_runtime_revision"] = {
+                "approved_config_sha256": runtime_revision.approved_config_sha256,
+                "target_config_sha256": runtime_revision.target_config_sha256,
+                "approved_checkpoint_sha256": runtime_revision.checkpoint_sha256,
+            }
 
         resume_state: Optional[Dict[str, Any]] = None
         resume_context_evidence_path: Optional[Path] = None
@@ -6938,6 +6950,18 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
             if evidence_root is not None
             else plan_result.plan_path.parent
         )
+        runtime_revision = getattr(getattr(self, "_services", None), "execution_runtime_revision", None)
+        if runtime_revision is not None:
+            runtime_revision.authorize_and_record(
+                config=self._config,
+                run_dir=checkpoint_file.parent,
+                plan_payload=plan_result.plan.model_dump(mode="json"),
+                run_input_capsule_sha256=str(capsule_record.sha256),
+                runtime_bundle=self._validated_runtime_bundle,
+                runtime_capabilities=self._validated_runtime_capabilities,
+                evidence=plan_evidence,
+            )
+            return ()
         if checkpoint_file.is_file() and completed_review_authorizes_exact_retry(
             checkpoint_file,
             pipeline_config_sha256=self._config.canonical_digest(),
