@@ -11,6 +11,7 @@ from easyicu.research_agent.agents.core import (
 )
 from easyicu.research_agent.agents.reporting import (
     _project_writer_evidence_digest,
+    _project_writer_literature_digest,
     _group_writer_numeric_citations,
 )
 from easyicu.research_agent.research_context.outbound import format_outbound_safe_context
@@ -168,6 +169,7 @@ def test_writer_projection_removes_only_redundant_uncited_preamble() -> None:
         "RUN_CONTEXT\n"
         + "redundant study coordinates " * 50
         + "\n## EXECUTED METHOD BOUNDARY\n"
+        + "Writer instruction: cite the supplied owner.\n"
         + "Preserve the fitted model. {claim:step.result}\n"
         + "## numeric citation authority\n"
         + "odds_ratio=1.24; cite={evidence:primary_result}\n"
@@ -179,10 +181,45 @@ def test_writer_projection_removes_only_redundant_uncited_preamble() -> None:
 
     assert "RUN_CONTEXT" not in projected
     assert "redundant study coordinates" not in projected
+    assert "Writer instruction:" not in projected
     assert projected.startswith("## EXECUTED METHOD BOUNDARY")
     assert "{claim:step.result}" in projected
     assert "{evidence:primary_result}" in projected
     assert "{evidence:sensitivity_result}" in projected
+
+
+def test_writer_results_excludes_prior_study_digest() -> None:
+    literature_digest = (
+        "direct_comparator: [@prior_study]\n"
+        "method:functional_form: [@spline_method]\n"
+    )
+
+    assert _project_writer_literature_digest("Results", literature_digest) == ""
+    assert (
+        _project_writer_literature_digest("Introduction", literature_digest)
+        == literature_digest
+    )
+    assert (
+        _project_writer_literature_digest("Methods", literature_digest)
+        == literature_digest
+    )
+    assert (
+        _project_writer_literature_digest("Discussion", literature_digest)
+        == literature_digest
+    )
+
+    llm = PatternScriptedMockLLMClient([], default="## Results\n\nComplete.")
+    WriterAgent(llm)._call_section(
+        section_name="Results",
+        instruction="Write one evidence-bound sentence.",
+        context=_context(),
+        evidence_ids=["primary_result"],
+        evidence_digest="{evidence:primary_result}",
+        literature_digest=literature_digest,
+    )
+
+    assert "[@prior_study]" not in llm.calls[0][0][1].content
+    assert "(none required for this section)" in llm.calls[0][0][1].content
 
 
 def test_numeric_citation_grouping_preserves_values_and_owner_boundaries() -> None:
