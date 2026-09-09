@@ -5209,6 +5209,7 @@ def make_research_pipeline_run_runner(
                 if execution_resume_target is not None
                 else None
             )
+            execution_runtime_revision = None
             if execution_resume_target is not None:
                 current_scientific_digest = (
                     study_context_owner.scientific_configuration_sha256(study)
@@ -5220,12 +5221,22 @@ def make_research_pipeline_run_runner(
                     current_scientific_digest=current_scientific_digest,
                     prepared_package_binding=prepared_package_binding,
                 )
+                from easyicu.research_agent.orchestration.runtime_revision import (
+                    prepare_execution_runtime_revision,
+                )
+
+                config, execution_runtime_revision = prepare_execution_runtime_revision(
+                    approved_config=config,
+                    runner_image=selected_runner_image or DockerRunner.DEFAULT_IMAGE,
+                    run_dir=wrapper_dir / "pipeline" / execution_resume_target.pipeline_run_id,
+                )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
                 services=PipelineServices(
                     llm=client,
                     human_review_gate=_WebHumanReviewGate(),
                     provider_hard_stop=provider_hard_stop,
+                    execution_runtime_revision=execution_runtime_revision,
                 ),
             )
             try:
