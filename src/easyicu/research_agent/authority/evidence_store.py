@@ -3120,6 +3120,7 @@ class EvidenceStore:
         from .runtime_artifacts import (
             active_step_evidence_ids_by_step,
             run_level_evidence_matches_claim_owner,
+            verified_run_evidence_path,
         )
 
         records_by_id = {
@@ -3149,11 +3150,18 @@ class EvidenceStore:
             ):
                 from .model_contrast_scientific_claims import model_contrast_numeric_identities
 
+                # Writer views deliberately omit protocol and lineage fields.
+                # Recover the numeric type from the registered full summary,
+                # never from a compact display projection or generated copy.
+                source_path = verified_run_evidence_path(self.root, record)
+                if source_path is None:
+                    continue
+                source_summary = json.loads(source_path.read_text(encoding="utf-8"))
                 validate_scientific_claim_registration(
                     root=self.root, record=record, step_id=step_id,
-                    summary=summary, drafts=derive_scientific_claim_drafts(summary),
+                    summary=source_summary, drafts=derive_scientific_claim_drafts(source_summary),
                 )
-                for path, (scale, role) in model_contrast_numeric_identities(summary).items():
+                for path, (scale, role) in model_contrast_numeric_identities(source_summary).items():
                     key = (step_id, evidence_id, path)
                     current_identity_scales[key] = scale
                     current_identity_roles[key] = role
