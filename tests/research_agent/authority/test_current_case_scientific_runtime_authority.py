@@ -1173,6 +1173,10 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     assert f"{reference_column}=2.1" in summary["primary_effect_label"]
     pd.testing.assert_frame_equal(contrasts, original_contrasts)
     assert summary["complete_case_n"] == 44095
+    assert summary["primary_estimate"] == summary["primary_or"]
+    assert summary["n_converged_variants"] == 1
+    assert summary["n_converged_results"] == 3
+    assert all(row["n"] == row["modeled_analytic_n"] == 44095 for row in summary["robustness_rows"])
     assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
     primary_row = matrix.loc[matrix["axis"] == "primary"].iloc[0]

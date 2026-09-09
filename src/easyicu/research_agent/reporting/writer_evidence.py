@@ -21,7 +21,7 @@ import pandas as pd
 from ..schema import ResearchContext
 from ..authority.evidence_store import EvidenceStore
 from .readiness import _blocked_outcome_step_ids
-from ..robustness.panel import RobustnessPanel, load_robustness_panel, worst_rows_by_axis
+from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
@@ -1561,15 +1561,18 @@ def _render_robustness_panel_block(
     converged_variants = [
         row
         for row in panel.rows
-        if row.spec_id != panel.primary_spec_id and row.converged
+        if row.spec_id != panel.primary_spec_id and row.converged and row.independent_variant
     ]
     if converged_variants:
         lines.append(
             "variants: "
             f"n_variants={panel.n_variants}, "
-            "range across variants point "
-            f"in [{_fmt_panel_number(panel.range_low)}, "
-            f"{_fmt_panel_number(panel.range_high)}]"
+            + (
+                "confidence-interval envelope across comparable results "
+                f"[{_fmt_panel_number(panel.range_low)}, {_fmt_panel_number(panel.range_high)}]"
+                if panel.range_low is not None and panel.range_high is not None
+                else "no common effect range is authorized; retain each result and its contrast separately"
+            )
         )
     elif panel.n_variants:
         lines.append(
@@ -1580,14 +1583,20 @@ def _render_robustness_panel_block(
         )
     else:
         lines.append(
-            "variants: n_variants=0, no sensitivity variant result rows were "
+            "variants: n_variants=0, no independent sensitivity variant result rows were "
             "recorded. This is not evidence of nonconvergence; do not claim "
             "an executed robustness analysis or a robustness range."
         )
-    for axis, row in sorted(worst_rows_by_axis(panel).items()):
+    for row in panel.rows:
+        if row.spec_id == panel.primary_spec_id:
+            continue
         lines.append(
-            f"worst on {axis} axis: "
-            f"spec_id={row.spec_id}, point={_fmt_panel_number(row.point_estimate)}"
+            f"{'variant' if row.independent_variant else 'documentation only (not an independent refit)'}: "
+            f"spec_id={row.spec_id}, axis={row.axis}, n={row.n}, converged={row.converged}, "
+            f"point={_fmt_panel_number(row.point_estimate)}, "
+            f"CI=[{_fmt_panel_number(row.ci_low)}, {_fmt_panel_number(row.ci_high)}], "
+            f"contrast={row.contrast_id or 'not declared'}, unit={row.effect_unit or 'not declared'}, "
+            f"notes={row.notes}, cite={{evidence:{row.evidence_id}}}"
         )
     return lines
 
@@ -1628,6 +1637,7 @@ def _render_executed_robustness_authority(
         row
         for row in rows
         if row.get("converged") is True and row.get("independent_variant") is True
+        and row.get("axis") != "primary"
     ]
     lines = [
         "EXECUTED ROBUSTNESS AUTHORITY: this typed executed result supersedes "
@@ -1640,7 +1650,7 @@ def _render_executed_robustness_authority(
         f"{_fmt_panel_number(summary.get('primary_ci_high'))}], "
         f"cite={{evidence:{summary_evidence}}}",
         "executed variants: "
-        f"n_converged={int(summary['n_converged_variants'])}, "
+        f"n_converged={len(independent)}, "
         f"n_independent={len(independent)}, "
         f"cite={{evidence:{summary_evidence}}}",
     ]

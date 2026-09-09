@@ -259,6 +259,7 @@ def run_landmark_spline_robustness(
         "ci_low",
         "ci_high",
         "modeled_analytic_n",
+        "n",
         "axis",
         "converged",
         "model_contract_n",
@@ -277,6 +278,7 @@ def run_landmark_spline_robustness(
         "effect_scale": "OR",
         "effect_unit": "recorded exposure units",
         "modeled_analytic_n": complete_case_n,
+        "n": complete_case_n,
         "converged": True,
         "model_contract_n": complete_case_n,
         "event_n": events,
@@ -427,6 +429,7 @@ def run_landmark_spline_robustness(
         "authority_kind": LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
         "runtime_projection_sha256": runtime_projection_sha256,
         "primary_effect": primary_or,
+        "primary_estimate": primary_or,
         "primary_or": primary_or,
         "primary_ci_low": primary_low,
         "primary_ci_high": primary_high,
@@ -434,7 +437,10 @@ def run_landmark_spline_robustness(
         "primary_effect_label": primary_effect_label,
         "primary_effect_is_nonlinear_curve_summary": False,
         "complete_case_n": complete_case_n,
-        "n_converged_variants": int(matrix["converged"].sum()),
+        "n_converged_results": int(matrix["converged"].sum()),
+        "n_converged_variants": int(
+            (matrix["converged"] & matrix["independent_variant"] & matrix["axis"].ne("primary")).sum()
+        ),
         "robustness_rows": rows,
         "robustness_panel": {"rows": rows},
         "limitations": [
