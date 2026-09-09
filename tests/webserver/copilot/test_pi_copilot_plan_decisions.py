@@ -225,6 +225,7 @@ def test_agent_plan_compiles_its_selected_landmark_without_rewriting_question() 
         study=study,
         agent_plan=plan,
         runtime_finding_codes=(
+            "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
             "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
             "REPEATED_STAY_IDENTITY_UNAVAILABLE",
         ),
@@ -235,6 +236,7 @@ def test_agent_plan_compiles_its_selected_landmark_without_rewriting_question() 
     assert study["question"] == original_question
     assert compiled.runtime_finding_codes == (
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
     )
     assert compiled.patch["analysis_design"] == {

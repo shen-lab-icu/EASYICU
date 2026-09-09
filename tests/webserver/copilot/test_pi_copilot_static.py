@@ -1307,6 +1307,50 @@ def test_initial_candidate_plan_starts_automatically_once_per_session() -> None:
     )
 
 
+def test_initial_candidate_plan_waits_for_data_source_confirmation() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-plan-actions.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const calls = [];
+      const host = {{
+        tr: en => en,
+        errorText: error => String(error && error.message || error),
+        regeneration: {{}}, nextActions: {{}}, replay: {{}},
+        session: () => ({{
+          session_id: 'session-pending-source',
+          binding: {{study_context_id: 'study-1', study_revision: 4}},
+          research_provider: {{provider: 'openai', credential_source: 'verified'}},
+        }}),
+        workflow: () => ({{next_action_code: 'provider_ready_to_generate_plan'}}),
+        busy: () => false,
+        sessionIsStale: () => false,
+        researchSourceReady: () => false,
+        api: () => ({{
+          loadStudyContext: async () => {{calls.push(['load']); return {{context: {{}}}};}},
+          startAgentRun: async () => {{calls.push(['plan']); return {{job_id: 'job-1'}};}},
+        }}),
+        projectId: () => 'project-1', turnGrants: () => [],
+        render: () => {{}}, recordHostAction: async () => {{}}, watchChildJob: () => {{}},
+        setBusy: () => {{}}, setError: () => {{}}, appendMessage: () => {{}},
+      }};
+      const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create(host);
+      actions.continueSystemOwnedPlanProgression().then(result => {{
+        process.stdout.write(JSON.stringify({{result, calls}}));
+      }});
+    """
+    payload = json.loads(
+        subprocess.run(
+            [node, "--eval", script], check=True, capture_output=True, text=True
+        ).stdout
+    )
+
+    assert payload == {"result": False, "calls": []}
+
+
 def test_failed_initial_candidate_plan_is_not_replayed_on_project_reopen() -> None:
     node = shutil.which("node")
     if node is None:

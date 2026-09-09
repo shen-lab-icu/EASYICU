@@ -54,7 +54,8 @@
     const startedTransitions = new Set();
 
     function unavailable() {
-      return !host.session() || host.busy() || host.sessionIsStale();
+      return !host.session() || host.busy() || host.sessionIsStale()
+        || (typeof host.researchSourceReady === 'function' && !host.researchSourceReady());
     }
 
     function workflowCode() {
