@@ -465,6 +465,75 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     ]
 
 
+def test_one_specification_can_report_multiple_declared_contrasts(tmp_path):
+    rows = [
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "spec_label": "age: RCS instead of linear adjustment",
+            "contrast_id": "lactate:1_vs_2",
+            "contrast_label": "1 vs 2",
+            "effect_unit": "mmol/L",
+        },
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "spec_label": "age: RCS instead of linear adjustment",
+            "contrast_id": "lactate:4.9_vs_2",
+            "contrast_label": "4.9 vs 2",
+            "effect_unit": "mmol/L",
+        },
+    ]
+    columns = [
+        *_MATRIX_COLUMNS,
+        "spec_label",
+        "contrast_id",
+        "contrast_label",
+        "effect_unit",
+    ]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows, columns)
+
+    summary = run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["specifications_drawn"] == 2
+    svg = (tmp_path / "out" / "robustness_plot.svg").read_text()
+    assert "1 vs 2" in svg
+    assert "4.9 vs 2" in svg
+
+
+def test_one_specification_cannot_repeat_the_same_contrast(tmp_path):
+    rows = [
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "contrast_id": "lactate:1_vs_2",
+        },
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "contrast_id": "lactate:1_vs_2",
+        },
+    ]
+    columns = [*_MATRIX_COLUMNS, "contrast_id"]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows, columns)
+
+    with pytest.raises(ValueError, match="unique non-empty ids"):
+        run_robustness_figure(
+            out_dir=tmp_path / "out",
+            run_dir=run_dir,
+            resolved_inputs=manifest,
+            step_id="07_robustness_sensitivity_figure",
+            figure_product="robustness_plot",
+        )
+
+
 def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):
     run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
     _bind_statistic(run_dir, manifest, ROBUSTNESS_PRIMARY_EFFECT_INPUT, 1.566)
