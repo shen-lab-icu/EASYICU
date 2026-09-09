@@ -202,6 +202,48 @@ class ProgressiveDesignCanaryReceipt(BaseModel):
     cost_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+def _validate_revised_checkpoint_transition(
+    previous: ProgressivePlannerCheckpoint, current: ProgressivePlannerCheckpoint,
+) -> None:
+    """A suffix revision appends evidence while preserving its retained prefix."""
+    if current.revision_offset is None:
+        if previous.revision_offset is not None:
+            raise ProgressivePlanningArtifactError(
+                "progressive_checkpoint_revision_drift", "cannot leave a revised checkpoint chain",
+            )
+        return
+    valid = (
+        current.outline == previous.outline
+        and current.foundation == previous.foundation
+        and current.request_authority_sha256 == previous.request_authority_sha256
+        and current.sequence == previous.sequence + 1
+        and current.previous_checkpoint_sha256 == previous.checkpoint_sha256
+    )
+    if current.revision_offset == previous.revision_offset:
+        valid = valid and (
+            current.repair_start_index == previous.repair_start_index
+            and current.materializations[:-1] == previous.materializations
+            and current.prompt_metrics.get("final_acceptance_repairs")
+            == previous.prompt_metrics.get("final_acceptance_repairs")
+        )
+    else:
+        start = current.repair_start_index
+        valid = valid and (
+            start is not None
+            and current.revision_offset > (previous.revision_offset or 0)
+            and len(previous.materializations) == len(previous.outline.steps)
+            and len(current.materializations) == start + 1
+            and current.materializations[:start] == previous.materializations[:start]
+            and current.prompt_metrics.get("final_acceptance_repairs", [])[:-1]
+            == previous.prompt_metrics.get("final_acceptance_repairs", [])
+        )
+    if not valid:
+        raise ProgressivePlanningArtifactError(
+            "progressive_checkpoint_revision_drift",
+            "suffix revision changed its parent, retained prefix, or sealed design",
+        )
+
+
 @dataclass
 class ProgressivePlannerCheckpointEmitter:
     """Build one typed append-only checkpoint chain in memory.
@@ -216,8 +258,10 @@ class ProgressivePlannerCheckpointEmitter:
     source_checkpoint: ProgressivePlannerCheckpoint | None = None
     _sequence: int = field(init=False)
     _previous_checkpoint_sha256: str | None = field(init=False)
+    _previous_checkpoint: ProgressivePlannerCheckpoint | None = field(init=False)
 
     def __post_init__(self) -> None:
+        self._previous_checkpoint = self.source_checkpoint
         self._sequence = (
             int(self.source_checkpoint.sequence) + 1
             if self.source_checkpoint is not None
@@ -259,9 +303,24 @@ class ProgressivePlannerCheckpointEmitter:
                 json.dumps(prompt_metrics, ensure_ascii=False)
             ),
         }
+        offset = self._sequence - len(materializations) - 1
+        if stage == "step" and offset > 0:
+            repairs = prompt_metrics.get("final_acceptance_repairs") or []
+            if not repairs:
+                raise ProgressivePlanningArtifactError(
+                    "progressive_checkpoint_revision_missing", "suffix rewind lacks a final gate finding",
+                )
+            body.update(
+                schema_version="easyicu.progressive_planner_checkpoint/2",
+                revision_offset=offset,
+                repair_start_index=repairs[-1]["retained_step_count"],
+            )
         body["checkpoint_sha256"] = canonical_sha256(body)
         checkpoint = ProgressivePlannerCheckpoint.model_validate(body)
+        if self._previous_checkpoint is not None:
+            _validate_revised_checkpoint_transition(self._previous_checkpoint, checkpoint)
         self.callback(checkpoint)
+        self._previous_checkpoint = checkpoint
         self._previous_checkpoint_sha256 = checkpoint.checkpoint_sha256
         self._sequence += 1
 
@@ -533,6 +592,7 @@ def persist_progressive_planner_checkpoint(
                 "progressive_checkpoint_chain_mismatch",
                 "checkpoint predecessor digest does not match sequence authority",
             )
+        _validate_revised_checkpoint_transition(previous, checkpoint)
         if (
             checkpoint.request_authority_sha256
             != previous.request_authority_sha256
@@ -825,6 +885,8 @@ def load_progressive_planner_checkpoint_chain(
                 "progressive_resume_checkpoint_chain_mismatch",
                 "checkpoint predecessor digest does not close the source chain",
             )
+        if previous is not None:
+            _validate_revised_checkpoint_transition(previous, checkpoint)
         chain.append(checkpoint)
         previous = checkpoint
 
@@ -834,6 +896,30 @@ def load_progressive_planner_checkpoint_chain(
             "terminal checkpoint changed while its source chain was loaded",
         )
     return tuple(chain)
+
+
+def _current_step_schema_authorities(
+    prompt_metrics: Mapping[str, Any], step_count: int,
+) -> list[Any]:
+    """Bind the current prefix; retain append-only schema history as history.
+
+    Revised planning owns separate active schema slots, also validated by its
+    checkpoints. Legacy runs retain their original one-entry-per-step list.
+    A revision missing its active slots must never fall back to old requests.
+    """
+    active_key = "active_step_materialization_schema_sha256"
+    key = (
+        active_key
+        if active_key in prompt_metrics or prompt_metrics.get("final_acceptance_repairs")
+        else "step_materialization_schema_sha256"
+    )
+    values = prompt_metrics.get(key)
+    if not isinstance(values, list) or len(values) != step_count:
+        raise ProgressivePlanningArtifactError(
+            "progressive_step_schema_authority_count_mismatch",
+            "one current schema authority entry is required per materialized step",
+        )
+    return values
 
 
 def persist_progressive_planning_artifacts(
@@ -877,16 +963,9 @@ def persist_progressive_planning_artifacts(
             "prompt metrics and compile receipt identify different skeletons",
         )
 
-    raw_step_schema_digests = prompt_metrics.get(
-        "step_materialization_schema_sha256"
+    raw_step_schema_digests = _current_step_schema_authorities(
+        prompt_metrics, len(materializations),
     )
-    if not isinstance(raw_step_schema_digests, list) or len(
-        raw_step_schema_digests
-    ) != len(materializations):
-        raise ProgressivePlanningArtifactError(
-            "progressive_step_schema_authority_count_mismatch",
-            "one schema authority entry is required per materialized step",
-        )
     step_schema_digests = [
         _authority_digest(value, field=f"step_schema[{index}]")
         for index, value in enumerate(raw_step_schema_digests)
@@ -1233,14 +1312,7 @@ def persist_progressive_planning_authority(
             "progressive_schema_authority_mismatch",
             "foundation schema authority differs between ledger and prompt metrics",
         )
-    metrics_step_schema = prompt_metrics.get("step_materialization_schema_sha256")
-    if not isinstance(metrics_step_schema, list) or len(metrics_step_schema) != len(
-        entries
-    ):
-        raise ProgressivePlanningArtifactError(
-            "progressive_step_schema_authority_count_mismatch",
-            "prompt metrics do not contain one schema digest per step",
-        )
+    metrics_step_schema = _current_step_schema_authorities(prompt_metrics, len(entries))
     ordered_steps: list[ProgressivePlanningStepAuthority] = []
     for index, (entry, materialization) in enumerate(
         zip(entries, materializations, strict=True)

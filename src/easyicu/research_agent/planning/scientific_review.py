@@ -37,6 +37,7 @@ from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
 )
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
+from ..contracts.functional_form import functional_form_products
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.phenotype_comparison import (
     COMPARISON_ACTION, comparison_cohort_input, validate_comparison_step,
@@ -998,8 +999,12 @@ def _sensitivity_facts(
                 )
                 and step.sensitivity_spec_ids
                 and step.functional_form_spec is not None
-                and len(step.expected_outputs) == 1
+                and bool(step.expected_outputs)
                 and str(step.expected_outputs[0]).startswith("table:")
+                and tuple(step.expected_outputs) == functional_form_products(
+                    step.expected_outputs[0], include_effects=len(step.expected_outputs) != 1,
+                )
+                and (len(step.expected_outputs) == 1 or step.scientific_capability is None)
             ):
                 # The progressive compiler signs this exact custom-sensitivity
                 # shape against the primary adjusted-association product. It is
@@ -1508,7 +1513,7 @@ def build_plan_scientific_review(
     findings: list[PlanScientificFinding] = []
     diagnostic_products = {
         product for source in plan.steps if source.functional_form_spec is not None
-        for product in source.expected_outputs
+        for product in source.expected_outputs[:1]
     }
     for step in plan.steps:
         if ("table:robustness_matrix" in step.inputs

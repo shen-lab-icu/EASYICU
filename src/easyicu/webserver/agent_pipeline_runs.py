@@ -1049,6 +1049,8 @@ def _metadata_only_planning_catalog(
         build_available_catalog,
         build_database_capability_catalog,
     )
+    from easyicu.outcome_availability import structural_outcome_unavailability
+    from easyicu.research_agent.concept_availability import normalize_database_name
 
     catalog = build_database_capability_catalog(database)
     if export_path is not None:
@@ -1061,6 +1063,15 @@ def _metadata_only_planning_catalog(
             # Exact source metadata takes precedence without reading values.
             by_id.update((item.concept_id, item) for item in source_catalog.concepts)
             catalog.concepts = list(by_id.values())
+    # Source metadata may refine a supported concept or add a local variable,
+    # but a physical column cannot revoke an explicit negative source contract.
+    # Keep unknown local concepts: absence from the canonical menu alone is not
+    # evidence that a source-owned measurement is structurally unavailable.
+    normalized_database = normalize_database_name(database)
+    catalog.concepts = [
+        item for item in catalog.concepts
+        if structural_outcome_unavailability(item.concept_id, normalized_database) is None
+    ]
     return catalog
 
 
@@ -1099,8 +1110,33 @@ def _metadata_only_planning_acquisition(
     )
     from easyicu.database_config import ID_COLUMNS
     from easyicu.research_agent.concept_availability import normalize_database_name
+    from easyicu.outcome_availability import structural_outcome_unavailability
 
     catalog = _metadata_only_planning_catalog(database=database, export_path=export_path)
+    required_source_failures = [
+        receipt
+        for concept in dict.fromkeys((
+            *required_concepts, *explicit_outcome_concepts(question), target_outcome or "",
+        ))
+        if (receipt := structural_outcome_unavailability(
+            concept, normalize_database_name(database),
+        )) is not None
+    ]
+    if required_source_failures:
+        raise ResearchPipelineRunError(
+            "research_pipeline_required_concept_structurally_unavailable",
+            "Required scientific inputs have no supported source contract. "
+            "Keep the question and requirements; resolve source support or "
+            "review an explicit design change before planning.",
+            details={
+                "database": normalize_database_name(database),
+                "required_concepts": [r.concept_id for r in required_source_failures],
+                "source_findings": [{
+                    "concept_id": r.concept_id, "reason_code": r.reason_code,
+                    "supported_databases": list(r.supported_databases),
+                } for r in required_source_failures],
+            },
+        )
     if not catalog.concepts:
         raise ResearchPipelineRunError(
             "research_pipeline_planning_catalog_unavailable",

@@ -67,6 +67,93 @@ class ProgressivePrefixState:
     prompt_summary: tuple[Mapping[str, Any], ...] = ()
 
 
+def final_acceptance_repair_start(
+    error: ProgressivePlanCompileError, outline: ProgressivePlanOutline,
+) -> int | None:
+    """Select a Planner-owned final gate for bounded suffix repair.
+
+    Source support, scientific authority, sealed-coordinate changes and unknown
+    failures are not invitations to rewrite the design. Unlocated article roles
+    require re-materializing the entire sealed outline, never a guessed suffix.
+    """
+    repairable = {
+        "progressive_article_required_roles_missing",
+        "progressive_robustness_specs_invalid",
+        "progressive_literature_citation_bindings_invalid",
+        "progressive_typed_product_specs_invalid",
+        "progressive_context_bindings_invalid",
+        "progressive_primary_cohort_invalid",
+        "progressive_primary_result_invalid",
+    }
+    if error.reason_code == "progressive_article_required_roles_missing":
+        findings = error.details.get("findings") or []
+        finding = findings[0] if findings else {}
+        roles = finding.get("missing_roles") or []
+        owners = finding.get("role_owner_indices") or {}
+        indices = [i for role in roles for i in owners.get(role, [])]
+        if (
+            roles and all(owners.get(role) for role in roles)
+            and all(type(i) is int and 0 <= i < len(outline.steps) for i in indices)
+        ):
+            return min(indices)
+        # An old/ambiguous final finding has no trustworthy step coordinate.
+        # Re-materialize the fixed outline from zero, not a guessed primary.
+        return 0 if outline.steps else None
+    index = error.step_index
+    if (
+        error.reason_code not in repairable
+        or type(index) is not int
+        or not 0 <= index < len(outline.steps)
+        or outline.steps[index].step_id != error.step_id
+    ):
+        return None
+    return index
+
+
+def article_role_repair_owners(
+    plan: AnalysisPlan, contract: Any, missing_roles: Sequence[str],
+) -> dict[str, list[int]]:
+    """Locate declared product/action owners, independently of error prose.
+
+    This is repair localization, never role acceptance: a wrongly typed
+    ``artifact:protocol`` may identify the step to repair without satisfying
+    the required table contract. Ambiguous/absent roles remain unlocated.
+    """
+    from ..reporting.article_contract import hinted_typed_products
+
+    owners: dict[str, list[int]] = {}
+    for role in missing_roles:
+        requirements = [r for r in contract.requirements if r.role == role]
+        modules = [r.module_id for r in requirements]
+        names = {role, *modules}
+        names.update(
+            product.partition(":")[2]
+            for product in hinted_typed_products(role, modules)
+            if ":" in product
+        )
+        indices = []
+        for index, step in enumerate(plan.steps):
+            declared = [p.partition(":")[2] for p in step.expected_outputs if ":" in p]
+            runtime_roles: Sequence[str] = ()
+            if step.scientific_action_id:
+                try:
+                    action = scientific_action_for_id(
+                        analysis_type=plan.analysis_type, action_id=step.scientific_action_id,
+                    )
+                except ValueError:
+                    pass
+                else:
+                    if action.runtime_contract is not None:
+                        runtime_roles = action.runtime_contract.article_roles
+            if (
+                role in runtime_roles or step.method in modules
+                or any(p == name or p.startswith(name + "_") for p in declared for name in names)
+            ):
+                indices.append(index)
+        owners[role] = indices
+    return owners
+
+
 @dataclass(frozen=True)
 class ProgressiveCheckpointAuthorities:
     """Full-request and semantic replay identities for one Planner run."""
@@ -496,7 +583,11 @@ def restore_progressive_resume_prefix(
             path="resume_checkpoint.materializations",
         )
     stored_schema_authorities = checkpoint.prompt_metrics.get(
-        "step_materialization_schema_sha256",
+        (
+            "active_step_materialization_schema_sha256"
+            if checkpoint.revision_offset is not None
+            else "step_materialization_schema_sha256"
+        ),
         [],
     )
     if not isinstance(stored_schema_authorities, list):

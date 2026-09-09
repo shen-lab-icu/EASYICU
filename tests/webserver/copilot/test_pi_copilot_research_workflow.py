@@ -1338,7 +1338,7 @@ def test_metadata_only_planning_grounds_aliases_and_drops_unsupported_optional_n
     ]
 
 
-def test_metadata_only_planning_merges_exact_source_metadata_for_dependence(
+def test_metadata_only_planning_preserves_canonical_negative_source_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1390,7 +1390,6 @@ def test_metadata_only_planning_merges_exact_source_metadata_for_dependence(
         "stay_id",
         "lact",
         "death",
-        "icu_readmission",
     ]
     assert acquisition.coverage.missing == []
 

@@ -197,6 +197,7 @@ def _synthetic_frame():
 
 @pytest.mark.parametrize("clustered", [False, True])
 def test_covariate_sensitivity_really_refits_on_the_primary_population(tmp_path, monkeypatch, clustered):
+    import hashlib
     import json
     import statsmodels.api as sm
     from easyicu.research_agent.authority.current_case_scientific_runtime import LandmarkSplineRuntimeAuthority
@@ -229,10 +230,23 @@ def test_covariate_sensitivity_really_refits_on_the_primary_population(tmp_path,
         out_dir=tmp_path / "primary",
     )
     source = pd.read_csv(tmp_path / "primary" / f"{authority.linear_sensitivity_product.partition(':')[2]}.csv")
+    frame.to_parquet(tmp_path / "cohort.parquet", index=False)
+    contrast_path = tmp_path / "primary" / f"{authority.downstream_parent_product.partition(':')[2]}.csv"
+    contrast_source = pd.read_csv(contrast_path)
+    source_paths = {
+        "dataset:analysis_cohort": tmp_path / "cohort.parquet",
+        authority.downstream_parent_product: contrast_path,
+        authority.linear_sensitivity_product: tmp_path / "primary" / f"{authority.linear_sensitivity_product.partition(':')[2]}.csv",
+    }
+    receipts = [{
+        "input_key": key, "evidence_id": "primary_comparison" if key == authority.linear_sensitivity_product else key,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "loaded": True,
+        "row_count": len(frame) if key.startswith("dataset:") else 2 if key == authority.downstream_parent_product else 1,
+    } for key, path in source_paths.items()]
     result = run_landmark_spline_functional_form(
         step=bound.steps[1], authority=authority, runtime_projection_sha256=projection.runtime_projection_sha256,
         linear_sensitivity=source, linear_evidence_id="primary_comparison", out_dir=tmp_path / "sensitivity",
-        cohort_frame=frame,
+        cohort_frame=frame, primary_contrasts=contrast_source, input_bindings=receipts,
     )
     table = pd.read_csv(tmp_path / "sensitivity" / "functional_form.csv")
     assert result["target_column"] == "age"
@@ -302,7 +316,7 @@ def test_covariate_refit_matches_an_independent_truncated_power_spline_oracle(tm
     assert actual["nonlinearity_p_value"] == pytest.approx(chi2.sf(statistic, 1), rel=1e-7)
 
 
-@pytest.mark.parametrize("mutation", [None, "missing_cohort", "digest_drift", "wrong_step"])
+@pytest.mark.parametrize("mutation", [None, "missing_cohort", "digest_drift", "wrong_step", "cohort_alias"])
 def test_bound_covariate_refit_verifies_all_three_artifact_inputs(tmp_path, mutation):
     import hashlib
     import json
@@ -311,13 +325,20 @@ def test_bound_covariate_refit_verifies_all_three_artifact_inputs(tmp_path, muta
     from easyicu.research_agent.execution.runners.typed_input_binding import TypedInputBindingError
 
     projection, authority, plan = _bound_sensitivity("age")
+    cohort_input = "dataset:analysis_cohort"
+    if mutation == "cohort_alias":
+        cohort_input = "cohort:analysis_set"
+        primary = plan.steps[0].model_copy(update={
+            "inputs": [cohort_input if key == "dataset:analysis_cohort" else key for key in plan.steps[0].inputs],
+        })
+        plan = authority.bind_plan(plan.model_copy(update={"steps": [primary, plan.steps[1]]}))
     frame = _synthetic_frame()
     frame.to_parquet(tmp_path / "cohort.parquet", index=False)
     run_landmark_spline_association(
         frame=frame, authority=authority, runtime_projection_sha256=projection.runtime_projection_sha256,
         out_dir=tmp_path / "primary",
     )
-    paths = {"dataset:analysis_cohort": tmp_path / "cohort.parquet"}
+    paths = {cohort_input: tmp_path / "cohort.parquet"}
     paths.update({key: tmp_path / "primary" / f"{key.partition(':')[2]}.csv" for key in (
         authority.downstream_parent_product, authority.linear_sensitivity_product,
     )})
@@ -327,7 +348,8 @@ def test_bound_covariate_refit_verifies_all_three_artifact_inputs(tmp_path, muta
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         manifest["inputs"][key] = {
             "relative_path": str(path.relative_to(tmp_path)), "sha256": digest,
-            "declared_kind": key.partition(":")[0], "evidence_kind": "table", "product": key.partition(":")[2],
+            "declared_kind": "dataset" if key.startswith("cohort:") else key.partition(":")[0],
+            "evidence_kind": "table", "product": key.partition(":")[2],
             "evidence_id": key, "product_contract": {"columns": list(data.columns), "row_count": len(data)},
             "consumption_contract": {"input_key": key, "mode": "all_rows", "artifact_sha256": digest},
         }

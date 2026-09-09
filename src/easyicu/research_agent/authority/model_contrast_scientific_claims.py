@@ -17,7 +17,9 @@ from .numeric_claim_identity import NumericEffectScale, NumericEstimand
 class ModelContrast(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    kind: Literal["spline_point", "linear_increment"]
+    kind: Literal["spline_point", "linear_increment", "covariate_form_point"]
+    target_column: str | None = Field(default=None, min_length=1)
+    sensitivity_spec_id: str | None = Field(default=None, min_length=1)
     source_evidence_id: str = Field(min_length=1)
     value: float
     reference: float | None = None
@@ -36,12 +38,17 @@ class ModelContrast(BaseModel):
     def _bounded(self):
         if not self.lower <= self.estimate <= self.upper:
             raise ValueError("model contrast interval must contain the estimate")
-        if self.kind == "spline_point" and self.reference is None:
+        if self.kind in {"spline_point", "covariate_form_point"} and self.reference is None:
             raise ValueError("spline point requires its reference")
         if self.kind == "linear_increment" and (
             self.reference is not None or self.value <= 0
         ):
             raise ValueError("linear increment requires a positive increment only")
+        if self.kind == "covariate_form_point":
+            if self.target_column is None or self.sensitivity_spec_id is None:
+                raise ValueError("covariate-form contrast requires its target and reviewed spec")
+        elif self.target_column is not None or self.sensitivity_spec_id is not None:
+            raise ValueError("primary/linear contrasts cannot acquire a covariate-form identity")
         return self
 
 
@@ -81,6 +88,18 @@ class ModelContrastReporting(BaseModel):
             {x.value for x in points}
         ) != len(points):
             raise ValueError("model contrast points require unique values and a shared reference")
+        alternatives = [x for x in self.contrasts if x.kind == "covariate_form_point"]
+        for spec_id in {x.sensitivity_spec_id for x in alternatives}:
+            group = [x for x in alternatives if x.sensitivity_spec_id == spec_id]
+            if (
+                len(group) != len(points)
+                or len({x.target_column for x in group}) != 1
+                or group[0].target_column not in self.adjustment_columns
+                or group[0].target_column == self.exposure
+                or len({x.source_evidence_id for x in group}) != 1
+                or {(x.value, x.reference) for x in group} != {(x.value, x.reference) for x in points}
+            ):
+                raise ValueError("covariate-form points must retain the primary contrast coordinates and one adjustment target")
         return self
 
 
@@ -136,6 +155,17 @@ def derive_model_contrast_claim_payloads(summary: dict) -> list[dict]:
     }
     if any(x.source_evidence_id not in source_ids for x in report.contrasts):
         raise ValueError("model contrast reporting source was not consumed")
+    alternatives = [x for x in report.contrasts if x.kind == "covariate_form_point"]
+    effect_sources = summary.get("functional_form_effect_sources", [])
+    if alternatives and not isinstance(effect_sources, list):
+        raise ValueError("covariate-form claims lack the consumed effect products")
+    for contrast in alternatives:
+        matches = [item for item in effect_sources if isinstance(item, dict)
+                   and item.get("spec_id") == contrast.sensitivity_spec_id
+                   and item.get("target_column") == contrast.target_column
+                   and item.get("contrast_evidence_id") == contrast.source_evidence_id]
+        if len(matches) != 1 or matches[0].get("curve_evidence_id") not in source_ids:
+            raise ValueError("covariate-form claim requires both consumed curve and point products")
     upper = max((x for x in report.contrasts if x.kind == "spline_point"), key=lambda x: x.value)
     if (upper.estimate, upper.lower, upper.upper) != tuple(
         summary.get(x) for x in ("primary_or", "primary_ci_low", "primary_ci_high")
@@ -147,7 +177,7 @@ def derive_model_contrast_claim_payloads(summary: dict) -> list[dict]:
     )
     payloads = []
     for index, contrast in enumerate(report.contrasts):
-        point = contrast.kind == "spline_point"
+        point = contrast.kind != "linear_increment"
         coordinate = (
             f"{report.exposure} at {contrast.value:g} versus {contrast.reference:g} {report.exposure_unit}"
             if point else f"a {contrast.value:g} {report.exposure_unit} increase in {report.exposure}"
@@ -156,6 +186,12 @@ def derive_model_contrast_claim_payloads(summary: dict) -> list[dict]:
             "this point contrast only, not a summary of the nonlinear curve"
             if point else "prespecified linear functional-form sensitivity"
         )
+        if contrast.kind == "covariate_form_point":
+            scope = (
+                f"prespecified sensitivity {contrast.sensitivity_spec_id}: "
+                f"{contrast.target_column} modeled with its reviewed restricted cubic spline "
+                "instead of a linear adjustment term; this exposure point contrast only"
+            )
         variance = report.variance_estimator.replace("_", " ")
         payloads.append({
             "claim_id": f"model_contrast_{index + 1}",
@@ -168,7 +204,7 @@ def derive_model_contrast_claim_payloads(summary: dict) -> list[dict]:
             ),
             "estimand": f"odds ratio; {scope}; {variance} Wald interval; noncausal association",
             "population": population,
-            "analysis_role": "primary" if point else "sensitivity",
+            "analysis_role": "primary" if contrast.kind == "spline_point" else "sensitivity",
             "status": "supported",
             "adjusted_for": report.adjustment_columns,
             "point_estimate": contrast.estimate,
