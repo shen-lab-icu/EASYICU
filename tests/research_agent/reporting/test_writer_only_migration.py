@@ -385,6 +385,67 @@ def test_second_authority_repair_is_validated_and_only_incomplete_owner_repeats(
     assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == manuscript
 
 
+@pytest.mark.parametrize("still_broken", [False, True])
+def test_completed_reader_failure_enters_remaining_final_audit_pass(tmp_path, monkeypatch, still_broken):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+    from easyicu.research_agent.reporting.manuscript_sections import ManuscriptReaderQualityContractError
+
+    software = "Analyses used versioned software and registered artifacts."
+    bad = _manuscript().replace(software, "")
+    prepared = _prepared(tmp_path, bad)
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+
+    class Writer:
+        calls = 0
+
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, *, section_errors, **kwargs):
+            self.calls += 1
+            assert set(section_errors) == {"methods"}
+            if self.calls == 1 or still_broken:
+                raise ManuscriptReaderQualityContractError(
+                    findings=(("MANUSCRIPT_SECTION_EMPTY", "Methods", "Still incomplete"),),
+                    manuscript=text, repaired_section_keys=("methods",),
+                )
+            return text.replace("### Software and reproducibility", "### Software and reproducibility\n\n" + software), ("methods",)
+
+    writer = Writer()
+    if still_broken:
+        with pytest.raises(WriterOnlyMigrationError, match="AUTHORITY_REPAIR_EXHAUSTED"):
+            repair_writer_only(prepared, writer=writer)
+    else:
+        result = repair_writer_only(prepared, writer=writer)
+        assert result.quality_audit.status == "pass"
+        assert result.authority_repaired_section_keys == ("methods",)
+    assert writer.calls == 2
+    assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == bad
+
+
+@pytest.mark.parametrize("phase", ["initial", "authority"])
+def test_replay_mismatch_keeps_identity_through_writer_owner(tmp_path, monkeypatch, phase):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    manuscript = _manuscript().replace("Analyses used versioned software and registered artifacts.", "")
+    prepared = _prepared(tmp_path, manuscript)
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+    drift = WriterOnlyMigrationError(code="WRITER_ONLY_REPLAY_MISMATCH", detail="Saved prefix changed")
+
+    class Writer:
+        def repair_existing(self, text, **kwargs):
+            if phase == "initial":
+                raise drift
+            return text, ()
+
+        def repair_sections(self, *args, **kwargs):
+            raise drift
+
+    with pytest.raises(WriterOnlyMigrationError) as caught:
+        repair_writer_only(prepared, writer=Writer())
+    assert caught.value is drift
+
+
 @pytest.mark.parametrize("separator", [",", ", ", ";", "; "])
 def test_exact_registered_citation_groups_are_normalized_before_unknown_removal(tmp_path, monkeypatch, separator):
     from types import SimpleNamespace

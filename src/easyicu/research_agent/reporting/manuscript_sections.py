@@ -50,10 +50,14 @@ class ManuscriptSectionContractError(RuntimeError):
 class ManuscriptReaderQualityContractError(RuntimeError):
     """Bounded section repairs did not close deterministic reader errors."""
 
-    def __init__(self, *, findings: tuple[tuple[str, str, str], ...], manuscript: str = ""):
+    def __init__(
+        self, *, findings: tuple[tuple[str, str, str], ...], manuscript: str = "",
+        repaired_section_keys: tuple[str, ...] = (),
+    ):
         self.findings = findings
         # Diagnostic candidate only; raising still blocks manuscript authority.
         self.manuscript = manuscript
+        self.repaired_section_keys = repaired_section_keys
         detail = "; ".join(
             f"{code} ({section}): {message}" for code, section, message in findings
         )
@@ -61,6 +65,20 @@ class ManuscriptReaderQualityContractError(RuntimeError):
             "Writer sections still fail deterministic reader-quality checks "
             f"after bounded targeted repairs: {detail}"
         )
+
+
+def completed_section_repair_candidate(
+    exc: Exception, *, expected_section_keys: Sequence[str],
+) -> tuple[str, tuple[str, ...]] | None:
+    """Return a completed draft only for the caller's final binding and audits."""
+    if (
+        isinstance(exc, ManuscriptReaderQualityContractError)
+        and exc.manuscript.strip()
+        and exc.repaired_section_keys
+        and set(exc.repaired_section_keys) == set(expected_section_keys)
+    ):
+        return exc.manuscript, exc.repaired_section_keys
+    return None
 
 
 MANUSCRIPT_SECTION_SPECS = (
@@ -839,10 +857,17 @@ def repair_named_manuscript_sections(
         expected_display_labels=display_labels,
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
-    if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining, manuscript=scientific)
     administrative = render_manuscript_administrative_sections(administrative_authority)
-    return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
+    candidate = "\n\n".join((scientific, administrative))
+    if remaining:
+        # The adjacent owner may bind this completed draft and run its final
+        # audits, or send their findings into its remaining bounded repair pass.
+        # This exception does not establish manuscript or publication authority.
+        raise ManuscriptReaderQualityContractError(
+            findings=remaining, manuscript=candidate,
+            repaired_section_keys=tuple(repaired_keys),
+        )
+    return candidate, tuple(repaired_keys)
 
 
 def render_manuscript_sections(
