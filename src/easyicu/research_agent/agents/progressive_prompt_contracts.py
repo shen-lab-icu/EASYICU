@@ -326,6 +326,7 @@ def step_materialization_shape_contract(
     # Do not advertise a population choice to modules that cannot own it.
     if outline_step.module_id == "absolute_risk_context":
         step["population_scope"] = None
+        step["population_scope_change_reason"] = None
     template = {
         "schema_version": "easyicu.progressive_step_materialization/1",
         "outline_step_sha256": outline_step_sha256,

@@ -1746,6 +1746,16 @@ class AnalysisStep(BaseModel):
         default=None, exclude_if=lambda value: value is None,
         description="Declared descriptive population, bound by the compiler and execution owner; absence preserves historical serialization, not fresh approval.",
     )
+    population_scope_change_reason: Optional[str] = Field(
+        default=None, min_length=12, max_length=1200, exclude_if=lambda value: value is None,
+        description="Required only for an intentional change from a source-bound descriptive population; disclose why the scientific scope changes for fresh complete-plan review.",
+    )
+
+    @field_validator("population_scope_change_reason", mode="before")
+    @classmethod
+    def _strip_population_scope_change_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
     phenotyping_feature_columns: Optional[List[str]] = Field(
         default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None,
         description="Exact clustering fit columns; readable profile, identity and outcome inputs are not fit features.",

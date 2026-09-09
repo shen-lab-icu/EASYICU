@@ -2950,6 +2950,7 @@ class ResearchAgentPipeline:
         long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
         from .planning.baseline_requirements import bind_baseline_requirements
+        from .planning.population_requirements import bind_population_requirements
 
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
@@ -2963,6 +2964,9 @@ class ResearchAgentPipeline:
             )
             bind_baseline_requirements(
                 context, self._config.bound_baseline_requirements, restoring=True,
+            )
+            bind_population_requirements(
+                context, self._config.bound_population_requirements, restoring=True,
             )
             if not context_path.is_file() or sha256_of_file(
                 context_path
@@ -2998,6 +3002,9 @@ class ResearchAgentPipeline:
             context = builder(**context_kwargs)
             context = bind_baseline_requirements(
                 context, self._config.bound_baseline_requirements,
+            )
+            context = bind_population_requirements(
+                context, self._config.bound_population_requirements,
             )
             context_path.write_text(
                 context.model_dump_json(indent=2),

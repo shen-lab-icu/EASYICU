@@ -1888,11 +1888,14 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
 ) -> None:
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
-    from easyicu.webserver.plan_change_request import PlanChangeRequest
+    from easyicu.webserver.plan_change_request import PlanChangeRequest, ReferencedPlan
 
     change = PlanChangeRequest(
         source_run_id="run-reviewed-candidate",
         user_message="Revise the complete plan; retain all requested outcomes and explain the population denominator.",
+        reference_plans=(ReferencedPlan(run_id="run-reviewed-candidate", artifact_sha256="c" * 64,
+            plan={"steps": [{"step_id": "risk", "population_scope": "primary_model",
+                             "expected_outputs": ["table:absolute_risk_context"]}]}),),
     ) if requested_changes else None
 
     actual_run = tmp_path / "actual-planner-run"
@@ -2020,6 +2023,10 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     assert configs[0].require_human_plan_review is True
     assert configs[0].required_primary_cohort_selection_mode is None
     assert configs[0].evidence_enforcement_mode == "strict"
+    from easyicu.research_agent.contracts.frozen_payload import thaw_payload
+    assert thaw_payload(configs[0].bound_population_requirements) == (
+        change.population_requirements().model_dump(mode="json") if change else None
+    )
     assert configs[0].bound_plan_revision_contract == (
         change.planner_context() if change is not None else None
     )
@@ -7955,7 +7962,10 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
     monkeypatch.setattr(agent_pipeline_runs, "_load_candidate_plan_materialization_authority", lambda **kw: None)
     review = _nonapprovable_review_payload(finding_code="ACCEPTED_BASELINE_CONTENT_MISSING")
     baseline = _requirements("age", "charlson").model_dump(mode="json")
-    review["facts"] = {"accepted_baseline_requirements": baseline}
+    population = {"schema_version": "easyicu.plan_population_requirements/1",
+        "source_plan_sha256": "d" * 64, "source_digest_kind": "canonical_plan_sha256",
+        "populations": [{"source_step_id": "risk", "output_product": "table:absolute_risk_context", "population_scope": "primary_model"}]}
+    review["facts"] = {"accepted_baseline_requirements": baseline, "plan_population_requirements": population}
     monkeypatch.setattr(agent_pipeline_runs, "_load_plan_revision_source_review", lambda **kw: PlanScientificReview.model_validate(review))
     monkeypatch.setattr(research_pipeline_run_preparation, "_data_foundation_profile", lambda **kw: _foundation_profile())
     monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client", lambda *a, **kw: (object(), {"provider": "openai", "model": "test"}))
@@ -7999,6 +8009,7 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
     from easyicu.research_agent.contracts.frozen_payload import thaw_payload
 
     assert thaw_payload(config.bound_baseline_requirements) == baseline
+    assert thaw_payload(config.bound_population_requirements) == population
     assert "48-hour" in config.bound_plan_revision_contract
     assert "ACCEPTED_BASELINE_CONTENT_MISSING" in config.bound_plan_revision_contract
     assert all(path.read_bytes() == content for path, content in before.items())

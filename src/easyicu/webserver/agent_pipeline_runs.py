@@ -77,6 +77,9 @@ from easyicu.webserver import (
 )
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.plan_change_request import PlanChangeRequest
+from easyicu.research_agent.planning.population_requirements import (
+    PlanPopulationRequirements, candidate_population_requirements,
+)
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.literature_projection import (
     load_current_plan_authority,
@@ -3649,6 +3652,7 @@ class _CandidatePlanMaterializationAuthority:
     primary_cohort_selection_mode: CohortSelectionMode
     primary_exposure_aggregation: Optional[str] = None
     baseline_requirements: Optional[AcceptedBaselineRequirements] = None
+    population_requirements: Optional[PlanPopulationRequirements] = None
 
 
 def _candidate_plan_contract(
@@ -3935,6 +3939,14 @@ def _load_candidate_plan_materialization_authority(
             details={"field": "cohort", "cause": str(exc)},
         ) from exc
     try:
+        population_requirements = candidate_population_requirements(plan, parsed_review.plan_sha256)
+    except (TypeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The accepted descriptive population lacks a unique typed result binding.",
+            details={"field": "population_scope", "cause": str(exc)},
+        ) from exc
+    try:
         baseline_requirements = candidate_baseline_requirements(
             plan=plan,
             source_plan_sha256=parsed_review.plan_sha256,
@@ -3955,6 +3967,7 @@ def _load_candidate_plan_materialization_authority(
         primary_cohort_selection_mode=candidate_cohort.selection_mode,
         primary_exposure_aggregation=aggregation or None,
         baseline_requirements=baseline_requirements,
+        population_requirements=population_requirements,
     )
 
 
@@ -4571,6 +4584,10 @@ def make_research_pipeline_run_runner(
         candidate_exposure_aggregation: Optional[str] = None
         candidate_authority: Optional[_CandidatePlanMaterializationAuthority] = None
         bound_baseline_requirements: Optional[AcceptedBaselineRequirements] = None
+        bound_population_requirements = (
+            execution.plan_change_request.population_requirements()
+            if execution.plan_change_request is not None else None
+        )
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if source_run_id:
             candidate_authority = _load_candidate_plan_materialization_authority(
@@ -4591,6 +4608,7 @@ def make_research_pipeline_run_runner(
                 candidate_outcome_concepts = candidate_authority.outcome_concepts
                 candidate_exposure_aggregation = candidate_authority.primary_exposure_aggregation
                 bound_baseline_requirements = candidate_authority.baseline_requirements
+                bound_population_requirements = candidate_authority.population_requirements
                 foundation_profile = _data_foundation_profile(
                     export_path=export_path,
                     study=candidate_planning_study,
@@ -4609,6 +4627,9 @@ def make_research_pipeline_run_runner(
                     project_root=project_root,
                     source_run_id=source_run_id,
                 )
+                inherited_population = source_review.facts.get("plan_population_requirements")
+                if inherited_population is not None and bound_population_requirements is None:
+                    bound_population_requirements = PlanPopulationRequirements.model_validate(inherited_population)
                 inherited_baseline = source_review.facts.get("accepted_baseline_requirements")
                 if inherited_baseline is not None:
                     bound_baseline_requirements = AcceptedBaselineRequirements.model_validate(inherited_baseline)
@@ -5131,6 +5152,10 @@ def make_research_pipeline_run_runner(
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
                 bound_plan_revision_contract=(bound_plan_revision_contract or None),
+                bound_population_requirements=(
+                    bound_population_requirements.model_dump(mode="json")
+                    if bound_population_requirements is not None else None
+                ),
                 bound_baseline_requirements=(
                     bound_baseline_requirements.model_dump(mode="json")
                     if bound_baseline_requirements is not None

@@ -462,6 +462,8 @@ def _bind_step_module_shape(
     )
     standard["properties"]["custom_method"] = {"type": "null"}
     if locked_module_id is not None and locked_module_id != "absolute_risk_context":
+        standard["properties"].pop("population_scope_change_reason", None)
+        standard["required"] = [name for name in standard["required"] if name != "population_scope_change_reason"]
         standard["properties"].pop("population_scope", None)
         standard["required"] = [name for name in standard["required"] if name != "population_scope"]
     # These contracts belong only to custom actions. Omit the irrelevant

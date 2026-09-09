@@ -557,6 +557,16 @@ class ProgressiveSkeletonStep(BaseModel):
         default=None, exclude_if=lambda value: value is None,
         description="Explicit population for absolute-risk context; primary_model reuses the preceding primary model's exact eligibility and complete cases.",
     )
+    population_scope_change_reason: Optional[str] = Field(
+        default=None, min_length=12, max_length=1200, exclude_if=lambda value: value is None,
+        description="Required only for an intentional change from a source-bound descriptive population; disclose why the scientific scope changes for fresh complete-plan review.",
+    )
+
+    @field_validator("population_scope_change_reason", mode="before")
+    @classmethod
+    def _strip_population_scope_change_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
     sensitivity_spec_ids: list[str] = Field(default_factory=list)
     functional_form_spec: Optional[FunctionalFormSpec] = Field(default=None, exclude_if=lambda value: value is None)
     phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
@@ -603,7 +613,7 @@ class ProgressiveSkeletonStep(BaseModel):
             self.primary_exposure and self.outcome
         ):
             raise ValueError("absolute_risk_context requires exposure and outcome")
-        if self.population_scope is not None and self.module_id != "absolute_risk_context":
+        if (self.population_scope is not None or self.population_scope_change_reason is not None) and self.module_id != "absolute_risk_context":
             raise ValueError("population_scope belongs only to absolute_risk_context")
         if self.module_id == "exposure_outcome_distribution":
             required = (
