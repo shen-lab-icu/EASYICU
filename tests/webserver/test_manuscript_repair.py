@@ -16,8 +16,8 @@ def test_report_only_limits_cap_and_never_expand_approved_budget():
         "full_reviewed"
     )
     caps = {
-        "max_provider_attempts_per_run": 6,
-        "max_provider_attempts_per_batch": 6,
+        "max_provider_attempts_per_run": 32,
+        "max_provider_attempts_per_batch": 32,
         "max_wall_clock_seconds_per_task": 600,
     }
     narrowed = manuscript_repair._report_only_limits(approved)

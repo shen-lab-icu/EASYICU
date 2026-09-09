@@ -1611,7 +1611,9 @@ def _select_numeric_claim(
     return None, True
 
 
-_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(r"(?:[.!?](?=\s|$)|\n{2,})")
+_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(
+    r"[.!?](?=\s|$)|(?P<paragraph>\r?\n[^\S\r\n]*\r?\n)"
+)
 
 _EFFECT_SCALE_PHRASE_PATTERNS = {
     NumericEffectScale.ODDS_RATIO: re.compile(r"\bodds[\s-]+ratios?\b", re.I),
@@ -1763,25 +1765,33 @@ def _numeric_sentence_bounds(text: str, *, start: int, end: int) -> Tuple[int, i
     # it cannot by itself produce a wrong bind.
     next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.end() if next_boundary is not None else len(text)
-    context_end = _extend_through_trailing_citations(text, context_end)
+    if next_boundary is not None and next_boundary.group("paragraph") is not None:
+        # A paragraph can end without punctuation. Do not start a citation walk
+        # after consuming its blank line: that would borrow the next owner.
+        context_end = next_boundary.start()
+    else:
+        context_end = _extend_through_trailing_citations(text, context_end)
     max_chars = 1600
     context_start = max(context_start, start - max_chars)
     context_end = min(context_end, end + max_chars)
     return context_start, context_end
 
 
-#: A markdown link whose target is an evidence artefact, as the writer emits
-#: it: ``[label](evidence/<file> "sha256=...")``. Anchored so only an unbroken
-#: run of such links is absorbed.
-_TRAILING_CITATION_RE = re.compile(r"\s*\[[^\]\n]*\]\(evidence/[^)\n]*\)")
+#: Claim expansion emits raw evidence placeholders; manuscript rendering emits
+#: Markdown links. Both must remain in scope after the sentence's period, or
+#: the strict binder loses the cited owner of otherwise verified numeric claims.
+#: Allow a single folded line, but never a blank line or following prose.
+_TRAILING_CITATION_RE = re.compile(
+    r"[^\S\r\n]*(?:\r?\n[^\S\r\n]*)?"
+    r"(?:\[[^\]\n]*\]\(evidence/[^)\n]*\)|\{evidence:[^}\n]+\})"
+)
 
 
 def _extend_through_trailing_citations(text: str, context_end: int) -> int:
     """Extend a sentence window over the citations written after its period.
 
-    Nothing but evidence links is absorbed: the first thing that is not one
-    stops the walk, so a following sentence's prose -- and therefore its
-    claims -- can never be pulled into this sentence's context.
+    Only evidence links and placeholders in the same paragraph are absorbed;
+    a blank line or other token stops the walk before following claims.
     """
 
     cursor = context_end
@@ -1789,7 +1799,7 @@ def _extend_through_trailing_citations(text: str, context_end: int) -> int:
         match = _TRAILING_CITATION_RE.match(text, cursor)
         if match is None or match.end() <= cursor:
             # A pattern that can match the empty string would spin here
-            # forever. The one above cannot -- it requires a bracketed label --
+            # forever. The one above cannot -- it requires a citation token --
             # but a walk that trusts a regex to advance is one edit away from
             # hanging the writer phase, and a mutation of exactly that shape
             # did hang this test suite.

@@ -81,6 +81,7 @@ from .extraction import (
     extract_database,
     plan_extraction_resources,
 )
+from .derivation_context import DerivationContextError, validate_native_derivation_context
 from .medications import (
     MedicationLoadError,
     MedicationMergeError,
@@ -177,6 +178,8 @@ __all__ = [
     "EXTRACT_MODULE_ORDER",
     "ExtractionResourcePlan",
     "plan_extraction_resources",
+    "DerivationContextError",
+    "validate_native_derivation_context",
 ]
 
 

@@ -654,7 +654,6 @@ def _compile_ordered_stratified_contract(
         and candidate.outcome_type == "binary"
         and candidate.primary_exposure
         and candidate.outcome
-        and candidate.event_level_index is not None
     ]
     if len(parents) != 1:
         raise _fail(
@@ -704,8 +703,20 @@ def _compile_ordered_stratified_contract(
         )
     levels = list(contract.exposure_levels)
     binary_levels = list(contract.binary_levels)
-    event_index = int(parent.event_level_index)
-    if len(levels) < 3 or binary_levels != [0, 1] or event_index != 1:
+    # Adjusted models encode the numeric binary outcome directly; their
+    # contract does not require the distribution module's event index. Reuse
+    # that model authority only after the shared outcome contract has proved
+    # the closed 0/1 domain. Never invent a domain or reverse an explicit event.
+    parent_requirements = _compile_adjusted_association(
+        context=context, variables=variables, step=parent,
+        step_index=skeleton.steps.index(parent),
+    )
+    if (
+        len(levels) < 3 or binary_levels != [0, 1]
+        or parent.event_level_index not in (None, 1)
+        or len(parent_requirements) != 1
+        or parent_requirements[0].method_family != ASSOCIATION_LOGIT_ESTIMATOR
+    ):
         raise _fail(
             "progressive_ordered_trend_domain_unsupported",
             "the v1 deterministic owner requires >=3 ordered exposure levels "

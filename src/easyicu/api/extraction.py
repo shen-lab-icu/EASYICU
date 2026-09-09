@@ -26,6 +26,12 @@ from ..scores.sofa2_aggregate import (
     sofa2_total_structurally_supported,
 )
 from .cohort import get_all_patient_ids_impl
+from .derivation_context import (
+    SepsisContextRecorder,
+    seal_context,
+    transfer_context,
+    validate_derivation_manifest,
+)
 from .concepts import (
     _concepts_need_sofa2,
     _normalize_patient_ids_for_db,
@@ -2700,6 +2706,8 @@ def _stream_special_extraction_batches(
     started = time.time()
     module_memory_sampler = _RSSPeakSampler().start()
     source_root = Path(published_output_dir)
+    context = (SepsisContextRecorder(Path(output_dir), database=database, data_path=data_path)
+               if need_sofa1 else None)
 
     def _read_dependency(
         module_name: str,
@@ -2835,6 +2843,9 @@ def _stream_special_extraction_batches(
             # derived modules empty so the native publisher can emit typed
             # structural placeholders.
             if susp.empty:
+                if context is not None:
+                    context.record(None, susp, ids=ids, id_col=id_col,
+                                   time_col=None, action="empty_si")
                 continue
             if "susp_inf" not in susp.columns:
                 errors.append("streamed Sepsis dependency sepsis_shared lacks susp_inf")
@@ -2849,6 +2860,9 @@ def _stream_special_extraction_batches(
             # A batch without a positive timed SI event cannot yield Sepsis-3.
             # Avoid reading either multi-million-row score dependency for it.
             if not bool(susp["susp_inf"].eq(True).fillna(False).any()):
+                if context is not None:
+                    context.record(None, susp, ids=ids, id_col=id_col,
+                                   time_col=suspicion_time_col, action="no_positive_si")
                 continue
             sofa1 = (
                 _read_dependency(
@@ -2876,8 +2890,6 @@ def _stream_special_extraction_batches(
             )
 
             if need_sofa1 and sofa1 is not None:
-                from ..scores.sepsis import sep3 as _sep3
-
                 time_col = _time_column(sofa1)
                 if time_col is None:
                     errors.append("streamed SOFA-1 dependency lacks a time index")
@@ -2893,11 +2905,10 @@ def _stream_special_extraction_batches(
                         source_time_col=suspicion_time_col,
                         target_time_col=time_col,
                     )
-                    frame = _sep3(
+                    frame = context.derive(
                         sofa1[[id_col, time_col, "sofa"]],
                         susp1,
-                        id_cols=[id_col],
-                        index_col=time_col,
+                        ids=ids, id_col=id_col, time_col=time_col,
                     ).rename(columns={"sep3": "sep3_sofa1"})
                     if "sep3_sofa1" in frame.columns:
                         frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
@@ -2948,6 +2959,8 @@ def _stream_special_extraction_batches(
     manifest = {
         "module": "special_concepts",
         "saved": saved,
+        "derivation_contexts": ({"sep3_sofa1": context.finish(expected_ids=all_ids)}
+                                if context is not None and not errors else {}),
         "errors": errors,
         "elapsed_sec": round(time.time() - started, 1),
         "batch_size": safe_batch_size,
@@ -3046,6 +3059,9 @@ def _run_special_extraction(
     if need_sofa2:
         deps.append("sofa2")
 
+    context = (SepsisContextRecorder(Path(output_dir), database=database, data_path=data_path)
+               if need_sofa1 else None)
+
     try:
         merged = _lc(concepts=deps, **load_kw)
     except Exception:
@@ -3104,13 +3120,12 @@ def _run_special_extraction(
             # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
             # module export (unified to delta 2026-06-22).
             if need_sofa1 and "sofa" in merged.columns:
-                from ..scores.sepsis import sep3 as _sep3
-
-                result = _sep3(
+                context_ids = (next(iter(patient_ids_filter.values()))
+                               if patient_ids_filter else merged[id_col].drop_duplicates())
+                result = context.derive(
                     merged[[id_col, time_col, "sofa"]],
                     merged[[id_col, time_col, "susp_inf"]],
-                    id_cols=[id_col],
-                    index_col=time_col,
+                    ids=context_ids, id_col=id_col, time_col=time_col,
                 ).rename(columns={"sep3": "sep3_sofa1"})
                 if "sep3_sofa1" in result.columns:
                     result["sep3_sofa1"] = result["sep3_sofa1"].fillna(0).astype(int)
@@ -3152,10 +3167,18 @@ def _run_special_extraction(
                     f"Missing columns: {missing}, available: {list(merged.columns)[:10]}"
                 )
 
+    if context is not None and not context.batches and not errors and merged.empty and patient_ids_filter:
+        empty_id_col, empty_ids = next(iter(patient_ids_filter.items()))
+        context.record(None, merged, ids=empty_ids, id_col=empty_id_col,
+                       time_col=None, action="empty_si")
     elapsed = time.time() - t0
     manifest = {
         "module": "special_concepts",
         "saved": saved,
+        "derivation_contexts": ({"sep3_sofa1": context.finish(
+            expected_ids=(next(iter(patient_ids_filter.values()))
+                          if patient_ids_filter else None))}
+            if context is not None and context.batches and not errors else {}),
         "errors": errors,
         "elapsed_sec": round(elapsed, 1),
         **module_memory_sampler.stop(),
@@ -5473,6 +5496,7 @@ def _publish_native_export_v2(
     result: Dict,
     concept_projection: Optional[Mapping[str, Sequence[str]]] = None,
     require_stay_time_bounds: bool = False,
+    expected_patient_ids: Optional[Sequence] = None,
 ) -> Dict[str, object]:
     """Seal completed grouped-module files as one native-v2 package.
 
@@ -6052,13 +6076,26 @@ def _publish_native_export_v2(
         "feature_definitions": {"included": False},
         "column_metadata": sidecar_ref.to_dict(),
     }
+    if "sepsis3_sofa1" in modules:
+        context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
+            "sep3_sofa1"
+        )
+        manifest["derivation_contexts"] = {"sep3_sofa1": seal_context(
+            output_root, manifest, context=context_ref,
+            upper_bounds=stay_time_upper_bounds, expected_ids=expected_patient_ids,
+        )}
+        if context_ref is not None:
+            manifest["derivation_validation"] = validate_derivation_manifest(
+                output_root, manifest, expected_patient_ids=expected_patient_ids
+            )
     temporary_manifest = output_root / ".native-export-v2-manifest.tmp"
-    temporary_manifest.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
+    temporary_manifest.write_bytes(manifest_bytes)
     os.replace(temporary_manifest, root_manifest)
     return {
         "manifest": str(root_manifest),
+        # Hash the producer's sealed bytes, never re-trust a subsequent read.
+        "manifest_sha256": __import__("hashlib").sha256(manifest_bytes).hexdigest(),
         "column_metadata": sidecar_ref.file,
         "column_metadata_sha256": sidecar_ref.sha256,
         "output_validation_reads": len(files),
@@ -6635,6 +6672,12 @@ def extract_database(
                             _attach_bounds_metadata(df, info)
                             mod_result["concepts"][c_name] = df
                 if output_dir is not None:
+                    if mod_name == "sepsis3_sofa1":
+                        ref = manifest.get("derivation_contexts", {}).get("sep3_sofa1")
+                        if ref is not None:
+                            retained = transfer_context(Path(tmp_sp_dir), Path(output_dir), ref)
+                            mod_result["derivation_contexts"] = {"sep3_sofa1": retained}
+                            output_manifest["derivation_contexts"] = {"sep3_sofa1": retained}
                     with open(
                         os.path.join(output_dir, f"{mod_name}.manifest.json"), "w"
                     ) as f:
@@ -6842,6 +6885,7 @@ def extract_database(
             max_patients=max_patients,
             result=result,
             require_stay_time_bounds=True,
+            expected_patient_ids=next(iter(patient_ids_filter.values())),
         )
 
     total_elapsed = time.time() - t_start

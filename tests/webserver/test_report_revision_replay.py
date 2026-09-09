@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.webserver.report_revision_replay import load_failed_writer_replay, WriterOnlyMigrationError
+from easyicu.research_agent.reporting.manuscript_sections import manuscript_writer_contract_sha256
 
 
 def _saved(tmp_path):
@@ -17,7 +18,8 @@ def _saved(tmp_path):
         'source_run_modified':False,'source_hashes':prepared.source_hashes,
         'source_run_dir':str(prepared.source_run_dir),'provider_summary':{'n_calls':1}}))
     (root / 'preflight.json').write_text(json.dumps({'migration_draft_sha256':'draft-hash',
-        'migration_draft_path':None,'writer_evidence_digest_sha256':hashlib.sha256(prepared.evidence_digest.encode()).hexdigest()}))
+        'migration_draft_path':None,'writer_contract_sha256':manuscript_writer_contract_sha256(),
+        'writer_evidence_digest_sha256':hashlib.sha256(prepared.evidence_digest.encode()).hexdigest()}))
     candidate=root/'runtime/writer_candidate_01.json'
     candidate.write_text(json.dumps({'section':'Discussion','instruction':'Fix recorded status.','text':'Recorded status is not confirmed diagnosis.'}))
     return prepared,candidate
@@ -32,7 +34,7 @@ def test_replay_reuses_exact_section_without_allowing_additional_calls(tmp_path)
         replay.section(section_name='Discussion',instruction='Fix recorded status.')
 
 
-@pytest.mark.parametrize('change',['source','draft','digest'])
+@pytest.mark.parametrize('change',['source','draft','digest','writer_contract'])
 def test_replay_never_reuses_another_study_or_report(tmp_path,change):
     prepared,_=_saved(tmp_path)
     if change == 'source':
@@ -41,6 +43,11 @@ def test_replay_never_reuses_another_study_or_report(tmp_path,change):
         prepared.migration_draft_sha256 = 'other'
     if change == 'digest':
         prepared.evidence_digest = 'other evidence'
+    if change == 'writer_contract':
+        preflight_path = tmp_path / 'report_revisions/failed/preflight.json'
+        preflight = json.loads(preflight_path.read_text())
+        preflight['writer_contract_sha256'] = 'older-contract'
+        preflight_path.write_text(json.dumps(preflight))
     assert load_failed_writer_replay(tmp_path,prepared) is None
 
 

@@ -1512,6 +1512,13 @@ def _open_export_package_impl(
     detected_formats: set[str] = set()
     files_by_module: dict[str, set[str]] = {}
     for entry in entries:
+        # Private derivation inputs are host-only replay evidence. Even a
+        # manifest edit must not promote them to research/provider variables.
+        if ".derivation-context" in Path(str(entry.get("file", ""))).parts:
+            raise ExportPackageError(
+                "private derivation inputs cannot be research data files",
+                code="private_derivation_context_as_data",
+            )
         path = _safe_manifest_file(root, entry.get("file"), label="data file")
         relative_path = path.relative_to(resolved_root).as_posix()
         if relative_path in seen_paths:

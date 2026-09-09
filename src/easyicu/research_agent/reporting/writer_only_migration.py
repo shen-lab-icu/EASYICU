@@ -52,6 +52,7 @@ from .manuscript_quality import (
 )
 from .manuscript_sections import (
     completed_section_repair_candidate,
+    manuscript_writer_contract_sha256,
     quality_repair_section_keys,
     quality_repair_section_errors,
 )
@@ -199,6 +200,23 @@ def _read_only_authority(run_dir: Path) -> _ReadOnlyAuthority:
         aliases=dict(snapshot.aliases),
         claims_by_ref={claim.claim_ref: claim for claim in claims},
     )
+
+
+def _claim_reader_view(run_dir: Path, manuscript: str) -> str:
+    """Audit the rendered verified claims while retaining the canonical tokens."""
+    if "{claim" not in manuscript:
+        return manuscript
+    authority = _read_only_authority(run_dir)
+    expanded = expand_scientific_claim_tokens(
+        manuscript, resolve_claim=authority.claims_by_ref.get,
+        current_evidence_ids={record.evidence_id for record in authority.records},
+    )
+    if expanded.missing_claim_refs or expanded.malformed_sentences:
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_SCIENTIFIC_CLAIM_BINDING_FAILED",
+            detail="Reader validation requires complete, current registered claims.",
+        )
+    return expanded.scaffold
 
 
 def _section_key_for_excerpt(manuscript: str, excerpt: str) -> Optional[str]:
@@ -533,6 +551,7 @@ def writer_only_preflight_payload(
         "source_hashes": dict(prepared.source_hashes),
         "writer_evidence_digest_sha256": _sha256(prepared.evidence_digest.encode("utf-8")),
         "writer_evidence_digest_origin": prepared.evidence_digest_origin,
+        "writer_contract_sha256": manuscript_writer_contract_sha256(),
         "migration_draft_path": (
             str(prepared.migration_draft_path)
             if prepared.migration_draft_path is not None
@@ -614,10 +633,13 @@ def repair_writer_only(
         # shorter cache prefix on the next report recovery.
         raise
     except Exception as exc:
-        raise WriterOnlyMigrationError(
-            code="WRITER_ONLY_REPAIR_FAILED_PRIOR_PRESERVED",
-            detail=f"{type(exc).__name__}: {exc}",
-        ) from exc
+        candidate = completed_section_repair_candidate(exc)
+        if candidate is None:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_REPAIR_FAILED_PRIOR_PRESERVED",
+                detail=f"{type(exc).__name__}: {exc}",
+            ) from exc
+        manuscript, repaired_keys = candidate
     if not str(manuscript or "").strip():
         raise WriterOnlyMigrationError(
             code="WRITER_ONLY_REPAIR_EMPTY_PRIOR_PRESERVED",
@@ -689,15 +711,16 @@ def repair_writer_only(
         )
         canonical = remove_empty_optional_subsections(canonical)
         canonical = repair_section_opening_connectors(canonical)
+        reader_view = _claim_reader_view(prepared.source_run_dir, canonical)
         canonical_quality = audit_manuscript_quality(
-            canonical,
+            reader_view,
             analysis_plan=prepared.plan,
             expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
             expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
         )
         canonical_literature = audit_manuscript_literature(
-            canonical,
+            reader_view,
             prepared.literature,
         )
         if prepared.literature.citations and not canonical_literature.direct_comparator_keys_available:
@@ -710,7 +733,7 @@ def repair_writer_only(
                 canonical = re.sub(r"(?ms)(^## Limitations\s*\n.*?)(?=^## |\Z)",
                                    lambda match: match.group(1).rstrip() + "\n\n" + boundary + "\n\n",
                                    canonical, count=1)
-        recording_errors = recorded_definition_section_errors(canonical, prepared.context)
+        recording_errors = recorded_definition_section_errors(reader_view, prepared.context)
         if (
             canonical_quality.status == "pass"
             and canonical_literature.status == "pass"
@@ -727,7 +750,7 @@ def repair_writer_only(
                 detail=", ".join(sorted(section_errors)),
             )
         repair_errors = quality_repair_section_errors(
-            canonical,
+            reader_view,
             analysis_plan=prepared.plan,
             expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
@@ -789,8 +812,9 @@ def repair_writer_only(
         for key in repaired_authority_keys:
             if key not in authority_repaired:
                 authority_repaired.append(key)
+    reader_view = _claim_reader_view(prepared.source_run_dir, manuscript)
     quality = audit_manuscript_quality(
-        manuscript,
+        reader_view,
         analysis_plan=prepared.plan,
         expected_primary_result_facts=prepared.host_result_facts,
         expected_display_labels=prepared.expected_display_labels,
@@ -802,7 +826,7 @@ def repair_writer_only(
             code="WRITER_ONLY_QUALITY_AUDIT_FAILED_PRIOR_PRESERVED",
             detail=", ".join(codes),
         )
-    literature = audit_manuscript_literature(manuscript, prepared.literature)
+    literature = audit_manuscript_literature(reader_view, prepared.literature)
     if literature.status != "pass":
         raise WriterOnlyMigrationError(
             code="WRITER_ONLY_LITERATURE_AUDIT_FAILED_PRIOR_PRESERVED",
@@ -810,7 +834,7 @@ def repair_writer_only(
         )
     return WriterOnlyMigrationResult(
         manuscript=manuscript,
-        reader_manuscript=render_reader_manuscript(manuscript),
+        reader_manuscript=render_reader_manuscript(reader_view),
         repaired_section_keys=tuple(repaired_keys),
         quality_audit=quality,
         literature_audit=literature,

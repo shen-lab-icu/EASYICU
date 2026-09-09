@@ -372,6 +372,33 @@ def _message_explicitly_changes_variance_estimator(message: str) -> bool:
     )
 
 
+def _repairs_contradictory_prediction_ceiling(
+    current: Mapping[str, Any], proposed: Mapping[str, Any], message: str,
+) -> bool:
+    """Accept a proposed legal setting for the same explicit prediction goal.
+
+    This exception repairs an impossible legacy envelope, not a valid prior
+    counts-only decision. The existing update/launch owners still validate the
+    complete proposal, including repeated stays and source grouping. Saving
+    changes the scientific digest and requires a newly reviewed complete plan.
+    """
+    if not (
+        current.get("analysis_family") == "prediction_model"
+        and current.get("variance_estimator") == "none_counts_only"
+        and not current.get("cluster_unit")
+        and proposed.get("analysis_family") == current.get("analysis_family")
+        and proposed.get("analysis_unit") == current.get("analysis_unit")
+        and proposed.get("variance_estimator") == "model_based"
+        and not proposed.get("cluster_unit")
+        and str(message or "").strip()
+    ):
+        return False
+    from easyicu.webserver.study_intent import deterministic_intent
+
+    intent = deterministic_intent(message)
+    return intent["slots"]["analysis_family"]["value"] == "prediction"
+
+
 def _message_explicitly_selects_analysis_goal(
     message: str, proposed: Any = ""
 ) -> bool:
@@ -711,6 +738,7 @@ def update_study_context(
             for spec in patch["sensitivity_specs"]
         ]
     omitted_unconfirmed_fields: list[str] = []
+    analysis_design_recovery: Optional[Dict[str, Any]] = None
     unconfirmed_omissions: list[Dict[str, str]] = []
     unconfirmed_gated = _unconfirmed_gated_slots(
         params, current or {}, context.user_message
@@ -1394,6 +1422,9 @@ def update_study_context(
             and not _message_explicitly_changes_variance_estimator(
                 context.user_message
             )
+            and not _repairs_contradictory_prediction_ceiling(
+                current_design, proposed_design, context.user_message,
+            )
         ):
             proposed_design = dict(proposed_design)
             for field in ("variance_estimator", "cluster_unit"):
@@ -1403,6 +1434,15 @@ def update_study_context(
                 else:
                     proposed_design.pop(field, None)
             patch["analysis_design"] = proposed_design
+        if _repairs_contradictory_prediction_ceiling(
+            current_design, proposed_design, context.user_message,
+        ):
+            analysis_design_recovery = {
+                "previous_design": dict(current_design),
+                "proposed_design": dict(proposed_design),
+                "requires_full_plan_review": True,
+                "execution_authorized": False,
+            }
         proposes_patient_clustering = (
             str(proposed_design.get("variance_estimator") or "").strip()
             == "cluster_robust"
@@ -1556,6 +1596,13 @@ def update_study_context(
         f"Saved typed StudyContext revision {int(updated.get('revision') or 0)} "
         "and projected the post-update workflow for the next scientific decision."
     )
+    if analysis_design_recovery is not None:
+        summary += (
+            " Repaired the contradictory counts-only setting for the unchanged "
+            "prediction goal using the proposed model-based design. Generate "
+            "and review the complete revised plan before analysis; no old plan "
+            "approval or execution authority transfers to this configuration."
+        )
     if omitted_unconfirmed_fields:
         # Preserve the omission and reason, but let the workflow decide when
         # a choice is needed. Execution requirements must not become an
@@ -1581,6 +1628,8 @@ def update_study_context(
             "host_rebind_after_turn": True,
             "omitted_unconfirmed_fields": omitted_unconfirmed_fields,
             "unconfirmed_omissions": unconfirmed_omissions,
+            **({"analysis_design_recovery": analysis_design_recovery}
+               if analysis_design_recovery is not None else {}),
         },
     )
     context.invalidate_authority("study_context_updated")

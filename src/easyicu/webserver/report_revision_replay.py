@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
+from easyicu.research_agent.reporting.manuscript_sections import manuscript_writer_contract_sha256
 
 
 @dataclass
@@ -48,7 +49,8 @@ def load_failed_writer_replay(wrapper: Path, prepared) -> SavedWriterReplay | No
         if preflight_path.is_symlink():
             continue
         preflight = json.loads(preflight_path.read_text())
-        if (preflight.get("migration_draft_sha256") != prepared.migration_draft_sha256
+        if (preflight.get("writer_contract_sha256") != manuscript_writer_contract_sha256()
+            or preflight.get("migration_draft_sha256") != prepared.migration_draft_sha256
             or preflight.get("migration_draft_path") != (str(prepared.migration_draft_path) if prepared.migration_draft_path else None)
             or preflight.get("writer_evidence_digest_sha256") != hashlib.sha256(prepared.evidence_digest.encode()).hexdigest()):
             continue
@@ -68,7 +70,7 @@ def load_failed_writer_replay(wrapper: Path, prepared) -> SavedWriterReplay | No
         generated = summary.get("n_calls", 0)
         replayed = summary.get("replayed_sections", 0)
         # Two quality passes plus two authority passes across eight section
-        # owners bound the complete repair; the live budget still caps new calls.
+        # owners bound the complete repair; the reviewed live budget caps new calls.
         if (rows and isinstance(generated, int) and generated >= 0
                 and isinstance(replayed, int) and replayed >= 0
                 and len(rows) == generated + replayed and len(rows) <= 32
