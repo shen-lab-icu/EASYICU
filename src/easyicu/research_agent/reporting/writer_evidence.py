@@ -388,6 +388,15 @@ def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
     of assigning an arbitrary p-value to the primary result.
     """
 
+    receipt = summary.get("scientific_runtime_receipt")
+    if isinstance(receipt, Mapping) and str(receipt.get("schema_version", "")).startswith(
+        "easyicu.landmark_spline_runtime_receipt/"
+    ):
+        # This native owner represents the primary association as a curve.
+        # Nested scalars belong to named diagnostics/secondary populations;
+        # even a unique nested CI must not become the primary curve's CI.
+        value = summary.get(key)
+        return value if value is not None and not isinstance(value, (dict, list, tuple)) else None
     if key == "p_value":
         value = summary.get(key)
         if value is not None and not isinstance(value, (dict, list)):
@@ -599,6 +608,29 @@ def _executed_method_boundary_rows(
             if isinstance(group_by, str) and group_by:
                 row["group_by"] = group_by
         contracts = summary.get("model_contracts")
+        receipt = summary.get("scientific_runtime_receipt")
+        if (
+            record.get("deterministic_standard_analysis") == "signed_landmark_spline_association"
+            and isinstance(receipt, Mapping)
+        ):
+            # Received only after the envelope consumer validates the complete
+            # typed receipt. Keep the executed risk set and model semantics,
+            # including the boundary on the non-equivalent sensitivity cohort.
+            for key in (
+                "landmark_hours", "population_rule", "adjustment_columns",
+                "spline_knot_quantiles", "population_flow", "variance_estimator",
+                "cluster_unit", "interpretation",
+            ):
+                if key in receipt:
+                    row[key] = receipt[key]
+            for block, keys in (
+                ("functional_form_comparison", ("comparison", "method", "target_column", "information_criteria_basis")),
+                ("adjusted_absolute_risk", ("method", "interval")),
+                ("variable_opportunity_sensitivity", ("population_rule", "interpretation")),
+            ):
+                source = receipt.get(block)
+                if isinstance(source, Mapping):
+                    row[block] = {key: source[key] for key in keys if key in source}
         if isinstance(contracts, list):
             fit_methods = sorted(
                 {

@@ -389,6 +389,7 @@ class WriterAgent:
                     + format_outbound_safe_context(
                         reporting_context,
                         include_exploratory_profiles=False,
+                        compact_variables=True,
                     )
                 ),
             ),

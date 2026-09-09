@@ -23,6 +23,7 @@ from ..audits.envelope_consumers import (
     RegisteredOutputEnvelopeConsumer,
     StepSummaryFractionEnvelopeDualReader,
 )
+from ..audits.model_contrast_reporting import model_contrast_reporting_findings
 from ..audits.validators import (
     ClinicalConstraintValidator,
     CrossStepCohortLockValidator,
@@ -350,6 +351,9 @@ def _evaluate_final_deterministic_gates(
         final_registered_output_envelope_validator=(RegisteredOutputEnvelopeConsumer()),
         final_registered_output_evidence_store=evidence_store,
     )
+    contract_findings.extend(model_contrast_reporting_findings(
+        step_record=step_record, step_summary=step_summary,
+    ))
     contract_findings.extend(
         figure_contract_validator.audit(
             step=step,
