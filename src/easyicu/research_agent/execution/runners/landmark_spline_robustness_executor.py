@@ -100,6 +100,10 @@ def landmark_spline_robustness_executor_code(
 
 
 def _contrast_coordinate_column(frame: Any) -> str:
+    # The current producer names the coordinate explicitly. Its exposure label
+    # and density metadata are not additional candidate coordinates.
+    if "exposure_value" in frame.columns:
+        return "exposure_value"
     reserved = {
         "adjusted_odds_ratio",
         "ci_low",
@@ -202,8 +206,17 @@ def run_landmark_spline_robustness(
     if len(contrasts) < 2 or len(linear_sensitivity) != 1:
         raise ValueError("signed landmark robustness inputs have unexpected rows")
 
+    if "exposure" in contrasts.columns and not contrasts["exposure"].eq(
+        sealed.exposure_column
+    ).all():
+        raise ValueError("signed landmark contrast exposure disagrees with authority")
     coordinate = _contrast_coordinate_column(contrasts)
-    ordered = contrasts.sort_values(coordinate)
+    coordinates = contrasts[coordinate].map(
+        lambda value: coerce_finite_float(value, label="contrast coordinate")
+    )
+    if coordinates.duplicated().any():
+        raise ValueError("signed landmark contrast coordinates must be unique")
+    ordered = contrasts.assign(**{coordinate: coordinates}).sort_values(coordinate)
     upper = ordered.iloc[-1]
     linear = linear_sensitivity.iloc[0]
     primary_or = coerce_finite_float(
@@ -222,6 +235,11 @@ def run_landmark_spline_robustness(
     if len(reference_columns) != 1:
         raise ValueError("signed landmark contrasts require one reference coordinate")
     reference_column = reference_columns[0]
+    references = contrasts[reference_column].map(
+        lambda value: coerce_finite_float(value, label="reference contrast coordinate")
+    )
+    if references.nunique() != 1:
+        raise ValueError("signed landmark contrasts must share one reference coordinate")
     reference_value = coerce_finite_float(
         upper[reference_column], label="reference contrast coordinate"
     )

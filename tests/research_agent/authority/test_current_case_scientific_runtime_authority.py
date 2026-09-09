@@ -919,8 +919,13 @@ def test_landmark_survival_executor_keeps_case_labels_in_authority() -> None:
     assert "ICU stays" not in source
 
 
+@pytest.mark.parametrize("contrast_schema", [
+    "legacy", "current", "numeric_strings", "wrong_exposure",
+    "duplicate_coordinate", "nonfinite_coordinate", "mixed_reference",
+])
 def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     tmp_path: Path,
+    contrast_schema: str,
 ) -> None:
     projection, authority = _authority("e2_lactate_mortality")
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
@@ -1099,7 +1104,35 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
             "events": [5480],
         }
     )
-    summary = run_landmark_spline_robustness(
+    upper_coordinate = 5.0
+    reference_column = "reference_value"
+    if contrast_schema != "legacy":
+        reference_column = "reference_exposure_value"
+        contrasts = contrasts.rename(columns={"reference_value": reference_column})
+        contrasts["exposure"] = authority.exposure_column
+        contrasts["exposure_density_n"] = [13, 4]
+        contrasts["exposure_density_fraction"] = [0.13, 0.04]
+        contrasts["exposure_density_display_n"] = 100
+        contrasts["exposure_density_population_n"] = 150
+        contrasts["exposure_density_scope"] = "primary_complete_case_within_curve_range"
+    if contrast_schema == "numeric_strings":
+        contrasts["exposure_value"] = ["5", "12"]
+        upper_coordinate = 12.0
+    expected_error = None
+    if contrast_schema == "wrong_exposure":
+        contrasts.loc[0, "exposure"] = "different_exposure"
+        expected_error = "exposure disagrees"
+    elif contrast_schema == "duplicate_coordinate":
+        contrasts["exposure_value"] = [1.0, 1.0]
+        expected_error = "coordinates must be unique"
+    elif contrast_schema == "nonfinite_coordinate":
+        contrasts.loc[0, "exposure_value"] = np.inf
+        expected_error = "finite"
+    elif contrast_schema == "mixed_reference":
+        contrasts.loc[0, reference_column] = 3.0
+        expected_error = "share one reference"
+    original_contrasts = contrasts.copy(deep=True)
+    replay_arguments = dict(
         step=step,
         authority=authority,
         runtime_projection_sha256=projection.runtime_projection_sha256,
@@ -1126,11 +1159,19 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
             },
         ],
     )
+    if expected_error:
+        with pytest.raises(ValueError, match=expected_error):
+            run_landmark_spline_robustness(**replay_arguments)
+        assert not (tmp_path / "robustness_matrix.csv").exists()
+        pd.testing.assert_frame_equal(contrasts, original_contrasts)
+        return
+    summary = run_landmark_spline_robustness(**replay_arguments)
     assert summary["status"] == "ok"
     assert summary["primary_or"] == 2.0
     assert summary["primary_effect_is_nonlinear_curve_summary"] is False
-    assert "exposure_value=5" in summary["primary_effect_label"]
-    assert "reference_value=2.1" in summary["primary_effect_label"]
+    assert f"exposure_value={upper_coordinate:g}" in summary["primary_effect_label"]
+    assert f"{reference_column}=2.1" in summary["primary_effect_label"]
+    pd.testing.assert_frame_equal(contrasts, original_contrasts)
     assert summary["complete_case_n"] == 44095
     assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
