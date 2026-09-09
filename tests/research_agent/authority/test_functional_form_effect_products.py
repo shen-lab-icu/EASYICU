@@ -144,6 +144,36 @@ def _prepare(root, *, clustered=False, targets=("age",)):
                            store=store, records=records)
 
 
+def test_binding_orders_covariate_effect_producer_before_robustness_consumer():
+    _, authority, draft = _bound_sensitivity("age")
+    form_step = draft.steps[1]
+    robustness = _robust_step()
+    spec = RobustnessSpec(
+        spec_id="complete_cases",
+        axis="missing",
+        description="Document the actual primary complete-case set.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": list(authority.model_complete_case_columns),
+        },
+    )
+
+    bound = authority.bind_plan(
+        draft.model_copy(
+            update={
+                "steps": [draft.steps[0], robustness, form_step],
+                "robustness_specs": [spec],
+            }
+        )
+    )
+
+    step_ids = [step.step_id for step in bound.steps]
+    assert step_ids.index(form_step.step_id) < step_ids.index(robustness.step_id)
+    rebound_robustness = next(step for step in bound.steps if step.step_id == robustness.step_id)
+    assert set(form_step.expected_outputs[1:]) <= set(rebound_robustness.inputs)
+    authority.validate_plan(bound)
+
+
 @pytest.fixture(scope="module")
 def effects(tmp_path_factory):
     return _prepare(tmp_path_factory.mktemp("functional-effects"), targets=("age", "charlson_first"), clustered=True)

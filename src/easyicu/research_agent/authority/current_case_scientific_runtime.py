@@ -1538,6 +1538,43 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     }
                 )
             )
+        # The robustness summary consumes covariate-form effect products.  A
+        # planner may emit the reviewed producer after that consumer, so bind
+        # the dependency in execution order before wiring its typed inputs.
+        robustness_positions = [
+            index
+            for index, step in enumerate(steps)
+            if step.planned_analysis_role == "sensitivity"
+            and step.robustness_replay_spec is not None
+        ]
+        if robustness_positions:
+            first_robustness_index = robustness_positions[0]
+            late_effect_producer_positions = [
+                index
+                for index, step in enumerate(steps)
+                if index >= first_robustness_index
+                and step.functional_form_spec is not None
+                and step.functional_form_spec.target_column != self.exposure_column
+            ]
+            if late_effect_producer_positions:
+                late_effect_producers = [
+                    steps[index] for index in late_effect_producer_positions
+                ]
+                late_positions = set(late_effect_producer_positions)
+                reordered = [
+                    step for index, step in enumerate(steps) if index not in late_positions
+                ]
+                insertion_index = next(
+                    index
+                    for index, step in enumerate(reordered)
+                    if step.planned_analysis_role == "sensitivity"
+                    and step.robustness_replay_spec is not None
+                )
+                steps = [
+                    *reordered[:insertion_index],
+                    *late_effect_producers,
+                    *reordered[insertion_index:],
+                ]
         for index, step in enumerate(steps):
             if step.planned_analysis_role != "sensitivity" or step.robustness_replay_spec is None:
                 continue
