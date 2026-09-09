@@ -23,6 +23,7 @@ from .deterministic_robustness import (
     declared_robustness_product_registrations,
     robustness_replay_spec_is_emittable,
 )
+from .bound_variable_display import BoundVariableDisplay, load_bound_variable_display
 
 LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND = "signed_landmark_spline_robustness"
 
@@ -182,6 +183,7 @@ def run_landmark_spline_robustness(
     out_dir: Path,
     complete_case_spec_id: str,
     input_bindings: list[dict[str, Any]] | None = None,
+    variable_display: BoundVariableDisplay | None = None,
 ) -> dict[str, Any]:
     """Project already-fitted signed outputs into the robustness contract."""
 
@@ -190,6 +192,8 @@ def run_landmark_spline_robustness(
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         raise TypeError("landmark robustness executor received wrong authority kind")
+    if variable_display is not None and variable_display.column != sealed.exposure_column:
+        raise ValueError("variable display differs from the authorized exposure")
     if len(str(runtime_projection_sha256)) != 64:
         raise ValueError("runtime projection digest is required")
     if not robustness_replay_spec_is_emittable(step):
@@ -247,6 +251,14 @@ def run_landmark_spline_robustness(
         f"upper signed curve-boundary contrast at {coordinate}={coordinate_value:g} "
         f"vs {reference_column}={reference_value:g}"
     )
+    exposure_label = variable_display.label if variable_display else sealed.exposure_column
+    exposure_unit = (variable_display.unit if variable_display else None) or "recorded exposure units"
+    contrast_label = f"{coordinate_value:g} vs {reference_value:g}"
+    linear_label = f"Per {sealed.linear_sensitivity_per_unit:g} unit increase"
+    if variable_display is not None:
+        contrast_label = f"{exposure_label}: {contrast_label}"
+        linear_label = f"{exposure_label}: {linear_label}"
+        primary_effect_label = f"Upper nonlinear contrast, {contrast_label} {exposure_unit}"
 
     matrix_columns = [
         "spec_id",
@@ -276,7 +288,7 @@ def run_landmark_spline_robustness(
     ]
     base = {
         "effect_scale": "OR",
-        "effect_unit": "recorded exposure units",
+        "effect_unit": exposure_unit,
         "modeled_analytic_n": complete_case_n,
         "n": complete_case_n,
         "converged": True,
@@ -294,7 +306,7 @@ def run_landmark_spline_robustness(
             "spec_id": "signed_upper_boundary_contrast",
             "spec_label": "Nonlinear model, upper contrast",
             "contrast_id": f"{sealed.exposure_column}:{coordinate_value:.17g}_vs_{reference_value:.17g}",
-            "contrast_label": f"{coordinate_value:g} vs {reference_value:g}",
+            "contrast_label": contrast_label,
             "point_estimate": primary_or,
             "ci_low": primary_low,
             "ci_high": primary_high,
@@ -313,7 +325,7 @@ def run_landmark_spline_robustness(
             "spec_id": "signed_linear_functional_form_sensitivity",
             "spec_label": "Linear sensitivity model",
             "contrast_id": f"{sealed.exposure_column}:per_{sealed.linear_sensitivity_per_unit:g}_unit_increase",
-            "contrast_label": f"Per {sealed.linear_sensitivity_per_unit:g} unit increase",
+            "contrast_label": linear_label,
             "point_estimate": coerce_finite_float(
                 linear["adjusted_odds_ratio"], label="linear sensitivity OR"
             ),
@@ -334,7 +346,7 @@ def run_landmark_spline_robustness(
             "spec_id": complete_case_spec_id,
             "spec_label": "Primary complete-case set",
             "contrast_id": f"{sealed.exposure_column}:{coordinate_value:.17g}_vs_{reference_value:.17g}",
-            "contrast_label": f"{coordinate_value:g} vs {reference_value:g}",
+            "contrast_label": contrast_label,
             "point_estimate": primary_or,
             "ci_low": primary_low,
             "ci_high": primary_high,
@@ -450,6 +462,9 @@ def run_landmark_spline_robustness(
         "input_bindings": list(input_bindings or []),
         "output_files": files,
     }
+    if variable_display is not None:
+        from dataclasses import asdict
+        summary["variable_display_binding"] = asdict(variable_display)
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
@@ -532,6 +547,10 @@ def run_bound_landmark_spline_robustness(
         out_dir=out_dir,
         input_bindings=receipts,
         complete_case_spec_id=complete_case_spec_id,
+        variable_display=load_bound_variable_display(
+            run_dir=run_dir, manifest=manifest, step_id=step.step_id,
+            column=sealed.exposure_column,
+        ),
     )
 
 
