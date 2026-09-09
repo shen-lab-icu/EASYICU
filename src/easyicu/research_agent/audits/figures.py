@@ -91,6 +91,9 @@ class FigureSourceDataValidator:
         "category",
     )
     _COMPOSITE_KEY_COLUMNS = (
+        # Continuous-effect tables repeat the exposure name and identify each
+        # plotted contrast/curve row by its numeric exposure value.
+        ("exposure", "exposure_value"),
         ("spec_id", "model_id", "term"),
         ("spec_id", "model_id"),
         # Coefficient tables repeat ordinary terms (age/sex/etc.) across
@@ -3868,8 +3871,8 @@ class FigureSourceDataValidator:
             best_col = min(
                 remaining,
                 key=lambda col: (
-                    measures[col],
                     len(_duplicates(upstream, (*widened, col))),
+                    measures[col],
                     col,
                 ),
             )
@@ -5593,6 +5596,7 @@ def _figure_audit__credit_table_source(source_path: Path, source_frame: pd.DataF
                 )
 
 
+
 def _figure_audit__credit_statistic_source(source_path: Path, statistic_ids: Set[str], *, matched_figure_obligations: Any, required_figure_obligations: Any, required_statistics: Any, self: Any, source_figure_products: Any, step: Any) -> None:
     for statistic_id in statistic_ids:
         product_name, expected = required_statistics[statistic_id]
@@ -5623,4 +5627,3 @@ def _figure_audit__credit_statistic_source(source_path: Path, statistic_ids: Set
                 matched_figure_obligations[figure].update(
                     required_figure_obligations[figure]
                 )
-

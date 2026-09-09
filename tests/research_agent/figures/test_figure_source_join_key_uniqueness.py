@@ -107,6 +107,42 @@ def test_the_reported_key_names_what_separates_the_rows(tmp_path: Path) -> None:
     assert result["key_column"] == "row_role+exposure_level"
 
 
+def test_numeric_level_wins_over_constant_text_when_only_it_separates_rows(
+    tmp_path: Path,
+) -> None:
+    """A constant text field must not stop the search before a numeric key.
+
+    Continuous-effect contrast tables often repeat the exposure name and use
+    the numeric exposure value to identify each row.  A constant text column
+    is preferable only when it separates rows at least as well; choosing it
+    first and stopping on no improvement falsely rejects an exact projection.
+    """
+
+    table = pd.DataFrame(
+        {
+            "exposure": ["lact_max", "lact_max"],
+            "exposure_value": [1.0, 4.9],
+            "reference_exposure_value": [2.0, 2.0],
+            "adjusted_odds_ratio": [0.82, 1.96],
+            "exposure_density_scope": [
+                "primary_complete_case",
+                "primary_complete_case",
+            ],
+        }
+    )
+
+    result = _compare(table.copy(), table, tmp_path)
+
+    assert result["ok"], result.get("reason")
+    assert result["key_column"] == "exposure+exposure_value"
+
+    forged = table.copy()
+    forged.loc[forged["exposure_value"] == 4.9, "adjusted_odds_ratio"] = 9.99
+    rejected = _compare(forged, table, tmp_path)
+    assert rejected["ok"] is False
+    assert rejected["reason"] == "source_values_disagree"
+
+
 def test_a_forged_value_is_still_rejected(tmp_path: Path) -> None:
     """Widening the key must not blunt the check it exists to enable."""
 
