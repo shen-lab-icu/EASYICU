@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.reporting.descriptive_report_facts import (
+    _compile_grouped_table_one_cohort_report_facts,
     compile_counts_only_report_facts,
     place_descriptive_report_facts,
     render_descriptive_report_claims,
@@ -150,6 +151,51 @@ def test_modern_report_keeps_a_source_bound_cohort_count_after_claim_filtering()
     assert not [finding for finding in audit_manuscript_quality(canonical, analysis_plan=_plan()).findings
                 if finding.section == "Results"]
     assert place_descriptive_report_facts(canonical, facts) == canonical
+
+
+def test_plan_driven_report_keeps_a_source_bound_cohort_count_after_claim_filtering():
+    records, evidence = _inputs()
+    facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
+    draft = (
+        "## Results\n\n### Cohort characteristics\nSee Table 1.\n\n"
+        "### Primary outcome\n\n## Discussion\nInterpretation remains bounded."
+    )
+
+    placed = place_descriptive_report_facts(draft, facts)
+    cohort = placed.split("### Cohort characteristics", 1)[1].split("### Primary outcome", 1)[0]
+
+    assert "The analysis cohort comprised 100 observations {evidence:summary}." in cohort
+    assert "See Table 1." in cohort
+    assert place_descriptive_report_facts(placed, facts) == placed
+
+
+def test_grouped_table_one_supplies_plan_driven_source_cohort_fact(tmp_path):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    summary = {
+        "status": "ok", "analysis_family": "grouped_table_one", "cohort_n": 94418,
+        "variables": ["age", "sex", "lact_max"],
+        "output_files": {"table:table_one": "table_one.csv"},
+    }
+    store = EvidenceStore(tmp_path)
+    record = store.register_json(
+        kind="statistic", description="Grouped Table 1 summary", payload=summary,
+        filename="summary.json", evidence_id="baseline_summary",
+        produced_by_step="baseline", generation_mode="deterministic_standard",
+    )
+    projected = [{
+        "step_id": "baseline", "status": "ok", "step_summary": summary,
+        "step_summary_evidence_id": record.evidence_id,
+    }]
+
+    facts = _compile_grouped_table_one_cohort_report_facts(projected, store)
+    placed = place_descriptive_report_facts(
+        "## Results\n\n### Cohort characteristics\nSee Table 1.\n", facts,
+    )
+
+    assert len(facts) == 1
+    assert facts[0].source_fields == ("cohort_n",)
+    assert "The source cohort included 94,418 ICU stays {evidence:baseline_summary}." in placed
 
 
 def test_different_recorded_cohorts_do_not_become_one_cohort_count():

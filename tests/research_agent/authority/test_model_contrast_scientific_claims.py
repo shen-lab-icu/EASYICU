@@ -6,6 +6,9 @@ import json
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.scientific_claim_registry import (
+    load_registered_scientific_claims,
+)
 from easyicu.research_agent.authority.scientific_claims import derive_scientific_claim_drafts
 from easyicu.research_agent.audits.model_contrast_reporting import model_contrast_reporting_findings
 
@@ -103,6 +106,89 @@ def test_legacy_projection_does_not_gain_authority_by_method_label():
     summary = _summary()
     del summary["reportable_model_contrasts"]
     assert derive_scientific_claim_drafts(summary) == []
+
+
+def test_covariate_form_claim_keeps_internal_spec_identity_out_of_reader_text():
+    summary = _summary()
+    spec_id = "age_functional_form_rcs_vs_linear"
+    summary["input_bindings"].extend([
+        {"evidence_id": "age_curve", "sha256": "d" * 64, "loaded": True},
+        {"evidence_id": "age_points", "sha256": "e" * 64, "loaded": True},
+    ])
+    summary["functional_form_effect_sources"] = [{
+        "spec_id": spec_id,
+        "target_column": "age",
+        "curve_evidence_id": "age_curve",
+        "contrast_evidence_id": "age_points",
+    }]
+    summary["reportable_model_contrasts"]["contrasts"].extend([
+        {
+            "kind": "covariate_form_point", "target_column": "age",
+            "sensitivity_spec_id": spec_id, "source_evidence_id": "age_points",
+            "value": 1, "reference": 2, "estimate": 0.82, "lower": 0.71, "upper": 0.94,
+        },
+        {
+            "kind": "covariate_form_point", "target_column": "age",
+            "sensitivity_spec_id": spec_id, "source_evidence_id": "age_points",
+            "value": 5, "reference": 2, "estimate": 1.95, "lower": 1.72, "upper": 2.21,
+        },
+    ])
+
+    claims = derive_scientific_claim_drafts(summary)
+    sensitivity_claims = claims[-2:]
+
+    assert summary["reportable_model_contrasts"]["contrasts"][-1]["sensitivity_spec_id"] == spec_id
+    assert all(spec_id not in claim.estimand for claim in sensitivity_claims)
+    assert all("prespecified sensitivity: age modeled with its reviewed restricted cubic spline" in claim.estimand
+               for claim in sensitivity_claims)
+
+
+def test_registered_legacy_covariate_wording_is_rederived_reader_safe(tmp_path):
+    summary = _summary()
+    spec_id = "age_functional_form_rcs_vs_linear"
+    summary["input_bindings"].extend([
+        {"evidence_id": "age_curve", "sha256": "d" * 64, "loaded": True},
+        {"evidence_id": "age_points", "sha256": "e" * 64, "loaded": True},
+    ])
+    summary["functional_form_effect_sources"] = [{
+        "spec_id": spec_id, "target_column": "age",
+        "curve_evidence_id": "age_curve", "contrast_evidence_id": "age_points",
+    }]
+    summary["reportable_model_contrasts"]["contrasts"].extend([
+        {
+            "kind": "covariate_form_point", "target_column": "age",
+            "sensitivity_spec_id": spec_id, "source_evidence_id": "age_points",
+            "value": 1, "reference": 2, "estimate": 0.82, "lower": 0.71, "upper": 0.94,
+        },
+        {
+            "kind": "covariate_form_point", "target_column": "age",
+            "sensitivity_spec_id": spec_id, "source_evidence_id": "age_points",
+            "value": 5, "reference": 2, "estimate": 1.95, "lower": 1.72, "upper": 2.21,
+        },
+    ])
+    store = EvidenceStore(tmp_path)
+    record = store.register_json(
+        kind="statistic", description="Native model reporting projection",
+        payload=summary, filename="summary.json", evidence_id="projection",
+        produced_by_step="model", generation_mode="deterministic_standard",
+    )
+    store.register_step_summary_numerics(
+        step_id="model", evidence_id=record.evidence_id, summary=summary,
+    )
+    records = store.records()
+    registered = next(item for item in records if item.evidence_id == record.evidence_id)
+    legacy = [dict(item) for item in registered.metadata["scientific_claims"]]
+    for item in legacy[-2:]:
+        item["estimand"] = item["estimand"].replace(
+            "prespecified sensitivity: age modeled",
+            f"prespecified sensitivity {spec_id}: age modeled",
+        )
+    registered.metadata["scientific_claims"] = legacy
+
+    claims = load_registered_scientific_claims(root=tmp_path, records=records)
+
+    assert all(spec_id not in claim.estimand for claim in claims[-2:])
+    assert all("prespecified sensitivity: age modeled" in claim.estimand for claim in claims[-2:])
 
 
 @pytest.mark.parametrize("generation_mode", ["deterministic_standard", "llm"])
