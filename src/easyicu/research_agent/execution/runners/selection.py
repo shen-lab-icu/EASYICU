@@ -49,7 +49,6 @@ from .audit_panel_executor import (
     audit_panel_executor_owns_step,
 )
 from .cohort_flow_figure_executor import (
-    COHORT_FLOW_INPUT,
     cohort_flow_figure_executor_code,
     cohort_flow_figure_executor_owns_step,
 )
@@ -708,7 +707,7 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind="cohort_flow_figure",
             selection_reason="cohort_flow_figure_contract_preflight",
             progress_message="Using digest-bound cohort-flow renderer",
-            consumed_input_keys=lambda _c: (COHORT_FLOW_INPUT,),
+            consumed_input_keys=lambda c: tuple(c.step.inputs),
             host_sealed_renderer=True,
             blocks_on_plausibility_receipt=True,
         ),

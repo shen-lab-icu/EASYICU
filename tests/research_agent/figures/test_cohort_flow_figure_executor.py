@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.typed_binding import _write_host_input_binding_receipts
 from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
     COHORT_ACCOUNTING_COMPLETE,
     COHORT_ACCOUNTING_DENOMINATOR_ONLY,
@@ -129,6 +130,7 @@ def test_exact_cohort_flow_selects_and_renders_without_llm(tmp_path: Path) -> No
     )
     assert selection is not None
     assert selection.analysis_kind == "cohort_flow_figure"
+    assert selection.consumed_input_keys == (COHORT_FLOW_INPUT,)
 
     out_dir = run_dir / "steps" / step.step_id / "outputs"
     summary = run_cohort_flow_figure(
@@ -149,10 +151,12 @@ def test_exact_cohort_flow_selects_and_renders_without_llm(tmp_path: Path) -> No
     assert (out_dir / "cohort_accounting.figure_contract.json").is_file()
 
 
+@pytest.mark.parametrize("source_input", [
+    "table:landmark_population_flow", "table:matched_population_flow", "table:validation_population_flow",
+])
 def test_primary_population_flow_selects_and_renders_without_llm(
-    tmp_path: Path,
+    tmp_path: Path, source_input: str,
 ) -> None:
-    source_input = "table:landmark_population_flow"
     frame = pd.DataFrame(
         [
             ["source_cohort", 100, 0, "source"],
@@ -223,6 +227,12 @@ def test_primary_population_flow_selects_and_renders_without_llm(
     assert cohort_flow_figure_executor_owns_step(
         step, resolved_bindings={source_input: binding}
     )
+    selection = select_standard_executor(
+        step, plan=AnalysisPlan(research_question="Test", steps=[step]),
+        resolved_bindings={source_input: binding},
+    )
+    assert selection is not None
+    assert selection.consumed_input_keys == (source_input,)
     out_dir = run_dir / "steps" / step.step_id / "outputs"
     summary = run_cohort_flow_figure(
         out_dir=out_dir,
@@ -237,6 +247,15 @@ def test_primary_population_flow_selects_and_renders_without_llm(
     assert source_data["n_remaining"].tolist() == [100, 80, 60]
     assert summary["source_input"] == source_input
     assert summary["paper_grade_cohort_accounting"] is True
+    bound = _write_host_input_binding_receipts(
+        out_dir=out_dir, step_summary=summary,
+        resolved_input_bindings={source_input: {**binding, "absolute_path": str(evidence_path)}},
+        consumed_input_keys=selection.consumed_input_keys,
+    )
+    assert bound["input_bindings"] == [{
+        "input_key": source_input, "loaded": True, "evidence_id": record.evidence_id,
+        "sha256": digest, "row_count": 3,
+    }]
 
 
 def test_a_single_stage_that_is_not_the_universe_still_reports_the_gap(
