@@ -494,6 +494,31 @@ def test_adjacent_contract_repairs_only_explicit_section_owner() -> None:
     assert audit_manuscript_quality(repaired).status == "pass"
 
 
+def test_completed_repair_preserves_unpassed_candidate_for_final_owner():
+    from easyicu.research_agent.reporting.manuscript_sections import completed_section_repair_candidate
+
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    )
+    with pytest.raises(ManuscriptReaderQualityContractError) as caught:
+        repair_named_manuscript_sections(
+            manuscript, section_errors={"discussion": ("Repair reader wording.",)},
+            call_section=lambda **kwargs: "## Discussion\n\nThis remains host-bound.",
+            common={},
+        )
+    candidate = completed_section_repair_candidate(caught.value, expected_section_keys=("discussion",))
+    assert candidate is not None
+    text, keys = candidate
+    assert keys == ("discussion",)
+    assert "## Data and code availability" in text
+    assert audit_manuscript_quality(text).status != "pass"
+    assert completed_section_repair_candidate(caught.value, expected_section_keys=("methods",)) is None
+    assert completed_section_repair_candidate(
+        ManuscriptReaderQualityContractError(findings=(), manuscript=text),
+        expected_section_keys=("discussion",),
+    ) is None
+
+
 def test_existing_manuscript_migration_repairs_missing_display_callouts() -> None:
     manuscript = "\n\n".join(
         _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS

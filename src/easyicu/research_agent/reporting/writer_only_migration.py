@@ -50,7 +50,11 @@ from .manuscript_quality import (
     remove_empty_optional_subsections,
     render_reader_manuscript,
 )
-from .manuscript_sections import quality_repair_section_keys, quality_repair_section_errors
+from .manuscript_sections import (
+    completed_section_repair_candidate,
+    quality_repair_section_keys,
+    quality_repair_section_errors,
+)
 from .manuscript_quality import repair_section_opening_connectors
 from .manuscript_labels import recorded_definition_section_errors, source_bound_manuscript_labels
 from .manuscript_baseline import baseline_reporting_mentions
@@ -605,6 +609,10 @@ def repair_writer_only(
             reader_display_labels=reader_labels,
             administrative_authority=prepared.administrative_authority,
         )
+    except WriterOnlyMigrationError:
+        # Preserve replay drift identity; it must never become a reusable
+        # shorter cache prefix on the next report recovery.
+        raise
     except Exception as exc:
         raise WriterOnlyMigrationError(
             code="WRITER_ONLY_REPAIR_FAILED_PRIOR_PRESERVED",
@@ -766,11 +774,18 @@ def repair_writer_only(
                 reader_display_labels=reader_labels,
                 administrative_authority=prepared.administrative_authority,
             )
+        except WriterOnlyMigrationError:
+            raise
         except Exception as exc:
-            raise WriterOnlyMigrationError(
-                code="WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED",
-                detail=f"{type(exc).__name__}: {exc}",
-            ) from exc
+            candidate = completed_section_repair_candidate(
+                exc, expected_section_keys=tuple(repair_errors),
+            )
+            if candidate is None:
+                raise WriterOnlyMigrationError(
+                    code="WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED",
+                    detail=f"{type(exc).__name__}: {exc}",
+                ) from exc
+            manuscript, repaired_authority_keys = candidate
         for key in repaired_authority_keys:
             if key not in authority_repaired:
                 authority_repaired.append(key)

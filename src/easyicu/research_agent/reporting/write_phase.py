@@ -1544,15 +1544,25 @@ def _draft_manuscript(
                 findings=findings,
             )
         else:
-            scaffold, repaired_keys = writer.repair_sections(
-                section_repair[0], section_errors=section_repair[1],
-                analysis_plan=execute_result.plan, context=agent_context,
-                evidence_ids=preferred_writer_evidence_names,
-                evidence_digest=writer_evidence_digest,
-                literature_digest=render_writer_literature_digest(literature, plan=execute_result.plan),
-                reader_display_labels=dict(execute_result.plan.display_labels or {}),
-                administrative_authority=load_manuscript_administrative_authority(run_dir),
-            )
+            from .manuscript_sections import completed_section_repair_candidate
+
+            try:
+                scaffold, repaired_keys = writer.repair_sections(
+                    section_repair[0], section_errors=section_repair[1],
+                    analysis_plan=execute_result.plan, context=agent_context,
+                    evidence_ids=preferred_writer_evidence_names,
+                    evidence_digest=writer_evidence_digest,
+                    literature_digest=render_writer_literature_digest(literature, plan=execute_result.plan),
+                    reader_display_labels=dict(execute_result.plan.display_labels or {}),
+                    administrative_authority=load_manuscript_administrative_authority(run_dir),
+                )
+            except Exception as exc:
+                candidate = completed_section_repair_candidate(
+                    exc, expected_section_keys=tuple(section_repair[1]),
+                )
+                if candidate is None:
+                    raise
+                scaffold, repaired_keys = candidate
             findings.append(ValidationFinding(
                 validator="writer_recovery", severity="info",
                 message="Regenerated section owners rejected by final manuscript checks; all evidence and numeric gates run again.",

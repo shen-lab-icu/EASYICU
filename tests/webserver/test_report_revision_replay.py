@@ -130,3 +130,16 @@ def test_mixed_replay_receipt_counts_generated_and_reused_sections(tmp_path, rec
     receipt_path.write_text(json.dumps(receipt))
     replay = load_failed_writer_replay(tmp_path, prepared)
     assert (replay is not None) == (recorded_replayed == 1)
+
+
+def test_partial_prefix_from_replay_mismatch_is_never_reusable(tmp_path):
+    prepared, path = _saved(tmp_path)
+    row = json.loads(path.read_text())
+    row['replayed_from_revision'] = 'older-failure'
+    path.write_text(json.dumps(row))
+    receipt_path = path.parent.parent / 'writer_only_migration_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt['reason_code'] = 'WRITER_ONLY_REPLAY_MISMATCH'
+    receipt['provider_summary'] = {'n_calls': 0, 'replayed_sections': 1}
+    receipt_path.write_text(json.dumps(receipt))
+    assert load_failed_writer_replay(tmp_path, prepared) is None
