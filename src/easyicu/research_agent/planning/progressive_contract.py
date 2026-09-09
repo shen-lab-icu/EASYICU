@@ -437,6 +437,28 @@ class ProgressiveOutlineStep(BaseModel):
         default=None,
         pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
     )
+    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Absolute-risk population chosen with the complete study design; executable detail must preserve it.",
+    )
+    population_scope_change_reason: Optional[str] = Field(
+        default=None, min_length=12, max_length=1200, exclude_if=lambda value: value is None,
+        description="Explain an intentional amendment of a source-bound population for complete-plan review; this is not execution approval.",
+    )
+
+    @field_validator("population_scope_change_reason", mode="before")
+    @classmethod
+    def _strip_population_scope_change_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _population_owner(self):
+        if self.population_scope is not None or self.population_scope_change_reason is not None:
+            if self.module_id != "absolute_risk_context":
+                raise ValueError("population_scope belongs only to absolute_risk_context")
+            if self.population_scope is None:
+                raise ValueError("population_scope_change_reason requires a population_scope")
+        return self
 
     @field_validator("depends_on", "variable_names", "literature_citation_keys")
     @classmethod
