@@ -1099,7 +1099,7 @@ def test_prompt_timeout_aborts_and_refreshes_session(
     gateway = PiGatewayClient(app_dir=APP_DIR, session_dir=tmp_path)
     recovered: list[str] = []
     monkeypatch.setattr(gateway, "_start", lambda: None)
-    monkeypatch.setattr(gateway, "_write", lambda payload: None)
+    monkeypatch.setattr(gateway, "_write", lambda payload, **kwargs: None)
     monkeypatch.setattr(
         gateway,
         "_recover_timed_out_prompt",
