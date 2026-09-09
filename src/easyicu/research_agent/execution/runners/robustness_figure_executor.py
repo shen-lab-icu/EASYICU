@@ -683,7 +683,19 @@ def _validated_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, str, bool]:
         )
     ]
     labels = [str(value).strip() for value in rows["spec_id"].tolist()]
-    if any(not label for label in labels) or len(set(labels)) != len(labels):
+    if any(not label for label in labels):
+        raise ValueError("robustness specifications must carry unique non-empty ids")
+    contrasts = (
+        [str(value).strip() for value in rows["contrast_id"].tolist()]
+        if "contrast_id" in rows
+        else [""] * len(rows)
+    )
+    repeated_specs = {label for label in labels if labels.count(label) > 1}
+    row_identities = list(zip(labels, contrasts, strict=True))
+    if any(
+        label in repeated_specs and not contrast
+        for label, contrast in row_identities
+    ) or len(set(row_identities)) != len(row_identities):
         raise ValueError("robustness specifications must carry unique non-empty ids")
     rows["__label"] = labels
     return rows, effect_scale, bool((~rows["__drawable"]).any())
