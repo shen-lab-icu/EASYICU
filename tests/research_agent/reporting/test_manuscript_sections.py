@@ -479,7 +479,7 @@ def test_adjacent_contract_repairs_only_explicit_section_owner() -> None:
 
     def call_section(**kwargs: object) -> str:
         calls.append(str(kwargs["section_name"]))
-        assert "EVIDENCE-AUTHORITY CONTRACT REPAIR" in str(kwargs["instruction"])
+        assert "EVIDENCE-AUTHORITY CONTRACT REPAIR" in str(kwargs["repair_feedback"])
         return _minimal_valid_section(str(kwargs["section_name"]))
 
     repaired, keys = repair_named_manuscript_sections(

@@ -47,6 +47,9 @@ from . import writer_display_labels as _writer_display
 
 _ANALYZER_PROMPT_BYTE_LIMIT = 48_000
 _WRITER_PROMPT_BYTE_LIMIT = 64_000
+# Repair feedback has its own transport allowance; evidence keeps its original
+# ceiling and the provider's governed token/call limits still apply unchanged.
+_WRITER_REPAIR_FEEDBACK_BYTE_LIMIT = 8_000
 
 
 def _group_writer_numeric_citations(digest: str) -> str:
@@ -234,6 +237,7 @@ class WriterAgent:
         language: Optional[str] = None,
         max_tokens: int = 2048,
         analysis_plan: AnalysisPlan | None = None,
+        repair_feedback: str = "",
     ) -> str:
         lang_inst = _writer_display.writer_language_instruction(language or self.language)
         evidence_list = ", ".join(str(eid) for eid in evidence_ids) or "(none)"
@@ -399,6 +403,17 @@ class WriterAgent:
             role="Writer",
             limit_bytes=_WRITER_PROMPT_BYTE_LIMIT,
         )
+        if repair_feedback:
+            feedback = LLMMessage(role="user", content=repair_feedback)
+            _enforce_reporting_prompt_budget(
+                [feedback], role="Writer repair feedback",
+                limit_bytes=_WRITER_REPAIR_FEEDBACK_BYTE_LIMIT,
+            )
+            messages.append(feedback)
+            _enforce_reporting_prompt_budget(
+                messages, role="Writer repair",
+                limit_bytes=_WRITER_PROMPT_BYTE_LIMIT + _WRITER_REPAIR_FEEDBACK_BYTE_LIMIT,
+            )
         raw = authorized_complete(
             self.llm, messages, max_tokens=max_tokens, temperature=0.3
         ).strip()

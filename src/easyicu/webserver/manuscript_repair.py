@@ -106,6 +106,15 @@ def _current_revision_input(target) -> tuple[Path | None, str | None]:
     return draft, identifier
 
 
+def _replay_or_generate_section(replay, *, section, instruction, generate, on_continue):
+    """Reuse an exact saved prefix, then use this run's authorized Writer budget."""
+    if replay is not None and replay.cursor < len(replay.rows):
+        return replay.section(section_name=section, instruction=instruction), True
+    if replay is not None:
+        on_continue()
+    return generate(), False
+
+
 def make_report_only_run_runner(
     *,
     study_context,
@@ -233,13 +242,24 @@ def make_report_only_run_runner(
                         step="report_repair",
                         label=f"Repairing report section: {section}",
                     )
-                    text = replay.section(section_name=section, instruction=kwargs["instruction"]) if replay else super()._call_section(**kwargs)
+                    instruction = kwargs["instruction"]
+                    if kwargs.get("repair_feedback"):
+                        instruction += "\n\n" + kwargs["repair_feedback"]
+                    generate = super()._call_section
+                    text, was_replayed = _replay_or_generate_section(
+                        replay, section=section, instruction=instruction,
+                        generate=lambda: generate(**kwargs),
+                        on_continue=lambda: pipeline_owner._progress(
+                            job, step="report_repair",
+                            label="Saved section outputs reused; continuing within the authorized report budget",
+                        ),
+                    )
                     pipeline_owner._write_json(
                         output
                         / "runtime"
                         / f"writer_candidate_{self.attempt:02d}.json",
-                        {"section": section, "instruction": kwargs["instruction"], "text": text,
-                         "replayed_from_revision": replay.revision_id if replay else None},
+                        {"section": section, "instruction": instruction, "text": text,
+                         "replayed_from_revision": replay.revision_id if was_replayed else None},
                     )
                     return text
 
@@ -270,9 +290,9 @@ def make_report_only_run_runner(
                 output_dir=output,
                 provider=str(provider.get("provider") or ""),
                 model=str(provider.get("model") or ""),
-                provider_summary=meter.summary(
+                provider_summary={**meter.summary(
                     hard_stop_accounting=task.accounting_summary()
-                ),
+                ), "replayed_sections": replay.cursor if replay else 0},
                 provider_ledger=str(ledger_path),
             )
             revision = {
@@ -334,9 +354,9 @@ def make_report_only_run_runner(
                 ),
                 provider=str(provider.get("provider") or ""),
                 model=str(provider.get("model") or ""),
-                provider_summary=meter.summary(
+                provider_summary={**meter.summary(
                     hard_stop_accounting=task.accounting_summary()
-                ),
+                ), "replayed_sections": replay.cursor if replay else 0},
                 provider_ledger=str(ledger_path),
             )
             raise

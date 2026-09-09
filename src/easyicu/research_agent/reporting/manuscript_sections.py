@@ -690,8 +690,7 @@ def repair_existing_manuscript_sections(
             return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
         for spec, error_detail in repair_specs:
             repair_instruction = (
-                spec.instruction
-                + "\n\nREADER-QUALITY CONTRACT MIGRATION:\n"
+                "READER-QUALITY CONTRACT MIGRATION:\n"
                 + f"Fix these section-owned errors:\n{error_detail}\n"
                 + "Regenerate the complete section from the same evidence. Do not add "
                 + "results, change executed methods, repeat excerpts, expose raw ids, "
@@ -713,7 +712,8 @@ def repair_existing_manuscript_sections(
                 spec,
                 call_section(
                     section_name=spec.section_name,
-                    instruction=repair_instruction,
+                    instruction=spec.instruction,
+                    repair_feedback=repair_instruction,
                     max_tokens=spec.max_tokens,
                     **common,
                 ),
@@ -783,8 +783,7 @@ def repair_named_manuscript_sections(
             continue
         detail = "\n".join(f"- {item}" for item in errors[:12])
         instruction = (
-            spec.instruction
-            + "\n\nEVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
+            "EVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
             + "The adjacent deterministic claim policy rejected these sentences "
             + f"owned by this section:\n{detail}\n"
             + "Regenerate the complete section. Every current-study method or "
@@ -799,7 +798,8 @@ def repair_named_manuscript_sections(
             spec,
             call_section(
                 section_name=spec.section_name,
-                instruction=instruction,
+                instruction=spec.instruction,
+                repair_feedback=instruction,
                 max_tokens=spec.max_tokens,
                 **common,
             ),

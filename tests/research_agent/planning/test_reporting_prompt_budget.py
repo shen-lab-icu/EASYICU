@@ -96,6 +96,30 @@ def test_writer_oversize_fails_before_provider_call() -> None:
     assert llm.calls == []
 
 
+def test_writer_repair_reserves_feedback_without_shortening_original_inputs() -> None:
+    from easyicu.research_agent.agents.core import _coder_prompt_payload_bytes
+
+    llm = PatternScriptedMockLLMClient([], default="## Results\n\nComplete.")
+    writer = WriterAgent(llm)
+    kwargs = dict(section_name="Results", instruction="Write the complete section.",
+                  context=_context(), evidence_ids=["primary_result"])
+    marker = "Exact source fact and reference: {evidence:primary_result}"
+    writer._call_section(**kwargs, evidence_digest=marker)
+    base_bytes = _coder_prompt_payload_bytes(llm.calls[-1][0])
+    digest = marker + "x" * (64_000 - base_bytes - 128)
+    feedback = "Fix the rejected section without changing the source facts. " * 40
+    writer._call_section(**kwargs, evidence_digest=digest, repair_feedback=feedback)
+    messages = llm.calls[-1][0]
+    assert digest in messages[1].content
+    assert messages[-1].content == feedback
+    assert 64_000 < _coder_prompt_payload_bytes(messages) <= 72_000
+
+    before = len(llm.calls)
+    with pytest.raises(ReportingPromptBudgetError, match="repair feedback"):
+        writer._call_section(**kwargs, evidence_digest=marker, repair_feedback="x" * 8_001)
+    assert len(llm.calls) == before
+
+
 def test_writer_non_result_section_uses_role_scoped_evidence_projection() -> None:
     digest = (
         "RUN_CONTEXT\n"
