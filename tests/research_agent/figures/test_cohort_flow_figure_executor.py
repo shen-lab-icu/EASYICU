@@ -8,7 +8,13 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
-from easyicu.research_agent.authority.typed_binding import _write_host_input_binding_receipts
+from easyicu.research_agent.authority.typed_binding import (
+    _write_host_input_binding_receipts,
+)
+from easyicu.research_agent.audits.aggregate_row import (
+    unlabelled_aggregate_row_findings,
+)
+from easyicu.research_agent.audits.validators import FigureSourceDataValidator
 from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
     COHORT_ACCOUNTING_COMPLETE,
     COHORT_ACCOUNTING_DENOMINATOR_ONLY,
@@ -151,11 +157,17 @@ def test_exact_cohort_flow_selects_and_renders_without_llm(tmp_path: Path) -> No
     assert (out_dir / "cohort_accounting.figure_contract.json").is_file()
 
 
-@pytest.mark.parametrize("source_input", [
-    "table:landmark_population_flow", "table:matched_population_flow", "table:validation_population_flow",
-])
+@pytest.mark.parametrize(
+    "source_input",
+    [
+        "table:landmark_population_flow",
+        "table:matched_population_flow",
+        "table:validation_population_flow",
+    ],
+)
 def test_primary_population_flow_selects_and_renders_without_llm(
-    tmp_path: Path, source_input: str,
+    tmp_path: Path,
+    source_input: str,
 ) -> None:
     frame = pd.DataFrame(
         [
@@ -228,7 +240,8 @@ def test_primary_population_flow_selects_and_renders_without_llm(
         step, resolved_bindings={source_input: binding}
     )
     selection = select_standard_executor(
-        step, plan=AnalysisPlan(research_question="Test", steps=[step]),
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
         resolved_bindings={source_input: binding},
     )
     assert selection is not None
@@ -244,18 +257,65 @@ def test_primary_population_flow_selects_and_renders_without_llm(
     )
 
     source_data = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
-    assert source_data["n_remaining"].tolist() == [100, 80, 60]
+    assert source_data["n"].tolist() == [100, 80, 60]
+    assert "step_order" not in source_data and "n_before" not in source_data
+    assert source_data["row_role"].tolist() == ["cohort_stage"] * 3
+    assert (
+        FigureSourceDataValidator._compare_source_to_upstream(
+            source_df=source_data,
+            source_path=out_dir / "cohort_accounting_source_data.csv",
+            upstream_path=evidence_path,
+        )["ok"]
+        is True
+    )
+    assert (
+        unlabelled_aggregate_row_findings(step_id=step.step_id, out_dir=out_dir) == []
+    )
     assert summary["source_input"] == source_input
     assert summary["paper_grade_cohort_accounting"] is True
     bound = _write_host_input_binding_receipts(
-        out_dir=out_dir, step_summary=summary,
-        resolved_input_bindings={source_input: {**binding, "absolute_path": str(evidence_path)}},
+        out_dir=out_dir,
+        step_summary=summary,
+        resolved_input_bindings={
+            source_input: {**binding, "absolute_path": str(evidence_path)}
+        },
         consumed_input_keys=selection.consumed_input_keys,
     )
-    assert bound["input_bindings"] == [{
-        "input_key": source_input, "loaded": True, "evidence_id": record.evidence_id,
-        "sha256": digest, "row_count": 3,
-    }]
+    assert bound["input_bindings"] == [
+        {
+            "input_key": source_input,
+            "loaded": True,
+            "evidence_id": record.evidence_id,
+            "sha256": digest,
+            "row_count": 3,
+        }
+    ]
+
+
+def test_sorted_flow_preserves_original_row_coordinates(tmp_path: Path) -> None:
+    step = _step()
+    run_dir, manifest, binding = _binding(tmp_path, frame=_frame().iloc[[2, 0, 1]])
+    out = tmp_path / "sorted_figure"
+    run_cohort_flow_figure(
+        out_dir=out,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=step.step_id,
+        figure_product="cohort_accounting",
+    )
+    path = out / "cohort_accounting_source_data.csv"
+    source = pd.read_csv(path)
+    assert source["source_row_index"].tolist() == [1, 2, 0]
+    assert source["n_remaining"].tolist() == [140, 128, 120]
+    assert source["display_label"].iloc[0] == "Source universe"
+    assert (
+        FigureSourceDataValidator._compare_source_to_upstream(
+            source_df=source,
+            source_path=path,
+            upstream_path=run_dir / binding["relative_path"],
+        )["ok"]
+        is True
+    )
 
 
 def test_a_single_stage_that_is_not_the_universe_still_reports_the_gap(
@@ -292,9 +352,7 @@ def test_a_single_stage_that_is_not_the_universe_still_reports_the_gap(
     source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
     assert source["display_label"].tolist() == ["Analysis denominator only"]
     contract = json.loads(
-        (out_dir / "cohort_accounting.figure_contract.json").read_text(
-            encoding="utf-8"
-        )
+        (out_dir / "cohort_accounting.figure_contract.json").read_text(encoding="utf-8")
     )
     assert "upstream eligibility and attrition are " in contract["core_claim"].lower()
     assert "no eligibility filter" not in contract["core_claim"].lower()
@@ -344,9 +402,7 @@ def test_single_denominator_is_not_promoted_to_complete_cohort_accounting(
     assert source["display_label"].tolist() == ["All bound input rows"]
     assert source["n_remaining"].tolist() == [94_458]
     contract = json.loads(
-        (out_dir / "cohort_accounting.figure_contract.json").read_text(
-            encoding="utf-8"
-        )
+        (out_dir / "cohort_accounting.figure_contract.json").read_text(encoding="utf-8")
     )
     panel = contract["panels"][0]
     assert panel["metadata"]["paper_grade_cohort_accounting"] is False
