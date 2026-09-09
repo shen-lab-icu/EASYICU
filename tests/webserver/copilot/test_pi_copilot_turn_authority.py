@@ -59,6 +59,48 @@ def test_explicit_replan_request_grants_one_provider_turn(message: str) -> None:
 @pytest.mark.parametrize(
     "message",
     [
+        "请修订当前完整研究方案，保留问题和来源，先供我审阅，暂不开始分析。",
+        "请修改当前分析方案，先呈现完整方案供审阅。",
+        "请生成完整研究方案，先供我审阅。",
+        "请重新生成完整分析方案，暂不开始分析。",
+        "授权本轮重新生成完整修订方案先供我审阅暂不开始分析。",
+        "请重新生成修订方案，审阅后再开展分析。",
+        "请重做分析方案，保持已定人群、结局与来源。",
+    ],
+)
+def test_research_scheme_synonyms_grant_only_planning(message: str) -> None:
+    # This is a one-turn Provider grant, never a plan decision or analysis approval.
+    assert infer_explicit_turn_actions(message) == frozenset({"provider_run"})
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "请不要修订当前完整研究方案。",
+        "暂不重新生成完整分析方案。",
+        "无需重做分析方案。",
+        "不授权本轮重新生成完整修订方案。",
+        "请解释如何修订当前完整研究方案。",
+        "请讨论如何生成完整研究方案。",
+        "请讨论修订当前完整研究方案的利弊。",
+        "请说明重新生成完整修订方案的流程。",
+        "能否重新生成完整分析方案？",
+        "授权本轮重新生成完整修订方案是否必要？",
+        "请审阅当前完整研究方案，只报告问题。",
+        "请修改报告，保留原研究方案。",
+        "请重新生成当前报告，暂不修订研究方案。",
+    ],
+)
+def test_scheme_discussion_denial_and_report_only_do_not_grant_planning(
+    message: str,
+) -> None:
+    expected = {"report_revision"} if message.startswith(("请修改报告", "请重新生成当前报告")) else set()
+    assert infer_explicit_turn_actions(message) == frozenset(expected)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
         "请最后准备数据提取并给我下载。",
         "我确认当前研究问题。",
         "我不授权执行数据提取。",

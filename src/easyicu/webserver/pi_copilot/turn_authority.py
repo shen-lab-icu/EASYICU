@@ -82,11 +82,12 @@ _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS = (
 )
 
 _PROVIDER_REPLAN_PATTERNS = (
-    r"(?:请|现在|按当前配置|授权)?(?:重新)?生成(?:新的?|全新的?|干净的?)?(?:\s*research agent\s*)?分析计划",
-    r"(?:请|现在|授权)?(?:重新规划|重做分析计划)",
+    r"(?:重新)?生成(?:(?:新的?|全新的?|干净的?|当前|这份|整份|完整|候选|修订|的)|\s)*(?:research agent\s*)?(?:研究|分析)(?:计划|方案)",
+    r"(?:重新)?生成(?:完整)?修订(?:计划|方案)",
+    r"(?:请|现在|授权)?(?:重新规划|重做(?:研究|分析)(?:计划|方案))",
     r"(?:一次性\s*)?provider_run\s*授权",
     r"(?:authorize|please|now)?[\s_-]*(?:regenerate|replan|generate)[\s_-]+(?:a[\s_-]+)?(?:the[\s_-]+)?(?:new[\s_-]+)?(?:research[\s_-]+agent[\s_-]+)?analysis[\s_-]+plan",
-    r"(?:修订|修正|修改|调整|完善)(?:(?:当前|这份|整份|完整|候选|研究|分析|的)|\s)*计划",
+    r"(?:修订|修正|修改|调整|完善)(?:(?:当前|这份|整份|完整|候选|研究|分析|的)|\s)*(?:计划|方案)",
     r"\b(?:revise|amend|update|modify)\s+(?:(?:a|the|current|complete|candidate|research|analysis)\s+)*plan\b",
 )
 
@@ -94,7 +95,9 @@ _PROVIDER_REPLAN_PATTERNS = (
 # spend a Planner turn. Keep these checks local to the planning action so a
 # request to revise a plan may still forbid changes to its question or source.
 _NON_ACTION_PLAN_PATTERNS = (
-    r"(?:不要|不必|无需|暂不|先别|禁止|如何|怎样|怎么|是否|能否)[^。.!！?？;；]{0,24}(?:生成|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}计划",
+    r"(?:不要|不必|无需|暂不|先别|禁止|如何|怎样|怎么|是否|能否)[^。.!！?？;；]{0,24}(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)",
+    r"(?:讨论|探讨|解释|说明|介绍)(?:一下)?\s*(?:如何|怎样|怎么)?\s*(?:重新)?(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)",
+    r"(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)\s*(?:是否|能否|可以吗|好吗|吗)",
     r"(?:不要|不必|无需|暂不|先别|禁止|如何|怎样|怎么|是否|能否)[^。.!！?？;；]{0,16}重新规划",
     r"\b(?:do not|don't|never|how|whether|should i)[^.!?;]{0,60}\b(?:regenerate|replan|generate|revise|amend|update|modify)\b[^.!?;]{0,60}\bplan\b",
 )
