@@ -305,11 +305,14 @@ class ScientificClaim(ScientificClaimDraft):
                 f"{display_number(self.interval_upper)}"
             )
         model_prefix = (
-            "In the covariate-adjusted model, " if self.adjusted_for else ""
+            "After adjustment for "
+            + ", ".join(_reader_coordinate(term) for term in self.adjusted_for)
+            + ", " if self.adjusted_for else ""
         )
         return (
-            f"{model_prefix}the prespecified exposure {relation} the study "
-            f"outcome in the prespecified analysis cohort ({estimate_text})."
+            f"{model_prefix}{_reader_coordinate(self.exposure)} {relation} "
+            f"{_reader_coordinate(self.outcome)} in "
+            f"{_reader_coordinate(self.population)} ({estimate_text})."
         )
 
     def _reader_interval(self) -> tuple[float, float, float, float]:
@@ -337,6 +340,8 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
         raise ValueError(
             "scientific_claims are host-derived and must not be supplied by a runner"
         )
+    if "reportable_model_contrasts" in summary:
+        return True
     interpretation_class = str(summary.get("interpretation_class") or "").strip()
     if interpretation_class == "adjusted_association":
         return True
@@ -371,6 +376,12 @@ def derive_scientific_claim_drafts(
     if not scientific_claim_compilation_requested(summary):
         return []
     assert isinstance(summary, dict)
+
+    if "reportable_model_contrasts" in summary:
+        from .model_contrast_scientific_claims import derive_model_contrast_claim_payloads
+
+        return [ScientificClaimDraft.model_validate(payload)
+                for payload in derive_model_contrast_claim_payloads(summary)]
 
     if summary.get("interpretation_class") == "absolute_risk_context":
         from .absolute_risk_scientific_claims import derive_absolute_risk_claim_payloads

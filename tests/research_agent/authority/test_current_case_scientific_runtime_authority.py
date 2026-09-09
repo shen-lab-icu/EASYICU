@@ -1107,6 +1107,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     upper_coordinate = 5.0
     reference_column = "reference_value"
     if contrast_schema != "legacy":
+        linear = linear.rename(columns={"per_unit": "exposure_increment"})
         reference_column = "reference_exposure_value"
         contrasts = contrasts.rename(columns={"reference_value": reference_column})
         contrasts["exposure"] = authority.exposure_column
@@ -1166,6 +1167,13 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         pd.testing.assert_frame_equal(contrasts, original_contrasts)
         return
     summary = run_landmark_spline_robustness(**replay_arguments)
+    from easyicu.research_agent.authority.scientific_claims import derive_scientific_claim_drafts
+    claims = derive_scientific_claim_drafts(summary)
+    assert len(claims) == 3
+    assert claims[1].outcome == authority.outcome_column
+    assert claims[1].point_estimate == 2.0
+    assert claims[1].adjusted_for == list(authority.required_adjustment_columns)
+    assert "not a summary of the nonlinear curve" in claims[1].estimand
     assert summary["status"] == "ok"
     assert summary["primary_or"] == 2.0
     assert summary["primary_effect_is_nonlinear_curve_summary"] is False
