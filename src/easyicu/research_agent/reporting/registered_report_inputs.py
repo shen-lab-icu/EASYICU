@@ -29,15 +29,19 @@ from .manuscript_labels import source_bound_manuscript_labels
 from .writer_evidence import _render_writer_evidence_digest_v2
 from ..research_context.typed import parse_research_context_json
 from .descriptive_report_facts import (
-    compile_counts_only_report_facts, render_descriptive_report_claims,
-    verified_descriptive_source_records,
+    compile_primary_counts_only_report_facts,
+    render_descriptive_report_claims,
     restore_descriptive_revision_claims,
+    verified_descriptive_source_records as _verified_descriptive_source_records,
 )
 from .writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
     prepare_writer_only_migration,
 )
+
+# Compatibility re-export for existing report consumers.
+verified_descriptive_source_records = _verified_descriptive_source_records
 
 
 class ReadOnlyReportEvidence:
@@ -187,11 +191,9 @@ def prepare_registered_report_repair(run_dir: Path, *, migration_draft: Path | N
     )
     prepared = replace(
         prepared, evidence_digest=digest,
-        host_result_facts=compile_counts_only_report_facts(
-            verified_descriptive_source_records(projected, evidence),
-            evidence=evidence, reader_display_labels=prepared.plan.display_labels,
-            context=context,
-            scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
+        host_result_facts=compile_primary_counts_only_report_facts(
+            records, evidence=evidence,
+            reader_display_labels=prepared.plan.display_labels, context=context,
         ),
     )
     if migration_draft is not None:
@@ -222,15 +224,14 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
 
     evidence = ReadOnlyReportEvidence(run_dir)
     records = json.loads((run_dir / "manifest.json").read_text())["per_step_records"]
-    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+    RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
         records,
         evidence_store=evidence,
     )
     claims = load_registered_scientific_claims(root=run_dir, records=evidence.records())
     plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
-    facts = compile_counts_only_report_facts(
-        verified_descriptive_source_records(projected, evidence), evidence=evidence,
-        reader_display_labels=plan.display_labels, scientific_claims=claims,
+    facts = compile_primary_counts_only_report_facts(
+        records, evidence=evidence, reader_display_labels=plan.display_labels,
         context=parse_research_context_json(evidence.verify_input("research_context.json", "research_context")),
     )
     manuscript = render_descriptive_report_claims(manuscript, facts)
