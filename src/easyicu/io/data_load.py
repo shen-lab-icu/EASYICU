@@ -25,7 +25,7 @@ the extraction suite will not exercise them.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Callable, Iterable, List, Mapping, Optional, Union
+from typing import Any, Callable, Iterable, List, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -433,13 +433,15 @@ def load_difftime(
     return as_id_tbl(data, id_vars=id_col)
 
 
-def _load_id_map(
+def load_id_map(
     data_source: Optional[ICUDataSource],
     config: DataSourceConfig,
     from_id: str,
     to_id: str,
+    *,
+    extra_columns: Sequence[str] = (),
 ) -> pd.DataFrame:
-    """A two-column map between two ID systems of one source.
+    """Map two ID systems, retaining any requested companion columns.
 
     Both identifiers live together in whichever id-system table is granular
     enough to carry them — MIMIC-IV's ``icustays`` holds ``subject_id``,
@@ -452,6 +454,7 @@ def _load_id_map(
             f"changing {from_id!r} to {to_id!r} needs a data source to read "
             "the ID map from"
         )
+    columns = list(dict.fromkeys([from_id, to_id, *extra_columns]))
     candidates = sorted(
         (cfg for cfg in config.id_configs.values() if cfg.table),
         key=lambda cfg: cfg.position,
@@ -462,12 +465,12 @@ def _load_id_map(
         tried.append(str(cfg.table))
         try:
             frame = data_source.load_table(
-                cfg.table, columns=[from_id, to_id]
+                cfg.table, columns=columns
             ).data
         except Exception:
             continue
-        if from_id in frame.columns and to_id in frame.columns:
-            return frame[[from_id, to_id]].drop_duplicates()
+        if all(col in frame.columns for col in columns):
+            return frame[columns].drop_duplicates()
     raise ValueError(
         f"no table of {config.name!r} carries both {from_id!r} and {to_id!r} "
         f"(tried {tried}), so the two ID systems cannot be related"
@@ -530,7 +533,7 @@ def load_id(
 
     from ..table import change_id
 
-    id_map = _load_id_map(data_source, config, current_list[0], id_var)
+    id_map = load_id_map(data_source, config, current_list[0], id_var)
     return as_id_tbl(
         change_id(
             tbl.data,

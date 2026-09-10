@@ -284,7 +284,7 @@ def default_vars(x: Any) -> dict[str, Any]:
         >>> default_vars(table_cfg)
         {'id_var': 'icustay_id', 'index_var': 'time', ...}
     """
-    from .config import TableConfig
+    from ..config import TableConfig
     
     if isinstance(x, TableConfig):
         defaults = x.defaults

@@ -1296,7 +1296,11 @@ def sofa2_renal(
     u6 = u6.where(renal_numeric(uo_6h_covered_h, "uo_6h_covered_h") >= 6 - 1e-9)
     u12 = u12.where(renal_numeric(uo_12h_covered_h, "uo_12h_covered_h") >= 12 - 1e-9)
     u24 = u24.where(renal_numeric(uo_24h_covered_h, "uo_24h_covered_h") >= 24 - 1e-9)
-    oligo_evidence = pd.Series(oliguria_gt6h, index=idx).eq(True).fillna(False)
+    oligo_evidence = (
+        validate_aligned_input(
+            oliguria_gt6h, component="sofa2_renal", field="oliguria_gt6h", index=idx,
+        ).eq(True).fillna(False) if oliguria_gt6h is not None else pd.Series(False, index=idx)
+    )
     urine_rate = renal_numeric(urine_mlkgph, "urine_mlkgph")
     urine_duration = renal_numeric(urine_duration_h, "urine_duration_h")
     potassium_value = renal_numeric(potassium, "potassium")

@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from threading import Event
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
 from ..schema import AnalysisStep
+from ..authority.provider_hard_stop import ProviderHardStopError
 
 _SUCCESS_REPLAN_REQUEST_FIELDS = (
     "replan_requested",
@@ -154,7 +156,7 @@ class RunCoordinator:
                 state.stop_reason = f"step_raised:{step.step_id}:{type(error).__name__}"
                 if on_step_exception is not None:
                     on_step_exception(step, error)
-                if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                if isinstance(error, (KeyboardInterrupt, SystemExit, ProviderHardStopError)):
                     raise
                 break
             state.executed_step_ids.add(step.step_id)
@@ -203,15 +205,35 @@ class RunCoordinator:
         on_worker_error: Callable[[AnalysisStep, BaseException], None],
     ) -> None:
         step_list = list(steps)
+        hard_stopped = Event()
+
+        def guarded_execute(step: AnalysisStep) -> Any:
+            if hard_stopped.is_set():
+                return None
+            try:
+                return execute_step(step)
+            except ProviderHardStopError:
+                hard_stopped.set()
+                raise
+
+        stop_error: Optional[ProviderHardStopError] = None
         with ThreadPoolExecutor(
             max_workers=min(int(max_workers), len(step_list)),
             thread_name_prefix="ra_step",
         ) as executor:
-            futures = {submit_step(executor, execute_step, step): step for step in step_list}
+            futures = {submit_step(executor, guarded_execute, step): step for step in step_list}
             for future in as_completed(futures):
+                if future.cancelled():
+                    continue
                 error = future.exception()
                 if error is not None:
                     on_worker_error(futures[future], error)
+                    if isinstance(error, ProviderHardStopError):
+                        stop_error = error
+                        for pending in futures:
+                            pending.cancel()
+        if stop_error is not None:
+            raise stop_error
 
 
 __all__ = ["RunCoordinator", "RunExecutionState", "RunTransition"]

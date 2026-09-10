@@ -98,7 +98,7 @@ def as_col_cfg(x: Any) -> Dict[str, Any]:
         }
     
     if isinstance(x, (IdTbl, TsTbl, WinTbl)):
-        from .table_meta import id_vars, index_var, dur_var
+        from . import id_vars, index_var, dur_var
         cfg = {}
         id_cols = id_vars(x)
         if id_cols:
@@ -153,7 +153,7 @@ def as_src_cfg(x: Any) -> DataSourceConfig:
     
     # Try to load from registry
     if isinstance(x, str):
-        from .resources import load_data_sources
+        from ..resources import load_data_sources
         registry = load_data_sources()
         return registry.get(x)
     
@@ -205,8 +205,8 @@ def as_src_tbl(x: Any, src: Optional[str] = None) -> Any:
     """
     if isinstance(x, str):
         if src:
-            from .datasource import ICUDataSource
-            from .resources import load_data_sources
+            from ..datasource import ICUDataSource
+            from ..resources import load_data_sources
             registry = load_data_sources()
             config = registry.get(src)
             if config:

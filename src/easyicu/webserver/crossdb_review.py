@@ -12,6 +12,7 @@ import json
 import math
 import threading
 import time
+from contextvars import copy_context
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -36,6 +37,11 @@ from easyicu.webserver import sources as source_store
 
 _REQUIRED_CORE_MODULES = {"demographics", "outcome"}
 _OPTIONAL_COMPARISON_MODULES = {"sepsis3_sofa2", "sofa2_score", "vitals"}
+_SYNC_SUMMARY_SLOTS = threading.BoundedSemaphore(2)
+_FEATURE_ROW_LIMIT = 1_000_000
+_FEATURE_CELL_LIMIT = 2_000_000
+_FEATURE_BYTE_LIMIT = 128 * 1024 * 1024
+_FEATURE_BATCH_ROWS = 10_000
 _UNSUPPORTED_FILTERS = {
     "row_level_filters": "Cross-DB Stage18 accepts registered-source aggregates only.",
     "age_at_admission": "Age cuts need audited row-level cohort construction.",
@@ -329,7 +335,47 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     """Return native Cross-DB descriptive aggregates for registered exports."""
     _reject_unsupported_request(body)
     requested_sources = _resolve_registered_sources(body)
-    return _crossdb_review_summary_for_sources(requested_sources)
+    seconds = _crossdb_summary_deadline_seconds(body.get("deadline_seconds"))
+    if not _SYNC_SUMMARY_SLOTS.acquire(blocking=False):
+        raise CrossdbReviewError({"error": "crossdb_summary_busy"})
+    done, abandoned = threading.Event(), threading.Event()
+    result: Dict[str, Any] = {}
+    deadline = time.monotonic() + seconds
+
+    def checkpoint(*_args: Any) -> None:
+        if abandoned.is_set() or time.monotonic() >= deadline:
+            raise CrossdbSummaryDeadlineError(seconds)
+
+    def work() -> None:
+        try:
+            result["value"] = _crossdb_review_summary_for_sources(
+                requested_sources, checkpoint=checkpoint
+            )
+        except Exception as exc:
+            result["error"] = exc
+        finally:
+            _SYNC_SUMMARY_SLOTS.release()
+            done.set()
+
+    context = copy_context()
+    try:
+        threading.Thread(target=lambda: context.run(work), daemon=True).start()
+    except Exception:
+        _SYNC_SUMMARY_SLOTS.release()
+        raise
+    if not done.wait(seconds):
+        abandoned.set()
+        raise CrossdbReviewError(
+            {"error": CrossdbSummaryDeadlineError.code, "deadline_seconds": seconds}
+        )
+    error = result.get("error")
+    if isinstance(error, CrossdbSummaryDeadlineError):
+        raise CrossdbReviewError(
+            {"error": error.code, "deadline_seconds": seconds}
+        ) from error
+    if error is not None:
+        raise error
+    return result["value"]
 
 
 def _crossdb_review_summary_for_sources(
@@ -380,7 +426,33 @@ def _crossdb_review_summary_for_sources(
     ):
         if checkpoint is not None:
             checkpoint("aggregating", index - 1, source_total, source)
-        sources.append(_source_aggregate(source, payload))
+        try:
+            sources.append(
+                _source_aggregate(
+                    source,
+                    payload,
+                    checkpoint=(
+                        lambda: checkpoint(
+                            "aggregating", index - 1, source_total, source
+                        )
+                    )
+                    if checkpoint
+                    else None,
+                )
+            )
+        except (CrossdbSummaryDeadlineError, _CrossdbSummaryAbandoned):
+            raise
+        except Exception as exc:
+            detail = exc.detail if isinstance(exc, CrossdbReviewError) else {}
+            raise CrossdbReviewError(
+                {
+                    "error": detail.get("error", "crossdb_feature_read_failed"),
+                    "source": _safe_registered_source(source),
+                    "error_type": type(exc).__name__,
+                    "reason": "Could not completely aggregate this source within the read budget; no partial comparison was returned.",
+                    "privacy": _privacy_payload(),
+                }
+            ) from exc
         if checkpoint is not None:
             checkpoint("aggregating", index, source_total, source)
     module_sets = [set(source.get("modules") or []) for source in sources]
@@ -2221,7 +2293,10 @@ def _resolve_registered_sources(body: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _source_aggregate(
-    source: Dict[str, Any], payload: Dict[str, Any]
+    source: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    checkpoint: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
     safe_source = dict(payload.get("source") or _safe_registered_source(source))
     summary = payload.get("summary") or {}
@@ -2269,7 +2344,9 @@ def _source_aggregate(
         "feature_density": _source_feature_density(
             desc, summary.get("cohort_size"), module_coverage
         ),
-        "feature_distributions": _source_feature_distributions(desc),
+        "feature_distributions": _source_feature_distributions(
+            desc, checkpoint=checkpoint
+        ),
         "quality": {
             "modules_ok": quality.get("modules_ok"),
             "modules_warn": quality.get("modules_warn"),
@@ -2593,7 +2670,11 @@ def _feature_density_payload(sources: List[Dict[str, Any]]) -> List[Dict[str, An
     return out
 
 
-def _source_feature_distributions(desc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _source_feature_distributions(
+    desc: Dict[str, Any],
+    *,
+    checkpoint: Optional[Callable[[], None]] = None,
+) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     path = Path(str(desc.get("path") or "")).expanduser()
     for item in desc.get("files") or []:
@@ -2605,9 +2686,11 @@ def _source_feature_distributions(desc: Dict[str, Any]) -> Dict[str, Dict[str, A
         features = [col for col in columns if _is_feature_column(col)]
         if not features:
             continue
-        frame = _read_feature_columns(path / file_name, features)
+        frame = _read_feature_columns(path / file_name, features, checkpoint=checkpoint)
         feature_payloads = []
         for feature in features:
+            if checkpoint:
+                checkpoint()
             if feature not in frame:
                 continue
             feature_payloads.append(
@@ -2701,15 +2784,85 @@ def _feature_distribution_payload(
     return out
 
 
-def _read_feature_columns(path: Path, features: List[str]) -> Any:
+def _read_feature_columns(
+    path: Path,
+    features: List[str],
+    *,
+    checkpoint: Optional[Callable[[], None]] = None,
+) -> Any:
+    """Read complete projected data within a budget; never silently sample rows."""
     import pandas as pd
 
     lower = str(path).lower()
-    if lower.endswith(".parquet"):
-        return pd.read_parquet(path, columns=features)
-    if lower.endswith(".xlsx"):
-        return pd.read_excel(path, usecols=features)
-    return pd.read_csv(path, usecols=features)
+    if path.stat().st_size > _FEATURE_BYTE_LIMIT:
+        raise CrossdbReviewError({"error": "crossdb_feature_read_budget_exceeded"})
+    row_limit = min(_FEATURE_ROW_LIMIT, _FEATURE_CELL_LIMIT // max(1, len(features)))
+
+    def batches():
+        if lower.endswith(".parquet"):
+            import pyarrow.parquet as pq
+
+            with pq.ParquetFile(path) as parquet:
+                if parquet.metadata.num_rows > row_limit:
+                    raise CrossdbReviewError(
+                        {"error": "crossdb_feature_read_budget_exceeded"}
+                    )
+                for batch in parquet.iter_batches(
+                    batch_size=_FEATURE_BATCH_ROWS, columns=features
+                ):
+                    if batch.nbytes > _FEATURE_BYTE_LIMIT:
+                        raise CrossdbReviewError(
+                            {"error": "crossdb_feature_read_budget_exceeded"}
+                        )
+                    yield batch.to_pandas()
+        elif lower.endswith(".xlsx"):
+            import openpyxl
+
+            workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            try:
+                rows = workbook.worksheets[0].iter_rows(values_only=True)
+                header = list(next(rows, ()))
+                positions = [header.index(feature) for feature in features]
+                chunk = []
+                for row in rows:
+                    chunk.append(
+                        [row[pos] if pos < len(row) else None for pos in positions]
+                    )
+                    if len(chunk) >= _FEATURE_BATCH_ROWS:
+                        yield pd.DataFrame(chunk, columns=features)
+                        chunk = []
+                if chunk:
+                    yield pd.DataFrame(chunk, columns=features)
+            finally:
+                workbook.close()
+        else:
+            with pd.read_csv(
+                path, usecols=features, chunksize=_FEATURE_BATCH_ROWS, dtype=object
+            ) as reader:
+                yield from reader
+
+    frames, row_count, byte_count = [], 0, 0
+    iterator = batches()
+    try:
+        if checkpoint:
+            checkpoint()
+        for frame in iterator:
+            if checkpoint:
+                checkpoint()
+            row_count += len(frame)
+            byte_count += int(frame.memory_usage(index=True, deep=True).sum())
+            if row_count > row_limit or byte_count > _FEATURE_BYTE_LIMIT:
+                raise CrossdbReviewError(
+                    {"error": "crossdb_feature_read_budget_exceeded"}
+                )
+            frames.append(frame)
+    finally:
+        iterator.close()
+    return (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=features)
+    )
 
 
 def _summarize_feature_distribution(series: Any) -> Dict[str, Any]:
@@ -2781,7 +2934,9 @@ def _bool_like_numeric(series: Any) -> Any:
     text = series.astype(str).str.strip().str.lower()
     unique = {value for value in text.unique() if value}
     if unique and unique <= set(mapping):
-        return pd.Series([mapping[value] for value in text], index=series.index)
+        return pd.Series(
+            [mapping.get(value) for value in text], index=series.index, dtype=float
+        )
     return None
 
 

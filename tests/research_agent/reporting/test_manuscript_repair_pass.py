@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import ast
+from functools import partial
+from pathlib import Path
+
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceEnforcementError
@@ -119,10 +123,62 @@ def test_deterministic_fallback_records_dependent_context_removal():
     opener = "The outcome was an unsupported endpoint."
     actual, receipts, detail = repair.repair_rejected(
         f"### Variables\n\n{opener} It represented hospital death.\n",
-        llm=object(), evidence_ids=["source"], evidence_digest=None,
-        rejected_sentences=[opener], scientific_claims={},
-        claim_required_sentences=[], allowed_claim_refs=[], language="en",
+        llm=object(),
+        evidence_ids=["source"],
+        evidence_digest=None,
+        rejected_sentences=[opener],
+        scientific_claims={},
+        claim_required_sentences=[],
+        allowed_claim_refs=[],
+        language="en",
     )
     assert "It represented" not in actual
     assert receipts[0]["dependent_context_drops"] == ["It represented hospital death."]
     assert detail["reason_code"] == "writer_evidence_repair_deterministic_drop"
+
+
+def test_write_phase_repair_callback_uses_current_step_ledger(tmp_path):
+    """Exercise the real callback expression and STRICT residual repair together."""
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.reporting import write_phase
+
+    evidence = EvidenceStore(root=tmp_path, enforcement_mode="strict")
+    source = tmp_path / "prior.csv"
+    source.write_text("n\n17\n")
+    evidence.register_file(
+        kind="table",
+        source_path=source,
+        evidence_id="prior",
+        description="Historical output",
+        producer="test",
+        produced_by_step="old_step",
+    )
+    scaffold = "## Results\n\nMedian age was 65 years {evidence:prior}.\n"
+    evidence.enforce_evidence_bound_scaffold(scaffold)
+    tree = ast.parse(Path(write_phase.__file__).read_text())
+    callbacks = [
+        keyword.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+        for keyword in node.keywords
+        if keyword.arg == "enforce_scaffold"
+    ]
+    assert len(callbacks) == 1
+    callback = eval(  # noqa: S307 -- exercise the trusted repository callback expression
+        compile(ast.Expression(callbacks[0]), "writer_callback", "eval"),
+        {
+            "partial": partial,
+            "evidence": evidence,
+            "per_step_records": [],
+        },
+    )
+    cleaned, drops, detail = _repair_pass(lambda *_args, **_kwargs: []).drop_residual(
+        scaffold,
+        enforce_scaffold=callback,
+    )
+    assert len(drops) == 1
+    assert detail["reason_code"] == "writer_evidence_repair_residual_strict_drop"
+    assert "Median age" not in cleaned
+    evidence.enforce_evidence_bound_scaffold(cleaned, per_step_records=[])

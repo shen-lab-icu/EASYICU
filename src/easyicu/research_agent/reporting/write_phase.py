@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import hashlib
+from functools import partial
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -1770,7 +1771,10 @@ def _draft_manuscript(
                 claim_required_sentences=strict_scientific_claim_sentences,
                 allowed_claim_refs=tuple(claim_text_by_ref),
                 language=run_language,
-                enforce_scaffold=evidence.enforce_evidence_bound_scaffold,
+                enforce_scaffold=partial(
+                    evidence.enforce_evidence_bound_scaffold,
+                    per_step_records=per_step_records,
+                ),
             )
             scaffold = repair_result.scaffold
             repair_message_prefix = (

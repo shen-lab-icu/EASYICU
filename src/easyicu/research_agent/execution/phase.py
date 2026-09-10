@@ -5333,9 +5333,10 @@ def _step_finalize_step(
                 evidence_ids=evidence_ids_for_step,
                 provider_budget=provider_budget,
             )
-        except Exception as exc:
-            interpretation = f"(analyzer failed: {exc})"
-            interp_generation_mode = "system"
+        finally:
+            # The coordinator seals exceptions as failures and stops the
+            # sequential queue. Never publish a failed call as Analyzer evidence.
+            _sync_provider_budget()
     _sync_provider_budget()
     # Content-addressing alone is insufficient for step-owned evidence:
     # two steps may legitimately receive identical analyzer text.  Bind

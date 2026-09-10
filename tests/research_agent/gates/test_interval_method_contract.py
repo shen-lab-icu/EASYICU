@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
 from easyicu.research_agent.gates.interval_method import (
     confidence_interval_method_findings,
 )
@@ -86,11 +88,11 @@ def test_interval_label_repair_is_coordinate_bound_and_idempotent(ra):
 
 def test_already_wald_or_unbound_profile_text_is_not_flagged(ra):
     assert _findings(_script(interval_method="wald_95_percent"), ra) == []
-    unrelated = '''
+    unrelated = """
 label = "profile_normal"
 result = custom_profile_likelihood_fit(data)
 ci = result.conf_int()
-'''
+"""
     assert confidence_interval_method_findings(ast.parse(unrelated)) == []
 
 
@@ -99,3 +101,53 @@ def test_interval_label_repair_registry_is_syntactic():
 
     assert metadata.repair_class is RepairClass.SYNTACTIC
     assert metadata.introduces_numbers is False
+
+
+@pytest.mark.parametrize(
+    "imports,constructor",
+    [
+        ("import statsmodels.formula.api as smf", "smf.logit"),
+        ("from statsmodels.formula import api as smf", "smf.logit"),
+        ("import statsmodels.discrete.discrete_model as dm", "dm.Logit"),
+        ("import statsmodels.api", "statsmodels.api.Logit"),
+        (
+            "from statsmodels.discrete.discrete_model import Logit as Logistic",
+            "Logistic",
+        ),
+    ],
+)
+def test_submodule_aliases_and_explicit_alpha_are_checked(imports, constructor):
+    script = f'{imports}\nresult = {constructor}(y, X).fit()\nci = result.conf_int(alpha=0.05)\nlabel = "profile_normal"'
+    findings = confidence_interval_method_findings(ast.parse(script))
+    assert len(findings) == 1
+    assert findings[0].detail["occurrence_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        _script().replace("conf_int()", "conf_int(alpha=0.1)"),
+        _script().replace("conf_int()", "conf_int(alpha=level)"),
+        _script().replace("sm.Logit", "sm.OLS"),
+        _script().replace("fit(disp=False)", "fit(disp=False, use_t=True)"),
+        _script().replace("ci =", "result.use_t = True\nci ="),
+    ],
+)
+def test_unknown_level_or_distribution_is_flagged_without_inventing_wald95(script, ra):
+    findings = _findings(script, ra)
+    assert len(findings) == 1
+    assert findings[0].detail["repair_safe"] is False
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+    assert repaired == script
+    assert names == []
+
+
+def test_explicit_default_alpha_can_repair_normal_logit_label(ra):
+    findings = _findings(_script().replace("conf_int()", "conf_int(alpha=0.05)"), ra)
+    assert findings[0].detail["repair_safe"] is True
+    assert findings[0].detail["occurrences"][0]["expected"] == "wald_95_percent"

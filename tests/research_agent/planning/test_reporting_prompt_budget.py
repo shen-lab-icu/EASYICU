@@ -82,6 +82,17 @@ def test_analyzer_oversize_fails_before_provider_call() -> None:
     assert llm.calls == []
 
 
+@pytest.mark.parametrize("text", ["", "  ", "(analyzer failed: invalid response)"])
+def test_analyzer_rejects_empty_or_failed_completion(text):
+    llm = PatternScriptedMockLLMClient([], default=text)
+    with pytest.raises(ValueError, match="empty or failed interpretation"):
+        AnalyzerAgent(llm).run(
+            context=_context(), step=_step(), step_summary={"estimate": 1.0},
+            evidence_ids=["result"],
+        )
+    assert len(llm.calls) == 1
+
+
 def test_writer_oversize_fails_before_provider_call() -> None:
     llm = PatternScriptedMockLLMClient([], default="unused")
 
