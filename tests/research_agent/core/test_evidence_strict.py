@@ -150,3 +150,14 @@ def test_enforcement_mode_accepts_enum_value(ra, tmp_path: Path):
         root=tmp_path, enforcement_mode=ra.EvidenceEnforcementMode.STRICT
     )
     assert store.enforcement_mode is ra.EvidenceEnforcementMode.STRICT
+
+
+def test_strict_preflight_and_binder_share_current_ledger(ra, tmp_path):
+    store = ra.EvidenceStore(root=tmp_path,enforcement_mode='strict')
+    source=tmp_path/'prior.csv'; source.write_text('n\n17\n')
+    store.register_file(kind='table',source_path=source,description='Prior output',evidence_id='prior',producer='test',produced_by_step='old_step')
+    text='Median age was 65 years {evidence:prior}.'
+    assert store.bind_manuscript(text)  # It exists and its digest verifies.
+    for reader in (store.enforce_evidence_bound_scaffold, store.bind_manuscript):
+        with pytest.raises(ra.EvidenceEnforcementError):
+            reader(text,per_step_records=[])

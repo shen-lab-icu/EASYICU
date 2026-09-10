@@ -532,8 +532,8 @@ class PublicationFigureSkill:
             try:
                 copy_path = out_dir / f"publication_figure_source_{name}.csv"
                 frame.to_csv(copy_path, index=False)
-            except Exception:
-                continue
+            except Exception as exc:
+                raise ValueError(f"Required figure source CSV could not be written: {name}") from exc
             record = evidence.register_file(
                 kind="table",
                 description=f"Source data copied for the {rendered.generation_mode}.",
@@ -728,8 +728,8 @@ class PublicationFigureSkill:
                         out_dir / "publication_figure_source_stratified_outcome.csv",
                         index=False,
                     )
-            except Exception:
-                strata_df = pd.DataFrame()
+            except Exception as exc:
+                raise ValueError(f"Stratified panel source failed: {strata_record.evidence_id}") from exc
         if missingness_record is not None:
             try:
                 missingness_df = _normalise_missingness_frame(
@@ -742,8 +742,8 @@ class PublicationFigureSkill:
                         out_dir / "publication_figure_source_missingness.csv",
                         index=False,
                     )
-            except Exception:
-                missingness_df = pd.DataFrame()
+            except Exception as exc:
+                raise ValueError(f"Missingness panel source failed: {missingness_record.evidence_id}") from exc
 
         n_side_panels = int(not strata_df.empty) + int(not missingness_df.empty)
         if n_side_panels:
@@ -1166,7 +1166,7 @@ class PublicationFigureSkill:
             if row.spec_id != panel.primary_spec_id
             and not _duplicates_primary_row(row, primary)
         ]
-        plot_rows = (primary_rows + other_rows)[:10]
+        plot_rows = primary_rows + other_rows
         source_df = pd.DataFrame(
             [
                 {

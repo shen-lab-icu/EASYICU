@@ -133,8 +133,10 @@ def first_normalisable_record(
     for record in find_table_records(evidence, names):
         try:
             frame = normalise(read_table(verified_record_path(run_dir, record)))
-        except Exception:
-            continue
+        except Exception as exc:
+            raise ValueError(
+                f"Figure source {record.evidence_id!r} could not be read or normalised"
+            ) from exc
         if not frame.empty:
             return record
     return None

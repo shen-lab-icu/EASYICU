@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from easyicu.concept import (
+    ConceptError,
     ConceptResolver,
     _drop_negative_source_end_durations,
     _source_duration_is_end,
@@ -1400,3 +1401,241 @@ def test_r3_api_has_no_stale_chunk_invariance_claim():
     source = inspect.getsource(api._get_auto_chunk_strategy)
     assert "can still change SOFA" not in source
     assert "measured" in source.lower() or "invariance" in source.lower()
+
+
+# --- Round 3 (2026-09-10 review): the warm-cache branch of the datetime
+# --- alignment path crashed on an unbound local inside a swallowed
+# --- try/except and returned unaligned absolute timestamps. ---
+
+
+def _admission_time_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "subject_id": [1, 2],
+            "intime": pd.to_datetime(["2150-01-01 00:00", "2150-01-02 00:00"]),
+            "outtime": pd.to_datetime(["2150-01-05 00:00", "2150-01-06 00:00"]),
+            "los": [4.0, 4.0],
+        }
+    )
+
+
+def _datetime_chart_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "subject_id": [1, 1, 2],
+            "stay_id": [10, 10, 20],
+            "charttime": pd.to_datetime(
+                ["2150-01-01 06:00", "2150-01-01 12:00", "2150-01-02 06:00"]
+            ),
+        }
+    )
+
+
+def test_align_time_warm_cache_matches_cold_cache_after_numeric_warmup():
+    """A warm icustays cache used to crash the datetime branch silently.
+
+    ``icustays_table`` was only bound on the cold ``else`` path while the
+    ``hasattr(icustays_table, 'data')`` check ran on both branches.  The
+    resulting UnboundLocalError was swallowed by ``except Exception: pass``
+    and the frame came back with absolute timestamps, which downstream code
+    reads as relative hours.  The cache is warmed through the real numeric
+    fast path first, matching the production order.
+    """
+
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="miiv"),
+        load_table=lambda *_args, **_kwargs: SimpleNamespace(
+            data=_admission_time_frame()
+        ),
+    )
+
+    warm_resolver = ConceptResolver.__new__(ConceptResolver)
+    warm_resolver._icustays_cache = None
+    numeric = pd.DataFrame(
+        {"subject_id": [1], "stay_id": [10], "charttime": [3.0]}
+    )
+    warm_resolver._align_time_to_admission(
+        numeric, source, ["subject_id"], "charttime"
+    )
+    assert warm_resolver._icustays_cache is not None
+
+    out_warm = warm_resolver._align_time_to_admission(
+        _datetime_chart_frame(), source, ["subject_id"], "charttime"
+    )
+
+    cold_resolver = ConceptResolver.__new__(ConceptResolver)
+    cold_resolver._icustays_cache = None
+    out_cold = cold_resolver._align_time_to_admission(
+        _datetime_chart_frame(), source, ["subject_id"], "charttime"
+    )
+
+    expected = [6.0, 12.0, 6.0]
+    assert out_warm["charttime"].tolist() == pytest.approx(expected)
+    assert out_cold["charttime"].tolist() == pytest.approx(expected)
+    assert out_warm["charttime"].tolist() == pytest.approx(
+        out_cold["charttime"].tolist()
+    )
+
+
+def _stay_id_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "stay_id": [10],
+            "charttime": pd.to_datetime(["2150-01-01 06:00"]),
+        }
+    )
+
+
+def _subject_without_stay_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "subject_id": [1],
+            "charttime": pd.to_datetime(["2150-01-01 06:00"]),
+        }
+    )
+
+
+def _subject_with_stay_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "subject_id": [1],
+            "stay_id": [10],
+            "charttime": pd.to_datetime(["2150-01-01 06:00"]),
+        }
+    )
+
+
+def _stay_numeric_frame() -> pd.DataFrame:
+    return pd.DataFrame({"stay_id": [10], "charttime": [3.0]})
+
+
+def _subject_without_stay_numeric_frame() -> pd.DataFrame:
+    return pd.DataFrame({"subject_id": [1], "charttime": [3.0]})
+
+
+def _subject_with_stay_numeric_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"subject_id": [1], "stay_id": [10], "charttime": [3.0]}
+    )
+
+
+def _stay_timedelta_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"stay_id": [10], "charttime": pd.to_timedelta([3.0], unit="h")}
+    )
+
+
+def _failing_source(failure: str) -> SimpleNamespace:
+    """An icustays source that either raises on load or lacks intime."""
+
+    if failure == "load_raises":
+
+        def _unavailable(*_args, **_kwargs):
+            raise RuntimeError("icustays table unavailable")
+
+        return SimpleNamespace(
+            config=SimpleNamespace(name="miiv"),
+            load_table=_unavailable,
+        )
+
+    admission = _admission_time_frame().drop(columns=["intime"])
+    return SimpleNamespace(
+        config=SimpleNamespace(name="miiv"),
+        load_table=lambda *_args, **_kwargs: SimpleNamespace(
+            data=admission.copy()
+        ),
+    )
+
+
+_ABSOLUTE_TIME_LAYOUTS = [
+    ("stay_id", _stay_id_frame, ["stay_id"]),
+    ("subject_without_stay", _subject_without_stay_frame, ["subject_id"]),
+    ("subject_with_stay", _subject_with_stay_frame, ["subject_id"]),
+]
+
+
+@pytest.mark.parametrize(
+    ("layout", "frame_factory", "id_columns"),
+    _ABSOLUTE_TIME_LAYOUTS,
+    ids=[layout for layout, _, _ in _ABSOLUTE_TIME_LAYOUTS],
+)
+@pytest.mark.parametrize("failure", ["load_raises", "missing_intime"])
+def test_align_time_prefix_failures_fail_closed(
+    layout, frame_factory, id_columns, failure
+):
+    """All three ID layouts must fail closed when admission data is broken.
+
+    The two early blocks (stay-level identifier join, admission-time merge)
+    used to swallow their failures and return absolute datetimes; a fix that
+    only covers the final conversion block misses them.
+    """
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._icustays_cache = None
+
+    with pytest.raises(ConceptError, match="align"):
+        resolver._align_time_to_admission(
+            frame_factory(), _failing_source(failure), id_columns, "charttime"
+        )
+
+
+@pytest.mark.parametrize(
+    ("layout", "frame_factory", "id_columns"),
+    [
+        ("stay_id_numeric", _stay_numeric_frame, ["stay_id"]),
+        (
+            "subject_without_stay_numeric",
+            _subject_without_stay_numeric_frame,
+            ["subject_id"],
+        ),
+        (
+            "subject_with_stay_numeric",
+            _subject_with_stay_numeric_frame,
+            ["subject_id"],
+        ),
+        ("stay_id_timedelta", _stay_timedelta_frame, ["stay_id"]),
+    ],
+    ids=[
+        "stay_id_numeric",
+        "subject_without_stay_numeric",
+        "subject_with_stay_numeric",
+        "stay_id_timedelta",
+    ],
+)
+def test_align_time_prefix_failure_keeps_relative_index(
+    layout, frame_factory, id_columns
+):
+    """An index already in relative time must survive optional mapping failures.
+
+    Only inputs that still need conversion (absolute datetimes) fail closed;
+    a frame whose index already carries hours or durations, and whose
+    stay-level mapping or cache warmup fails, is returned unchanged.
+    """
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._icustays_cache = None
+
+    frame = frame_factory()
+    out = resolver._align_time_to_admission(
+        frame, _failing_source("load_raises"), id_columns, "charttime"
+    )
+    assert out["charttime"].tolist() == frame["charttime"].tolist()
+
+
+@pytest.mark.parametrize(
+    ("layout", "frame_factory", "id_columns"),
+    _ABSOLUTE_TIME_LAYOUTS,
+    ids=[layout for layout, _, _ in _ABSOLUTE_TIME_LAYOUTS],
+)
+def test_align_time_normal_load_preserves_duration_values(layout, frame_factory, id_columns):
+    admission = _admission_time_frame().assign(stay_id=[10, 20])
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="miiv"),
+        load_table=lambda *_args, **_kwargs: SimpleNamespace(data=admission.copy()),
+    )
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._icustays_cache = None
+    frame = frame_factory()
+    frame["charttime"] = pd.to_timedelta([6.25], unit="h")
+    out = resolver._align_time_to_admission(frame, source, id_columns, "charttime")
+    assert out["charttime"].tolist() == [6.25]

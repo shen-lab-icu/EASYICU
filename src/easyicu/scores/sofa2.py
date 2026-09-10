@@ -190,7 +190,10 @@ def sofa2_component_evidence(
         creatinine = numeric(first("crea", "creatinine"))
         urine_windows = pd.Series(False, index=index, dtype=bool)
         for name in ("uo_6h", "uo_12h", "uo_24h"):
-            urine_windows |= numeric(inputs.get(name))
+            window = int(name.removeprefix("uo_").removesuffix("h"))
+            urine_windows |= numeric(inputs.get(name)) & (
+                numeric_values(inputs.get(f"{name}_covered_h")) >= window - 1e-9
+            )
         urine_rate = numeric(inputs.get("urine_mlkgph"))
         urine_duration = numeric(inputs.get("urine_duration_h"))
         treatment = positive(inputs.get("rrt")) | positive(
@@ -1179,6 +1182,10 @@ def sofa2_renal(
     uo_6h: Optional[pd.Series] = None,
     uo_12h: Optional[pd.Series] = None,
     uo_24h: Optional[pd.Series] = None,
+    uo_6h_covered_h: Optional[pd.Series] = None,
+    uo_12h_covered_h: Optional[pd.Series] = None,
+    uo_24h_covered_h: Optional[pd.Series] = None,
+    oliguria_gt6h: Optional[pd.Series] = None,
     urine_mlkgph: Optional[pd.Series] = None,
     urine_duration_h: Optional[pd.Series] = None,
     potassium: Optional[pd.Series] = None,
@@ -1208,22 +1215,11 @@ def sofa2_renal(
     RRT criteria (score 4pt - receiving or fulfils criteria for RRT):
     - Includes chronic RRT use
     - Excludes patients receiving RRT ONLY for non-renal causes
-    - Meets criteria if: creatinine >1.2 AND oliguria + (K≥6.0 OR pH≤7.20 + HCO3≤12)
+    - Meets criteria if: (creatinine >1.2 OR oliguria >6 h) AND (K≥6.0 OR (pH≤7.20 AND HCO3≤12))
 
     Intermittent RRT:
     - Score 4pt on BOTH treatment AND non-treatment days
     - Continue until RRT permanently discontinued
-    
-    Comparison with SOFA-1:
-    ┌──────────────────┬────────────────────┬─────────────────────┐
-    │ Aspect           │ SOFA-1             │ SOFA-2              │
-    ├──────────────────┼────────────────────┼─────────────────────┤
-    │ Urine metric     │ mL/day (absolute)  │ mL/kg/h (body wt)   │
-    │ 4pt oliguria     │ <200 mL/day        │ <0.3 mL/kg/h (24h)  │
-    │ 3pt oliguria     │ <500 mL/day        │ <0.3 mL/kg/h (24h)  │
-    │ RRT              │ Not scored         │ Auto 4pt            │
-    │ Body weight      │ Not considered     │ Standardized        │
-    └──────────────────┴────────────────────┴─────────────────────┘
     
     Args:
         crea: Serum creatinine (mg/dL) - EasyICU/runtime-style name
@@ -1238,6 +1234,11 @@ def sofa2_renal(
         uo_6h: 6-hour average urine output (mL/kg/h) - EasyICU runtime concept name
         uo_12h: 12-hour average urine output (mL/kg/h) - EasyICU runtime concept name
         uo_24h: 24-hour average urine output (mL/kg/h) - EasyICU runtime concept name
+        uo_6h_covered_h: Observed/estimated coverage of exactly the supplied 6 h window
+        uo_12h_covered_h: Coverage of exactly the supplied 12 h window
+        uo_24h_covered_h: Coverage of exactly the supplied 24 h window
+        oliguria_gt6h: Evidence from one complete interval strictly longer than 6 h,
+            whose average rate is <0.3 mL/kg/h; absent evidence fails closed
         urine_mlkgph: Urine output rate (mL/kg/h) - readable fallback API
         urine_duration_h: Duration of urine measurement period (hours) - readable fallback API
         potassium: Serum potassium (mmol/L) - for RRT criteria
@@ -1249,11 +1250,11 @@ def sofa2_renal(
         Series of renal SOFA-2 scores (0-4)
 
     Notes:
-    - If urine_mlkgph not available, use creatinine-only scoring
+    - Without assessable urine, independent creatinine and RRT criteria still apply
     - RRT overrides all other criteria → auto 4pt
     - For intermittent RRT: keep scoring 4pt until permanently stopped
     - Anuria defined as 0 mL for ≥12h
-    - RRT criteria check: creatinine >1.2 + oliguria + (K≥6.0 OR pH≤7.20 + HCO3≤12)
+    - RRT criteria: (creatinine >1.2 OR oliguria >6 h) AND (K≥6.0 OR (pH≤7.20 AND HCO3≤12))
     - Unit conversion: mg/dL × 88.4 = μmol/L
     """
     creatinine_series = _coalesce_series(crea, creatinine)
@@ -1290,6 +1291,12 @@ def sofa2_renal(
     u6 = renal_numeric(uo_6h, "uo_6h")
     u12 = renal_numeric(uo_12h, "uo_12h")
     u24 = renal_numeric(uo_24h, "uo_24h")
+    # Direct callers must supply coverage for the same window as each rate.
+    # Missing coverage disables only urine criteria, preserving independent evidence.
+    u6 = u6.where(renal_numeric(uo_6h_covered_h, "uo_6h_covered_h") >= 6 - 1e-9)
+    u12 = u12.where(renal_numeric(uo_12h_covered_h, "uo_12h_covered_h") >= 12 - 1e-9)
+    u24 = u24.where(renal_numeric(uo_24h_covered_h, "uo_24h_covered_h") >= 24 - 1e-9)
+    oligo_evidence = pd.Series(oliguria_gt6h, index=idx).eq(True).fillna(False)
     urine_rate = renal_numeric(urine_mlkgph, "urine_mlkgph")
     urine_duration = renal_numeric(urine_duration_h, "urine_duration_h")
     potassium_value = renal_numeric(potassium, "potassium")
@@ -1346,7 +1353,7 @@ def sofa2_renal(
         score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)] = np.maximum(score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)], 3)
 
         if (potassium is not None) and (ph is not None) and (bicarbonate_series is not None):
-            base_injury = (c > 1.2) | (u6 < 0.3)
+            base_injury = (c > 1.2) | oligo_evidence
             metabolic_crisis = (potassium_value >= 6.0) | (
                 (ph_value <= 7.20) & (bicarbonate_value <= 12)
             )
@@ -1361,8 +1368,7 @@ def sofa2_renal(
         # AND (K ≥6.0 mmol/L OR (pH ≤7.20 AND HCO3 ≤12 mmol/L)).
         # NOTE: in the EasyICU runtime this fallback is not reached — the dictionary
         # wires the windowed urine concepts (uo_6h/uo_12h/uo_24h) and the windowed
-        # path above already implements footnote (p) with OR and the 6 h window via
-        # the u6 concept. This fallback is for direct API callers; aligned here for
+        # path above consumes a shared strictly >6 h interval assessment. This fallback is for direct API callers; aligned here for
         # consistency.
         oliguria = (urine_rate < 0.3) & (
             urine_duration > 6

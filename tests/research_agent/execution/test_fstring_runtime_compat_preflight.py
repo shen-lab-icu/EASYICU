@@ -174,3 +174,10 @@ def test_fstring_runtime_quote_repair_is_syntactic_and_automatic() -> None:
     assert metadata.introduces_numbers is False
     assert metadata.requires_disclosure is False
     assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_unparseable_code_cannot_pass_mechanical_audit(ra):
+    findings = audit_mechanical_code_contracts('def unfinished(:\n', _step(ra))
+    assert len(findings) == 1
+    assert findings[0].severity == 'error'
+    assert findings[0].detail['reason'] == 'python_syntax_error'

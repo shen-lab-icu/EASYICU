@@ -368,6 +368,7 @@ def get_pi_copilot_literature_source(pmid: ShortText) -> dict:
         status = (
             422
             if code == "literature_source_pmid_invalid"
+            else 403 if code == "literature_source_network_blocked"
             else 404 if code == "literature_source_not_found" else 502
         )
         raise HTTPException(status_code=status, detail=exc.detail) from exc

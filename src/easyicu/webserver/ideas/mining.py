@@ -44,6 +44,7 @@ from easyicu.research_agent.literature_concepts import (
 from easyicu.research_agent.know_how.registry import KnowHowRegistry
 from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
+from easyicu.webserver.capabilities import pubmed_connector_block_reason
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.ideas import direct_evidence_search
 from easyicu.webserver.ideas.handoff import (
@@ -525,7 +526,9 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         220,
     )
     journal = _clean(body.get("journal") or "", 120)
-    allow_network = _request_bool(body, "allow_network")
+    allow_network = _request_bool(body, "allow_network") and (
+        pubmed_connector_block_reason(path="literature_discovery") is None
+    )
     limit = max(1, min(int(body.get("limit") or 8), 20))
     if not topic:
         raise IdeaMiningWebError(
@@ -871,7 +874,9 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
         exposure=idea.get("exposure_or_predictor"),
         outcome=idea.get("outcome"),
     )
-    allow_network = _request_bool(body, "allow_network")
+    allow_network = _request_bool(body, "allow_network") and (
+        pubmed_connector_block_reason(path="prior_art") is None
+    )
     if not allow_network:
         prior = {
             "status": "blocked_network_opt_in_required",
@@ -5134,12 +5139,18 @@ def _pmc_full_text_evidence(pmcid: str) -> Dict[str, Any]:
     }
 
 
-def review_literature_source(pmid: str) -> Dict[str, Any]:
+def review_literature_source(pmid: str, *, allow_network: bool = True) -> Dict[str, Any]:
     """Read one selected PubMed record and attempt bounded PMC enrichment."""
 
     normalized = str(pmid or "").strip()
     if not re.fullmatch(r"[0-9]{1,12}", normalized):
         raise IdeaMiningWebError({"error": "literature_source_pmid_invalid"})
+    reason = pubmed_connector_block_reason(path="literature_source_review")
+    if reason or allow_network is not True:
+        raise IdeaMiningWebError({
+            "error": "literature_source_network_blocked",
+            "reason": reason or "network_opt_in_required",
+        })
     try:
         records = _pubmed_article_records([normalized])
     except Exception as exc:

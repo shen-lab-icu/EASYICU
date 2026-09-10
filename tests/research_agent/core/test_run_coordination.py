@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 from contextvars import ContextVar
 from types import SimpleNamespace
+from functools import partial
+from threading import RLock
 
 import pytest
 
@@ -11,6 +13,33 @@ from easyicu.research_agent.schema import AnalysisStep
 
 def _step(step_id: str) -> AnalysisStep:
     return AnalysisStep(step_id=step_id, intent=f"execute {step_id}")
+
+
+def test_parallel_exception_seals_identity_and_flushes_terminal_record():
+    from easyicu.research_agent.execution.run_coordination import RunCoordinator
+    from easyicu.research_agent.execution.phase import _step_record_step_exception
+    records, findings, flushes = [], [], []
+
+    def execute(step):
+        if step.step_id == "bad":
+            raise RuntimeError("synthetic crash")
+        return {"step_id": step.step_id, "status": "ok"}
+
+    RunCoordinator().run_parallel(
+        steps=[_step("bad"), _step("good")], max_workers=2,
+        execute_step=execute, submit_step=lambda pool, fn, step: pool.submit(fn, step),
+        on_worker_error=partial(
+            _step_record_step_exception, shared_lock=RLock(), findings=findings,
+            per_step_records=records, _append_terminal_step_record=lambda rows, row: rows.append(row),
+            _flush_partial_manifest=lambda payload: flushes.append((payload, list(records))),
+            parallel=True,
+        ),
+    )
+    assert len(records) == 1
+    assert records[0]["step_id"] == "bad"
+    assert records[0]["status"] == "execution_raised"
+    assert "synthetic crash" in records[0]["traceback"]
+    assert flushes[0][1] == records
 
 
 def test_sequential_stop_is_resolved_after_step_execution() -> None:
@@ -275,7 +304,7 @@ def test_parallel_workers_use_supplied_context_submitter_and_report_errors() -> 
         max_workers=2,
         execute_step=execute,
         submit_step=_submit_in_current_context,
-        on_worker_error=errors.append,
+        on_worker_error=lambda step, error: errors.append(error),
     )
 
     assert sorted(observed) == ["01:bound", "02:bound"]

@@ -1051,6 +1051,10 @@ def sofa2_renal(
     bicarb: Optional[pd.Series] = None,
     rrt_episode_active: Optional[pd.Series] = None,
     rrt_nonrenal_only: Optional[pd.Series] = None,
+    uo_6h_covered_h: Optional[pd.Series] = None,
+    uo_12h_covered_h: Optional[pd.Series] = None,
+    uo_24h_covered_h: Optional[pd.Series] = None,
+    oliguria_gt6h: Optional[pd.Series] = None,
 ) -> pd.Series:
     from .scores.sofa2 import sofa2_renal as canonical
 
@@ -1066,6 +1070,10 @@ def sofa2_renal(
         potassium=potassium,
         ph=ph,
         bicarb=bicarb,
+        uo_6h_covered_h=uo_6h_covered_h,
+        uo_12h_covered_h=uo_12h_covered_h,
+        uo_24h_covered_h=uo_24h_covered_h,
+        oliguria_gt6h=oliguria_gt6h,
     )
 
 def sirs_score(

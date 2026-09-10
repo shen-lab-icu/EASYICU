@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import subprocess
 import sys
 from pathlib import Path
+
+
+def test_absent_backend_cohort_is_not_counted_as_agreement():
+    complete = _plan()
+    absent = SimpleNamespace(cohort=None)
+    report = compare_plans({"complete": complete, "absent": absent})
+    assert report.overall_agreement_rate < 1.0
+    assert all(set(field.values_by_backend) == {"complete", "absent"}
+               for field in report.field_disagreements)
 
 from easyicu.research_agent.cohort.schema import (
     CohortDefinition,

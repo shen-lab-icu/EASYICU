@@ -286,7 +286,7 @@
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3423,
+      "loc": 3431,
       "sha256": "b6f4e338b7a1dd8184f6db93537cff17525fcf0d7686e482809df14c060e01d4",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
@@ -406,7 +406,7 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Consolidate planned model requirements into contracts/model_terms.py, progressive transport parsers into agents/progressive_payload.py, and suffix wire decoding into agents/plan_payload.py. Keep explicit requested endpoints distinct from physical availability. Lower schema/planner/suffix LOC ceilings; no scientific contract or failure rule is weakened.",
+  "baseline_reason": "Accept only the 8-line current-ledger manuscript enforcement addition from the 2026-09-10 repair. Preserve the pre-existing 52-line overage and all other baseline limits; do not refresh to the current checkout.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -944,6 +944,19 @@
         }
       ],
       "evidence": "docs/architecture/canonical9_owner_closeout_20260905.md"
+    },
+    {
+      "reason": "Accept only the 8-line current-ledger manuscript enforcement addition from the 2026-09-10 repair. Preserve the pre-existing 52-line overage and all other baseline limits; do not refresh to the current checkout.",
+      "changes": [
+        {
+          "file": "authority/evidence_store.py",
+          "before_loc": 3423,
+          "after_loc": 3431
+        }
+      ],
+      "source_head": "efa6a4c6d23c51a458c307291a9249be33662b9c",
+      "patch_sha256": "5d033d6c817560bf0f0853b6e00fbe244d576b01336781ce0a84ab69b76bd6fb",
+      "evidence": "docs/qa/review_remediation_20260910.md"
     }
   ]
 }

@@ -1728,7 +1728,7 @@ def _draft_manuscript(
         strict_missing_sentences: List[str] = []
         strict_scientific_claim_sentences: List[str] = []
         try:
-            evidence.enforce_evidence_bound_scaffold(scaffold)
+            evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
         except EvidenceEnforcementError as exc:
             raw_missing = (exc.detail or {}).get("removed_sentences", [])
             if isinstance(raw_missing, list):
@@ -1843,7 +1843,7 @@ def _draft_manuscript(
     scaffold, structural_repairs = repair_reader_structure_from_existing_prose(scaffold)
     if structural_repairs:
         if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
-            evidence.enforce_evidence_bound_scaffold(scaffold)
+            evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
         findings.append(
             ValidationFinding(
                 validator="manuscript_quality",
@@ -2023,7 +2023,7 @@ def _bind_and_review_manuscript(
     )
 
     evidence_bound_scaffold, removed_sentences = (
-        evidence.enforce_evidence_bound_scaffold(scaffold)
+        evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
     )
     from .manuscript_surface import repair_filtered_section_openers
 

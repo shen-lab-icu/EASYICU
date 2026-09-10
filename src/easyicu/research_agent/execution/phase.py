@@ -1889,6 +1889,15 @@ def run_execute_phase(
             resumed_step_ids=resumed_step_ids,
         )
     )
+    _record_step_exception = functools.partial(
+        _step_record_step_exception,
+        shared_lock=shared_lock,
+        findings=findings,
+        _flush_partial_manifest=_flush_partial_manifest,
+        per_step_records=per_step_records,
+        _append_terminal_step_record=_append_terminal_step_record,
+    )
+
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
@@ -1948,15 +1957,6 @@ def run_execute_phase(
             )
             return remaining
 
-        _record_step_exception = functools.partial(
-            _step_record_step_exception,
-            shared_lock=shared_lock,
-            findings=findings,
-            _flush_partial_manifest=_flush_partial_manifest,
-            per_step_records=per_step_records,
-            _append_terminal_step_record=_append_terminal_step_record,
-        )
-
         # ``steps_to_run`` carries the fail-closed preflight decision; recomputing
         # from the full plan here would revive
         # every step after a typed-DAG/trajectory contract ERROR and spend
@@ -1975,18 +1975,12 @@ def run_execute_phase(
         )
     else:
 
-        _record_parallel_worker_error = functools.partial(
-            _step_record_parallel_worker_error,
-            shared_lock=shared_lock,
-            findings=findings,
-        )
-
         run_coordinator.run_parallel(
             steps=steps_to_run,
             max_workers=pipeline._max_concurrent_steps,
             execute_step=_execute_one_step,
             submit_step=_submit_in_current_context,
-            on_worker_error=_record_parallel_worker_error,
+            on_worker_error=functools.partial(_record_step_exception, parallel=True),
         )
     if run_input_authority_state.corrupted:
         _flush_partial_manifest(
@@ -4557,6 +4551,7 @@ def _step_record_step_exception(
     _flush_partial_manifest: Any,
     per_step_records: List[Dict[str, Any]],
     _append_terminal_step_record: Any,
+    parallel: bool = False,
 ) -> None:
     """Seal a terminal record for a step that raised instead of returning."""
 
@@ -4570,8 +4565,8 @@ def _step_record_step_exception(
                         f"The run was interrupted by "
                         f"{type(error).__name__} while step "
                         f"{step.step_id} was in flight; the step's own "
-                        "in-flight record is kept so a resume can pick "
-                        "it up, and no later step ran."
+                        "in-flight record is kept so a resume can pick it up. "
+                        + ("Already submitted independent workers may finish." if parallel else "No later step ran.")
                     ),
                     detail={
                         "reason": "operator_interrupt",
@@ -4616,8 +4611,9 @@ def _step_record_step_exception(
                 severity="error",
                 message=(
                     f"Step {step.step_id} raised {detail} instead of "
-                    "returning a step record, so the run stopped "
-                    "fail-closed before any later step."
+                    "returning a step record. "
+                    + ("The failed step is sealed; already submitted independent workers may finish."
+                       if parallel else "The run stopped fail-closed before any later step.")
                 ),
                 detail={
                     "reason": "step_execution_raised",
@@ -4628,22 +4624,6 @@ def _step_record_step_exception(
         )
         _append_terminal_step_record(per_step_records, crash_record)
         _flush_partial_manifest({"step_execution_raised": step.step_id})
-
-
-def _step_record_parallel_worker_error(
-    exc: BaseException,
-    *,
-    shared_lock: Any,
-    findings: List[ValidationFinding],
-) -> None:
-    with shared_lock:
-        findings.append(
-            ValidationFinding(
-                validator="step_executor",
-                severity="error",
-                message=f"Worker raised an unhandled exception: {exc!r}",
-            )
-        )
 
 
 def _step_build_probe_summary_and_record(

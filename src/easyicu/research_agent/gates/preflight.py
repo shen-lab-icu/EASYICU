@@ -50,6 +50,7 @@ from .typed_input import (
 )
 from .typed_binding_identity import direct_resolved_input_key_findings
 from .preflight_support import (
+    unparseable_python_finding,
     _assigned_name_for_slot,
     _caught_exception_names,
     _flatten_bitand_terms,
@@ -6141,11 +6142,10 @@ def audit_mechanical_code_contracts(
 
     try:
         tree = ast.parse(str(script_text or ""))
-    except SyntaxError:
-        return _pre312_fstring_subscript_quote_findings(
-            str(script_text or ""),
-            None,
-        )
+    except SyntaxError as exc:
+        compatibility = _pre312_fstring_subscript_quote_findings(str(script_text or ""), None)
+        return compatibility or [unparseable_python_finding(exc, step, validator="mechanical_code_preflight")]
+
     findings: list[ValidationFinding] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

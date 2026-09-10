@@ -96,6 +96,7 @@ def change_interval(
     copy: bool = True,
     is_window_concept: bool = False,
     time_unit: Optional[str] = None,
+    row_evidence_columns: Optional[List[str]] = None,
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -154,6 +155,8 @@ def change_interval(
 
     # Handle DataFrame input
     if isinstance(table, pd.DataFrame):
+        if row_evidence_columns:
+            raise ValueError("Window evidence requires ICUTable patient/time metadata")
         df = table.copy() if copy else table
 
         detected_time_cols = _detect_time_columns(df)
@@ -187,6 +190,9 @@ def change_interval(
         
         return df
     
+    # Evidence is tied to an exact patient/time/value tuple. Rebinning it would
+    # require recomputing from source observations, not aggregating its numbers.
+    # The explicit contract is restricted to ICUTable inputs with patient keys.
     # Handle ICUTable input
     if not table.index_column or table.index_column not in table.data.columns:
         return table
@@ -239,6 +245,7 @@ def change_interval(
         if col not in time_cols:
             time_cols.append(col)
 
+    evidence_time = df[table.index_column].copy() if row_evidence_columns else None
     # 🔧 FIX: 窗口概念不取整时间，保留原始值给 expand_interval_rows
     if not has_endtime:
         df = _round_time_columns(df, time_cols)
@@ -265,7 +272,17 @@ def change_interval(
     
     # 🔧 对于窗口概念（有 endtime），完全跳过聚合，只做时间取整
     # 聚合将在 expand_interval_rows 展开后进行
-    if has_endtime:
+    if row_evidence_columns:
+        if fill_gaps or not df[table.index_column].equals(evidence_time):
+            raise ValueError("Changing a window evidence time axis requires recomputation from source observations")
+        protected = list(dict.fromkeys([table.value_column, *row_evidence_columns]))
+        protected = [col for col in protected if col in df.columns and col not in group_cols]
+        counts = df.groupby(group_cols, dropna=False)[protected].nunique(dropna=False)
+        if (counts > 1).any().any():
+            raise ValueError("Conflicting window evidence rows require recomputation from source observations")
+        # Select a whole row; never sum coverage or independently aggregate fields.
+        df = df.drop_duplicates(subset=group_cols, keep="first")
+    elif has_endtime:
         # 窗口概念：只取整时间，不聚合
         # 时间已经在上面的 _round_time_columns 中取整了
         pass
