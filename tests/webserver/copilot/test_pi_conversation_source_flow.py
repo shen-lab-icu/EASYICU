@@ -47,6 +47,76 @@ def test_source_confirmation_continues_once_but_selection_only_opens_picker():
     assert result == ['use_study_required_data', 'workflow', 'continue', 'begin_local_selection']
 
 
+@pytest.mark.parametrize('lookup', ['exact', 'missing', 'wrong', 'switched'])
+def test_source_picker_uses_host_context_when_browser_history_is_full(lookup):
+    result = run_js(f"""
+      global.window = global;
+      global.location = {{hash:'#guided'}};
+      const storage = new Map();
+      global.localStorage = {{getItem:k=>storage.get(k)||null,
+        setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)}};
+      global.CustomEvent = class {{constructor(type,init){{this.type=type;this.detail=init.detail;}}}};
+      global.addEventListener = () => {{}};
+      global.dispatchEvent = () => {{}};
+      global.document = {{readyState:'loading',addEventListener:()=>{{}}}};
+      const target = {{id:'new-project',revision:4,question:'New research question',
+        data_source:{{path:'/exports/new',database:'miiv'}},current_stage:'study_setup'}};
+      const old = Array.from({{length:80}},(_,i)=>({{id:'history-'+i,revision:2,
+        question:'Historical question '+i,data_source:{{path:'/exports/old-'+i,database:'miiv'}}}}));
+      const calls = [];
+      let activeId = old[79].id;
+      global.EU_API = {{
+        loadActiveStudyContext:async()=>({{context:old[79]}}),
+        listStudyContexts:async()=>({{contexts:[target,...old],active_id:activeId}}),
+        loadStudyContext:async id=>{{
+          calls.push('load:'+id);
+          if ({lookup!r}==='missing') throw Error('HTTP 404');
+          if ({lookup!r}==='switched') await window.EU_STUDY_CONTEXT.activate(old[0].id);
+          return {{context:{lookup!r}==='wrong'?old[0]:target}};
+        }},
+        saveStudyContext:async body=>{{
+          calls.push(body);activeId=body.id;
+          return {{context:[target,...old].find(c=>c.id===body.id)}};
+        }},
+      }};
+      eval({_read('js/study-context.js')!r});
+      global.EU_GUIDED_PI_PREVIEW = {{open:()=>calls.push('open')}};
+      eval({_read('js/screens-guided-pi-data-binding.js')!r});
+      let session = {{session_id:'s',binding:{{study_context_id:target.id}}}};
+      let error = '';
+      const owner = window.EU_GUIDED_PI_DATA_BINDING.create({{
+        session:()=>session,busy:()=>false,projectId:()=> 'p',
+        api:()=>({{authorizePiCopilotDataSource:async()=>({{
+          session:{{...session,data_source_authorization:{{status:'selection_in_progress'}}}},
+          resource:{{kind:'native_workspace',study_context_id:target.id}}
+        }})}}),
+        setSession:s=>session=s,rememberSession:()=>{{}},
+        setError:s=>error=s,errorText:e=>e.message,render:()=>{{}},
+        loadWorkflow:async()=>calls.push('workflow'),
+        continueAfterDataSourceConfirmation:async()=>calls.push('continue'),
+      }});
+      (async()=>{{
+        await owner.authorizeDataSource('begin_local_selection');
+        process.stdout.write(JSON.stringify({{calls,error,active:window.EU_STUDY_CONTEXT.active(),
+          authorization:session.data_source_authorization.status}}));
+      }})();
+    """)
+    assert 'load:new-project' in result['calls']
+    assert result['authorization'] == 'selection_in_progress'
+    assert 'continue' not in result['calls']
+    if lookup == 'exact':
+        assert result['error'] == ''
+        assert result['active']['id'] == 'new-project'
+        assert result['active']['data_source']['path'] == '/exports/new'
+        assert {'id': 'new-project'} in result['calls']
+        assert result['calls'][-1] == 'open'
+    else:
+        assert result['error']
+        assert result['active']['id'] == ('history-0' if lookup == 'switched' else 'history-79')
+        assert {'id': 'new-project'} not in result['calls']
+        assert 'open' not in result['calls']
+
+
 @pytest.mark.parametrize('status', ['confirmed', 'pending', 'selection_in_progress'])
 def test_local_source_receipt_is_visible_without_inventing_a_chat_decision(status):
     result = run_js(f"""
