@@ -68,6 +68,7 @@ def source(tmp_path, monkeypatch):
         row = {'run_id': run_id, 'project_dir': str(wrapper), 'scientific_configuration_sha256': digest}
         monkeypatch.setattr(owner.agent_runs, 'list_run_history', lambda **kwargs: {'runs': [row]})
         monkeypatch.setattr(owner.agent_runs, 'read_run_record', lambda _: record)
+        monkeypatch.setattr(owner.agent_runs, 'read_run_review', lambda _: {'artifact_payloads': record.artifact_payloads})
         request = PlanChangeRequest(
             source_run_id=run_id, user_message='Add a function-form sensitivity; retain the rest of the plan.',
             reference_plans=(ReferencedPlan(run_id=run_id, artifact_sha256=artifact_sha, plan=reference_plan_content(plan_payload)),),
@@ -79,6 +80,95 @@ def source(tmp_path, monkeypatch):
 
 def bind(fixture, request=None, study=None):
     return owner.bind_plan_change_requirements(request or fixture.request, study=study or fixture.study, project_root=fixture.root)
+
+
+def compiled_study(f, monkeypatch, tmp_path):
+    from easyicu.webserver.pi_copilot import plan_review_progress
+
+    monkeypatch.setenv('EASYICU_HOME', str(tmp_path / 'host-state'))
+    before = {**f.study, 'revision': 1}
+    after = {
+        **before, 'revision': 2, 'covariates': ['age'],
+        'covariate_selection': 'exact', 'covariate_authority': 'agent_plan',
+        'confirmations': {'agent_plan_configuration_compiled': True},
+    }
+    plan_review_progress.record_choice(
+        before=before, after=after, run=f.row,
+        decision_code='agent_plan_configuration', option_id='typed_runtime_projection',
+    )
+    return after
+
+
+def test_runtime_projection_retains_full_baseline_without_expanding_adjustment(source, monkeypatch, tmp_path):
+    names = ('age', *(f'baseline_{i}' for i in range(14)))
+    f = source(names)
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    request = f.request.model_copy(update={
+        'source_scientific_configuration_sha256': f.digest,
+        'target_scientific_configuration_sha256': study_contexts.scientific_configuration_sha256(changed),
+    })
+    bound = bind(f, request, study=changed)
+    assert bound.baseline_requirements() is not None
+    assert tuple(v.name for v in bound.baseline_requirements().tables[0].variables) == names
+    assert set(names) <= set(bound.reference_concepts(set(names)))
+    assert changed['covariates'] == ['age']
+    assert bound.population_requirements() == bind(f).population_requirements()
+    context = bind_baseline_requirements(f.context, bound.baseline_requirements().model_dump(mode='json'))
+    assert baseline_outline_coverage(context, [{'step_id': 'small', 'module_id': 'table_one', 'variable_names': ['exposure', 'age']}])['status'] == 'incomplete'
+    assert build_plan_scientific_review(context=context, plan=_plan('age')).approval_allowed is False
+
+
+def test_fresh_runtime_replan_launch_recovers_host_source_without_browser_fields(source, monkeypatch, tmp_path):
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+    from tests.webserver.test_research_pipeline_run_preparation import _request, _scientific
+
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    request = replace(_request(), study_context=changed, project_root=f.root)
+    scientific = replace(_scientific(), study=changed)
+    monkeypatch.setattr(preparation.capability_policy, 'capability_settings', lambda: {})
+    monkeypatch.setattr(preparation, 'ExtensionRegistry', lambda: SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(revision=0, skills=(), mcp_servers=()), pipeline_activation=lambda snapshot: None))
+    monkeypatch.setattr(preparation, '_require_profile_dictionaries', lambda **kwargs: None)
+    monkeypatch.setattr(preparation, '_require_execution_runtime', lambda **kwargs: None)
+    provider = SimpleNamespace(provider={}, provider_environment={}, credential_source='fixture', literature_search_authorized=False)
+    _, execution = preparation._prepare_launch_execution(request, scientific, provider)
+    assert execution.plan_change_request is not None
+    assert execution.plan_change_request.source_run_id == f.request.source_run_id
+    assert execution.plan_change_request.baseline_requirements() == bind(f).baseline_requirements()
+    assert execution.development_resume_binding is None
+    assert execution.plan_revision_source_run_id == execution.execution_resume_source_run_id == ''
+    assert request.plan_change_request is None  # No new client field or execution grant.
+
+
+@pytest.mark.parametrize('drift', ['missing', 'corrupt', 'revision', 'question', 'source', 'user_choice', 'run'])
+def test_runtime_continuity_requires_exact_host_receipt(source, monkeypatch, tmp_path, drift):
+    from easyicu.webserver.pi_copilot import plan_review_progress
+
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    bound = owner.compiled_configuration_plan_change(study=changed, project_root=f.root)
+    assert bound.baseline_requirements() is not None
+    if drift == 'missing':
+        plan_review_progress._path(changed['id']).unlink()
+    elif drift == 'corrupt':
+        plan_review_progress._path(changed['id']).write_text('{}')
+    elif drift == 'revision':
+        changed = {**changed, 'revision': 3}
+    elif drift == 'question':
+        changed = {**changed, 'question': 'New scientific scope.'}
+    elif drift == 'source':
+        changed = {**changed, 'data_source': {'database': 'eicu'}}
+    elif drift == 'user_choice':
+        after = {**changed, 'revision': 3}
+        plan_review_progress.record_choice(before=changed, after=after, run=f.row,
+            decision_code='ADJUSTMENT_SET_NOT_USER_CONFIRMED', option_id='accept_proposed_adjustment')
+        changed = after
+    else:
+        f.row['run_id'] = 'different-run'
+    assert owner.compiled_configuration_plan_change(study=changed, project_root=f.root) is None
+    with pytest.raises(ResearchPipelineRunError):
+        bind(f, bound, study=changed)
 
 
 @pytest.mark.parametrize('names', [
@@ -179,13 +269,16 @@ def test_legacy_json_canonical_and_readback_are_unchanged(source):
     assert bind(f, bind(f)) == bind(f)
 
 
+@pytest.mark.parametrize('runtime_projection', [False, True])
 @pytest.mark.parametrize('catalog_variant', ['exact', 'existing_unique_alias'])
-def test_sealed_operationalized_coordinates_reach_zero_row_menu(source, monkeypatch, tmp_path, catalog_variant):
+def test_sealed_operationalized_coordinates_reach_zero_row_menu(source, monkeypatch, tmp_path, catalog_variant, runtime_projection):
     import pyarrow.parquet as pq
     from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
     f = source()
-    request = bind(f)
+    request = (owner.compiled_configuration_plan_change(
+        study=compiled_study(f, monkeypatch, tmp_path), project_root=f.root,
+    ) if runtime_projection else bind(f))
     assert 'severity' in request.source_requirements.planning_concepts
     assert 'severity_first' in request.source_requirements.operationalized_columns
     catalog = AvailableCatalog(source='fixture', concepts=[CatalogConcept(
@@ -204,6 +297,22 @@ def test_sealed_operationalized_coordinates_reach_zero_row_menu(source, monkeypa
         agent_pipeline_runs._metadata_only_planning_acquisition(database='miiv', question='Describe baseline.', llm=untouched, output_dir=tmp_path/'missing', plan_change_request=request)
     assert caught.value.code == 'plan_change_required_concepts_unavailable'
     assert untouched.calls == [] and not (tmp_path/'missing').exists()
+
+
+@pytest.mark.parametrize('feedback_failure', ['changed', 'missing', 'over_budget'])
+def test_compiled_review_feedback_fails_before_new_provider_work(source, monkeypatch, tmp_path, feedback_failure):
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    review = json.loads(json.dumps(f.record.artifact_payloads['scientific_plan_review.json']))
+    if feedback_failure == 'changed':
+        review['context_sha256'] = 'f' * 64
+    elif feedback_failure == 'over_budget':
+        review['findings'][0]['message'] = 'x' * 13000
+    result = {} if feedback_failure == 'missing' else {'artifact_payloads': {'scientific_plan_review.json': review}}
+    monkeypatch.setattr(owner.agent_runs, 'read_run_review', lambda _: result)
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        owner.compiled_configuration_plan_change(study=changed, project_root=f.root)
+    assert raised.value.code == 'plan_change_review_feedback_invalid'
 
 
 def test_launch_preparation_binds_before_runtime_and_runner_rechecks(source, monkeypatch, tmp_path):

@@ -1,4 +1,4 @@
-"""A current-user amendment request, not an approval or scientific finding."""
+"""A user amendment or Host runtime revision, never approval or a finding."""
 
 from __future__ import annotations
 
@@ -112,7 +112,10 @@ class PlanChangeRequest(BaseModel):
             # These source concepts were read from sealed descriptors, never
             # inferred by stripping suffixes from old analysis column names.
             if self.source_scientific_configuration_sha256 != self.target_scientific_configuration_sha256:
-                return ()
+                # Only the Host-verified runtime projection carries these
+                # requirements across digests. Explicit new scientific scope
+                # has an empty roster; old reference inputs cannot widen it.
+                return tuple(sorted(set(self.source_requirements.planning_concepts) & catalog_ids))
             coordinates.update(self.source_requirements.planning_concepts)
         for reference in self.reference_plans:
             for step in reference.plan.get("steps") or ():
@@ -140,18 +143,19 @@ class PlanChangeRequest(BaseModel):
         """Keep requested amendments distinct from reviewed plan authority."""
 
         return (
-            "Current user request to revise the complete candidate plan. "
+            "Host-bound request to revise the complete candidate plan. "
             "Address the requested amendments or explain the exact conflict. "
             "This request is not a scientific fact, approved plan, clinical "
             "sign-off, or permission to execute analysis. Preserve the research "
             "question, data source, required outcomes, and host authority gates; "
             "propose changes for a fresh complete-plan review. "
-            "reference_plans contain the exact saved content discussed by the user; "
+            "reference_plans contain the exact saved candidate content; "
             "compare their declared variables, methods and outputs instead of "
             "reconstructing them from run names. Historical plans are context, "
             "not current approval or evidence of scientific correctness.\n"
             + ("source_requirements preserves the accepted baseline and population "
-            "only within the same host-bound scientific configuration; an explicit "
+            "within the same scientific configuration or an exact Host-recorded "
+            "runtime projection of that candidate; an explicit "
             "new configuration supersedes the old scope. Missing variables in "
             "the latest message do not withdraw accepted requirements.\n"
             if self.source_requirements is not None else "")
