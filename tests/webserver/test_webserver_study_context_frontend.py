@@ -29,7 +29,7 @@ def _node_binary() -> str | None:
 
 def test_study_context_owner_is_wired_before_route_modules() -> None:
     index = _read("index.html")
-    assert "js/study-context.js?v=20260904-covariate-owner1" in index
+    assert "js/study-context.js?v=20260910-context-lookup1" in index
     assert index.index("js/api.js?") < index.index("js/study-context.js?")
     assert index.index("js/study-context.js?") < index.index("js/screens-extraction.js?")
     assert index.index("js/screens-extraction.js?") < index.index(
@@ -42,7 +42,7 @@ def test_study_context_owner_is_wired_before_route_modules() -> None:
         "js/screens-agent-study-context.js?"
     )
     assert index.index("js/screens-agent-study-context.js?") < index.index(
-        "js/screens-agent.js?"
+        "js/screens-guided.js?"
     )
     assert index.index("js/screens-guided.js?") < index.index(
         "js/screens-guided-study-context.js?"

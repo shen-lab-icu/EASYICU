@@ -440,8 +440,22 @@
     return context;
   }
 
-  function activate(id) {
-    const context = contexts.find(row => row.id === text(id));
+  async function activate(id) {
+    const contextId = text(id);
+    let context = contexts.find(row => row.id === contextId);
+    // The bounded browser history is a navigation cache, not proof that a
+    // session-bound study exists or is absent in the host store.
+    if (!context && contextId && typeof window.EU_API?.loadStudyContext === 'function') {
+      const lookupRevision = revision;
+      const loaded = responseContext(await window.EU_API.loadStudyContext(contextId));
+      if (lookupRevision !== revision) {
+        throw new Error('StudyContext selection changed while loading');
+      }
+      if (!loaded || text(loaded.id) !== contextId) {
+        throw new Error('StudyContext lookup returned a different context');
+      }
+      context = normalize(loaded);
+    }
     if (!context) return Promise.reject(new Error('StudyContext not found: ' + text(id)));
     if (isDirty(context.id)) {
       const selected = setLocal(context, 'activate-dirty');
