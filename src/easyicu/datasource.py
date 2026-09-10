@@ -654,6 +654,35 @@ class ICUDataSource:
     def register_table_source(self, table: str, source: Any) -> None:
         """Register a callable/file path used to load ``table``."""
         self._table_sources[table] = source
+
+    def cache_source_identity(self, cache_dir: Path) -> Optional[str]:
+        """Bind reusable concept results to current input content and config.
+
+        Callable loaders have no immutable content identity: their results may
+        change without their Python identity changing, so disk reuse is disabled.
+        """
+        import hashlib
+        from .content_identity import data_path_fingerprint
+
+        digest = hashlib.sha256(self.config.model_dump_json().encode())
+        paths = [self.base_path] if self.base_path is not None else []
+        for dataset in self._dataset_sources.values():
+            if dataset.path:
+                path = Path(dataset.path)
+                paths.append(path if path.is_absolute() else (self.base_path or Path.cwd()) / path)
+        for name, source in sorted(self._table_sources.items()):
+            digest.update(name.encode())
+            if isinstance(source, (str, Path)):
+                paths.append(Path(source))
+            else:
+                return None
+        if not paths and not self._table_sources:
+            return None
+        for path in sorted(set(Path(p).resolve() for p in paths)):
+            if not path.exists():
+                return None
+            digest.update(data_path_fingerprint(path, exclude_dir=cache_dir).encode())
+        return digest.hexdigest()
     
     def clear_cache(self) -> None:
         """清除表缓存,释放内存。"""
@@ -2335,17 +2364,22 @@ class ICUDataSource:
             values = patient_ids_filter.value
             if isinstance(values, (list, tuple, set)):
                 value_list = list(values)
+            elif isinstance(values, (str, bytes)):
+                value_list = [values]
             elif isinstance(values, pd.Series):
                 value_list = values.tolist()
             else:
                 value_list = [values]
             
             if value_list:
+                escaped_id_col = str(id_col).replace('"', '""')
                 if len(value_list) == 1:
-                    where_conditions.append(f"{id_col} = {value_list[0]}")
+                    where_conditions.append(
+                        f'"{escaped_id_col}" = {_duckdb_sql_literal(value_list[0])}'
+                    )
                 else:
-                    values_str = ", ".join(map(str, value_list))
-                    where_conditions.append(f"{id_col} IN ({values_str})")
+                    values_str = ", ".join(_duckdb_sql_literal(v) for v in value_list)
+                    where_conditions.append(f'"{escaped_id_col}" IN ({values_str})')
         
         # Build WHERE clause
         where_clause = ""
@@ -2493,6 +2527,8 @@ class ICUDataSource:
             
             if isinstance(values, (list, tuple, set)):
                 value_list = list(values)
+            elif isinstance(values, (str, bytes)):
+                value_list = [values]
             elif isinstance(values, pd.Series):
                 value_list = values.tolist()
             else:
@@ -2503,10 +2539,14 @@ class ICUDataSource:
             
             if value_list:
                 if len(value_list) == 1:
-                    where_conditions.append(f"{id_col} = {value_list[0]}")
+                    escaped_id_col = str(id_col).replace('"', '""')
+                    where_conditions.append(
+                        f'"{escaped_id_col}" = {_duckdb_sql_literal(value_list[0])}'
+                    )
                 else:
-                    values_str = ", ".join(map(str, value_list))
-                    where_conditions.append(f"{id_col} IN ({values_str})")
+                    escaped_id_col = str(id_col).replace('"', '""')
+                    values_str = ", ".join(_duckdb_sql_literal(v) for v in value_list)
+                    where_conditions.append(f'"{escaped_id_col}" IN ({values_str})')
         
         # 🚀 大表 itemid 预过滤优化
         if itemid_filter_config:

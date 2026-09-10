@@ -208,6 +208,9 @@ def _collect_plan_fields(
         values = _plan_field_values(plan)
         for field_path, value in values.items():
             fields.setdefault(field_path, {})[backend_name] = value
+    for by_backend in fields.values():
+        for backend_name in plans:
+            by_backend.setdefault(backend_name, None)
     return fields
 
 

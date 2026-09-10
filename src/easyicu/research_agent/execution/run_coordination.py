@@ -200,18 +200,18 @@ class RunCoordinator:
         max_workers: int,
         execute_step: Callable[[AnalysisStep], Any],
         submit_step: Callable[[Any, Callable[..., Any], AnalysisStep], Any],
-        on_worker_error: Callable[[BaseException], None],
+        on_worker_error: Callable[[AnalysisStep, BaseException], None],
     ) -> None:
         step_list = list(steps)
         with ThreadPoolExecutor(
             max_workers=min(int(max_workers), len(step_list)),
             thread_name_prefix="ra_step",
         ) as executor:
-            futures = [submit_step(executor, execute_step, step) for step in step_list]
+            futures = {submit_step(executor, execute_step, step): step for step in step_list}
             for future in as_completed(futures):
                 error = future.exception()
                 if error is not None:
-                    on_worker_error(error)
+                    on_worker_error(futures[future], error)
 
 
 __all__ = ["RunCoordinator", "RunExecutionState", "RunTransition"]

@@ -13,6 +13,7 @@ import copy
 import math
 from collections import Counter
 from pathlib import Path
+from threading import RLock
 from typing import Any, Dict, Iterable, List, Tuple
 
 from easyicu.webserver import dataio
@@ -36,6 +37,7 @@ _SURVIVAL_DEFAULT_WINDOW_DAYS = 30.0
 _SURVIVAL_28D_WINDOW_DAYS = 28.0
 _SUMMARY_CACHE_MAX = 8
 _SUMMARY_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_SUMMARY_CACHE_LOCK = RLock()
 _MAX_COMPARE_FEATURES = 48
 _FEATURE_RESERVED_COLUMNS = {
     "stay_id",
@@ -211,9 +213,10 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
     requested_feature_ids = _requested_feature_ids(body)
     cache_key = _summary_cache_key(path, desc, requested_feature_ids)
-    cached = _SUMMARY_CACHE.get(cache_key)
-    if cached is not None:
-        return copy.deepcopy(cached)
+    with _SUMMARY_CACHE_LOCK:
+        cached = _SUMMARY_CACHE.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
     frames = {
         module: _read_module_frame(path, desc, module) for module in _READ_MODULES
     }
@@ -416,9 +419,10 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         "sofa_reclassification": sofa_reclassification,
         "blocked_features": blocked_features,
     }
-    _SUMMARY_CACHE[cache_key] = copy.deepcopy(payload)
-    while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
-        _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
+    with _SUMMARY_CACHE_LOCK:
+        _SUMMARY_CACHE[cache_key] = copy.deepcopy(payload)
+        while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
+            _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
     return payload
 
 

@@ -116,7 +116,7 @@ def _prepare_robustness_authority(ra, run_dir: Path, evidence, rows) -> None:
         )
 
 
-@pytest.mark.parametrize("variant_count", [0, 3])
+@pytest.mark.parametrize("variant_count", [0, 3, 12])
 def test_robustness_panel_publication_figure_has_no_header_title_overlap(
     ra, tmp_path: Path, variant_count: int
 ):
@@ -192,6 +192,10 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
     )
 
     assert result.generated is True
+    plotted_source = pd.read_csv(
+        tmp_path / "publication_figures" / "publication_figure_source_robustness_panel.csv"
+    )
+    assert len(plotted_source) == variant_count + 1
     assert not any(
         finding.severity == "error" and "overlapping text" in finding.message
         for finding in result.findings

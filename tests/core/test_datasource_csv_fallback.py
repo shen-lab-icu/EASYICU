@@ -3,9 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from easyicu.config import DataSourceConfig, DataSourceRegistry
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
+
+
+@pytest.mark.parametrize("selector", [["1 OR 1=1"], ["O'Brien"], "O'Brien"])
+def test_partitioned_patient_selectors_are_literals(tmp_path, selector):
+    pd.DataFrame({"stay_id": ["1", "2", "O'Brien"], "value": [1, 2, 3]}).to_parquet(
+        tmp_path / "part.parquet", index=False
+    )
+    source = ICUDataSource(DataSourceConfig(name="unit"), base_path=tmp_path)
+    out = source._read_partitioned_data_duckdb(
+        tmp_path, ["stay_id", "value"], FilterSpec("stay_id", FilterOp.IN, selector)
+    )
+    expected = [] if selector == ["1 OR 1=1"] else ["O'Brien"]
+    assert out.stay_id.tolist() == expected
 
 
 def _repo_config(name: str):

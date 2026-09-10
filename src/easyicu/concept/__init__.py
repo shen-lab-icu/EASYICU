@@ -6127,8 +6127,21 @@ class ConceptResolver:
                 if db_stay_id_col in data.columns:
                     primary_id = db_stay_id_col
                 # 已经有intime了，后面不需要再加载
-            except Exception:
-                return data
+            except Exception as exc:
+                if (
+                    pd.api.types.is_numeric_dtype(data[index_column])
+                    or pd.api.types.is_timedelta64_dtype(data[index_column])
+                ):
+                    # The index already carries relative time (hours or a
+                    # duration); the optional stay-level mapping is not
+                    # required to keep it that way.
+                    return data
+                raise ConceptError(
+                    "time alignment to ICU admission failed while resolving "
+                    "stay-level identifiers and admission times for index "
+                    f"column {index_column!r}: {exc!r}; refusing to return "
+                    "unaligned absolute timestamps"
+                ) from exc
         
         # 🔧 FIX: 如果 primary_id 就是 icustay_id（MIMIC-III chartevents），
         # 仍然需要加载 intime 进行时间转换
@@ -6153,9 +6166,28 @@ class ConceptResolver:
                 
                 # 只合并 intime 列
                 data = data.merge(icustays_temp_df[[primary_id, 'intime']], on=primary_id, how='left')
-            except Exception:
-                return data
+            except Exception as exc:
+                if (
+                    pd.api.types.is_numeric_dtype(data[index_column])
+                    or pd.api.types.is_timedelta64_dtype(data[index_column])
+                ):
+                    # The index already carries relative time (hours or a
+                    # duration); the optional admission-time merge is not
+                    # required to keep it that way.
+                    return data
+                raise ConceptError(
+                    "time alignment to ICU admission failed while loading or "
+                    "merging admission times for index column "
+                    f"{index_column!r}: {exc!r}; refusing to return "
+                    "unaligned absolute timestamps"
+                ) from exc
         
+        # Durations already describe a relative axis. Converting them through
+        # pd.to_datetime destroys valid values; join identifiers as above, then
+        # enter the existing relative-hours path without subtracting admission.
+        if pd.api.types.is_timedelta64_dtype(data[index_column]):
+            data[index_column] = data[index_column].dt.total_seconds() / 3600.0
+
         # 🔧 FIX Bug 32: Handle dtype=object time column from multi-source concat.
         # When DuckDB returns float64 (relative hours) for one source and another source
         # contributes datetime64 values, pd.concat produces dtype=object. Without this,
@@ -6251,18 +6283,23 @@ class ConceptResolver:
                 if self._icustays_cache is not None and all(c in self._icustays_cache.columns for c in [primary_id, 'intime', 'outtime', 'los']):
                     icustays_df = self._icustays_cache.copy()
                 else:
-                # Load icustays table to get admission times
+                    # Load icustays table to get admission times
                     icustays_table = data_source.load_table('icustays', columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
-                if hasattr(icustays_table, 'data'):
-                    icustays_df = icustays_table.data
-                else:
-                    icustays_df = icustays_table
-                    # Cache it
-                    self._icustays_cache = icustays_df.copy()
+                    if hasattr(icustays_table, 'data'):
+                        icustays_df = icustays_table.data
+                    else:
+                        icustays_df = icustays_table
+                        # Cache it
+                        self._icustays_cache = icustays_df.copy()
                 
                 if 'intime' not in icustays_df.columns:
-                    # No admission time available, return as-is
-                    return data
+                    # No admission time available: alignment cannot be
+                    # completed, and an unaligned absolute timestamp would
+                    # masquerade as relative hours downstream.
+                    raise ConceptError(
+                        "icustays table has no 'intime' column; cannot align "
+                        f"{index_column!r} to ICU admission"
+                    )
                 
                 # Merge with admission times
                 admission_times = icustays_df[[primary_id, 'intime', 'outtime', 'los'] if 'los' in icustays_df.columns else [primary_id, 'intime', 'outtime']].copy()
@@ -6351,9 +6388,20 @@ class ConceptResolver:
             if dur_unit and "dur_var" in data.columns:
                 set_dur_var_unit(data, dur_unit)
             
-        except Exception:
-            # If alignment fails, return original data silently
-            pass
+        except ConceptError:
+            raise
+        except Exception as exc:
+            # Alignment is a data-semantics step, not best-effort: every
+            # downstream consumer reads this index as relative hours, so
+            # returning the frame with absolute timestamps still in place
+            # would silently reinterpret them.  Fail through the
+            # concept-layer error family instead (the same rationale
+            # concept/errors.py documents for empty results).
+            raise ConceptError(
+                "time alignment to ICU admission failed for index column "
+                f"{index_column!r} with id columns {id_columns!r}: "
+                f"{exc!r}; refusing to return unaligned absolute timestamps"
+            ) from exc
         
         return data
 
@@ -6883,6 +6931,9 @@ class ConceptResolver:
             is_id_tbl_target = definition and getattr(definition, 'target', 'ts_tbl') == 'id_tbl'
             has_time_column = getattr(result, 'index_column', None)
             if agg_method and has_time_column and has_time_column in result.data.columns and not result.data.empty and not isinstance(result, WinTbl) and not is_id_tbl_target:
+                evidence_columns = [col for col in result.data.columns
+                                    if col.startswith(f"{concept_name}_")]
+                protect_urine = concept_name in {"uo_6h", "uo_12h", "uo_24h"} and bool(evidence_columns)
                 try:
                     fill_missing = self._should_fill_gaps(concept_name, definition)
                     fill_method = self._get_fill_method(concept_name, definition)
@@ -6894,6 +6945,7 @@ class ConceptResolver:
                         fill_method=fill_method,
                         copy=False,
                         time_unit="hours",
+                        row_evidence_columns=evidence_columns if protect_urine else None,
                     )
                     
                     # Extract data if ICUTable is returned
@@ -6902,6 +6954,8 @@ class ConceptResolver:
                     else:
                         result.data = combined_result
                 except Exception as e:
+                    if protect_urine:
+                        raise ConceptError(f"Cannot resample {concept_name} evidence: {e}") from e
                     # If change_interval fails, log but continue
                     if verbose:
                         print(f"  ⚠️ 警告: {concept_name} 的interval处理失败: {e}")
@@ -7956,8 +8010,16 @@ class ConceptResolver:
         import hashlib
         import json
         
+        source_identity = None
+        if self.cache_dir is not None and self.use_pickle:
+            identify = getattr(data_source, "cache_source_identity", None)
+            source_identity = identify(self.cache_dir) if callable(identify) else None
+            if source_identity is None:
+                # No stable source identity means no cross-call disk reuse.
+                return ""
         # Create a dictionary of all parameters that affect the result
         cache_params = {
+            "source_identity": source_identity,
             "concept_name": concept_name,
             "database": data_source.config.name if hasattr(data_source.config, 'name') else str(data_source.config),
             "patient_ids": _normalize_patient_ids_for_cache(patient_ids),
@@ -7986,7 +8048,7 @@ class ConceptResolver:
         does not make an untrusted file safe. That is why the opt-in gate is
         in front of it rather than behind it.
         """
-        if self.cache_dir is None or not self.use_pickle:
+        if self.cache_dir is None or not self.use_pickle or not cache_key:
             return None
 
         try:
@@ -8029,7 +8091,7 @@ class ConceptResolver:
         result: ICUTable,
     ) -> None:
         """Store a concept result in disk cache if the pickle opt-in was given."""
-        if self.cache_dir is None or not self.use_pickle:
+        if self.cache_dir is None or not self.use_pickle or not cache_key:
             return
 
         try:

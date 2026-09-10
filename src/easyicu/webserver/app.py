@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+from urllib.parse import urlsplit
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -184,6 +185,23 @@ async def local_clients_only(request: Request, call_next):
                 )
             },
         )
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        cross_site = request.headers.get("sec-fetch-site", "").lower() == "cross-site"
+        if origin:
+            try:
+                source = urlsplit(origin)
+                target = urlsplit(str(request.base_url))
+                source_port = source.port or (443 if source.scheme == "https" else 80)
+                target_port = target.port or (443 if target.scheme == "https" else 80)
+                cross_site = cross_site or (
+                    source.scheme, source.hostname, source_port
+                ) != (target.scheme, target.hostname, target_port)
+                cross_site = cross_site or bool(source.username or source.password)
+            except ValueError:
+                cross_site = True
+        if cross_site:
+            return JSONResponse(status_code=403, content={"detail": "Cross-origin write requests are not allowed."})
     return await call_next(request)
 
 

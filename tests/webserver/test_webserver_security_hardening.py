@@ -9,6 +9,50 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+
+
+@pytest.mark.parametrize("headers", [
+    {"Origin": "https://unrelated.example"},
+    {"Sec-Fetch-Site": "cross-site"},
+    {"Origin": "null"},
+    {"Origin": "http://testserver:9999"},
+])
+def test_cross_origin_empty_post_cannot_reset_settings(monkeypatch, headers):
+    from fastapi.testclient import TestClient
+    from easyicu.webserver.app import app
+    from easyicu.webserver import settings
+    calls = []
+    monkeypatch.setattr(settings, "reset_settings", lambda: calls.append(True) or {})
+    response = TestClient(app).post("/api/settings/reset", headers=headers)
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_same_origin_empty_post_remains_available(monkeypatch):
+    from fastapi.testclient import TestClient
+    from easyicu.webserver.app import app
+    from easyicu.webserver import settings
+    calls = []
+    monkeypatch.setattr(settings, "reset_settings", lambda: calls.append(True) or {})
+    monkeypatch.setattr(settings, "about", lambda: {})
+    response = TestClient(app).post("/api/settings/reset", headers={"Origin": "http://testserver"})
+    assert response.status_code == 200
+    assert calls == [True]
+
+
+def test_pi_literature_checks_connector_before_network(monkeypatch):
+    from fastapi.testclient import TestClient
+    from easyicu.webserver.app import app
+    from easyicu.webserver import capabilities, settings
+    from easyicu.webserver.ideas import mining
+    outbound, events = [], []
+    monkeypatch.setattr(settings, "load_settings", lambda: {"connector_pubmed_enabled": False})
+    monkeypatch.setattr(capabilities, "record_tool_event", lambda *args: events.append(args))
+    monkeypatch.setattr(mining.request, "urlopen", lambda *args, **kw: outbound.append(True))
+    response = TestClient(app).get("/api/copilot/pi/literature/sources/12345")
+    assert response.status_code == 403
+    assert outbound == []
+    assert events[0][0] == "pubmed_connector_blocked"
 from fastapi.testclient import TestClient
 
 from easyicu.webserver import agent_outputs
