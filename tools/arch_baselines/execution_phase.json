@@ -16,7 +16,7 @@
       "shim_bypass_violations": []
     },
     "execution/run_coordination.py": {
-      "loc": 217,
+      "loc": 239,
       "sha256": "99d7fc3afb8ba5a968f1921a79e6d3b3a1ea6ec637f71f5f2c23ff93a62c4b4d",
       "intra_package_import_edges": 1,
       "shim_bypass_violations": []
@@ -238,7 +238,7 @@
       "shim_bypass_violations": []
     },
     "agents/reporting.py": {
-      "loc": 454,
+      "loc": 457,
       "sha256": "db38b4076d8be54ce75ab6b130151546f859fc812d15d756daa609efe8ef82e3",
       "intra_package_import_edges": 10,
       "shim_bypass_violations": []
@@ -406,7 +406,7 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Accept only the 8-line current-ledger manuscript enforcement addition from the 2026-09-10 repair. Preserve the pre-existing 52-line overage and all other baseline limits; do not refresh to the current checkout.",
+  "baseline_reason": "Accept only the round-3 Analyzer validation (+3 LOC) and coordinator hard-stop propagation (+22 LOC). Retain the pre-existing 81-line reporting overage and all unrelated limits; this is not a current-checkout baseline refresh.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -957,6 +957,29 @@
       "source_head": "efa6a4c6d23c51a458c307291a9249be33662b9c",
       "patch_sha256": "5d033d6c817560bf0f0853b6e00fbe244d576b01336781ce0a84ab69b76bd6fb",
       "evidence": "docs/qa/review_remediation_20260910.md"
+    },
+    {
+      "reason": "Accept only the round-3 Analyzer validation (+3 LOC) and coordinator hard-stop propagation (+22 LOC). Retain the pre-existing 81-line reporting overage and all unrelated limits; this is not a current-checkout baseline refresh.",
+      "changes": [
+        {
+          "file": "execution/run_coordination.py",
+          "before_loc": 217,
+          "after_loc": 239,
+          "added_lines": 22,
+          "source_before_sha256": "7f8c43b09167feaab7d5ba3aa5721ab1edd9735a2421bf2e424244368970569e",
+          "source_after_sha256": "be712a9177974c85f771c63885e3f9bb2bbdd12b02a87b3fdd0ff7aa0b1edf4f"
+        },
+        {
+          "file": "agents/reporting.py",
+          "before_loc": 454,
+          "after_loc": 457,
+          "added_lines": 3,
+          "source_before_sha256": "72acb46ceed1a8e3d3d73e4aa75548eed314ad2789d1fa54ee5183ec77f2d9b8",
+          "source_after_sha256": "281ff3a740cb77db023a2e844eb5a67ce175c573be7341e7c159d2a032e432fe"
+        }
+      ],
+      "source_head": "aa4f3a95f66b9fa0805e111e26c865c04e48253a",
+      "evidence": "docs/qa/review_round3_remediation_20260910.md"
     }
   ]
 }

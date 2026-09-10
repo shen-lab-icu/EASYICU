@@ -130,6 +130,12 @@ def _load_receipt_index(index_path: Optional[Path], root: Path) -> dict[str, dic
         payload = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema_version") == 2:
+        roots = payload.get("roots")
+        files = roots.get(str(root), {}) if isinstance(roots, dict) else {}
+        return files if isinstance(files, dict) else {}
     if payload.get("schema_version") != 1 or payload.get("root") != str(root):
         return {}
     files = payload.get("files")
@@ -142,11 +148,28 @@ def _save_receipt_index(
     if index_path is None:
         return
     index_path.parent.mkdir(parents=True, exist_ok=True)
+    roots = {}
+    previous = ""
+    if index_path.is_file():
+        try:
+            previous = index_path.read_text(encoding="utf-8")
+            old = json.loads(previous)
+            if not isinstance(old, dict):
+                old = {}
+            if old.get("schema_version") == 2 and isinstance(old.get("roots"), dict):
+                roots = old["roots"]
+            elif old.get("schema_version") == 1 and isinstance(old.get("files"), dict):
+                roots[str(old.get("root"))] = old["files"]
+        except (OSError, ValueError):
+            pass
+    roots[str(root)] = receipts
     payload = json.dumps(
-        {"schema_version": 1, "root": str(root), "files": receipts},
+        {"schema_version": 2, "roots": roots},
         sort_keys=True,
         separators=(",", ":"),
     )
+    if payload == previous:
+        return
     temporary = index_path.with_name(
         f"{index_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
     )

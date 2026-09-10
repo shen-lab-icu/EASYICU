@@ -202,8 +202,9 @@ def _demote_result_figure_shape_for_family_renderer(
                         finding.message
                         + " [advisory: this study-design family builds its "
                         "manuscript-facing primary figure deterministically in "
-                        "the write phase; the display-suite gate remains the "
-                        "fail-closed backstop for panel count and role diversity]"
+                        "the write phase; final figure and source-binding audits "
+                        "still apply. Display-suite panel-count and role-diversity "
+                        "checks are design advice, not a blocking substitute]"
                     ),
                 }
             )

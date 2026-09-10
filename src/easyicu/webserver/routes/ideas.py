@@ -43,7 +43,11 @@ def post_ideas_mine(body: Dict[str, Any]) -> dict:
 def post_ideas_resolve_source(body: Dict[str, Any]) -> dict:
     """Resolve a paper/PDF/frontier source seed into bounded metadata."""
     try:
-        return idea_mining_web.resolve_source(body)
+        patched, connector_reason = _pubmed_connector_gate(body)
+        payload = idea_mining_web.resolve_source(patched)
+        if connector_reason:
+            payload["connector_disabled_reason"] = connector_reason
+        return payload
     except idea_mining_web.IdeaMiningWebError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 

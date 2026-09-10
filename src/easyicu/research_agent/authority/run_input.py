@@ -2505,6 +2505,17 @@ def _explicit_step_authority_error(
                 f"successful checkpoint {field} {evidence_id} has kind "
                 f"{actual_kind or '<missing>'}, expected {expected_kind}"
             )
+        if field == "interpretation_evidence_id":
+            path = verified_run_evidence_path(run_dir, authority)
+            if path is None:
+                return "Analyzer interpretation failed path/digest verification"
+            try:
+                with path.open(encoding="utf-8") as handle:
+                    prefix = handle.read(256).lstrip().lower()
+            except (OSError, UnicodeError):
+                return "Analyzer interpretation is unreadable"
+            if not prefix or prefix.startswith("(analyzer failed:"):
+                return "Analyzer interpretation is empty or records a failed call"
         if field == "script_evidence_id":
             error = _native_script_repair_error(
                 checkpoint=record, script=authority, records=records, run_dir=run_dir,

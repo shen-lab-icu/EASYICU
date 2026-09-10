@@ -411,7 +411,8 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
     _require_source_seed(body)
     source = _source_record(body)
     source_type = str(source.get("source_type") or "manual")
-    allow_network = _request_bool(body, "allow_network")
+    connector_reason = pubmed_connector_block_reason(path="resolve_source")
+    allow_network = _request_bool(body, "allow_network") and connector_reason is None
     adapter = {
         "status": "metadata_ready",
         "source_type": source_type,
@@ -509,6 +510,8 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
         },
     }
     _assert_no_row_payload(payload)
+    if connector_reason:
+        payload["connector_disabled_reason"] = connector_reason
     return payload
 
 

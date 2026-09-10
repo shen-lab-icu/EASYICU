@@ -205,13 +205,16 @@ class AnalyzerAgent:
             role="Analyzer",
             limit_bytes=_ANALYZER_PROMPT_BYTE_LIMIT,
         )
-        return complete_with_provider_budget(
+        interpretation = complete_with_provider_budget(
             budget=provider_budget,
             category="analyzer",
             call=lambda: authorized_complete(
                 self.llm, messages, max_tokens=512, temperature=0.2
             ),
         ).strip()
+        if not interpretation or interpretation.lower().startswith("(analyzer failed:"):
+            raise ValueError("Analyzer returned an empty or failed interpretation")
+        return interpretation
 
 
 # ---------------------------------------------------------------------------
