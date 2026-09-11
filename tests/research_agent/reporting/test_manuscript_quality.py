@@ -445,6 +445,52 @@ def test_adjustment_aliases_and_materialisation_suffixes_are_equivalent() -> Non
     }
 
 
+def test_display_labels_resolve_adjustment_sets_without_hiding_real_conflicts() -> None:
+    labels = {
+        "age": "Patient age",
+        "sex": "Patient sex",
+        "adm": "Patient admission type",
+    }
+    text = _valid_manuscript().replace(
+        "The adjustment set comprised age and sex.",
+        "The adjustment set comprised patient age, patient sex, and "
+        "patient admission type, with no additional covariates substituted "
+        "or added.",
+    ).replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        "After adjustment for age, sex, and adm, Sepsis-3 status was associated "
+        "with mortality.",
+    )
+
+    without_labels = audit_manuscript_quality(text)
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in _codes(text)
+    assert without_labels.adjustment_sets == {
+        "Methods": ("admission type", "age", "sex"),
+        "Results": ("adm", "age", "sex"),
+    }
+
+    with_labels = audit_manuscript_quality(
+        text,
+        reader_display_labels=labels,
+    )
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in with_labels.findings
+    }
+    assert with_labels.adjustment_sets == {
+        "Methods": ("adm", "age", "sex"),
+        "Results": ("adm", "age", "sex"),
+    }
+
+    different_roster = text.replace("age, sex, and adm", "age, sex, and charlson_max")
+    conflicting = audit_manuscript_quality(
+        different_roster,
+        reader_display_labels=labels,
+    )
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in {
+        finding.code for finding in conflicting.findings
+    }
+
+
 def test_internal_runtime_terms_are_rejected_in_reader_facing_prose() -> None:
     text = _valid_manuscript().replace(
         "Sepsis status was associated with in-hospital mortality.",

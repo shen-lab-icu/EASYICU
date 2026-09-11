@@ -500,6 +500,7 @@ def _quality_repair_specs(
     scientific: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     expected_primary_result_facts: Sequence = (),
     analysis_plan: AnalysisPlan | None = None,
@@ -526,6 +527,7 @@ def _quality_repair_specs(
         expected_primary_result_facts=expected_primary_result_facts,
         analysis_plan=analysis_plan,
         expected_display_labels=expected_display_labels,
+        reader_display_labels=reader_display_labels,
         expected_baseline_mentions=expected_baseline_mentions,
         require_administrative_sections=False,
     ).findings:
@@ -558,6 +560,7 @@ def quality_repair_section_keys(
     manuscript: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[str, ...]:
@@ -574,6 +577,7 @@ def quality_repair_section_keys(
             manuscript,
             analysis_plan=analysis_plan,
             expected_display_labels=expected_display_labels,
+            reader_display_labels=reader_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
         )
     )
@@ -583,6 +587,7 @@ def quality_repair_section_errors(
     manuscript: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     expected_primary_result_facts: Sequence = (),
     analysis_plan: AnalysisPlan | None = None,
@@ -596,6 +601,7 @@ def quality_repair_section_errors(
             analysis_plan=analysis_plan,
             expected_primary_result_facts=expected_primary_result_facts,
             expected_display_labels=expected_display_labels,
+            reader_display_labels=reader_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
         )
     }
@@ -605,6 +611,7 @@ def _remaining_quality_errors(
     scientific: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
@@ -625,6 +632,7 @@ def _remaining_quality_errors(
             scientific,
             analysis_plan=analysis_plan,
             expected_display_labels=expected_display_labels,
+            reader_display_labels=reader_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
             require_administrative_sections=False,
         ).findings
@@ -704,6 +712,7 @@ def repair_existing_manuscript_sections(
             scientific,
             analysis_plan=common.get("analysis_plan"),
             expected_display_labels=display_labels,
+            reader_display_labels=common.get("reader_display_labels", {}),
             expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
         if not repair_specs:
@@ -769,6 +778,7 @@ def repair_existing_manuscript_sections(
         scientific,
         analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
+        reader_display_labels=common.get("reader_display_labels", {}),
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     administrative = render_manuscript_administrative_sections(administrative_authority)
@@ -865,6 +875,7 @@ def repair_named_manuscript_sections(
         scientific,
         analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
+        reader_display_labels=common.get("reader_display_labels", {}),
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     administrative = render_manuscript_administrative_sections(administrative_authority)
@@ -980,6 +991,7 @@ def render_manuscript_sections(
             scientific,
             analysis_plan=common.get("analysis_plan"),
             expected_display_labels=display_labels,
+            reader_display_labels=common.get("reader_display_labels", {}),
             expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
         if not repair_specs:
@@ -1034,6 +1046,7 @@ def render_manuscript_sections(
         scientific,
         analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
+        reader_display_labels=common.get("reader_display_labels", {}),
         expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
     administrative = render_manuscript_administrative_sections(administrative_authority)

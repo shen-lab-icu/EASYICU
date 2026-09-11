@@ -9,6 +9,7 @@ from easyicu.research_agent.reporting.manuscript_sections import (
     MANUSCRIPT_SECTION_SPECS,
     ManuscriptReaderQualityContractError,
     ManuscriptSectionContractError,
+    quality_repair_section_errors,
     repair_existing_manuscript_sections,
     repair_named_manuscript_sections,
     render_manuscript_sections,
@@ -650,6 +651,66 @@ def test_adjustment_conflict_repairs_methods_owner_only() -> None:
     assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
         finding.code for finding in audit_manuscript_quality(repaired).findings
     }
+
+
+def test_adjustment_display_labels_prevent_redundant_methods_repair() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace(
+        "Evidence-bound analysis prose.",
+        "The adjustment set comprised patient age, patient sex, and "
+        "patient admission type.",
+    ).replace(
+        "Evidence-bound association prose.",
+        "The adjusted odds ratio was 1.61, after adjustment for age, sex, and adm.",
+    )
+    calls: list[str] = []
+
+    def call_section(**kwargs: object) -> str:
+        calls.append(str(kwargs["section_name"]))
+        raise AssertionError("equivalent display labels should need no section repair")
+
+    repaired, repaired_keys = repair_existing_manuscript_sections(
+        manuscript,
+        call_section=call_section,
+        common={
+            "reader_display_labels": {
+                "age": "Patient age",
+                "sex": "Patient sex",
+                "adm": "Patient admission type",
+            },
+        },
+    )
+
+    assert repaired_keys == ()
+    assert calls == []
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in audit_manuscript_quality(repaired).findings
+    }
+
+
+def test_quality_repair_owner_uses_reader_display_labels() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace(
+        "Evidence-bound analysis prose.",
+        "The adjustment set comprised patient age, patient sex, and "
+        "patient admission type.",
+    ).replace(
+        "Evidence-bound association prose.",
+        "The adjusted odds ratio was 1.61, after adjustment for age, sex, and adm.",
+    )
+    labels = {
+        "age": "Patient age",
+        "sex": "Patient sex",
+        "adm": "Patient admission type",
+    }
+
+    assert "methods" in quality_repair_section_errors(manuscript)
+    assert "methods" not in quality_repair_section_errors(
+        manuscript,
+        reader_display_labels=labels,
+    )
 
 
 def test_verified_administrative_authority_is_rendered_exactly() -> None:
