@@ -5148,7 +5148,23 @@ def test_adjudicate_idea_literature_persists_confirmed_definition(
             "idea_id": body["idea_id"],
             "decision": body["decision"],
             "rationale": body["rationale"],
-            "screening": {"retrieval_candidate_count": 3},
+            "screening": {
+                "retrieval_candidate_count": 3,
+                "direct_comparator_count": 0,
+                "records": [
+                    {
+                        "pmid": "12345678",
+                        "title": "Retrieval candidate",
+                        "disposition": "exclude",
+                        "evidence_role": "related_context",
+                        "rationale": "Different population.",
+                        "population_match": False,
+                        "exposure_match": True,
+                        "outcome_match": True,
+                        "publication_type_eligible": True,
+                    }
+                ],
+            },
             "comparison_axes": [{"axis": "population_and_setting"}],
             "authority": {"human_confirmed": True},
         },
@@ -5159,6 +5175,17 @@ def test_adjudicate_idea_literature_persists_confirmed_definition(
         lambda run_id, idea_id: {
             "prior_art_decision": "differentiated",
             "prior_art_adjudication_sha256": "a" * 64,
+            "prior_art_adjudication_summary": {
+                "decision": "differentiated",
+                "rationale": "The endpoint differs from available candidates.",
+                "screening": {
+                    "retrieval_candidate_count": 3,
+                    "direct_comparator_count": 0,
+                    "records": [{"pmid": "12345678"}],
+                },
+                "comparison_axes": [{"axis": "population_and_setting"}],
+                "authority": {"human_confirmed": True},
+            },
         },
     )
     plan_fields = {
@@ -5186,6 +5213,14 @@ def test_adjudicate_idea_literature_persists_confirmed_definition(
 
     assert result["code"] == "easyicu_idea_literature_adjudicated"
     assert result["details"]["execution_can_advance"] is True
+    screening = result["details"]["prior_art_adjudication"]["screening"]
+    assert "records" not in screening
+    assert screening["screened_candidates"][0]["pmid"] == "12345678"
+    binding_screening = result["details"]["prior_art_adjudication"]["binding"][
+        "prior_art_adjudication_summary"
+    ]["screening"]
+    assert "records" not in binding_screening
+    assert binding_screening["retrieval_candidate_count"] == 3
     assert calls[0]["plan_fields"] == plan_fields
 
 

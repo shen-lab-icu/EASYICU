@@ -152,6 +152,120 @@ def test_exact_owner_receipts_can_project_publication_ready(tmp_path: Path) -> N
     assert all(domain.status == "passed" for domain in projection.domains)
 
 
+def test_analysis_cohort_receipt_closes_source_scope(tmp_path: Path) -> None:
+    definition = {
+        "name": "web_study_test",
+        "inclusion": [],
+        "exclusion": [],
+        "derived_from_named": None,
+        "locked_at": "not_locked",
+        "selection_mode": "all_input_rows",
+    }
+    definition_sha = "c" * 64
+    _write(
+        tmp_path / "cohort_provenance.json",
+        {
+            "database": "miiv",
+            "cohort_definition": None,
+            "export_authority": {"authority_sha256": "a" * 64},
+        },
+    )
+    _write(
+        tmp_path / "cohort_analysis_provenance.json",
+        {
+            "cohort_definition": definition,
+            "cohort_sha256": definition_sha,
+            "n_universe": 94_418,
+            "n_analysis_cohort": 94_418,
+        },
+    )
+    _write(
+        tmp_path / "cohort_locked.json",
+        {"cohort": definition, "cohort_sha256": definition_sha},
+    )
+
+    projection = build_scientific_readiness_projection(
+        run_id="run-analysis-cohort",
+        run_dir=tmp_path,
+        axes={
+            "analysis_validated": True,
+            "manuscript_ready": False,
+            "publication_ready": False,
+            "paper_authorized": False,
+        },
+        literature_evidence={},
+        study={},
+    )
+
+    data_domain = next(domain for domain in projection.domains if domain.domain == "data")
+    assert data_domain.status == "passed"
+    assert "COHORT_SOURCE_SCOPE_NOT_EXPLICIT" not in {
+        finding.code for finding in projection.findings
+    }
+    assert projection.facts["data"] == {
+        "database": "miiv",
+        "cohort_definition_explicit": True,
+        "cohort_definition_source": "cohort_analysis_provenance.json",
+        "analysis_cohort_denominator": 94_418,
+        "export_authority_present": True,
+    }
+
+
+def test_tampered_analysis_cohort_receipt_keeps_source_scope_blocked(
+    tmp_path: Path,
+) -> None:
+    definition = {
+        "name": "web_study_test",
+        "inclusion": [],
+        "exclusion": [],
+        "derived_from_named": None,
+        "locked_at": "not_locked",
+        "selection_mode": "all_input_rows",
+    }
+    _write(
+        tmp_path / "cohort_provenance.json",
+        {
+            "database": "miiv",
+            "cohort_definition": None,
+            "export_authority": {"authority_sha256": "a" * 64},
+        },
+    )
+    _write(
+        tmp_path / "cohort_analysis_provenance.json",
+        {
+            "cohort_definition": definition,
+            "cohort_sha256": "0" * 64,
+            "n_universe": 100,
+            "n_analysis_cohort": 100,
+        },
+    )
+    _write(
+        tmp_path / "cohort_locked.json",
+        {"cohort": definition, "cohort_sha256": "c" * 64},
+    )
+
+    projection = build_scientific_readiness_projection(
+        run_id="run-tampered-cohort",
+        run_dir=tmp_path,
+        axes={
+            "analysis_validated": True,
+            "manuscript_ready": False,
+            "publication_ready": False,
+            "paper_authorized": False,
+        },
+        literature_evidence={},
+        study={},
+    )
+
+    data_domain = next(domain for domain in projection.domains if domain.domain == "data")
+    assert data_domain.status == "review_required"
+    assert "COHORT_SOURCE_SCOPE_NOT_EXPLICIT" in {
+        finding.code for finding in projection.findings
+    }
+    assert projection.facts["data"]["cohort_definition_explicit"] is False
+    assert projection.facts["data"]["cohort_definition_source"] is None
+
+
 def test_web_gate_distinguishes_draft_generation_from_publication() -> None:
     gate = agent_pipeline_runs._gate_from_axes(
         {
