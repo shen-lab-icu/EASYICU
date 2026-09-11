@@ -220,7 +220,9 @@ def _base_planner_user_prompt(
     "question (e.g. protocol/feasibility or an existing per-cluster description). "
     "`table:table_one` requires `table_one_spec` with group_by, at least two "
     "closed group_levels, and variables specifying name/kind/summary/test/levels. "
-    "THE COLUMN YOU GROUP ON IS NOT ALSO A ROW. List group_by and every row "
+    "THE COLUMN YOU GROUP ON IS NOT ALSO A ROW: name it in `group_by` or in "
+    "`variables`, never in both, because a grouping row would report each group "
+    "as 100% of itself. List group_by and every row "
     "variable in inputs alongside the typed cohort artifact. Overall and groups "
     "are columns. Categorical count_percent rows require at least two closed "
     "levels; ordinal numerical rows may declare levels (then undeclared values "
@@ -868,13 +870,15 @@ def _build_planner_user_prompt(
         prompt = replace_wire_section(
             prompt,
             start=(
-                "A step that declares the exact output `table:table_one` MUST also "
+                "`table:table_one` requires `table_one_spec` with group_by, "
             ),
             end="For counts, events, prevalence",
             replacement=(
                 "A `table:table_one` step MUST carry `table_one_spec` with "
                 "group_by, closed group_levels and its variable roster. The "
-                "grouping column is not also a row. Its inputs list the cohort "
+                "grouping column is not also a row variable: name it in "
+                "`group_by` or in `variables`, never in both. Its inputs list "
+                "the cohort "
                 "artifact, group_by and every row variable explicitly. Preserve "
                 "observed scalar types; categorical count/percent rows need "
                 "closed levels, continuous rows have none, and numeric ordinal "
@@ -882,7 +886,9 @@ def _build_planner_user_prompt(
                 f"are hidden, copy the opaque tokens (binary: {opaque_binary_json}) "
                 "and never guess labels. Choose the declared missing-group "
                 "policy from the catalogued coverage, and report grouped plus "
-                "Overall summaries, missing n (%), the test and P value. This "
+                "Overall summaries and missing n (%); name a test and P value "
+                "only where the design compares groups, never in a "
+                "descriptive-only Table 1. This "
                 "step emits only `table:table_one` plus allowed host audit "
                 "outputs; use a separate step for every other result or figure, "
                 "and use `table:cohort_summary` for an ungrouped description. "
