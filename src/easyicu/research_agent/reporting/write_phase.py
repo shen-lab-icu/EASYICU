@@ -556,6 +556,7 @@ def _persist_manuscript_quality_artifacts(
     evidence: Any,
     findings: List[ValidationFinding],
     expected_display_labels: Sequence[str] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
     expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
     expected_primary_result_facts: Sequence = (),
     analysis_plan: AnalysisPlan | None = None,
@@ -567,6 +568,7 @@ def _persist_manuscript_quality_artifacts(
         analysis_plan=analysis_plan,
         expected_primary_result_facts=expected_primary_result_facts,
         expected_display_labels=expected_display_labels,
+        reader_display_labels=reader_display_labels,
         expected_baseline_mentions=expected_baseline_mentions,
     )
     quality_audit_path = run_dir / "manuscript_quality_audit.json"
@@ -2344,6 +2346,7 @@ def _bind_and_review_manuscript(
         expected_display_labels=expected_manuscript_display_labels(
             current_evidence_names
         ),
+        reader_display_labels=reader_display_labels,
         expected_baseline_mentions=baseline_reporting_mentions(context, reader_display_labels),
     )
     if not writer_probe_mode:
@@ -3246,6 +3249,7 @@ def _draft_bind_and_repair_manuscript(
             analysis_plan=execute_result.plan,
             expected_primary_result_facts=binding.primary_result_facts,
             expected_display_labels=expected_manuscript_display_labels(draft.current_evidence_names),
+            reader_display_labels=dict(execute_result.plan.display_labels or {}),
             expected_baseline_mentions=baseline_reporting_mentions(context, execute_result.plan.display_labels),
         )
         if not section_errors:

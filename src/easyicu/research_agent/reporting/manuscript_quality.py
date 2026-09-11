@@ -680,8 +680,35 @@ def repair_reader_structure_from_existing_prose(
     return repaired, tuple(repairs)
 
 
-def _normalise_adjustment_set(raw: str) -> tuple[str, ...]:
+def _normalise_adjustment_set(
+    raw: str,
+    reader_display_labels: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
     cleaned = _strip_audit_markup(raw).replace("`", "")
+    labels = {
+        str(label).strip(): str(key).strip()
+        for key, label in dict(reader_display_labels or {}).items()
+        if str(label).strip() and str(key).strip()
+    }
+    replacements: dict[str, str] = {}
+    for label, key in labels.items():
+        replacements[label] = key
+        for prefix in ("the ", "patient "):
+            if label.casefold().startswith(prefix):
+                replacements[label[len(prefix) :]] = key
+    for label, key in sorted(replacements.items(), key=lambda item: -len(item[0])):
+        cleaned = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])",
+            key,
+            cleaned,
+            flags=re.I,
+        )
+    cleaned = re.split(
+        r",?\s+with no additional (?:covariates|variables|adjustment terms)\b",
+        cleaned,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
     cleaned = re.sub(r"\[@[^\]]+\]", "", cleaned)
     cleaned = re.sub(r"\band\b", ",", cleaned, flags=re.I)
     values: list[str] = []
@@ -700,7 +727,10 @@ def _normalise_adjustment_set(raw: str) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
-def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
+def _adjustment_sets(
+    sections: Mapping[str, str],
+    reader_display_labels: Mapping[str, str] | None = None,
+) -> dict[str, tuple[str, ...]]:
     found: dict[str, tuple[str, ...]] = {}
     methods = _strip_audit_markup(sections.get("Methods", ""))
     method_patterns = (
@@ -709,7 +739,7 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
         r"model was adjusted for\s+([^.;]+)",
     )
     method_sets = {
-        _normalise_adjustment_set(match.group(1))
+        _normalise_adjustment_set(match.group(1), reader_display_labels)
         for pattern in method_patterns
         for match in re.finditer(pattern, methods, flags=re.I)
     }
@@ -719,7 +749,7 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
 
     results = _strip_audit_markup(sections.get("Results", ""))
     result_sets = {
-        _normalise_adjustment_set(match.group(1))
+        _normalise_adjustment_set(match.group(1), reader_display_labels)
         for match in re.finditer(
             r"after adjustment for\s+(.+),\s+[^,.\n]+?\s+"
             r"(?:was|were|had|showed)\b",
@@ -728,7 +758,7 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
         )
     }
     result_sets.update(
-        _normalise_adjustment_set(match.group(1))
+        _normalise_adjustment_set(match.group(1), reader_display_labels)
         for match in re.finditer(
             r",\s+after adjustment for\s+([^.;]+)",
             results,
@@ -1001,6 +1031,7 @@ def audit_manuscript_quality(
     bound_text: str,
     *,
     expected_display_labels: Sequence[str] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
     expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
     expected_primary_result_facts: Sequence = (),
     require_administrative_sections: bool = True,
@@ -1181,7 +1212,7 @@ def audit_manuscript_quality(
                 ),
             ))
 
-    adjustments = _adjustment_sets(section_map)
+    adjustments = _adjustment_sets(section_map, reader_display_labels)
     variables = _subsections(section_map.get("Methods", "")).get("Variables", "")
     variable_prose = " ".join(re.sub(
         r"<!--.*?-->", "", _strip_audit_markup(variables), flags=re.S,

@@ -524,6 +524,7 @@ def prepare_writer_only_migration(
         manuscript,
         analysis_plan=plan,
         expected_display_labels=labels,
+        reader_display_labels=plan.display_labels if plan else None,
         expected_baseline_mentions=baseline_reporting_mentions(context, plan.display_labels if plan else None),
     )
     source_literature = audit_manuscript_literature(manuscript, literature)
@@ -548,6 +549,7 @@ def prepare_writer_only_migration(
             manuscript,
             analysis_plan=plan,
             expected_display_labels=labels,
+            reader_display_labels=plan.display_labels if plan else None,
             expected_baseline_mentions=baseline_reporting_mentions(context, plan.display_labels if plan else None),
         ),
         removed_unknown_literature_keys=tuple(unknown_keys),
@@ -737,6 +739,7 @@ def repair_writer_only(
             analysis_plan=prepared.plan,
             expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
+            reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
             expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
         )
         canonical_literature = audit_manuscript_literature(
@@ -774,6 +777,7 @@ def repair_writer_only(
             analysis_plan=prepared.plan,
             expected_primary_result_facts=prepared.host_result_facts,
             expected_display_labels=prepared.expected_display_labels,
+            reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
             expected_baseline_mentions=baseline_reporting_mentions(
                 prepared.context, prepared.plan.display_labels if prepared.plan else None,
             ),
@@ -838,6 +842,7 @@ def repair_writer_only(
         analysis_plan=prepared.plan,
         expected_primary_result_facts=prepared.host_result_facts,
         expected_display_labels=prepared.expected_display_labels,
+        reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
         expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
     )
     if quality.status != "pass":
@@ -992,6 +997,7 @@ def publish_writer_only_result(
         bound_manuscript,
         analysis_plan=prepared.plan,
         expected_display_labels=prepared.expected_display_labels,
+        reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
         expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
     )
     if bound_quality.status != "pass":
