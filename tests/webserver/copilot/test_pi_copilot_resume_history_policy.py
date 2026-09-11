@@ -347,6 +347,30 @@ def test_legacy_planner_rate_limit_projection_recovers_resume_reason(
     ) == "research_pipeline_planner_provider_unavailable"
 
 
+def test_legacy_compiler_projection_recovers_outer_provider_http_failure(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "run-compiler-misclassified-provider-http"
+    project_dir.mkdir()
+    (project_dir / "source_run_manifest.json").write_text(
+        """{
+  "analysis_started": false,
+  "failure_code": "research_pipeline_progressive_compile_failed",
+  "failure_type": "provider_http",
+  "schema_version": "easyicu.web-research-pipeline-projection/1",
+  "status": "failed"
+}""",
+        encoding="utf-8",
+    )
+
+    assert run_authority._normalized_planner_gate_reason(
+        {
+            "gate_reason": "research_pipeline_progressive_compile_failed",
+            "project_dir": str(project_dir),
+        }
+    ) == "research_pipeline_planner_provider_unavailable"
+
+
 def test_legacy_execution_failure_is_not_upgraded_after_analysis_started(
     tmp_path: Path,
 ) -> None:
