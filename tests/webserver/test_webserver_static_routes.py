@@ -121,7 +121,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260904-agent-plan-compiler1" in index_html
+    assert "js/api.js?v=20260909-research-displays1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -193,7 +193,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction.js?v=20260829-data-scope1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -203,7 +203,7 @@ def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
     history_js = _static_js("screens-agent-run-history.js")
 
     owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
-    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1"
+    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260909-report-revision1"
     assert owner_asset in index_html
     assert index_html.index(owner_asset) < index_html.index(monitor_asset)
     assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
@@ -410,7 +410,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20260904-agent-plan-compiler1" in index_html
+    assert "js/api.js?v=20260909-research-displays1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -549,7 +549,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260829-readability2" in index_html
     assert "css/guided-projects.css?v=20260902-type-scale2" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20260904-agent-plan-compiler1" in index_html
+    assert "js/api.js?v=20260909-research-displays1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260908-conversation-files1" in index_html
     )
@@ -697,7 +697,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -898,7 +898,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "data-gpi-provider-form" in provider_js
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
@@ -937,7 +937,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260901-reference-aligned1" in index_html
+    assert "js/screens-agent-render.js?v=20260909-grouped-table2" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
@@ -1110,7 +1110,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260908-conversation-files1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -2461,7 +2461,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260904-agent-plan-compiler1" in index_html
+    assert "api.js?v=20260909-research-displays1" in index_html
     assert "screens-dict.js?v=20260830-viz-final1" in index_html
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
@@ -2765,7 +2765,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260904-agent-plan-compiler1" in index_html
+    assert "api.js?v=20260909-research-displays1" in index_html
     assert "screens-guided-projects.js?v=20260908-conversation-files1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
