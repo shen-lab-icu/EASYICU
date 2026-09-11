@@ -8283,6 +8283,23 @@ def test_candidate_planner_provider_http_failure_preserves_resume_route() -> Non
     )
 
 
+def test_candidate_planner_rate_limit_preserves_resume_route() -> None:
+    class RateLimitError(RuntimeError):
+        pass
+
+    failure = RateLimitError("provider response content must not cross the boundary")
+    failure.status_code = 429
+
+    assert agent_pipeline_runs._pipeline_failure_code(
+        failure,
+        budget_mode="planner_canary",
+    ) == "research_pipeline_planner_provider_unavailable"
+    assert (
+        agent_pipeline_runs._pipeline_failure_code(failure)
+        == "research_pipeline_execution_failed"
+    )
+
+
 def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

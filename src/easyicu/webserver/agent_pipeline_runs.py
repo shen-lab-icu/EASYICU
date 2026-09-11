@@ -464,10 +464,10 @@ def _pipeline_failure_code(
         # mid-run is attributed to the host environment rather than reported as
         # a generic execution failure of the science.
         return "research_pipeline_execution_runtime_unavailable"
-    if (
-        budget_mode != "full_reviewed"
-        and _pipeline_failure_category(exc) == "provider_http"
-    ):
+    if budget_mode != "full_reviewed" and _pipeline_failure_category(exc) in {
+        "provider_http",
+        "rate_limit",
+    }:
         return "research_pipeline_planner_provider_unavailable"
     return "research_pipeline_execution_failed"
 
