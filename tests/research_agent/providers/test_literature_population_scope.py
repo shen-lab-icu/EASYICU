@@ -70,3 +70,32 @@ def test_adult_background_does_not_relabel_pediatric_study_population():
     )
     assert not decision.population_match
     assert decision.disposition == "exclude"
+
+
+def test_adult_only_icu_database_recovers_unselected_critically_ill_cohort():
+    decision = screen_source_backed_direct_comparator(
+        exposure="lactate",
+        outcome="in hospital mortality",
+        adult_required=True,
+        record=CitationRecord(
+            key="mimic_lactate",
+            year="2020",
+            title=(
+                "Lactate indices as predictors of in-hospital mortality after "
+                "admission to an intensive care unit in unselected critically "
+                "ill patients"
+            ),
+            relevance=(
+                "Study-design excerpt: The analysis used the MIMIC-III database."
+            ),
+            publication_types=["Observational Study"],
+        ),
+        source="pubmed",
+        query=None,
+    )
+
+    assert decision.population_match is True
+    assert decision.exposure_match is True
+    assert decision.outcome_match is True
+    assert decision.disposition == "include"
+    assert decision.evidence_role == "direct_comparator"

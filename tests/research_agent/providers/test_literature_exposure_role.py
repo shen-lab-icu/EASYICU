@@ -69,3 +69,64 @@ def test_actual_disease_comparison_is_preserved(exposure, comparison):
     assert decision.exposure_match
     assert decision.disposition == "include"
     assert decision.evidence_role == "direct_comparator"
+
+
+def test_secondary_performance_comparator_does_not_become_direct_comparator():
+    record = CitationRecord(
+        key="renin_versus_lactate",
+        year="2022",
+        title=(
+            "Renin Kinetics Are Superior to Lactate Kinetics for Predicting "
+            "In-Hospital Mortality in Hypotensive Critically Ill Patients"
+        ),
+        relevance=(
+            "Study-design excerpt: This prospective observational cohort "
+            "studied adult ICU patients on vasopressors. Peak lactate "
+            "demonstrated moderate discrimination for in-hospital mortality."
+        ),
+        publication_types=["Observational Study"],
+    )
+
+    decision = screen_source_backed_direct_comparator(
+        exposure="lactate",
+        outcome="in hospital mortality",
+        adult_required=True,
+        record=record,
+        source="pubmed",
+        query="focused query",
+    )
+
+    assert decision.population_match is True
+    assert decision.outcome_match is True
+    assert decision.exposure_match is False
+    assert decision.disposition == "exclude"
+    assert decision.evidence_role == "related_context"
+
+
+def test_inhospital_mortality_spelling_matches_declared_outcome():
+    record = CitationRecord(
+        key="inhospital_spelling",
+        year="2022",
+        title=(
+            "Serial Lactate Predicts Inhospital Mortality in Critically Ill "
+            "Adult Patients"
+        ),
+        relevance=(
+            "Study-design excerpt: Adult ICU patients had serial lactate "
+            "measurements during the first 24 hours."
+        ),
+        publication_types=["Observational Study"],
+    )
+
+    decision = screen_source_backed_direct_comparator(
+        exposure="lactate",
+        outcome="in hospital mortality",
+        adult_required=True,
+        record=record,
+        source="pubmed",
+        query="focused query",
+    )
+
+    assert decision.population_match is True
+    assert decision.exposure_match is True
+    assert decision.outcome_match is True
