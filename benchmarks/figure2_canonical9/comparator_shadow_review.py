@@ -355,12 +355,31 @@ def _parse_pmc(xml_text: str) -> dict[str, dict[str, Any]]:
                 if _text(node)
             )
         )
+        body = article.find(".//body")
+        # JATS carries figures and tables either inside ``<body>`` or in a
+        # ``<floats-group>`` sibling of ``<body>``. A body-scoped search silently
+        # reports zero displays for every publisher that uses the latter, which
+        # understates the comparator on the one dimension the shadow review uses
+        # it for. Supplementary ``<sub-article>`` content is excluded: a display
+        # there is not part of the main article's figure or table count.
+        main_article_parts = [
+            child for child in article if child.tag != "sub-article"
+        ]
         records[normalized_pmcid] = {
             "pmid": identifiers.get("pmid"),
             "pmcid": normalized_pmcid,
             "section_titles": section_titles[:80],
-            "figure_caption_count": len(article.findall(".//body//fig")),
-            "table_count": len(article.findall(".//body//table-wrap")),
+            # A PMC record can exist as a citation stub with no article body, so
+            # retrieving XML is not evidence of accessible full text. Reported
+            # availability decides whether `full_text_required_for_every_anchor`
+            # can enforce its own policy at all.
+            "has_full_text": bool(body is not None and len(body)),
+            "figure_caption_count": sum(
+                len(node.findall(".//fig")) for node in main_article_parts
+            ),
+            "table_count": sum(
+                len(node.findall(".//table-wrap")) for node in main_article_parts
+            ),
             "supplementary_material_count": len(
                 article.findall(".//supplementary-material")
             ),
@@ -461,7 +480,7 @@ def hydrate_anchor_source_pack(
                 publication_types=tuple(metadata.get("publication_types") or ()),
                 abstract_available=bool(abstract),
                 abstract_word_count=len(abstract.split()),
-                pmc_full_text_available=pmc is not None,
+                pmc_full_text_available=bool(pmc and pmc.get("has_full_text")),
                 pmc_section_titles=tuple((pmc or {}).get("section_titles") or ()),
                 figure_caption_count=int((pmc or {}).get("figure_caption_count") or 0),
                 table_count=int((pmc or {}).get("table_count") or 0),
