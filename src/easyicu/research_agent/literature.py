@@ -1102,6 +1102,38 @@ _ICU_TITLE_FILTER = (
     'OR "critically ill"[Title])'
 )
 
+# Source-database aliases are retrieval hints only. They help an exact
+# same-database comparator survive a bounded relevance-ranked PubMed stratum;
+# they never grant eligibility. The downstream source-backed screen still has
+# to establish population, exposure role, outcome, and publication type.
+_DATABASE_RETRIEVAL_ALIASES = {
+    "aumc": ("AmsterdamUMCdb", "Amsterdam University Medical Centers database"),
+    "eicu": ("eICU", "eICU Collaborative Research Database"),
+    "eicu_demo": ("eICU", "eICU Collaborative Research Database"),
+    "hirid": ("HiRID",),
+    "miiv": (
+        "MIMIC-III",
+        "MIMIC-IV",
+        "MIMIC",
+        "Medical Information Mart for Intensive Care",
+    ),
+    "mimic": (
+        "MIMIC-III",
+        "MIMIC-IV",
+        "MIMIC",
+        "Medical Information Mart for Intensive Care",
+    ),
+    "mimic_demo": (
+        "MIMIC-III",
+        "MIMIC-IV",
+        "MIMIC",
+        "Medical Information Mart for Intensive Care",
+    ),
+    "mimic_iii": ("MIMIC-III", "MIMIC", "Medical Information Mart for Intensive Care"),
+    "mimic_iv": ("MIMIC-IV", "MIMIC", "Medical Information Mart for Intensive Care"),
+    "sic": ("SICdb", "Salzburg Intensive Care database"),
+}
+
 # Variables in these roles are good PubMed query terms; ids/timestamps are not.
 _QUERY_ROLES = {
     VariableRole.COMPOSITE_SCORE,
@@ -1565,7 +1597,18 @@ def _adult_study_population_matches(record: CitationRecord) -> bool:
     if re.search(r"\b(?:paediatric|pediatric|children|neonatal|neonates|infants)\b", title):
         return False
     blob = _normalise_clinical_text(" ".join((record.title, record.relevance or "")))
-    return any(token in f" {blob} " for token in (" adult ", " adults "))
+    if any(token in f" {blob} " for token in (" adult ", " adults ")):
+        return True
+    return any(
+        marker in blob
+        for marker in (
+            "mimic iii",
+            "mimic iv",
+            "medical information mart for intensive care",
+            "multiparameter intelligent monitoring for intensive care",
+            "eicu",
+        )
+    )
 
 
 _EXPOSURE_ROLE_MARKERS = (
@@ -1617,6 +1660,11 @@ def _clinical_exposure_role_matches(
         if _normalise_clinical_text(term)
     ):
         return False
+    if _text_uses_exposure_as_secondary_predictor(
+        normalized_exposure,
+        normalized_title,
+    ):
+        return False
     if _text_assigns_studied_exposure(normalized_exposure, normalized_title):
         return True
 
@@ -1625,6 +1673,31 @@ def _clinical_exposure_role_matches(
         if not normalized:
             continue
         if _text_assigns_studied_exposure(normalized_exposure, normalized):
+            return True
+    return False
+
+
+def _text_uses_exposure_as_secondary_predictor(exposure: str, text: str) -> bool:
+    """Reject titles where another marker is explicitly studied against exposure.
+
+    A study such as "Renin Kinetics Are Superior to Lactate Kinetics for
+    Predicting Mortality" reports lactate as a performance comparator, not as
+    the primary exposure. The downstream abstract may still contain a lactate
+    discrimination result, so title-level precedence must be applied before a
+    sentence-level analytic relation can promote the record.
+    """
+
+    if not exposure:
+        return False
+    escaped = re.escape(exposure)
+    pattern = re.compile(
+        rf"\b(?:superior|inferior|better|worse|more accurate|less accurate|"
+        rf"outperform(?:s|ed|ing)?)\b.{{0,24}}\b(?:to|than)\b\s+"
+        rf"(?:the\s+)?{escaped}\b"
+    )
+    for match in pattern.finditer(text):
+        clause = re.split(r"[.;]", text[: match.start()])[-1]
+        if not _clinical_axis_matches(exposure, clause, axis="exposure"):
             return True
     return False
 
@@ -1692,8 +1765,10 @@ def _clinical_axis_matches(term: str, blob: str, *, axis: str) -> bool:
             aliases.update(
                 {
                     "in hospital mortality",
+                    "inhospital mortality",
                     "hospital mortality",
                     "in hospital death",
+                    "inhospital death",
                     "hospital death",
                 }
             )
@@ -1724,7 +1799,10 @@ def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> st
             return (
                 '("in-hospital mortality"[Title/Abstract] OR '
                 '"in hospital mortality"[Title/Abstract] OR '
+                '"inhospital mortality"[Title/Abstract] OR '
                 '"hospital mortality"[Title/Abstract] OR '
+                '"in-hospital death"[Title/Abstract] OR '
+                '"inhospital death"[Title/Abstract] OR '
                 '"hospital death"[Title/Abstract])'
             )
         if declared == "icu mortality":
@@ -1760,6 +1838,114 @@ def _pubmed_identity_alternatives_clause(identity: Any) -> str:
         alternatives[0]
         if len(alternatives) == 1
         else "(" + " OR ".join(alternatives) + ")"
+    )
+
+
+def _database_retrieval_terms(context: ResearchContext) -> tuple[str, ...]:
+    """Return conservative publication aliases for declared source databases."""
+
+    terms: List[str] = []
+    for database in (
+        context.cohort.database,
+        *list(context.cross_database_validation or []),
+    ):
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(database or "").casefold()).strip(
+            "_"
+        )
+        for alias in _DATABASE_RETRIEVAL_ALIASES.get(normalized, ()):
+            if alias not in terms:
+                terms.append(alias)
+    return tuple(terms)
+
+
+def _database_retrieval_clause(context: ResearchContext) -> str:
+    terms = _database_retrieval_terms(context)
+    if not terms:
+        return ""
+    return "(" + " OR ".join(
+        f'"{term.replace(chr(34), "")}"[Title/Abstract]' for term in terms
+    ) + ")"
+
+
+def _declared_exposure_horizon_hours(context: ResearchContext) -> Optional[int]:
+    """Return one bounded hour horizon declared for the primary exposure window."""
+
+    values: List[float] = []
+    for window in context.time_windows:
+        if float(window.start_hours) == 0.0 and 0.0 < float(window.end_hours) <= 72.0:
+            values.append(float(window.end_hours))
+    variable = context.variable(context.primary_exposure or "")
+    if variable is not None:
+        window_text = " ".join(
+            (
+                str(variable.analysis_window or ""),
+                str(variable.description or ""),
+            )
+        )
+        for match in re.finditer(
+            r"\[\s*0(?:\.0+)?\s*,\s*(\d+(?:\.\d+)?)\s*\]\s*h",
+            window_text,
+            flags=re.IGNORECASE,
+        ):
+            value = float(match.group(1))
+            if 0.0 < value <= 72.0:
+                values.append(value)
+    if not values:
+        return None
+    hours = min(values)
+    return int(hours) if hours.is_integer() else None
+
+
+def _time_horizon_retrieval_clause(
+    context: ResearchContext,
+) -> tuple[str, tuple[str, ...]]:
+    """Return a bounded exposure-window clause and normalized match terms."""
+
+    hours = _declared_exposure_horizon_hours(context)
+    if hours is None:
+        return "", ()
+    terms = (
+        f"{hours}-hour",
+        f"{hours}-h",
+        f"{hours} hour",
+        f"{hours} hours",
+        f"{hours} h",
+        f"{hours}h",
+        f"first {hours}",
+    )
+    return (
+        "("
+        + " OR ".join(f'"{term}"[Title/Abstract]' for term in terms)
+        + ")",
+        tuple(_normalise_clinical_text(term) for term in terms),
+    )
+
+
+def _time_horizon_outcome_clause(
+    context: ResearchContext,
+    outcome_clause: str,
+) -> str:
+    """Broaden only mortality wording inside the database/window stratum."""
+
+    variable = context.variable(context.target_outcome or "")
+    declared = " ".join(
+        str(value or "")
+        for value in (
+            (variable.source_concept if variable is not None else None),
+            (variable.name if variable is not None else None),
+            (variable.description if variable is not None else None),
+            context.target_outcome,
+        )
+    )
+    normalized = _normalise_clinical_text(declared)
+    if not outcome_clause or not any(
+        f" {marker} " in f" {normalized} "
+        for marker in ("mortality", "death", "survival")
+    ):
+        return outcome_clause
+    return (
+        f"({outcome_clause} OR mortality[Title/Abstract] OR "
+        'death[Title/Abstract])'
     )
 
 
@@ -2001,6 +2187,26 @@ def build_pubmed_protocol_queries_for_context(
         queries.append(
             " AND ".join((exposure_or_topic, _ICU_FILTER, _OBSERVATIONAL_FILTER))
         )
+    database_clause = _database_retrieval_clause(context)
+    time_clause, _ = _time_horizon_retrieval_clause(context)
+    if exposure_or_topic and outcome_clause and database_clause and time_clause:
+        # A bounded relevance search can push an exact same-database,
+        # same-window comparator below the retained depth. This complementary
+        # stratum recovers it without relaxing the source-backed screen.
+        horizon_outcome_clause = _time_horizon_outcome_clause(
+            context,
+            outcome_clause,
+        )
+        queries.append(
+            " AND ".join(
+                (
+                    exposure_or_topic,
+                    time_clause,
+                    horizon_outcome_clause,
+                    database_clause,
+                )
+            )
+        )
     intent = _study_intent_clause(context.research_question)
     if exposure_or_topic and intent:
         queries.append(" AND ".join((exposure_or_topic, intent, _ICU_FILTER)))
@@ -2066,9 +2272,16 @@ def _rank_protocol_search_results(
     topic = _question_topic_term(context.research_question).casefold()
     intent_terms = _study_intent_focus_terms(context.research_question)
     adult_required = _adult_population_required(context)
+    database_terms = tuple(
+        _normalise_clinical_text(term) for term in _database_retrieval_terms(context)
+    )
+    _, time_terms = _time_horizon_retrieval_clause(context)
 
     def score(record: CitationRecord) -> tuple[int, int]:
         title = _normalise_clinical_text(record.title)
+        source_blob = _normalise_clinical_text(
+            " ".join((record.title, str(record.relevance or "")))
+        )
         value = 0
         if exposure and _clinical_axis_matches(exposure, title, axis="exposure"):
             value += 6
@@ -2098,6 +2311,14 @@ def _rank_protocol_search_results(
             )
         ):
             value -= 12
+        if database_terms and any(
+            f" {term} " in f" {source_blob} " for term in database_terms
+        ):
+            value += 5
+        if time_terms and any(
+            f" {term} " in f" {source_blob} " for term in time_terms
+        ):
+            value += 3
         if adult_required and any(
             marker in f" {title} "
             for marker in (" child ", " children ", " pediatric ", " paediatric ")
