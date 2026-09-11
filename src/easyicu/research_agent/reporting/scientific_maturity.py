@@ -40,6 +40,8 @@ from ..research_context.temporal_semantics import (
 )
 from ..schema import AnalysisPlan, ResearchContext
 from .display_suite import panel_has_absolute_risk_context
+from .manuscript_quality import render_reader_manuscript
+from .manuscript_sections import MANUSCRIPT_SECTION_SPECS
 from .novelty_positioning import novelty_authority_digests
 
 
@@ -643,6 +645,113 @@ def _manuscript_section_word_counts(manuscript: str) -> dict[str, int]:
     return output
 
 
+_PROSE_SECTION_ALIASES = {
+    "abstract": {"abstract"},
+    "introduction": {"introduction", "background"},
+    "methods": {"methods", "method", "materials and methods"},
+    "results": {"results"},
+    "discussion": {"discussion"},
+    "limitations": {"limitations", "strengths and limitations"},
+    "conclusion": {"conclusion", "conclusions"},
+}
+
+
+def _manuscript_section_prose_metrics(manuscript: str) -> dict[str, dict[str, int]]:
+    """Measure reader-facing prose per section for the advisory length targets.
+
+    The anti-stub floors compare against :func:`_manuscript_section_word_counts`,
+    which counts the bound text and so includes evidence-link markup. A Writer
+    section target describes reader prose, and crediting citation markup as
+    content would overstate exactly the thin sections the target exists to catch.
+    The two measures intentionally differ and are never exchanged.
+
+    Both use the same token regex, so a CJK manuscript counts per run of
+    characters rather than per word; that limitation is inherited from the
+    existing floor measure, not introduced here.
+    """
+
+    reader = render_reader_manuscript(manuscript)
+    matches = list(
+        re.finditer(r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$", reader, re.MULTILINE)
+    )
+    output: dict[str, dict[str, int]] = {}
+    for index, match in enumerate(matches):
+        normalized = " ".join(
+            re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+", " ", match.group("title").casefold()
+            ).split()
+        )
+        section = next(
+            (
+                key
+                for key, values in _PROSE_SECTION_ALIASES.items()
+                if normalized in values
+            ),
+            None,
+        )
+        if section is None:
+            continue
+        level = len(match.group("marks"))
+        end = len(reader)
+        for candidate in matches[index + 1 :]:
+            if len(candidate.group("marks")) <= level:
+                end = candidate.start()
+                break
+        body = reader[match.end() : end]
+        paragraphs = [block for block in re.split(r"\n\s*\n", body) if block.strip()]
+        output[section] = {
+            "words": len(re.findall(r"\b[\w'-]+\b", body)),
+            "paragraphs": len(paragraphs),
+        }
+    return output
+
+
+def _section_target_deviations(manuscript: str) -> list[dict[str, Any]]:
+    """Compare delivered reader prose with the target its Writer instruction asked for.
+
+    Advisory only. Nothing here joins ``thin_sections`` or any blocker set: a
+    stated target that became a gate would push the Writer to pad a descriptive
+    study to reach a word count, which the instructions themselves forbid.
+    """
+
+    measured = _manuscript_section_prose_metrics(manuscript)
+    deviations: list[dict[str, Any]] = []
+    for spec in MANUSCRIPT_SECTION_SPECS:
+        section = measured.get(spec.key)
+        if section is None:
+            continue
+        issues: list[str] = []
+        if spec.word_target:
+            low, high = spec.word_target
+            if section["words"] < low:
+                issues.append("below_word_target")
+            elif section["words"] > high:
+                issues.append("above_word_target")
+        if spec.paragraph_target:
+            low, high = spec.paragraph_target
+            if section["paragraphs"] < low:
+                issues.append("below_paragraph_target")
+            elif section["paragraphs"] > high:
+                issues.append("above_paragraph_target")
+        if issues:
+            deviations.append(
+                {
+                    "section": spec.key,
+                    "observed_words": section["words"],
+                    "observed_paragraphs": section["paragraphs"],
+                    "word_target": list(spec.word_target) if spec.word_target else None,
+                    "paragraph_target": (
+                        list(spec.paragraph_target)
+                        if spec.paragraph_target
+                        else None
+                    ),
+                    "issues": issues,
+                    "gating": False,
+                }
+            )
+    return deviations
+
+
 def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
     audit = _read_json(run_dir, "manuscript_literature_audit.json")
     manuscript_path = run_dir / "manuscript_scaffold_bound.md"
@@ -689,6 +798,9 @@ def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
         "section_word_counts": section_word_counts,
         "section_word_floors": section_word_floors,
         "thin_sections": thin_sections,
+        # Advisory: whether the Writer honoured the length its own instruction
+        # asked for. Kept separate from thin_sections so it can never gate.
+        "sections_outside_spec_target": _section_target_deviations(manuscript),
         "missing_sections": missing,
         "literature_audit_status": str(audit.get("status") or "missing"),
         "exact_literature_citations_present": bool(
