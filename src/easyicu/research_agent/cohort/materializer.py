@@ -722,6 +722,112 @@ def _load_concept(
         raise RuntimeError(f"failed to load concept {concept!r}") from exc
 
 
+def _normalize_legacy_export_categorical(
+    frame: pd.DataFrame,
+    *,
+    concept: str,
+    database: str,
+    package: Optional[ExportPackage],
+) -> tuple[pd.DataFrame, Optional[Dict[str, Any]]]:
+    """Apply a declared category map to an untyped legacy export.
+
+    Legacy exports can predate a concept-dictionary mapping change.  The
+    physical column then contains raw source levels even though the dictionary
+    declares a closed output domain.  Re-materializing that raw column would
+    silently bless an undeclared level, so the export is normalized through
+    the same ``apply_map`` callback used by source extraction.
+
+    This is deliberately limited to untyped exports and simple ``apply_map``
+    callbacks.  Typed exports carry their own owner-authorized bindings and are
+    never rewritten here.
+    """
+
+    if (
+        package is None
+        or package.column_metadata_sha256 is not None
+        or frame.empty
+        or concept not in frame.columns
+    ):
+        return frame, None
+
+    from ...config import load_src_cfg
+    from ...resources import load_dictionary
+    from ...concept.callback_apply import _apply_callback
+
+    definition = load_dictionary().get(concept)
+    levels = getattr(definition, "levels", None)
+    if definition is None or not isinstance(levels, (list, tuple)) or not levels:
+        return frame, None
+
+    values = frame[concept]
+    nonnull = values.dropna()
+    if nonnull.empty or bool(nonnull.isin(levels).all()):
+        return frame, None
+
+    source_config = load_src_cfg(database)
+    sources = [
+        source
+        for source in definition.for_data_source(source_config)
+        if getattr(source, "callback", None)
+    ]
+    if len(sources) != 1:
+        raise MaterializedMetadataError(
+            f"legacy export concept {concept!r} has undeclared values but "
+            "does not have one unambiguous source callback"
+        )
+    callback = str(sources[0].callback).strip()
+    if not callback.startswith("apply_map("):
+        raise MaterializedMetadataError(
+            f"legacy export concept {concept!r} has undeclared values and "
+            "requires a declared apply_map callback"
+        )
+
+    normalized = _apply_callback(
+        frame.copy(),
+        sources[0],
+        concept,
+    )
+    if len(normalized) != len(frame):
+        raise MaterializedMetadataError(
+            f"legacy export normalization changed row count for {concept!r}"
+        )
+    remaining = normalized[concept].dropna()
+    unexpected = remaining.loc[~remaining.isin(levels)]
+    if not unexpected.empty:
+        counts = {
+            str(key): int(value)
+            for key, value in unexpected.value_counts(dropna=False).items()
+        }
+        raise MaterializedMetadataError(
+            f"legacy export concept {concept!r} still contains undeclared "
+            f"levels after apply_map: {counts}"
+        )
+
+    raw_counts = {
+        str(key): int(value)
+        for key, value in values.value_counts(dropna=False).items()
+    }
+    normalized_counts = {
+        str(key): int(value)
+        for key, value in normalized[concept].value_counts(dropna=False).items()
+    }
+    changed = values.notna() & normalized[concept].notna() & values.ne(
+        normalized[concept]
+    )
+    receipt = {
+        "policy": "declared_apply_map_for_legacy_export",
+        "concept": concept,
+        "database": database,
+        "manifest_sha256": package.manifest_sha256,
+        "callback_sha256": hashlib.sha256(callback.encode("utf-8")).hexdigest(),
+        "declared_levels": list(levels),
+        "raw_counts": raw_counts,
+        "normalized_counts": normalized_counts,
+        "changed_rows": int(changed.sum()),
+    }
+    return normalized, receipt
+
+
 def _export_authority_provenance(
     package: Optional[ExportPackage],
 ) -> Optional[Dict[str, Any]]:
@@ -1235,6 +1341,7 @@ def _materialize_cohort_from_resolved_source(
     if bounds_violation_policy not in {"reject", "exclude_with_receipt"}:
         raise MaterializedMetadataError("unsupported source bounds violation policy")
     bounds_violation_counts: dict[str, int] = {}
+    legacy_export_domain_normalizations: dict[str, Dict[str, Any]] = {}
 
     unavailable: List[str] = []
 
@@ -1242,6 +1349,14 @@ def _materialize_cohort_from_resolved_source(
         loaded = _load_concept(
             source_mode, source_handle, concept, database, patient_ids, unavailable
         )
+        loaded, normalization_receipt = _normalize_legacy_export_categorical(
+            loaded,
+            concept=concept,
+            database=database,
+            package=export_package,
+        )
+        if normalization_receipt is not None:
+            legacy_export_domain_normalizations[concept] = normalization_receipt
         if loaded.empty or concept not in loaded.columns:
             return loaded
         loaded = loaded.copy()
@@ -1507,6 +1622,9 @@ def _materialize_cohort_from_resolved_source(
         "declared_positive_only_event_concepts": list(declared_positive_only),
         "source_bounds_violation_policy": bounds_violation_policy,
         "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),
+        "legacy_export_domain_normalizations": (
+            legacy_export_domain_normalizations
+        ),
         "columns": list(cohort.columns),
         "cohort_sha256": _hash_df(cohort.reset_index(drop=True)),
         "build_seconds": round(time.time() - t0, 2),
@@ -1594,6 +1712,7 @@ def _build_trajectory_long_from_resolved_source(
     if bounds_violation_policy not in {"reject", "exclude_with_receipt"}:
         raise MaterializedMetadataError("unsupported source bounds violation policy")
     bounds_violation_counts: dict[str, int] = {}
+    legacy_export_domain_normalizations: dict[str, Dict[str, Any]] = {}
     unavailable: List[str] = []
     available_unobserved: List[str] = []
     receipt_aware: List[str] = []
@@ -1610,6 +1729,14 @@ def _build_trajectory_long_from_resolved_source(
             patient_ids,
             unavailable,
         )
+        df, normalization_receipt = _normalize_legacy_export_categorical(
+            df,
+            concept=concept,
+            database=database,
+            package=export_package,
+        )
+        if normalization_receipt is not None:
+            legacy_export_domain_normalizations[concept] = normalization_receipt
         if metadata_collector.enabled and not df.empty:
             df = df.copy()
             if TIME_COL in df.columns:
@@ -1805,6 +1932,9 @@ def _build_trajectory_long_from_resolved_source(
         "unavailable_concepts": unavailable,
         "source_bounds_violation_policy": bounds_violation_policy,
         "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),
+        "legacy_export_domain_normalizations": (
+            legacy_export_domain_normalizations
+        ),
         "n_rows": int(len(long_df)),
         "n_stays": int(long_df[ID_COL].nunique()) if len(long_df) else 0,
         "trajectory_sha256": _hash_df(long_df),

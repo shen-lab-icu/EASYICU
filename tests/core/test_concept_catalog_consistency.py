@@ -72,6 +72,15 @@ def test_mimic_sampling_keeps_negative_cultures_as_collection_events() -> None:
         assert "specimen" in source["_comment"]
 
 
+def test_admission_type_maps_mimic_ophthalmology_service_to_surgery() -> None:
+    """EYE is a real MIMIC-IV services.curr_service code, not a free level."""
+
+    concept = _load_json("concept-dict.json")
+    for database in ("miiv", "mimic", "mimic_demo"):
+        callback = concept["adm"]["sources"][database][0]["callback"]
+        assert re.search(r"\bEYE\s*=\s*'surg'", callback)
+
+
 def _data_source_tables() -> dict[str, dict]:
     data_sources = _load_json("data-sources.json")
     return {source["name"]: source["tables"] for source in data_sources}
