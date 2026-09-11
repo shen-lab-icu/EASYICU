@@ -62,11 +62,23 @@ def prepare_landmark_model_population(
     exposed = working[authority.exposure_column].notna()
     mask = alive & observed & exposed
     primary = working.loc[mask].copy()
-    model_frame = pd.concat([
+    assembled = pd.concat([
         primary[authority.exposure_column].rename("__exposure"),
         primary[authority.outcome_column].rename("__outcome"),
         adjustment_design(primary, authority),
-    ], axis=1).dropna()
+    ], axis=1)
+    model_frame = assembled.dropna()
+    for column in authority.categorical_adjustment_columns:
+        levels = primary.loc[model_frame.index, column].astype("string")
+        event_counts = model_frame["__outcome"].astype(float).groupby(levels).sum()
+        empty = [str(level) for level, count in event_counts.items() if count <= 0]
+        if empty:
+            raise ValueError(
+                "signed landmark categorical adjustment "
+                f"{column!r} has zero-event level(s) in the complete-case "
+                f"model population: {', '.join(sorted(empty))}; the level is "
+                "not estimable with maximum-likelihood covariance"
+            )
     if len(model_frame) < 30 or model_frame["__outcome"].nunique() != 2:
         raise ValueError("signed landmark primary population is not estimable")
     return LandmarkModelPopulation(working, model_frame, alive, observed, exposed, mask)

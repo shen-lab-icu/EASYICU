@@ -1278,16 +1278,38 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             and product.partition(":")[2]
             in {"measurement_process", "measurement_process_audit"}
         ]
+        sensitivity_contrast_products = [
+            product
+            for product in declared_products
+            if product.partition(":")[0] == "table"
+            and product.partition(":")[2].endswith("_exposure_contrasts")
+            and (
+                "robustness" in product.partition(":")[2]
+                or "sensitivity" in product.partition(":")[2]
+            )
+            and any(
+                step.planned_analysis_role == "sensitivity"
+                and step.method in RCS_LINEAR_SENSITIVITY_METHODS
+                and product in {str(output) for output in step.expected_outputs}
+                for step in plan.steps
+            )
+        ]
         composite_inputs: tuple[str, ...] | None = None
         if (
             self.adjusted_absolute_risk_product is not None
             and self.adjusted_absolute_risk_product in declared_products
             and "table:robustness_summary" in declared_products
             and len(measurement_products) == 1
+            and len(sensitivity_contrast_products) <= 1
         ):
             composite_inputs = (
                 self.curve_product,
                 self.adjusted_absolute_risk_product,
+                *(
+                    (sensitivity_contrast_products[0],)
+                    if sensitivity_contrast_products
+                    else ()
+                ),
                 "table:robustness_summary",
                 measurement_products[0],
             )
@@ -1322,21 +1344,17 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             }
             <= set(step.inputs)
         ]
-        # Prefer the broad article display over a dedicated robustness figure.
-        # Both consume ``table:robustness_summary`` and therefore used to make
-        # the candidate set ambiguous.  The article display is the unique
-        # figure that also consumes the generic primary result and descriptive
-        # context; after authority binding it can be mechanically upgraded to
-        # the exact signed renderer with the model-standardised risk curve.
-        # Preserve the historical
-        # single-figure fallback when no article display exists.
+        # Only a four-table article display may be rebound as the composite
+        # hero.  A dedicated robustness figure also consumes the summary, but
+        # promoting it would silently replace that display and leave the
+        # actual two-curve display untouched.
         composite_candidates = (
             exact_composite_candidates
             if len(exact_composite_candidates) == 1
             else (
                 article_composite_candidates
                 if len(article_composite_candidates) == 1
-                else broad_composite_candidates
+                else []
             )
         )
         composite_step_id = (
@@ -1514,6 +1532,25 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 )
                 for item in step.input_consumption_contracts
             ]
+            figure_panels = [
+                (
+                    panel.model_copy(
+                        update={
+                            "source_products": [
+                                (
+                                    replacement
+                                    if value == generic_parent
+                                    else value
+                                )
+                                for value in panel.source_products
+                            ]
+                        }
+                    )
+                    if generic_parent in panel.source_products
+                    else panel
+                )
+                for panel in step.figure_panels
+            ]
             if signed_result_projection:
                 contracts = [
                     ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
@@ -1524,6 +1561,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     update={
                         "inputs": list(dict.fromkeys(inputs)),
                         "input_consumption_contracts": contracts,
+                        "figure_panels": figure_panels,
                         "icu_rule_refs": list(dict.fromkeys([*step.icu_rule_refs, self.plan_rule_ref])) if functional_form else step.icu_rule_refs,
                         # The binary-sensitivity capability is closed over the
                         # generic adjusted-association parent.  Rebinding that

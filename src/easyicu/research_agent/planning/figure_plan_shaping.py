@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..authority.current_case_scientific_runtime import CurrentCaseScientificRuntimeAuthority
 from ..contracts.declared_product import typed_product
+from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
 from ..contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
     ASSOCIATION_SUMMARY_COMPOSITE_INPUTS,
@@ -449,6 +450,33 @@ def ensure_landmark_association_composite_figure_step(
         if output.partition(":")[2]
         in {"measurement_process", "measurement_process_audit"}
     )
+    sensitivity_candidates = sorted(
+        output
+        for output in produced
+        if output.startswith("table:")
+        and output.partition(":")[2].endswith("_exposure_contrasts")
+        and (
+            "robustness" in output.partition(":")[2]
+            or "sensitivity" in output.partition(":")[2]
+        )
+    )
+    sensitivity = None
+    if len(sensitivity_candidates) == 1:
+        sensitivity = sensitivity_candidates[0]
+        sensitivity_owner = next(
+            (
+                step
+                for step in plan.steps
+                if sensitivity in {str(output) for output in step.expected_outputs}
+            ),
+            None,
+        )
+        if (
+            sensitivity_owner is None
+            or sensitivity_owner.planned_analysis_role != "sensitivity"
+            or sensitivity_owner.method not in RCS_LINEAR_SENSITIVITY_METHODS
+        ):
+            sensitivity = None
     if (
         len(curve_candidates) != 1
         or len(adjusted_risk_candidates) != 1
@@ -458,6 +486,7 @@ def ensure_landmark_association_composite_figure_step(
     sources = (
         curve_candidates[0],
         adjusted_risk_candidates[0],
+        *((sensitivity,) if sensitivity is not None else ()),
         "table:robustness_summary",
         measurement_candidates[0],
     )
@@ -481,31 +510,48 @@ def ensure_landmark_association_composite_figure_step(
         or _method_head(str(curve_owner.method or ""))
         != "signed_landmark_restricted_cubic_spline"
         or _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources)
-        or _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources[:2])
+        or (
+            sensitivity is None
+            and _dedicated_renderer_consumes_exact_sources(
+                plan.steps, sources=sources[:2]
+            )
+        )
     ):
         return plan, []
 
     steps = list(plan.steps)
-    reusable_index = next(
-        (
-            index
-            for index, step in enumerate(steps)
-            if step.planned_analysis_role == "auxiliary"
-            and _method_head(str(step.method or "")) == "visualization"
-            and not step.figure_panels
-            and len(step.expected_outputs) == 1
-            and str(step.expected_outputs[0]).startswith("figure:")
-            and "article" in (f"{step.step_id} {step.expected_outputs[0]}".lower())
-            and "table:robustness_summary"
-            in {str(value) for value in step.inputs}
-            and (
-                adjusted_risk_candidates[0]
+    pair_renderer_indices = [
+        index
+        for index, step in enumerate(steps)
+        if _dedicated_renderer_consumes_exact_sources([step], sources=sources[:2])
+    ]
+    if len(pair_renderer_indices) > 1:
+        return plan, []
+    reusable_index = (
+        pair_renderer_indices[0]
+        if sensitivity is not None and pair_renderer_indices
+        else next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if step.planned_analysis_role == "auxiliary"
+                and _method_head(str(step.method or "")) == "visualization"
+                and not step.figure_panels
+                and len(step.expected_outputs) == 1
+                and str(step.expected_outputs[0]).startswith("figure:")
+                and "article"
+                in (f"{step.step_id} {step.expected_outputs[0]}".lower())
+                and "table:robustness_summary"
                 in {str(value) for value in step.inputs}
-                or "table:absolute_risk_context"
-                in {str(value) for value in step.inputs}
-            )
-        ),
-        None,
+                and (
+                    adjusted_risk_candidates[0]
+                    in {str(value) for value in step.inputs}
+                    or "table:absolute_risk_context"
+                    in {str(value) for value in step.inputs}
+                )
+            ),
+            None,
+        )
     )
     figure_output = (
         str(steps[reusable_index].expected_outputs[0])
@@ -1439,7 +1485,7 @@ def omit_redundant_composite_audits(
         if (
             step.planned_analysis_role != "auxiliary"
             or _method_head(str(step.method or "")) != "visualization"
-            or len(step.inputs) != 4
+            or len(step.inputs) not in {4, 5}
             or len(step.expected_outputs) != 1
             or not str(step.expected_outputs[0]).startswith("figure:")
         ):
@@ -1451,7 +1497,10 @@ def omit_redundant_composite_audits(
             steps.append(step)
             continue
         audit_inputs = {
-            source for panel in panels[2:] for source in panel.source_products
+            source
+            for panel in panels
+            if panel.panel_id in {"robustness_summary", "measurement_process"}
+            for source in panel.source_products
         }
         if not audit_inputs <= {*sources, "table:robustness_summary"}:
             steps.append(step)
@@ -1549,13 +1598,21 @@ def apply_article_figure_strategy_placements(
         "sensitivity_coverage_matrix",
         "status_matrix",
     }
+    audit_only_source_products = {
+        "table:robustness_summary",
+        "table:measurement_process",
+        "table:measurement_process_audit",
+    }
     changed = False
     steps: list[AnalysisStep] = []
     for step in plan.steps:
         panels = []
         for panel in step.figure_panels:
             placement = placements.get(panel.article_role, panel.placement)
-            if str(panel.chart_type) in audit_only_chart_types:
+            if (
+                str(panel.chart_type) in audit_only_chart_types
+                or set(panel.source_products) & audit_only_source_products
+            ):
                 placement = "supplementary"
             panels.append(panel.model_copy(update={"placement": placement}))
         if panels != step.figure_panels:
@@ -1631,7 +1688,7 @@ def close_empty_deterministic_figure_contracts(
             templates = _data_quality_panel_templates(data_quality_sources)
         elif (
             LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= input_set
-            and len(input_set) == 4
+            and len(input_set) in {4, 5}
             and any(
                 value.startswith("table:")
                 and value.partition(":")[2].endswith("landmark_rcs_curve")
@@ -1656,7 +1713,10 @@ def close_empty_deterministic_figure_contracts(
                 for value in input_set
             )
         ):
-            templates = landmark_association_composite_panels(inputs)
+            try:
+                templates = landmark_association_composite_panels(inputs)
+            except ValueError:
+                templates = None
         elif input_set == frozenset(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS):
             templates = cohort_balance_association_composite_panels(inputs)
         elif input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):

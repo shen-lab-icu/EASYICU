@@ -90,6 +90,40 @@ def test_coverage_preserves_non_independence_as_an_audit_dimension() -> None:
     assert display["independent_specs"].tolist() == [1, 0]
 
 
+def test_coverage_aggregates_distinct_contrasts_within_one_axis() -> None:
+    summary = pd.DataFrame(
+        {
+            "axis": ["primary", "primary", "model", "model"],
+            "contrast_id": ["1_vs_2", "5_vs_2", "1_vs_2", "5_vs_2"],
+            "total_specs": [1, 1, 1, 1],
+            "converged_specs": [1, 1, 1, 0],
+            "non_independent_specs": [0, 0, 0, 0],
+        }
+    )
+
+    display = prepare_robustness_coverage(summary)
+
+    assert display[["axis", "total_specs", "converged_specs"]].to_dict(
+        orient="records"
+    ) == [
+        {"axis": "primary", "total_specs": 2, "converged_specs": 2},
+        {"axis": "model", "total_specs": 2, "converged_specs": 1},
+    ]
+
+
+def test_coverage_rejects_repeated_axis_without_distinct_contrasts() -> None:
+    with pytest.raises(ValueError, match="explicit contrast_id"):
+        prepare_robustness_coverage(
+            pd.DataFrame(
+                {
+                    "axis": ["primary", "primary"],
+                    "total_specs": [1, 1],
+                    "converged_specs": [1, 1],
+                }
+            )
+        )
+
+
 def test_coverage_rejects_counts_outside_the_registered_total() -> None:
     with pytest.raises(ValueError, match="do not nest"):
         prepare_robustness_coverage(

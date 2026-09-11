@@ -152,8 +152,8 @@ def prepare_robustness_coverage(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("robustness coverage cannot be empty")
     result = frame.copy()
     result["axis"] = result["axis"].map(lambda value: str(value or "").strip())
-    if result["axis"].eq("").any() or result["axis"].duplicated().any():
-        raise ValueError("robustness coverage axes must be non-empty and unique")
+    if result["axis"].eq("").any():
+        raise ValueError("robustness coverage axes must be non-empty")
 
     count_columns = ["total_specs", "converged_specs"]
     if "non_independent_specs" in result.columns:
@@ -179,6 +179,25 @@ def prepare_robustness_coverage(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(
             "non-independent robustness counts do not nest within total_specs"
         )
+
+    if result["axis"].duplicated().any():
+        if "contrast_id" not in result.columns:
+            raise ValueError(
+                "repeated robustness axes require an explicit contrast_id"
+            )
+        contrasts = result["contrast_id"].map(
+            lambda value: str(value or "").strip()
+        )
+        repeated_rows = result.assign(contrast_id=contrasts)
+        if contrasts.eq("").any() or repeated_rows.duplicated(
+            ["axis", "contrast_id"]
+        ).any():
+            raise ValueError(
+                "repeated robustness axes require unique non-empty contrast ids"
+            )
+        result = repeated_rows.groupby(
+            "axis", sort=False, as_index=False
+        )[count_columns].sum()
 
     result["registered_specs"] = result["total_specs"]
     if "non_independent_specs" in result.columns:
