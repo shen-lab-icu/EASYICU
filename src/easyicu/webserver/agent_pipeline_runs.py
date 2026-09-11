@@ -535,6 +535,18 @@ _SAFE_RUNNER_UNAVAILABLE_REASONS = frozenset(
 def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     """Project one allowlisted owner diagnostic without exception text."""
 
+    # ``__context__`` can preserve an earlier Planner compiler finding when a
+    # later Provider transport call fails while that finding is being handled.
+    # The outer transport error owns the current terminal outcome; do not
+    # misclassify a recoverable HTTP failure from stale compiler context.
+    outer_http_status = safe_provider_http_status_code(exc)
+    if outer_http_status is not None:
+        return {
+            "owner": "easyicu.providers.http_transport_v1",
+            "reason_code": "provider_http_error",
+            "status_code": outer_http_status,
+        }
+
     for item in _pipeline_exception_chain(exc):
         if isinstance(item, ValidationError):
             coordinates: List[Dict[str, Any]] = []

@@ -8,6 +8,41 @@ import pytest
 from easyicu.webserver import agent_pipeline_runs
 
 
+def test_outer_http_failure_takes_precedence_over_contextual_compiler_failure():
+    from easyicu.research_agent.planning.progressive_contract import (
+        ProgressivePlanCompileError,
+    )
+
+    try:
+        raise ProgressivePlanCompileError(
+            "progressive_typed_product_specs_invalid",
+            "an earlier bounded repair failed",
+            step_id="baseline_context",
+            step_index=1,
+            path="typed_product_specs",
+        )
+    except ProgressivePlanCompileError:
+        transport = RuntimeError("provider body must stay private")
+        transport.response = SimpleNamespace(
+            status_code=503,
+            headers={"Authorization": "secret"},
+            text="secret",
+            url="https://private.example/patient",
+        )
+        try:
+            raise transport
+        except RuntimeError as failure:
+            assert agent_pipeline_runs._safe_pipeline_typed_failure(failure) == {
+                "owner": "easyicu.providers.http_transport_v1",
+                "reason_code": "provider_http_error",
+                "status_code": 503,
+            }
+            assert agent_pipeline_runs._pipeline_failure_code(
+                failure,
+                budget_mode="planner_canary",
+            ) == "research_pipeline_planner_provider_unavailable"
+
+
 @pytest.mark.parametrize("status", [401, 429, 503])
 def test_pipeline_failure_keeps_typed_http_status_across_exception_chain(tmp_path, status):
     secret = "sk-secret-provider-message-and-patient-fragment"
