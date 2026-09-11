@@ -3134,6 +3134,66 @@ def _prepare_idea_handoff(
     )
 
 
+def _prior_art_screening_projection(value: Any) -> Dict[str, Any]:
+    """Project adjudication counts and screened metadata without row containers."""
+
+    screening = value if isinstance(value, Mapping) else {}
+    candidates = []
+    for row in list(screening.get("records") or [])[:20]:
+        if not isinstance(row, Mapping):
+            continue
+        candidates.append(
+            {
+                key: row.get(key)
+                for key in (
+                    "pmid",
+                    "title",
+                    "disposition",
+                    "evidence_role",
+                    "rationale",
+                    "population_match",
+                    "exposure_match",
+                    "outcome_match",
+                    "publication_type_eligible",
+                )
+                if row.get(key) is not None
+            }
+        )
+    return {
+        "retrieval_candidate_count": screening.get("retrieval_candidate_count"),
+        "direct_comparator_count": screening.get("direct_comparator_count"),
+        "screened_candidates": candidates,
+    }
+
+
+def _prior_art_adjudication_binding_projection(
+    binding: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Project the digest binding while replacing its internal row container."""
+
+    summary = binding.get("prior_art_adjudication_summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    projected = {
+        key: binding.get(key)
+        for key in (
+            "prior_art_adjudication_schema_version",
+            "prior_art_adjudication_sha256",
+            "prior_art_decision",
+            "prior_art_adjudicated_at",
+            "idea_definition_sha256",
+        )
+        if binding.get(key) is not None
+    }
+    projected["prior_art_adjudication_summary"] = {
+        "decision": summary.get("decision"),
+        "rationale": summary.get("rationale"),
+        "screening": _prior_art_screening_projection(summary.get("screening")),
+        "comparison_axes": list(summary.get("comparison_axes") or [])[:6],
+        "authority": summary.get("authority"),
+    }
+    return projected
+
+
 def _adjudicate_idea_literature(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -3187,10 +3247,12 @@ def _adjudicate_idea_literature(
                     "idea_id": adjudication.get("idea_id"),
                     "decision": decision,
                     "rationale": adjudication.get("rationale"),
-                    "screening": adjudication.get("screening"),
+                    "screening": _prior_art_screening_projection(
+                        adjudication.get("screening")
+                    ),
                     "comparison_axes": adjudication.get("comparison_axes"),
                     "authority": adjudication.get("authority"),
-                    "binding": binding,
+                    "binding": _prior_art_adjudication_binding_projection(binding),
                 }
             ),
             "execution_can_advance": decision == "differentiated",

@@ -256,11 +256,109 @@ def _data_status(
     run_dir: Path | None,
 ) -> tuple[ScientificDomainReadiness, list[ScientificReadinessFinding], dict[str, Any]]:
     provenance = _read_json(run_dir, "cohort_provenance.json")
+    analysis_provenance = _read_json(run_dir, "cohort_analysis_provenance.json")
+    locked_cohort = _read_json(run_dir, "cohort_locked.json")
+    analysis_receipt_path = (
+        run_dir / "cohort_analysis_provenance.json" if run_dir is not None else None
+    )
+    lock_path = run_dir / "cohort_locked.json" if run_dir is not None else None
+    analysis_receipt_present = bool(
+        analysis_receipt_path is not None and analysis_receipt_path.is_file()
+    )
+    lock_present = bool(lock_path is not None and lock_path.is_file())
+
     cohort_definition = provenance.get("cohort_definition")
     export_authority = provenance.get("export_authority")
     database = _text(provenance.get("database"), 80) or None
-    scope_explicit = bool(cohort_definition)
+    source_scope_explicit = bool(cohort_definition)
+
+    analysis_definition = analysis_provenance.get("cohort_definition")
+    analysis_sha = _text(analysis_provenance.get("cohort_sha256"), 64)
+    analysis_scope_explicit = False
+    analysis_cohort_denominator: int | None = None
+    if analysis_receipt_present:
+        definition_is_mapping = isinstance(analysis_definition, Mapping)
+        inclusion = (
+            analysis_definition.get("inclusion", [])
+            if definition_is_mapping
+            else []
+        )
+        exclusion = (
+            analysis_definition.get("exclusion", [])
+            if definition_is_mapping
+            else []
+        )
+        selection_mode = (
+            _text(
+                analysis_definition.get("selection_mode") or "predicate_filtered",
+                40,
+            )
+            if definition_is_mapping
+            else ""
+        )
+        explicit_selection = (
+            definition_is_mapping
+            and bool(_text(analysis_definition.get("name"), 160))
+            and isinstance(inclusion, list)
+            and isinstance(exclusion, list)
+            and (
+                (
+                    selection_mode == "all_input_rows"
+                    and not inclusion
+                    and not exclusion
+                )
+                or (
+                    selection_mode == "predicate_filtered"
+                    and bool(inclusion or exclusion)
+                )
+            )
+        )
+        digest_is_valid = (
+            len(analysis_sha) == 64
+            and all(character in "0123456789abcdef" for character in analysis_sha)
+        )
+        locked_definition = locked_cohort.get("cohort")
+        locked_sha = _text(locked_cohort.get("cohort_sha256"), 64)
+        lock_bound = (
+            not lock_present
+            or (
+                isinstance(locked_definition, Mapping)
+                and analysis_definition == locked_definition
+                and analysis_sha == locked_sha
+            )
+        )
+        try:
+            n_universe = int(analysis_provenance.get("n_universe"))
+            n_analysis_cohort = int(analysis_provenance.get("n_analysis_cohort"))
+        except (TypeError, ValueError):
+            denominator_is_valid = False
+        else:
+            analysis_cohort_denominator = n_analysis_cohort
+            denominator_is_valid = (
+                n_universe >= 0
+                and n_analysis_cohort >= 0
+                and n_analysis_cohort <= n_universe
+                and (
+                    selection_mode != "all_input_rows"
+                    or n_analysis_cohort == n_universe
+                )
+            )
+        analysis_scope_explicit = (
+            explicit_selection
+            and digest_is_valid
+            and lock_bound
+            and denominator_is_valid
+        )
+
+    scope_explicit = (
+        analysis_scope_explicit
+        if analysis_receipt_present
+        else source_scope_explicit
+    )
     authority_present = isinstance(export_authority, Mapping) and bool(export_authority)
+    evidence_refs = ["cohort_provenance.json"]
+    if analysis_receipt_present:
+        evidence_refs.append("cohort_analysis_provenance.json")
     findings: list[ScientificReadinessFinding] = []
     if not scope_explicit:
         findings.append(
@@ -272,7 +370,7 @@ def _data_status(
                     "The materialized cohort may be technically traceable, but the source "
                     "population, selection path, and representativeness are not explicitly closed."
                 ),
-                evidence_refs=["cohort_provenance.json"],
+                evidence_refs=evidence_refs,
                 remediation=(
                     "Persist the source population, eligibility/exclusion flow, source "
                     "coverage, and final denominator as a reproducible cohort definition."
@@ -288,7 +386,7 @@ def _data_status(
             if passed
             else "Provenance exists, but scientific population scope is not fully established."
         ),
-        evidence_refs=["cohort_provenance.json"],
+        evidence_refs=evidence_refs,
     )
     return (
         domain,
@@ -296,6 +394,16 @@ def _data_status(
         {
             "database": database,
             "cohort_definition_explicit": scope_explicit,
+            "cohort_definition_source": (
+                "cohort_analysis_provenance.json"
+                if analysis_scope_explicit
+                else (
+                    "cohort_provenance.json"
+                    if source_scope_explicit and not analysis_receipt_present
+                    else None
+                )
+            ),
+            "analysis_cohort_denominator": analysis_cohort_denominator,
             "export_authority_present": authority_present,
         },
     )
