@@ -128,10 +128,20 @@ def ensure_prespecified_sensitivity_steps(
     # A declared id or prose alone is insufficient. Only the actual runtime
     # owner, with the exact same time coordinates, can fulfill this obligation
     # through the primary fit. Final runtime binding/validation remains required.
+    referenced_spec_ids = {
+        spec_id
+        for step in plan.steps
+        for spec_id in step.sensitivity_spec_ids
+    }
     primary_covered = {
         spec.spec_id
         for spec in specs
-        if _primary_landmark_covers_spec(primary, spec, runtime_authority)
+        if _primary_landmark_covers_spec(
+            primary,
+            spec,
+            runtime_authority,
+            referenced_spec_ids=referenced_spec_ids,
+        )
     }
     already_executed = {
         spec_id
@@ -277,12 +287,14 @@ def _primary_landmark_covers_spec(
     primary: AnalysisStep,
     spec: PrespecifiedSensitivitySpec,
     authority: CurrentCaseScientificRuntimeAuthority | None,
+    *,
+    referenced_spec_ids: set[str],
 ) -> bool:
     if not isinstance(authority, LandmarkSplineRuntimeAuthority):
         return False
     requirement = primary.model_requirements[0]
     return (
-        spec.spec_id in primary.sensitivity_spec_ids
+        spec.spec_id in referenced_spec_ids
         and spec.strategy == "landmark"
         and spec.landmark_hours == authority.landmark_hours
         and spec.require_alive_at_landmark
