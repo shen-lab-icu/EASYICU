@@ -51,6 +51,16 @@ _NEXT_STEP_SUMMARIES = {
         "The bound directory has no readable EasyICU export files. Prepare the "
         "package before planning."
     ),
+    "research_pipeline_manifest_invalid": (
+        "The bound EasyICU export package exists but cannot establish intake "
+        "authority, so retrying this submission will fail identically. This is "
+        "not a permission problem and the user's folder does not need to be "
+        "re-picked: read details.intake_error_code and details.intake_error_message "
+        "for the specific contract the manifest misses, then run "
+        "easyicu_start_extraction to prepare a current package from the source "
+        "database. A package written before the current manifest contract stays "
+        "unusable no matter how often it is retried."
+    ),
     "planner_checkpoint_not_available": (
         "The unchanged study has no validated Planner checkpoint to continue. "
         "Generate a fresh candidate plan instead."

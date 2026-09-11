@@ -3043,7 +3043,24 @@ def validate_research_pipeline_source(
                     "observed_binding_sha256": None,
                 },
             ) from exc
-        raise ExportCohortError("research_pipeline_manifest_invalid") from exc
+        # Carry the intake reason through. `validate_research_pipeline_source` is
+        # the first owner that opens the package, and the research-run preparer
+        # forwards `exc.detail` verbatim, so dropping it here is the only reason a
+        # stale export -- one whose manifest predates the `concept_ids` contract --
+        # surfaces as an unexplained code whose only offered remedy is to retry.
+        # The member name is reported, never the absolute path: this receipt is
+        # rendered into Copilot and Web payloads.
+        reason_code = getattr(exc, "code", None)
+        reason_detail: Dict[str, Any] = {
+            "intake_error_code": str(reason_code or "export_package_unreadable"),
+            "intake_error_message": str(exc).strip() or type(exc).__name__,
+        }
+        member = getattr(exc, "member", None)
+        if member:
+            reason_detail["intake_member"] = str(member)
+        raise ExportCohortError(
+            "research_pipeline_manifest_invalid", reason_detail
+        ) from exc
 
     binding["binding_sha256"] = hashlib.sha256(
         json.dumps(

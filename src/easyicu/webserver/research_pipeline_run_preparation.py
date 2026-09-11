@@ -306,12 +306,30 @@ def _prepare_scientific_launch(
                 database=database,
             )
         except dataio.ExportCohortError as exc:
+            forwarded = {
+                key: value for key, value in exc.detail.items() if key != "error"
+            }
+            # `ResearchRunSubmissionError` prefers this message over its own
+            # next-step table, so the intake reason has to appear here or the only
+            # remedy a reader ever sees is to retry. A package whose manifest
+            # predates the intake contract can never pass on retry: it needs a
+            # fresh extraction, and saying so is the difference between a user
+            # re-picking a healthy folder and fixing the actual stale artifact.
+            message = (
+                "The Research Agent requires a manifest-backed prepared data package."
+            )
+            intake_code = str(forwarded.get("intake_error_code") or "").strip()
+            if intake_code:
+                message = (
+                    f"{message} Intake rejected the bound package as "
+                    f"{intake_code}: {forwarded.get('intake_error_message') or ''} "
+                    "Retrying will fail identically; run easyicu_start_extraction "
+                    "to prepare a current export package from the source database."
+                )
             raise ResearchPipelineRunError(
                 str(exc.detail.get("error") or "research_pipeline_source_invalid"),
-                "The Research Agent requires a manifest-backed prepared data package.",
-                details={
-                    key: value for key, value in exc.detail.items() if key != "error"
-                },
+                message,
+                details=forwarded,
             ) from exc
         prepared_package_binding = dict(package_receipt["binding"])
 
