@@ -445,6 +445,78 @@ def test_primary_landmark_coverage_does_not_remove_other_sensitivity_obligations
     assert [s.method for s in shaped.steps] == ["adjusted_association_models", "multiple_imputation_sensitivity"]
 
 
+def test_primary_landmark_coverage_accepts_spec_referenced_by_robustness_replay() -> None:
+    from easyicu.research_agent.planning.figure_plan_shaping import apply_required_plan_obligations
+
+    authority, context, plan = _landmark_shaping_case()
+    spec_id = context.user_preferences.sensitivity_specs[0].spec_id
+    primary = plan.steps[0].model_copy(update={"sensitivity_spec_ids": []})
+    robustness = AnalysisStep.model_validate(
+        {
+            "step_id": "robustness_assessment",
+            "planned_analysis_role": "sensitivity",
+            "intent": "Replay the prespecified temporal alignment coordinate.",
+            "method": "robustness_sensitivity",
+            "inputs": [
+                "exposure",
+                "outcome",
+                "age",
+                "event_hours",
+                "followup_hours",
+                "artifact:analysis_cohort",
+                "table:adjusted_association_estimates",
+            ],
+            "expected_outputs": ["table:robustness_summary"],
+            "sensitivity_spec_ids": [
+                "time_alignment_landmark_replay",
+                spec_id,
+                "complete_case_primary_variables",
+            ],
+            "robustness_replay_spec": {
+                "products": [
+                    {
+                        "product_id": "robustness_summary",
+                        "output": "robustness_summary",
+                    }
+                ]
+            },
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "steps": [primary, robustness],
+            "robustness_specs": [
+                RobustnessSpec(
+                    spec_id="complete_case_primary_variables",
+                    axis="missing",
+                    description="Replay the complete-case specification.",
+                    missing_override={
+                        "strategy": "complete_case",
+                        "variables": ["exposure", "outcome", "age"],
+                    },
+                )
+            ],
+        }
+    )
+    findings = []
+
+    shaped = apply_required_plan_obligations(
+        plan,
+        context,
+        findings,
+        runtime_authority=authority,
+    )
+
+    assert not any(step.method == "landmark_analysis" for step in shaped.steps)
+    assert any(
+        finding.detail.get("reason_code") == "typed_landmark_obligation_owned_by_primary"
+        for finding in findings
+    )
+    bound = authority.bind_plan(shaped)
+    authority.validate_plan(bound)
+    assert bound.steps[0].method == authority.plan_method
+
+
 @pytest.mark.parametrize("mutation", [None, "plausibility", "cohort_digest", "missing_parent", "wrong_step", "different_population"])
 def test_primary_population_risk_executes_same_rows_and_refuses_drift(tmp_path, monkeypatch, mutation):
     import hashlib
