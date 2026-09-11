@@ -149,11 +149,30 @@ def test_typed_selected_design_requires_complete_reviewable_recommendation() -> 
     assert agent_pipeline_runs._plan_has_complete_reviewable_recommendation({})
 
 
-def _write_pipeline_export(root: Path, *, database: str = "miiv") -> Path:
+def _write_pipeline_export(
+    root: Path, *, database: str = "miiv", current_contract: bool = True
+) -> Path:
+    """Write a prepared export package manifest.
+
+    ``current_contract=False`` reproduces an export written before intake began
+    requiring per-file ``concept_ids``: the same directory is laid out correctly
+    and passes the layout-only readiness probe, but cannot establish authority.
+    """
+
     root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
         root / "demographics.parquet", index=False
     )
+    # Built in the original key order so the default path serializes the same
+    # manifest bytes as before; the file entry joins the binding hash.
+    file_entry: dict[str, Any] = {
+        "file": "demographics.parquet",
+        "module": "demographics",
+        "concepts": 1,
+    }
+    if current_contract:
+        file_entry["concept_ids"] = ["age"]
+    file_entry["rows"] = 1
     (root / "_manifest.json").write_text(
         json.dumps(
             {
@@ -164,15 +183,7 @@ def _write_pipeline_export(root: Path, *, database: str = "miiv") -> Path:
                     "modules": {"demographics": ["age"]},
                 },
                 "feature_definitions": {"included": False},
-                "files": [
-                    {
-                        "file": "demographics.parquet",
-                        "module": "demographics",
-                        "concepts": 1,
-                        "concept_ids": ["age"],
-                        "rows": 1,
-                    }
-                ],
+                "files": [file_entry],
             }
         ),
         encoding="utf-8",
@@ -2252,6 +2263,34 @@ def test_pipeline_factory_rejects_missing_or_unknown_database(database: Any) -> 
         if database is None
         else "research_pipeline_database_unknown"
     )
+
+
+def test_stale_package_rejection_carries_the_intake_reason(
+    tmp_path: Path,
+) -> None:
+    """A pre-``concept_ids`` export has to say why it cannot establish authority.
+
+    The layout-only readiness probe accepts this directory, so it can be selected
+    and confirmed as a data source; intake is the first owner that opens the
+    package. Without the reason travelling with the rejection, the submission
+    boundary reports a stable code whose only offered remedy is to retry a
+    package that will fail identically every time.
+    """
+
+    export = _write_pipeline_export(tmp_path / "stale-export", current_contract=False)
+
+    with pytest.raises(dataio.ExportCohortError) as exc:
+        dataio.validate_research_pipeline_source(str(export), database="miiv")
+
+    detail = exc.value.detail
+    assert detail["error"] == "research_pipeline_manifest_invalid"
+    assert detail["intake_error_code"] == "manifest_concept_ids_invalid"
+    assert "concept_ids" in detail["intake_error_message"]
+
+    # The reason must survive the hop into the research-run error payload, which
+    # is what Copilot and the Web surface actually read.
+    forwarded = {key: value for key, value in detail.items() if key != "error"}
+    assert "intake_error_code" in forwarded
 
 
 def test_pipeline_factory_rejects_clinical_anchor_as_materialization_anchor(
@@ -6491,6 +6530,33 @@ def test_unprepared_source_rejection_names_the_preparation_step(
     assert "easyicu_start_extraction" in result["summary"]
     assert "not a permission problem" in result["summary"]
     assert "re-pick" in result["summary"]
+
+
+def test_stale_package_offers_re_extraction_instead_of_a_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Close the loop from the real rejection to the advice Pi receives.
+
+    The detail is produced by the actual intake owner against an actual stale
+    package rather than hand-written, so this also pins that the intake reason
+    survives every hop: dataio -> submission boundary -> Pi receipt.
+    """
+
+    export = _write_pipeline_export(tmp_path / "stale", current_contract=False)
+    with pytest.raises(dataio.ExportCohortError) as raised:
+        dataio.validate_research_pipeline_source(str(export), database="miiv")
+
+    result = _run_submission_rejection(monkeypatch, dict(raised.value.detail))
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "research_pipeline_manifest_invalid"
+    assert result["summary"] != (
+        "The existing EasyICU run submission boundary rejected the request."
+    )
+    assert "easyicu_start_extraction" in result["summary"]
+    assert "fail identically" in result["summary"]
+    assert result["details"]["intake_error_code"] == "manifest_concept_ids_invalid"
 
 
 def test_other_run_rejections_carry_the_owning_message(
