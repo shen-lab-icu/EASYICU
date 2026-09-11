@@ -33,6 +33,14 @@ class ManuscriptSectionSpec:
     instruction: str
     max_tokens: int
     required_subsections: tuple[str, ...] = ()
+    # The length bound the instruction already states in prose. Carrying it as
+    # data lets `scientific_maturity` report whether the Writer honoured its own
+    # request. These are advisory targets, not gates: the anti-stub floors in
+    # `scientific_maturity.section_word_floors` stay the only blocking bound, so a
+    # target can never become a quota a descriptive study is padded to meet.
+    # ``None`` means the instruction states no numeric bound; none is inferred.
+    word_target: tuple[int, int] | None = None
+    paragraph_target: tuple[int, int] | None = None
 
 
 class ManuscriptSectionContractError(RuntimeError):
@@ -100,6 +108,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="abstract",
         section_name="Abstract",
+        word_target=(200, 300),
+        paragraph_target=(4, 4),
         instruction=(
             "Write `## Abstract` with four labelled paragraphs:\n"
             "- **Background:** 2-3 sentences (clinical importance, knowledge "
@@ -138,6 +148,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="introduction",
         section_name="Introduction",
+        word_target=(300, 500),
+        paragraph_target=(3, 5),
         instruction=(
             "Write `## Introduction` with 3-5 concise paragraphs (roughly 300-500 words; "
             "scale to the question, not a mandatory quota):\n"
@@ -165,6 +177,7 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="methods",
         section_name="Methods",
+        word_target=(400, 600),
         instruction=(
             "Write `## Methods` with sub-sections:\n"
             "### Study design and cohort\n"
@@ -221,6 +234,7 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="results",
         section_name="Results",
+        word_target=(400, 600),
         instruction=(
             "Write `## Results` with sub-sections:\n"
             "### Cohort characteristics\n"
@@ -304,6 +318,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="discussion",
         section_name="Discussion",
+        word_target=(400, 650),
+        paragraph_target=(4, 5),
         instruction=(
             "Write `## Discussion` with 4-5 concise paragraphs (roughly 400-650 words; "
             "do not inflate a descriptive study to meet a quota):\n"
@@ -337,6 +353,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="limitations",
         section_name="Limitations",
+        word_target=(150, 250),
+        paragraph_target=(1, 1),
         instruction=(
             "Write `## Limitations` — one paragraph, 150-250 words. Include at "
             "least:\n"
