@@ -8,8 +8,21 @@ import pytest
 
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
 from easyicu.research_agent.reporting.manuscript_quality import render_reader_manuscript
+from easyicu.research_agent.reporting import pdf_render
 from easyicu.research_agent.reporting.pdf_render import render_pdf_for_run
 from easyicu.research_agent.reporting.write_phase import _latex_figure_paths
+
+
+def test_pdf_renderer_finds_standard_local_tool_without_service_path(
+    tmp_path, monkeypatch
+) -> None:
+    engine = tmp_path / "latexmk"
+    engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    engine.chmod(0o755)
+    monkeypatch.setattr(pdf_render.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(pdf_render, "_LOCAL_TOOL_DIRS", (tmp_path,))
+
+    assert pdf_render._which_first("latexmk") == str(engine)
 
 
 def test_scaffold_draft_watermark_is_explicit_and_opt_in() -> None:
