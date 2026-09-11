@@ -1379,6 +1379,47 @@ def _project_and_report_owner_manuscript_claims(
     return projected
 
 
+def _ensure_unsigned_novelty_positioning_packet(
+    *,
+    evidence: Any,
+    context: Any,
+    plan: Any,
+    literature: Optional[LiteratureBundle],
+    run_dir: Path,
+) -> None:
+    """Write and register the novelty appraisal surface before the Writer runs.
+
+    The packet is deliberately unsigned and leaves comparator/difference cells
+    blank: an abstract search hit cannot authorize the Agent to declare its own
+    work novel. An existing independently reviewed packet is never overwritten,
+    so a resumed attempt cannot downgrade a signed appraisal back to blank.
+    """
+
+    novelty_path = run_dir / "novelty_positioning_audit.json"
+    if not novelty_path.exists():
+        novelty_packet = build_unsigned_novelty_positioning_packet(
+            context=context,
+            plan=plan,
+            literature=literature,
+        )
+        novelty_path.write_text(
+            novelty_packet.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+    if evidence.get("novelty_positioning_audit") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Unsigned source-bound novelty comparison packet for independent "
+                "clinical and methods appraisal."
+            ),
+            source_path=novelty_path,
+            evidence_id="novelty_positioning_audit",
+            producer="pipeline",
+            generation_mode="system",
+        )
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1418,33 +1459,13 @@ def _draft_manuscript(
         evidence,
         per_step_records,
     )
-    # Produce a digest-bound appraisal surface before the Writer runs.  It is
-    # deliberately unsigned and leaves comparator/difference cells blank; an
-    # abstract search hit cannot authorize the Agent to declare its own work
-    # novel.  Existing independently reviewed packets are never overwritten.
-    novelty_path = run_dir / "novelty_positioning_audit.json"
-    if not novelty_path.exists():
-        novelty_packet = build_unsigned_novelty_positioning_packet(
-            context=context,
-            plan=execute_result.plan,
-            literature=literature,
-        )
-        novelty_path.write_text(
-            novelty_packet.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-    if evidence.get("novelty_positioning_audit") is None:
-        evidence.register_file(
-            kind="log",
-            description=(
-                "Unsigned source-bound novelty comparison packet for independent "
-                "clinical and methods appraisal."
-            ),
-            source_path=novelty_path,
-            evidence_id="novelty_positioning_audit",
-            producer="pipeline",
-            generation_mode="system",
-        )
+    _ensure_unsigned_novelty_positioning_packet(
+        evidence=evidence,
+        context=context,
+        plan=execute_result.plan,
+        literature=literature,
+        run_dir=run_dir,
+    )
     emit_progress(
         "writer",
         "Drafting manuscript scaffold.",
