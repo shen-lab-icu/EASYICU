@@ -323,6 +323,30 @@ def test_legacy_planner_provider_http_projection_recovers_resume_reason(
     ) == "research_pipeline_planner_provider_unavailable"
 
 
+def test_legacy_planner_rate_limit_projection_recovers_resume_reason(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "run-provider-rate-limit"
+    project_dir.mkdir()
+    (project_dir / "source_run_manifest.json").write_text(
+        """{
+  "analysis_started": false,
+  "failure_code": "research_pipeline_execution_failed",
+  "failure_type": "rate_limit",
+  "schema_version": "easyicu.web-research-pipeline-projection/1",
+  "status": "failed"
+}""",
+        encoding="utf-8",
+    )
+
+    assert run_authority._normalized_planner_gate_reason(
+        {
+            "gate_reason": "research_pipeline_execution_failed",
+            "project_dir": str(project_dir),
+        }
+    ) == "research_pipeline_planner_provider_unavailable"
+
+
 def test_legacy_execution_failure_is_not_upgraded_after_analysis_started(
     tmp_path: Path,
 ) -> None:

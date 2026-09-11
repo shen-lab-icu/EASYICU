@@ -51,7 +51,7 @@ def _normalized_planner_gate_reason(row: Mapping[str, Any]) -> str:
         payload.get("schema_version") == "easyicu.web-research-pipeline-projection/1"
         and payload.get("status") == "failed"
         and payload.get("failure_code") == "research_pipeline_execution_failed"
-        and payload.get("failure_type") == "provider_http"
+        and payload.get("failure_type") in {"provider_http", "rate_limit"}
         and payload.get("analysis_started") is False
     ):
         return "research_pipeline_planner_provider_unavailable"
