@@ -18,6 +18,19 @@ only when the count is nonzero, on the grounds that "no out-of-range rows" and
 "we never looked" are different facts; a receipt with no denominator loses that
 same distinction one level down, and death and other partly recorded outcomes
 are exactly where it bites.
+
+``observed_n - compared_n`` is therefore already the count of values that were
+present but would not convert, and ``coercion_loss_n`` states it instead of
+making a reader do the subtraction.  It cannot be a fail-close: the Planner
+policy this block implements is ``retain_and_flag``, so the receipt may report a
+malformed value but must not invalidate the analysis set over it.
+
+The conversion temporary is prefixed (``_easyicu_plausibility_numeric_v1``)
+while the delivered ``plausibility_audit`` stays plain.  Only the delivered
+value is followed by name into the summary write, and that name must not be
+prefixed; a loop temporary has no such duty, and leaving it plain made it
+collide with the agent's own ``numeric`` -- see
+``audits.validators._downgrade_host_injected_plausibility_receipt_findings``.
 """
 
 from __future__ import annotations
@@ -222,24 +235,29 @@ def render_standard_plausibility_receipt_code(
             maximum = plausibility_range.get("maximum")
             if minimum is None and maximum is None:
                 raise RuntimeError("Flag-only plausibility range has no bound")
-            numeric = pd.to_numeric({frame_name}[column], errors="coerce")
+            _easyicu_plausibility_numeric_v1 = pd.to_numeric(
+                {frame_name}[column], errors="coerce"
+            )
             below_minimum_n = (
-                int((numeric < float(minimum)).sum())
+                int((_easyicu_plausibility_numeric_v1 < float(minimum)).sum())
                 if minimum is not None
                 else 0
             )
             above_maximum_n = (
-                int((numeric > float(maximum)).sum())
+                int((_easyicu_plausibility_numeric_v1 > float(maximum)).sum())
                 if maximum is not None
                 else 0
             )
+            observed_n = int({frame_name}[column].notna().sum())
+            compared_n = int(_easyicu_plausibility_numeric_v1.notna().sum())
             plausibility_audit[column] = {{
                 "policy": "retain_and_flag",
                 "below_minimum_n": below_minimum_n,
                 "above_maximum_n": above_maximum_n,
                 "out_of_range_n": below_minimum_n + above_maximum_n,
-                "compared_n": int(numeric.notna().sum()),
-                "observed_n": int({frame_name}[column].notna().sum()),
+                "compared_n": compared_n,
+                "observed_n": observed_n,
+                "coercion_loss_n": observed_n - compared_n,
             }}
         if set(plausibility_audit) != set(plausibility_expected_columns):
             raise RuntimeError(
