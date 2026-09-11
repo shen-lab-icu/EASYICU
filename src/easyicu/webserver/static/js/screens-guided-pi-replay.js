@@ -224,6 +224,17 @@
     };
   }
 
+  /**
+   * Resume the execution the host just offered a retry for.
+   *
+   * `options.resumeRunId` is the authoritative failed run the workflow
+   * projection reported, and it is what the server's retry owner validates.
+   * `session.binding.run_id` names the reviewed *candidate plan* run instead:
+   * its gate reason is a plan review, never a failed execution, so sending it
+   * makes the product refuse its own offered action with
+   * `research_pipeline_execution_retry_source_not_failed_execution`. It stays
+   * as a fallback only for a session whose projection has not loaded yet.
+   */
   async function retryFailedExecution(options) {
     const host = options && typeof options === 'object' ? options : {};
     const session = host.session && typeof host.session === 'object' ? host.session : {};
@@ -231,7 +242,8 @@
     const provider = session.research_provider && typeof session.research_provider === 'object'
       ? session.research_provider : {};
     const api = host.api && typeof host.api === 'object' ? host.api : {};
-    const runId = String(binding.run_id || '').trim();
+    const runId = String(host.resumeRunId || '').trim()
+      || String(binding.run_id || '').trim();
     const studyContextId = String(binding.study_context_id || '').trim();
     if (!runId || !studyContextId || typeof api.loadStudyContext !== 'function' || typeof api.startAgentRun !== 'function') {
       throw new Error('failed_execution_retry_coordinates_unavailable');

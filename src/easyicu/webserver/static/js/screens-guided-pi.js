@@ -351,6 +351,10 @@
     replay: MODULES.require('replay'),
     session: () => state.session,
     workflow: () => state.workflow,
+    // The run the host's own projection treats as authoritative. A governed
+    // action must name the run the offer was computed from, not the run id the
+    // session last happened to bind.
+    latestRun: () => state.latestRun,
     busy: () => state.busy || Boolean(state.childJobId),
     sessionIsStale,
     researchSourceReady: () => !DATA_CONSENT.requiresConfirmation(state.session),

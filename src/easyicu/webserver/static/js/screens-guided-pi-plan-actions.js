@@ -112,6 +112,19 @@
       host.render();
     }
 
+    function retrySourceRunId() {
+      // The retry offer is computed from the authoritative latest run, so the
+      // retry action must name that same run. The session binding is only a
+      // fallback: it keeps the coordinate of the reviewed candidate plan, and
+      // the server's retry owner refuses a source whose gate reason is not a
+      // failed approved execution.
+      const latest = typeof host.latestRun === 'function' ? host.latestRun() : null;
+      const projected = String((latest && latest.run_id) || '').trim();
+      if (projected) return projected;
+      const session = host.session() || {};
+      return String((session.binding && session.binding.run_id) || '').trim();
+    }
+
     function generationRequest(reasonCode) {
       const retryExecution = reasonCode === 'failed_pipeline_execution_retry_available';
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
@@ -519,6 +532,7 @@
         try {
           payload = await replay.retryFailedExecution({
             api: host.api(), session: host.session(), reportOnly: reportOnly || restore,
+            resumeRunId: retrySourceRunId(),
           });
         } catch (error) {
           // A general Restore action may revalidate the same approved run
@@ -539,6 +553,7 @@
           });
           payload = await replay.retryFailedExecution({
             api: host.api(), session: host.session(), reportOnly: false,
+            resumeRunId: retrySourceRunId(),
           });
         }
         await host.recordHostAction(
