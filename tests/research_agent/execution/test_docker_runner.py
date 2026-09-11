@@ -196,11 +196,63 @@ def test_missing_docker_binary_raises(
 ):
     cohort = _make_cohort(tmp_path)
     import easyicu.research_agent.execution.runner as runner_mod
+    from easyicu.research_agent.execution import docker_locality
 
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _n: None)
+    # "Missing" means missing everywhere the resolver is allowed to look. A
+    # machine with a real Homebrew docker must not turn this assertion green by
+    # accident, and must not let the local fallback go untested either.
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", ())
 
     with pytest.raises(FileNotFoundError, match="not found on PATH"):
         ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+
+
+def test_constructor_finds_docker_outside_a_short_service_path(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A launchd-hosted service PATH excludes the standard install locations.
+
+    Reporting ``docker_executable_missing`` for an installed binary sends the
+    user to install software they already have, and the preflight that answers it
+    rejects the submission before any work is spent.
+    """
+
+    import easyicu.research_agent.execution.runner as runner_mod
+    from easyicu.research_agent.execution import docker_locality
+
+    local = tmp_path / "homebrew-bin"
+    local.mkdir()
+    binary = local / "docker"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", (local,))
+
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=_make_cohort(tmp_path))
+
+    assert runner.docker_executable == str(binary)
+
+
+def test_explicit_docker_path_is_never_replaced_by_another_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A caller that named a binary gets that binary, or a clear refusal."""
+
+    import easyicu.research_agent.execution.runner as runner_mod
+    from easyicu.research_agent.execution import docker_locality
+
+    local = tmp_path / "homebrew-bin"
+    local.mkdir()
+    other = local / "docker"
+    other.write_text("#!/bin/sh\n", encoding="utf-8")
+    other.chmod(0o755)
+
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", (local,))
+
+    assert docker_locality.resolve_docker_executable(str(tmp_path / "nope")) is None
 
 
 def test_constructor_resolves_docker_via_which(

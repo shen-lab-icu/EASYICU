@@ -54,6 +54,7 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
+from .docker_locality import resolve_docker_executable
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
@@ -1913,11 +1914,14 @@ class DockerRunner:
         self._cached_runtime_provenance: Optional[Dict[str, object]] = None
         self._cached_runtime_requirements: Optional[str] = None
         # Resolve the docker binary up front so we can produce a
-        # readable error before the pipeline gets too far.
-        resolved = shutil.which(self.docker_executable)
+        # readable error before the pipeline gets too far. A service process
+        # (launchd, GUI launcher) has a short PATH that excludes the standard
+        # Docker install locations, so PATH alone is not the last word here.
+        resolved = resolve_docker_executable(self.docker_executable)
         if resolved is None:
             raise FileNotFoundError(
-                f"Docker executable {self.docker_executable!r} not found on PATH. "
+                f"Docker executable {self.docker_executable!r} was not found on PATH "
+                "or in the standard local install locations. "
                 "Either install Docker, set EASYICU_DOCKER_EXECUTABLE to the binary, "
                 "or fall back to the subprocess CodeRunner "
                 "(``runner_kind='subprocess'`` in ResearchAgentPipeline)."
@@ -3295,7 +3299,9 @@ _RUNNER_UNAVAILABLE_REMEDIATION = {
         "'colima start', ...) and retry."
     ),
     "docker_executable_missing": (
-        "No 'docker' executable was found on PATH. Install Docker and retry."
+        "No 'docker' executable was found on PATH or in the standard local "
+        "install locations. Install Docker, or set EASYICU_DOCKER_EXECUTABLE to "
+        "the binary if it lives somewhere non-standard."
     ),
     "docker_image_missing": (
         "The pinned execution image is not present locally. Build or pull it "
@@ -3416,7 +3422,10 @@ def probe_runner_availability(
     requested_executable = (
         docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
     )
-    resolved_docker = shutil.which(requested_executable)
+    # Same short-PATH reason as DockerRunner.__init__: this preflight is what
+    # rejects a submission, and answering "docker_executable_missing" for an
+    # installed binary sends the user to install something they already have.
+    resolved_docker = resolve_docker_executable(requested_executable)
     if resolved_docker is None:
         return RunnerAvailability(
             kind=kind,

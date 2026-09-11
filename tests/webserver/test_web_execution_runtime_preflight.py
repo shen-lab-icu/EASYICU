@@ -290,7 +290,13 @@ def test_a_stopped_daemon_and_a_missing_image_are_not_the_same_problem(
 def test_a_missing_docker_executable_is_reported_without_a_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from easyicu.research_agent.execution import docker_locality
+
     monkeypatch.setattr(runner_module.shutil, "which", lambda _name: None)
+    # The resolver also probes standard local install locations, so this case has
+    # to remove them: otherwise it passes only on machines without Docker, and a
+    # developer machine would silently stop testing the missing-executable path.
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", ())
 
     def fail(*_args, **_kwargs):  # pragma: no cover - must never run
         raise AssertionError("no probe is possible without an executable")
@@ -300,6 +306,46 @@ def test_a_missing_docker_executable_is_reported_without_a_probe(
     availability = runner_module.probe_runner_availability("docker")
     assert availability.available is False
     assert availability.reason_code == "docker_executable_missing"
+
+
+def test_preflight_finds_docker_that_a_short_service_path_cannot_see(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The submitted-rejection path: installed binary, invisible to the service.
+
+    A launchd-hosted web service has a PATH without the Homebrew bin directory.
+    Answering ``docker_executable_missing`` there rejects the run before it is
+    spent, and tells the user to install Docker they already have.
+    """
+
+    from easyicu.research_agent.execution import docker_locality
+
+    local = tmp_path / "homebrew-bin"
+    local.mkdir()
+    binary = local / "docker"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", (local,))
+
+    probed: list = []
+
+    def probe(command, *_args, **_kwargs):
+        probed.append(command[0])
+        raise OSError("daemon stopped; availability only needs the executable")
+
+    monkeypatch.setattr(runner_module, "_run_with_bounded_output", probe)
+
+    availability = runner_module.probe_runner_availability("docker")
+
+    assert probed == [str(binary)], "the local install must be the one probed"
+    assert availability.available is False
+    assert (
+        availability.reason_code != "docker_executable_missing"
+    ), "the executable exists, so that answer would be false"
+
 
 
 def test_the_web_projection_mirrors_the_owner_contract() -> None:
