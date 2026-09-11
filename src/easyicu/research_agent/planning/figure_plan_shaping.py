@@ -45,6 +45,7 @@ from ..contracts.figure_plan import (
     landmark_association_composite_panels,
     measurement_availability_figure_panels,
     robustness_figure_panels,
+    separable_display_panel_ids,
 )
 from ..schema import (
     AnalysisPlan,
@@ -1572,6 +1573,52 @@ def apply_runtime_bound_figure_contracts(
     return apply_deterministic_figure_panels(revised, findings)
 
 
+def _resolve_unseparable_placement_splits(
+    *, step: AnalysisStep, panels: Sequence[Any]
+) -> list[Any]:
+    """Give one exported surface exactly one placement.
+
+    A composite shipped as a single image has one display surface, so a panel
+    that must leave the main article takes the whole surface with it.  Only a
+    renderer that declares it exports a panel on its own supplementary artifact
+    can keep siblings on a different placement.
+
+    This bound matters because the runtime figure-binding gate groups planned
+    panels by placement and then looks for an artifact per group.  A split the
+    renderer cannot produce is therefore not a cosmetic plan disagreement: it
+    fails the whole run closed at the end of execution, on a step whose figure
+    rendered correctly, after every scientific step already spent its budget.
+    """
+
+    resolved = list(panels)
+    indexes_by_output: dict[str, list[int]] = {}
+    for index, panel in enumerate(panels):
+        indexes_by_output.setdefault(str(panel.figure_output), []).append(index)
+    for figure_output, indexes in indexes_by_output.items():
+        if len(indexes) < 2:
+            continue
+        declared = {str(panels[index].placement) for index in indexes}
+        if len(declared) < 2:
+            continue
+        separable = separable_display_panel_ids(
+            source_products=tuple(str(value) for value in step.inputs),
+            panel_ids=[str(panels[index].panel_id) for index in indexes],
+        )
+        stuck = [
+            index
+            for index in indexes
+            if str(panels[index].placement) == "supplementary"
+            and str(panels[index].panel_id) not in separable
+        ]
+        if not stuck:
+            continue
+        for index in indexes:
+            resolved[index] = panels[index].model_copy(
+                update={"placement": "supplementary"}
+            )
+    return resolved
+
+
 def apply_article_figure_strategy_placements(
     *, plan: AnalysisPlan, strategy: Any
 ) -> AnalysisPlan:
@@ -1581,6 +1628,8 @@ def apply_article_figure_strategy_placements(
     supplementary placement belongs to the Planner-final article strategy.
     Compile the latter once before the plan digest is sealed so renderers do
     not infer publication hierarchy from variable names or benchmark cases.
+    A projection is still bounded by what the selected renderer can export: see
+    :func:`_resolve_unseparable_placement_splits`.
     """
 
     placements = {
@@ -1615,6 +1664,7 @@ def apply_article_figure_strategy_placements(
             ):
                 placement = "supplementary"
             panels.append(panel.model_copy(update={"placement": placement}))
+        panels = _resolve_unseparable_placement_splits(step=step, panels=panels)
         if panels != step.figure_panels:
             changed = True
             step = step.model_copy(update={"figure_panels": panels})

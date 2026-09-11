@@ -68,7 +68,14 @@ class PlannedFigurePanelSpec(BaseModel):
 
 
 class DeterministicFigurePanelTemplate(BaseModel):
-    """Panel contract shared by a deterministic renderer and plan shaping."""
+    """Panel contract shared by a deterministic renderer and plan shaping.
+
+    ``separable_display`` states that the renderer exports this panel on its own
+    physical surface, so a sibling panel of the same product slot can stay in
+    the main article while this one goes to the supplement. One exported image
+    is one surface: a template that does not declare the flag cannot be moved
+    away from its siblings, and the plan shaper must not promise it there.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -76,6 +83,7 @@ class DeterministicFigurePanelTemplate(BaseModel):
     article_role: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     chart_type: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     placement: Literal["main", "supplementary"] = "main"
+    separable_display: bool = False
     source_products: Tuple[str, ...] = Field(min_length=1, max_length=16)
 
     @field_validator("source_products")
@@ -528,6 +536,7 @@ def landmark_association_composite_panels(
             article_role="robustness",
             chart_type="sensitivity_coverage_matrix",
             placement="supplementary",
+            separable_display=True,
             source_products=("table:robustness_summary",),
         ),
         DeterministicFigurePanelTemplate(
@@ -535,8 +544,40 @@ def landmark_association_composite_panels(
             article_role="data_quality",
             chart_type="availability_panel",
             placement="supplementary",
+            separable_display=True,
             source_products=(measurement,),
         ),
+    )
+
+
+def separable_display_panel_ids(
+    *,
+    source_products: Sequence[str],
+    panel_ids: Sequence[str],
+) -> frozenset[str]:
+    """Which of a step's planned panels its bound renderer can export apart.
+
+    The shaper asks this against the shared contract of the renderer that the
+    step's exact typed inputs select, so a placement split is honored only when
+    some artifact can carry it. The panel ids must be the whole contract: a
+    hand-written subset no longer proves which renderer was chosen, and the
+    conservative answer to an unproven group is that nothing is separable.
+    """
+
+    wanted = {str(value or "").strip() for value in panel_ids}
+    if not wanted:
+        return frozenset()
+    try:
+        templates = landmark_association_composite_panels(source_products)
+    except ValueError:
+        return frozenset()
+    declared = {str(template.panel_id) for template in templates}
+    if declared != wanted:
+        return frozenset()
+    return frozenset(
+        str(template.panel_id)
+        for template in templates
+        if template.separable_display
     )
 
 
@@ -749,6 +790,7 @@ __all__ = [
     "measurement_availability_figure_panels",
     "LANDMARK_ASSOCIATION_COMPOSITE_INPUTS",
     "landmark_association_composite_panels",
+    "separable_display_panel_ids",
     "robustness_figure_panels",
     "resolve_data_quality_figure_inputs",
 ]

@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Sequence
 
 import pytest
 
-from easyicu.research_agent.contracts.figure_plan import PlannedFigurePanelSpec
+from easyicu.research_agent.contracts.figure_plan import (
+    PlannedFigurePanelSpec,
+    landmark_association_composite_panels,
+    separable_display_panel_ids,
+)
 from easyicu.research_agent.execution.figure_plan_binding import (
     validate_planned_figure_contract_bindings,
     validate_step_planned_figure_contract_binding,
+)
+from easyicu.research_agent.planning.figure_plan_shaping import (
+    apply_article_figure_strategy_placements,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -208,3 +217,197 @@ def test_supplementary_placement_does_not_waive_chart_or_source_binding(
             plan=plan, run_dir=run_dir, per_step_records=records
         )
     assert [f.detail["reason"] for f in findings] == ["runtime_panel_contract_mismatch"]
+
+
+# Dev9 E2 measured the cost of an unbounded placement projection.  The
+# data-quality figure is one exported composite -- two planned panels, one PNG,
+# one contract -- yet the article strategy kept the availability panel in the
+# main article while the host audit rule moved process coverage out of it.  The
+# runtime binding gate then grouped the planned panels by placement and looked
+# for a second artifact that no renderer could produce, so a step that rendered
+# correctly fail-closed the entire run after every scientific step had already
+# spent its budget.  These tests pin the bound in the owner that creates the
+# promise, and keep the gate evidence that the bound is load-bearing.
+
+COMPOSITE_STEP_ID = "12_data_quality_figure"
+COMPOSITE_OUTPUT = "figure:data_quality"
+COMPOSITE_FILE = "data_quality.svg"
+COMPOSITE_CONTRACT = "data_quality.figure_contract.json"
+AVAILABILITY_SOURCE = "table:measurement_audit"
+PROCESS_SOURCE = "table:measurement_process"
+LANDMARK_AUDIT_PROFILE = (
+    "table:generic_landmark_rcs_curve",
+    "table:generic_adjusted_absolute_risk",
+    "table:robustness_grid_exposure_contrasts",
+    "table:robustness_summary",
+    "table:measurement_process",
+)
+
+
+def _composite_panels() -> list[PlannedFigurePanelSpec]:
+    return [
+        PlannedFigurePanelSpec(
+            panel_id="source_availability",
+            figure_output=COMPOSITE_OUTPUT,
+            article_role="data_quality",
+            chart_type="availability_panel",
+            source_products=[AVAILABILITY_SOURCE],
+        ),
+        PlannedFigurePanelSpec(
+            panel_id="measurement_process_coverage",
+            figure_output=COMPOSITE_OUTPUT,
+            article_role="data_quality",
+            chart_type="coverage_heatmap",
+            source_products=[PROCESS_SOURCE],
+        ),
+    ]
+
+
+def _composite_plan(placements: Sequence[str]) -> AnalysisPlan:
+    step = AnalysisStep(
+        step_id=COMPOSITE_STEP_ID,
+        planned_analysis_role="auxiliary",
+        intent="Render the prespecified data-quality composite.",
+        method="visualization",
+        inputs=[AVAILABILITY_SOURCE, PROCESS_SOURCE],
+        expected_outputs=[COMPOSITE_OUTPUT],
+        figure_panels=[
+            panel.model_copy(update={"placement": placement})
+            for panel, placement in zip(_composite_panels(), placements)
+        ],
+    )
+    return AnalysisPlan(research_question="Audit source coverage.", steps=[step])
+
+
+def _composite_runtime(
+    tmp_path: Path,
+) -> tuple[Path, list[dict[str, object]]]:
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / COMPOSITE_STEP_ID / "outputs"
+    out_dir.mkdir(parents=True)
+    (out_dir / COMPOSITE_FILE).write_text("<svg/>", encoding="utf-8")
+    (out_dir / COMPOSITE_CONTRACT).write_text(
+        json.dumps(
+            {
+                "figure_id": COMPOSITE_OUTPUT,
+                "core_claim": (
+                    "Source availability and measurement-process coverage are "
+                    "rendered from two digest-verified parent audit tables."
+                ),
+                "panels": [
+                    {
+                        "panel_id": "source_availability",
+                        "title": "Source availability",
+                        "role": "data_quality",
+                        "claim": "Stays with no recorded source value.",
+                        "evidence_ids": ["data_quality_missingness_source_data.csv"],
+                        "metadata": {
+                            "chart_type": "availability_panel",
+                            "source_products": [AVAILABILITY_SOURCE],
+                            "placement": "supplementary",
+                        },
+                    },
+                    {
+                        "panel_id": "measurement_process_coverage",
+                        "title": "Measurement-process coverage",
+                        "role": "data_quality",
+                        "claim": "Measured share per audited variable.",
+                        "evidence_ids": [
+                            "data_quality_measurement_process_source_data.csv"
+                        ],
+                        "metadata": {
+                            "chart_type": "coverage_heatmap",
+                            "source_products": [PROCESS_SOURCE],
+                            "placement": "supplementary",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    records: list[dict[str, object]] = [
+        {
+            "step_id": COMPOSITE_STEP_ID,
+            "status": "ok",
+            "step_summary": {
+                "output_files": {COMPOSITE_OUTPUT: COMPOSITE_FILE},
+                "contract_files": [COMPOSITE_CONTRACT],
+            },
+        }
+    ]
+    return run_dir, records
+
+
+def _data_quality_main_strategy() -> SimpleNamespace:
+    return SimpleNamespace(
+        role_strategies=[SimpleNamespace(role="data_quality", placement="main")]
+    )
+
+
+def test_audit_demotion_moves_the_whole_composite_instead_of_one_panel() -> None:
+    shaped = apply_article_figure_strategy_placements(
+        plan=_composite_plan(["main", "main"]),
+        strategy=_data_quality_main_strategy(),
+    )
+
+    assert [
+        (panel.panel_id, panel.placement)
+        for panel in shaped.steps[0].figure_panels
+    ] == [
+        ("source_availability", "supplementary"),
+        ("measurement_process_coverage", "supplementary"),
+    ]
+
+
+def test_projected_composite_binds_to_its_single_exported_surface(
+    tmp_path: Path,
+) -> None:
+    shaped = apply_article_figure_strategy_placements(
+        plan=_composite_plan(["main", "main"]),
+        strategy=_data_quality_main_strategy(),
+    )
+    run_dir, records = _composite_runtime(tmp_path)
+
+    assert (
+        validate_planned_figure_contract_bindings(
+            plan=shaped, run_dir=run_dir, per_step_records=records
+        )
+        == []
+    )
+
+
+def test_hand_split_composite_is_the_shape_no_renderer_can_bind(
+    tmp_path: Path,
+) -> None:
+    """Keep the gate failing on a split, so the bound above stays necessary."""
+
+    run_dir, records = _composite_runtime(tmp_path)
+
+    findings = validate_planned_figure_contract_bindings(
+        plan=_composite_plan(["main", "supplementary"]),
+        run_dir=run_dir,
+        per_step_records=records,
+    )
+
+    assert sorted(str(finding.detail["reason"]) for finding in findings) == [
+        "runtime_figure_output_is_unbound",
+        "runtime_panel_contract_mismatch",
+    ]
+
+
+def test_separable_display_is_declared_by_the_renderer_contract() -> None:
+    templates = landmark_association_composite_panels(LANDMARK_AUDIT_PROFILE)
+
+    assert separable_display_panel_ids(
+        source_products=LANDMARK_AUDIT_PROFILE,
+        panel_ids=[template.panel_id for template in templates],
+    ) == {"robustness_summary", "measurement_process"}
+    assert separable_display_panel_ids(
+        source_products=LANDMARK_AUDIT_PROFILE,
+        panel_ids=[template.panel_id for template in templates][:3],
+    ) == frozenset()
+    assert separable_display_panel_ids(
+        source_products=[AVAILABILITY_SOURCE, PROCESS_SOURCE],
+        panel_ids=["source_availability", "measurement_process_coverage"],
+    ) == frozenset()
