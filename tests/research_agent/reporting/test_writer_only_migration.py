@@ -24,6 +24,7 @@ from easyicu.research_agent.reporting.writer_only_migration import (
     _remove_unresolved_evidence_tokens,
     publish_writer_only_result,
     repair_writer_only,
+    writer_only_preflight_payload,
 )
 
 
@@ -585,3 +586,94 @@ def test_unknown_or_malformed_group_cannot_gain_evidence_authority(token):
         aliases={}, claims_by_ref={},
     )
     assert owner._normalize_registered_evidence_groups(token, authority) == token
+
+
+def _slot_bearing_draft() -> str:
+    """A repair draft whose result sentences are not placed yet."""
+
+    return (
+        _manuscript()
+        .replace(
+            "**Results:** Sepsis status was associated with mortality.",
+            "**Results:** {claim:robustness_summary.model_contrast_1}",
+        )
+        .replace(
+            "**Conclusions:** The association requires external validation.",
+            "**Conclusions:**",
+        )
+        .replace(
+            "### Primary association\n"
+            "Sepsis status was associated with mortality.",
+            "### Primary association\n"
+            "{claim:robustness_summary.model_contrast_1}",
+        )
+        .replace(
+            "### Sensitivity and subgroup analyses\n"
+            "Sensitivity analyses used the prespecified population.",
+            "### Sensitivity and subgroup analyses\n"
+            "{claim:robustness_summary.model_contrast_2}",
+        )
+    )
+
+
+def test_preflight_separates_unbound_draft_from_delivered_manuscript(
+    tmp_path: Path,
+) -> None:
+    """An unplaced claim slot is not a defect in the delivered report."""
+
+    draft = _slot_bearing_draft()
+    prepared = _prepared(tmp_path, draft)
+    (prepared.source_run_dir / "manuscript_scaffold_bound.md").write_text(
+        _manuscript(), encoding="utf-8"
+    )
+
+    payload = writer_only_preflight_payload(prepared)
+
+    draft_codes = [finding["code"] for finding in payload["source_quality_findings"]]
+    assert draft_codes.count("MANUSCRIPT_SECTION_TRUNCATED") == 2, draft_codes
+    assert payload["source_quality_audited_artifact"] == "manuscript_scaffold.md"
+    assert payload["delivered_manuscript_artifact"] == "manuscript_scaffold_bound.md"
+    assert payload["delivered_source_quality_status"] == "pass"
+    assert payload["delivered_source_quality_findings"] == []
+    assert payload["unbound_draft_truncation_only"] is True
+    assert payload["provider_calls"] == 0
+
+
+def test_preflight_keeps_the_legacy_repair_guard_on_preplacement_keys(
+    tmp_path: Path,
+) -> None:
+    """Clarifying a diagnostic must not widen a fail-closed gate."""
+
+    draft = _slot_bearing_draft()
+    prepared = _prepared(tmp_path, draft)
+    (prepared.source_run_dir / "manuscript_scaffold_bound.md").write_text(
+        _manuscript(), encoding="utf-8"
+    )
+
+    payload = writer_only_preflight_payload(prepared)
+
+    assert payload["planned_section_keys"] == [
+        key for key in quality_repair_section_keys(draft)
+    ]
+    assert payload["planned_section_keys"]
+
+
+def test_preflight_without_delivered_manuscript_claims_no_all_clear(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared(tmp_path, _manuscript(leak=True))
+
+    payload = writer_only_preflight_payload(prepared)
+
+    assert payload["delivered_manuscript_artifact"] is None
+    assert payload["delivered_manuscript_sha256"] is None
+    assert payload["delivered_source_quality_status"] is None
+    assert payload["delivered_source_quality_findings"] == []
+    assert payload["unbound_draft_truncation_only"] is False
+
+
+def test_bound_manuscript_stays_outside_the_sealed_input_hash_guard() -> None:
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    assert "manuscript_scaffold.md" in owner._INPUT_NAMES
+    assert "manuscript_scaffold_bound.md" not in owner._INPUT_NAMES

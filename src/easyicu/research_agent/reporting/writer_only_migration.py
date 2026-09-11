@@ -79,6 +79,12 @@ _INPUT_NAMES = (
     "preplan_literature_bundle.json",
     "writer_evidence_digest.md",
 )
+# The repair input keeps unresolved ``{claim:...}`` slots, while the bound file is
+# the manuscript the run actually delivered. They are reported separately so a
+# preflight is never read as a defect in the delivered text. Neither name joins
+# _INPUT_NAMES: the sealed-input hash guard must stay exactly as strict.
+_UNBOUND_MANUSCRIPT_FILENAME = "manuscript_scaffold.md"
+_BOUND_MANUSCRIPT_FILENAME = "manuscript_scaffold_bound.md"
 
 
 class WriterOnlyMigrationError(RuntimeError):
@@ -564,9 +570,39 @@ def prepare_writer_only_migration(
 def writer_only_preflight_payload(
     prepared: PreparedWriterOnlyMigration,
 ) -> dict[str, Any]:
-    """Render the zero-Provider repair plan."""
+    """Render the zero-Provider repair plan.
 
-    return {
+    ``source_quality_*`` is computed on the unbound ``manuscript_scaffold.md``,
+    where every result sentence is still a ``{claim:...}`` slot until
+    :func:`repair_writer_only` places the verified facts. Auditing that draft
+    before placement flags Abstract and Results as truncated even when the
+    delivered ``manuscript_scaffold_bound.md`` is complete, so this payload names
+    the artifact it judged and reports the delivered verdict beside it. The
+    legacy repair guard deliberately keeps consuming the pre-placement value; a
+    diagnostic label must not quietly widen a fail-closed gate.
+    """
+
+    delivered_path = prepared.source_run_dir / _BOUND_MANUSCRIPT_FILENAME
+    delivered_text: str | None
+    try:
+        delivered_text = delivered_path.read_text(encoding="utf-8")
+    except OSError:
+        delivered_text = None
+    plan = prepared.plan
+    delivered_audit = (
+        None
+        if delivered_text is None
+        else audit_manuscript_quality(
+            delivered_text,
+            analysis_plan=plan,
+            expected_display_labels=prepared.expected_display_labels,
+            reader_display_labels=plan.display_labels if plan else None,
+            expected_baseline_mentions=baseline_reporting_mentions(
+                prepared.context, plan.display_labels if plan else None,
+            ),
+        )
+    )
+    payload: dict[str, Any] = {
         "schema_version": WRITER_ONLY_MIGRATION_SCHEMA,
         "mode": "preflight",
         "source_run_dir": str(prepared.source_run_dir),
@@ -581,6 +617,7 @@ def writer_only_preflight_payload(
         ),
         "migration_draft_sha256": prepared.migration_draft_sha256,
         "source_quality_status": prepared.source_quality_audit.status,
+        "source_quality_audited_artifact": _UNBOUND_MANUSCRIPT_FILENAME,
         "source_quality_findings": [
             asdict(finding)
             for finding in prepared.source_quality_audit.findings
@@ -602,6 +639,26 @@ def writer_only_preflight_payload(
         "claim_ceiling": "analysis_only",
         "publication_authorized": False,
     }
+    payload["delivered_manuscript_artifact"] = (
+        _BOUND_MANUSCRIPT_FILENAME if delivered_text is not None else None
+    )
+    payload["delivered_manuscript_sha256"] = (
+        _sha256(delivered_text.encode("utf-8")) if delivered_text is not None else None
+    )
+    payload["delivered_source_quality_status"] = (
+        delivered_audit.status if delivered_audit is not None else None
+    )
+    payload["delivered_source_quality_findings"] = (
+        [asdict(finding) for finding in delivered_audit.findings]
+        if delivered_audit is not None
+        else []
+    )
+    payload["unbound_draft_truncation_only"] = bool(
+        delivered_audit is not None
+        and prepared.source_quality_audit.status != "pass"
+        and delivered_audit.status == "pass"
+    )
+    return payload
 
 
 def repair_writer_only(
