@@ -1454,7 +1454,7 @@ def test_primary_model_contract_detects_unreported_zero_event_category(
 ):
     cohort_path, out_dir = _write_inputs(tmp_path)
     cohort = pd.read_parquet(cohort_path)
-    cohort.loc[5, "adm"] = "EYE"
+    cohort.loc[5, "adm"] = "UNMAPPED_SERVICE"
     cohort.to_parquet(cohort_path, index=False)
     contracts = copy.deepcopy(_contracts())
     for contract in contracts:
