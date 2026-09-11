@@ -4225,6 +4225,132 @@ model.fit(frame[["marker_first"]], assignment)
     assert "downgraded_reason" not in findings[0].detail
 
 
+def _flag_only_receipt_script() -> str:
+    """An agent body plus the flag-only plausibility receipt the host appends.
+
+    The body deliberately binds a plain ``numeric`` of its own, because that
+    collision is what made the E2 dependence-audit step unfixable: the
+    auditor named the receipt's conversion variable, and the only party allowed
+    to rewrite it was the Coder that never wrote it.
+    """
+
+    from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
+    from easyicu.research_agent.execution.runners.plausibility_receipt import (
+        host_plausibility_receipt_injected,
+    )
+
+    body = (
+        "import pandas as pd\n\n"
+        "frame = pd.read_parquet('/cohort.parquet')\n"
+        "numeric = numeric_series_fail_closed(frame['age'], 'age')\n"
+        "print(len(numeric))\n"
+    )
+    return host_plausibility_receipt_injected(
+        body,
+        scope=FlagOnlyPlausibilityScope(
+            step_id="repeated_stay_dependence_audit",
+            expected_columns=("age",),
+            source_contracts_sha256="a" * 64,
+            authority_kind="resolved_raw_input_contracts",
+        ),
+        already_satisfied=False,
+    )
+
+
+def _strict_nonfinite_finding(variable: str):
+    class _FindingLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": (
+                                "The appended plausibility audit converts "
+                                "invalid or non-finite values with "
+                                "errors='coerce' and treats them as "
+                                "unavailable."
+                            ),
+                            "detail": {
+                                "issue_code": (
+                                    "strict_numeric_nonfinite_guard_required"
+                                ),
+                                "variables": [variable],
+                            },
+                        }
+                    ]
+                }
+            )
+
+    return _FindingLLM()
+
+
+def _audit_flag_only_receipt_script(ra, llm):
+    return _offline_concept_auditor(ra, llm).audit(
+        context=ra.build_research_context(
+            research_question="Association of peak lactate with death.",
+            cohort=pd.DataFrame({"stay_id": [1, 2], "age": [64.0, 71.0]}),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=_flag_only_receipt_script(),
+        step=None,
+    )
+
+
+def test_llm_concept_auditor_does_not_charge_the_coder_for_the_host_receipt(ra):
+    findings = _audit_flag_only_receipt_script(
+        ra,
+        _strict_nonfinite_finding("_easyicu_plausibility_numeric_v1"),
+    )
+
+    assert findings[0].severity == "warning"
+    assert (
+        findings[0].detail["host_owned_source_region"]
+        == "flag_only_plausibility_receipt"
+    )
+    assert "host appended" in findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_still_charges_the_coder_for_its_own_coercion(ra):
+    findings = _audit_flag_only_receipt_script(
+        ra, _strict_nonfinite_finding("numeric")
+    )
+
+    assert findings[0].severity == "error"
+    assert "host_owned_source_region" not in findings[0].detail
+
+
+def test_host_plausibility_receipt_sentinels_match_the_rendered_source():
+    """The reclassifier claims a region by these literals, so pin them here.
+
+    ``execution/runners/plausibility_receipt.py`` owns the source. If it stops
+    emitting one of these lines, this test fails instead of the region quietly
+    becoming unrecognisable and the Coder being blamed for the host's code.
+    """
+
+    from easyicu.research_agent.audits.validators import (
+        _HOST_PLAUSIBILITY_RECEIPT_SENTINELS,
+    )
+    from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
+    from easyicu.research_agent.execution.runners.plausibility_receipt import (
+        render_standard_plausibility_receipt_code,
+    )
+
+    source = render_standard_plausibility_receipt_code(
+        FlagOnlyPlausibilityScope(
+            step_id="05_step",
+            expected_columns=("age",),
+            source_contracts_sha256="a" * 64,
+            authority_kind="resolved_raw_input_contracts",
+        ),
+        frame_name="plausibility_frame",
+    )
+
+    for sentinel in _HOST_PLAUSIBILITY_RECEIPT_SENTINELS:
+        assert sentinel in source
+
+
 def test_llm_concept_auditor_does_not_downgrade_unused_provenance_flag(ra):
     class _CompanionGatingFindingLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):

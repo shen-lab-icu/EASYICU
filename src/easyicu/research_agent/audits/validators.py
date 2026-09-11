@@ -2705,6 +2705,135 @@ def _reclassify_flag_only_plausibility_range_findings(
     return reclassified
 
 
+#: The lines only the host's injected flag-only plausibility receipt writes.
+#: ``execution/runners/plausibility_receipt.py`` owns that source, and a test
+#: here pins that every sentinel still appears in it, so this region cannot be
+#: claimed by drift.
+_HOST_PLAUSIBILITY_RECEIPT_SENTINELS = (
+    "plausibility_expected_columns = ",
+    '"Resolved plausibility contracts do not match the step authority"',
+    '"Flag-only plausibility scope is absent from the sealed contracts"',
+    '"coercion_loss_n"',
+)
+
+
+def _host_plausibility_receipt_region(script_text: str) -> Optional[Tuple[int, int]]:
+    """Return the first and last line of the host-injected receipt, or ``None``.
+
+    The receipt is appended, so the region runs from its earliest sentinel to
+    the end of the script.  Every sentinel must appear at or after that line: a
+    body that merely quotes one of them keeps its own authorship.
+    """
+
+    lines = str(script_text or "").splitlines()
+    for index, line in enumerate(lines):
+        if not any(
+            sentinel in line for sentinel in _HOST_PLAUSIBILITY_RECEIPT_SENTINELS
+        ):
+            continue
+        tail = "\n".join(lines[index:])
+        if all(sentinel in tail for sentinel in _HOST_PLAUSIBILITY_RECEIPT_SENTINELS):
+            return index + 1, len(lines)
+    return None
+
+
+def _region_store_names(
+    tree: ast.AST,
+    *,
+    region: Tuple[int, int],
+) -> Tuple[Set[str], Set[str]]:
+    """Names bound inside the region, and names bound anywhere outside it."""
+
+    first, last = region
+    inside: Set[str] = set()
+    outside: Set[str] = set()
+
+    def record(name: str, line: Optional[int]) -> None:
+        if not name:
+            return
+        if line is not None and first <= int(line) <= last:
+            inside.add(name)
+        else:
+            outside.add(name)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            record(node.id, getattr(node, "lineno", None))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            record(node.name, node.lineno)
+        elif isinstance(node, ast.alias):
+            record(node.asname or node.name, getattr(node, "lineno", None))
+        elif isinstance(node, ast.ExceptHandler) and node.name is not None:
+            record(node.name, node.lineno)
+    return inside, outside
+
+
+def _downgrade_host_injected_plausibility_receipt_findings(
+    *,
+    findings: Sequence[ValidationFinding],
+    script_text: str,
+) -> List[ValidationFinding]:
+    """Do not charge the Coder for arithmetic the host wrote into the script.
+
+    The host appends its flag-only plausibility receipt to the assembled script
+    BEFORE the concept audit, so the auditor reads the host's own comparisons as
+    agent-authored.  On the E2 dependence-audit step it named the receipt's
+    conversion variable, the repair loop asked the Coder to rewrite code it does
+    not own, the next candidate re-carried the same appended block, the monotonic
+    constraint re-raised the cached finding, and the step died on its concept
+    repair budget after an earlier candidate had already executed and filed the
+    honest receipt.
+
+    Failing closed is not available to that block either: ``retain_and_flag`` is
+    the Planner's declared policy, and the receipt already discloses every value
+    that was present but would not convert as ``coercion_loss_n``.  A genuine
+    finding about an agent-authored variable keeps its authority, because a name
+    bound anywhere outside the injected region is not treated as host property.
+    """
+
+    region = _host_plausibility_receipt_region(script_text)
+    if region is None:
+        return list(findings)
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        return list(findings)
+    inside, outside = _region_store_names(tree, region=region)
+
+    downgraded: List[ValidationFinding] = []
+    for finding in findings:
+        detail = dict(finding.detail or {})
+        variables = [
+            variable
+            for variable in (detail.get("variables") or [])
+            if isinstance(variable, str) and variable
+        ]
+        if not (
+            finding.validator == LLMConceptAuditor.name
+            and finding.severity == "error"
+            and str(detail.get("issue_code") or "")
+            == "strict_numeric_nonfinite_guard_required"
+            and variables
+            and all(name in inside and name not in outside for name in variables)
+        ):
+            downgraded.append(finding)
+            continue
+        detail.setdefault(
+            "downgraded_reason",
+            "Every named variable is bound only inside the flag-only "
+            "plausibility receipt the host appended to this script, and that "
+            "receipt reports coercion loss as ``coercion_loss_n`` instead of "
+            "invalidating the analysis set, which is the Planner-declared "
+            "retain_and_flag policy. The Coder cannot be asked to rewrite the "
+            "host's own source.",
+        )
+        detail["host_owned_source_region"] = "flag_only_plausibility_receipt"
+        downgraded.append(
+            finding.model_copy(update={"severity": "warning", "detail": detail})
+        )
+    return downgraded
+
+
 def _reclassify_llm_concept_findings(
     *,
     findings: Sequence[ValidationFinding],
@@ -2725,6 +2854,10 @@ def _reclassify_llm_concept_findings(
     reclassified = _reclassify_flag_only_plausibility_range_findings(
         findings=reclassified,
         context=context,
+    )
+    reclassified = _downgrade_host_injected_plausibility_receipt_findings(
+        findings=reclassified,
+        script_text=script_text,
     )
     return _downgrade_finalized_exposure_reconciliation_findings(
         findings=reclassified,
