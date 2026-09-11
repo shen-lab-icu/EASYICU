@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.execution.runners.landmark_association_figure_executor import (
     _continuous_exposure_label,
@@ -31,6 +32,15 @@ INPUTS = (
     "table:generic_adjusted_absolute_risk",
     "table:robustness_summary",
     "table:measurement_process",
+)
+
+SENSITIVITY_INPUT = "table:robustness_grid_exposure_contrasts"
+SENSITIVITY_INPUTS = (
+    INPUTS[0],
+    INPUTS[1],
+    SENSITIVITY_INPUT,
+    INPUTS[2],
+    INPUTS[3],
 )
 
 LEGACY_INPUTS = (
@@ -79,6 +89,19 @@ def _frames() -> dict[str, pd.DataFrame]:
             {"concept": ["exposure"], "n_total": [100], "measured_one_n": [54]}
         ),
     }
+
+
+def _sensitivity_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "exposure": ["biomarker_mg_dl"] * 3,
+            "exposure_value": [1.0, 3.0, 5.0],
+            "reference_exposure_value": [2.1, 2.1, 2.1],
+            "adjusted_odds_ratio": [0.78, 1.08, 1.88],
+            "ci_low": [0.74, 0.99, 1.82],
+            "ci_high": [0.82, 1.18, 1.94],
+        }
+    )
 
 
 def _binding(key: str, frame: pd.DataFrame, path: Path) -> dict[str, object]:
@@ -216,6 +239,13 @@ def test_renderer_exports_two_claim_led_panels_and_four_source_tables(
         "marginal_effect_panel",
         "absolute_risk_curve",
     ]
+    caption = contract["reader_caption"]
+    assert "adjusted odds ratios" in caption
+    assert "model-standardised absolute outcome risk" in caption
+    assert "reference value" in caption
+    assert "exposure-distribution strips" in caption.lower()
+    assert "no model was refit" in caption
+    assert "audit-only" in caption
     assert summary["supplementary_panel_ids"] == [
         "measurement_process",
         "robustness_summary",
@@ -394,6 +424,197 @@ def test_renderer_keeps_routine_audit_panels_out_of_main_figure(
         )
         == []
     )
+
+
+def test_renderer_exports_independent_functional_form_sensitivity_panel(
+    tmp_path: Path,
+) -> None:
+    frames = _frames()
+    frames[SENSITIVITY_INPUT] = _sensitivity_frame()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    step = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render the three claim-led panels and their audit supplement.",
+        method="visualization",
+        inputs=list(SENSITIVITY_INPUTS),
+        expected_outputs=["figure:display_suite"],
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"} for key in SENSITIVITY_INPUTS
+        ],
+        figure_panels=[
+            panel.bind(figure_output="figure:display_suite")
+            for panel in landmark_association_composite_panels(SENSITIVITY_INPUTS)
+        ],
+    )
+    assert landmark_association_figure_executor_owns_step(
+        step, resolved_bindings=bindings
+    )
+
+    summary = run_landmark_association_figure(
+        out_dir=tmp_path / "outputs",
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="display_suite",
+        input_keys=SENSITIVITY_INPUTS,
+    )
+
+    assert summary["status"] == "ok"
+    assert len(summary["source_data_files"]) == 5
+    assert summary["supplementary_panel_ids"] == [
+        "measurement_process",
+        "robustness_summary",
+    ]
+    contract = pd.read_json(
+        tmp_path / "outputs" / "display_suite.figure_contract.json", typ="series"
+    )
+    assert [panel["panel_id"] for panel in contract["panels"]] == [
+        "association_curve",
+        "absolute_risk_curve",
+        "sensitivity_contrasts",
+    ]
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+    ]
+    sensitivity_panel = contract["panels"][2]
+    assert sensitivity_panel["metadata"]["chart_type"] == "sensitivity_forest"
+    assert sensitivity_panel["metadata"]["estimate_geometry"] == (
+        "paired_effect_estimates_with_95ci"
+    )
+    assert sensitivity_panel["metadata"]["effect_comparison_authorized"] is True
+    assert sensitivity_panel["metadata"]["reason_code"] == (
+        "SAME_ESTIMAND_INDEPENDENT_FUNCTIONAL_FORM_REFIT"
+    )
+    assert "Panel c compares" in contract["reader_caption"]
+    svg = (tmp_path / "outputs" / "display_suite.svg").read_text(encoding="utf-8")
+    assert "Sensitivity to covariate" in svg
+    assert "functional form" in svg
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=tmp_path / "outputs",
+            step_summary=summary,
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("exposure_values", "reference_values", "message"),
+    [
+        ([1.0, 2.5, 5.0], [2.1, 2.1, 2.1], "align exactly with the primary grid"),
+        ([1.0, 3.0, 5.0], [2.0, 2.0, 2.0], "references must align"),
+    ],
+)
+def test_renderer_rejects_sensitivity_contrasts_not_aligned_to_primary(
+    tmp_path: Path,
+    exposure_values: list[float],
+    reference_values: list[float],
+    message: str,
+) -> None:
+    frames = _frames()
+    sensitivity = _sensitivity_frame()
+    sensitivity["exposure_value"] = exposure_values
+    sensitivity["reference_exposure_value"] = reference_values
+    frames[SENSITIVITY_INPUT] = sensitivity
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    with pytest.raises(ValueError, match=message):
+        run_landmark_association_figure(
+            out_dir=tmp_path / "outputs",
+            run_dir=tmp_path,
+            resolved_inputs={"step_id": "display_suite", "inputs": bindings},
+            step_id="display_suite",
+            figure_product="display_suite",
+            input_keys=SENSITIVITY_INPUTS,
+        )
+
+
+def test_landmark_composite_keeps_audits_supplementary_for_five_inputs() -> None:
+    panels = landmark_association_composite_panels(SENSITIVITY_INPUTS)
+    assert [
+        (panel.panel_id, panel.article_role, panel.placement, panel.chart_type)
+        for panel in panels
+    ] == [
+        (
+            "association_curve",
+            "primary_estimand",
+            "main",
+            "marginal_effect_panel",
+        ),
+        (
+            "absolute_risk_curve",
+            "descriptive_result",
+            "main",
+            "absolute_risk_curve",
+        ),
+        (
+            "sensitivity_contrasts",
+            "robustness",
+            "main",
+            "sensitivity_forest",
+        ),
+        (
+            "robustness_summary",
+            "robustness",
+            "supplementary",
+            "sensitivity_coverage_matrix",
+        ),
+        (
+            "measurement_process",
+            "data_quality",
+            "supplementary",
+            "availability_panel",
+        ),
+    ]
+
+    step = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render the typed article display suite.",
+        inputs=list(SENSITIVITY_INPUTS),
+        expected_outputs=["figure:display_suite"],
+        method="visualization",
+        figure_panels=[
+            panel.bind(figure_output="figure:display_suite") for panel in panels
+        ],
+    )
+    strategy = SimpleNamespace(
+        role_strategies=[
+            SimpleNamespace(role="primary_estimand", placement="main"),
+            SimpleNamespace(role="descriptive_result", placement="main"),
+            SimpleNamespace(role="robustness", placement="main"),
+            SimpleNamespace(role="data_quality", placement="main"),
+        ]
+    )
+
+    shaped = apply_article_figure_strategy_placements(
+        plan=AnalysisPlan(research_question="Association?", steps=[step]),
+        strategy=strategy,
+    )
+
+    placements = {
+        panel.panel_id: panel.placement for panel in shaped.steps[0].figure_panels
+    }
+    assert placements == {
+        "association_curve": "main",
+        "absolute_risk_curve": "main",
+        "sensitivity_contrasts": "main",
+        "robustness_summary": "supplementary",
+        "measurement_process": "supplementary",
+    }
 
 
 def test_audit_only_coverage_is_supplementary_even_when_robustness_is_main() -> None:

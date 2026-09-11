@@ -643,6 +643,161 @@ def test_signed_landmark_association_gets_source_bound_composite_renderer() -> N
     assert repeated == []
 
 
+@pytest.mark.parametrize(
+    ("sensitivity_method", "include_sensitivity"),
+    [
+        ("linear_per_unit_sensitivity", True),
+        ("restricted_cubic_spline_sensitivity", True),
+        ("ad_hoc_sensitivity", False),
+    ],
+)
+def test_landmark_composite_admits_only_registered_functional_form_sensitivity(
+    sensitivity_method: str,
+    include_sensitivity: bool,
+) -> None:
+    sensitivity_product = "table:functional_form_sensitivity_exposure_contrasts"
+    plan = AnalysisPlan(
+        research_question="Estimate a landmark association.",
+        steps=[
+            AnalysisStep(
+                step_id="measurement_audit",
+                planned_analysis_role="auxiliary",
+                intent="Audit the landmark measurement process.",
+                method="missing_data",
+                expected_outputs=["table:measurement_process"],
+            ),
+            AnalysisStep(
+                step_id="adjusted_primary",
+                planned_analysis_role="primary",
+                intent="Estimate the signed landmark spline association.",
+                method="signed_landmark_restricted_cubic_spline",
+                expected_outputs=[
+                    "table:landmark_rcs_curve",
+                    "table:landmark_adjusted_absolute_risk",
+                ],
+            ),
+            AnalysisStep(
+                step_id="robustness_replay",
+                planned_analysis_role="sensitivity",
+                intent="Replay the prespecified robustness authority.",
+                method="robustness_sensitivity",
+                expected_outputs=["table:robustness_summary"],
+            ),
+            AnalysisStep(
+                step_id="functional_form_sensitivity",
+                planned_analysis_role="sensitivity",
+                intent="Refit the registered functional-form sensitivity.",
+                method=sensitivity_method,
+                expected_outputs=[sensitivity_product],
+            ),
+        ],
+    )
+
+    shaped, _ = ensure_landmark_association_composite_figure_step(plan=plan)
+
+    figure = shaped.steps[-1]
+    expected_inputs = [
+        "table:landmark_rcs_curve",
+        "table:landmark_adjusted_absolute_risk",
+        *([sensitivity_product] if include_sensitivity else []),
+        "table:robustness_summary",
+        "table:measurement_process",
+    ]
+    assert figure.inputs == expected_inputs
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        *(["robustness"] if include_sensitivity else []),
+        "robustness",
+        "data_quality",
+    ]
+    assert (
+        "sensitivity_forest"
+        in {panel.chart_type for panel in figure.figure_panels}
+    ) is include_sensitivity
+
+
+def test_existing_landmark_pair_display_is_rebound_to_include_sensitivity() -> None:
+    curve = "table:landmark_rcs_curve"
+    risk = "table:landmark_adjusted_absolute_risk"
+    sensitivity = "table:robustness_grid"
+    plan = AnalysisPlan(
+        research_question="Estimate a landmark association.",
+        steps=[
+            AnalysisStep(
+                step_id="measurement_audit",
+                planned_analysis_role="auxiliary",
+                intent="Audit the landmark measurement process.",
+                method="missing_data",
+                expected_outputs=["table:measurement_process_audit"],
+            ),
+            AnalysisStep(
+                step_id="adjusted_primary",
+                planned_analysis_role="primary",
+                intent="Estimate the signed landmark spline association.",
+                method="signed_landmark_restricted_cubic_spline",
+                expected_outputs=[curve, risk],
+            ),
+            AnalysisStep(
+                step_id="functional_form_sensitivity",
+                planned_analysis_role="sensitivity",
+                intent="Refit the prespecified covariate functional form.",
+                method="restricted_cubic_spline_sensitivity",
+                sensitivity_spec_ids=["age_functional_form"],
+                expected_outputs=[
+                    sensitivity,
+                    f"{sensitivity}_exposure_curve",
+                    f"{sensitivity}_exposure_contrasts",
+                ],
+                functional_form_spec={
+                    "target_column": "age",
+                    "knot_quantiles": [0.1, 0.5, 0.9],
+                },
+            ),
+            AnalysisStep(
+                step_id="robustness_summary",
+                planned_analysis_role="sensitivity",
+                intent="Summarize the signed robustness projection.",
+                method="robustness_sensitivity",
+                expected_outputs=["table:robustness_summary"],
+            ),
+            AnalysisStep(
+                step_id="display_package",
+                planned_analysis_role="auxiliary",
+                intent="Render the two aligned signed landmark curves.",
+                method="visualization",
+                inputs=[curve, risk],
+                expected_outputs=["figure:display_package"],
+                input_consumption_contracts=[
+                    {"input_key": source, "mode": "all_rows"}
+                    for source in (curve, risk)
+                ],
+            ),
+        ],
+    )
+
+    shaped, findings = ensure_landmark_association_composite_figure_step(plan=plan)
+
+    figure = next(step for step in shaped.steps if step.step_id == "display_package")
+    assert figure.inputs == [
+        curve,
+        risk,
+        f"{sensitivity}_exposure_contrasts",
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    ]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "robustness",
+        "data_quality",
+    ]
+    assert findings[0].detail["reason_code"] == (
+        "landmark_association_composite_figure_rebound"
+    )
+
+
 def test_signed_landmark_renderer_reuses_article_step_and_measurement_alias() -> None:
     """A Planner-authored article placeholder must not fall back to Coder.
 

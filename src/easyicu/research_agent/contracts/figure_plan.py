@@ -379,8 +379,10 @@ def association_sensitivity_composite_panels(
 
 
 def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
+    sensitivity = _landmark_sensitivity_contrast_product(source_products)
     reserved = {
         "table:robustness_summary",
+        sensitivity,
     }
     adjusted_risk = _landmark_adjusted_risk_product(source_products)
     matches = [
@@ -389,6 +391,13 @@ def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
         if value.startswith("table:")
         and value not in reserved
         and value != adjusted_risk
+        and not (
+            (
+                "robustness" in value.partition(":")[2]
+                or "sensitivity" in value.partition(":")[2]
+            )
+            and value.partition(":")[2].endswith("_exposure_curve")
+        )
         and value.partition(":")[2]
         not in {"measurement_process", "measurement_process_audit"}
     ]
@@ -432,6 +441,22 @@ def _measurement_process_product(source_products: Sequence[str]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def _landmark_sensitivity_contrast_product(
+    source_products: Sequence[str],
+) -> str | None:
+    matches = [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and value.partition(":")[2].endswith("_exposure_contrasts")
+        and (
+            "robustness" in value.partition(":")[2]
+            or "sensitivity" in value.partition(":")[2]
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def landmark_association_composite_panels(
     source_products: Sequence[str],
 ) -> Tuple[DeterministicFigurePanelTemplate, ...]:
@@ -440,22 +465,34 @@ def landmark_association_composite_panels(
     cleaned = tuple(str(value or "").strip() for value in source_products)
     curve = _landmark_curve_product(cleaned)
     adjusted_risk = _landmark_adjusted_risk_product(cleaned)
+    sensitivity = _landmark_sensitivity_contrast_product(cleaned)
     measurement = _measurement_process_product(cleaned)
     if (
         curve is None
         or adjusted_risk is None
-        or len(cleaned) not in {2, 4}
+        or len(cleaned) not in {2, 3, 4, 5}
         or len(cleaned) != len(set(cleaned))
         or (
-            len(cleaned) == 4
+            len(cleaned) == 3
+            and (
+                sensitivity is None
+                or measurement is not None
+                or "table:robustness_summary" in cleaned
+            )
+        )
+        or (
+            len(cleaned) in {4, 5}
             and (
                 measurement is None
                 or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
             )
         )
+        or (len(cleaned) == 4 and sensitivity is not None)
+        or (len(cleaned) == 5 and sensitivity is None)
     ):
         raise ValueError(
-            "landmark composite requires two curve tables or the complete four-table profile"
+            "landmark composite requires two curves, an optional comparable "
+            "sensitivity table, or the complete audit profile"
         )
     panels = (
         DeterministicFigurePanelTemplate(
@@ -471,7 +508,17 @@ def landmark_association_composite_panels(
             source_products=(adjusted_risk,),
         ),
     )
-    if len(cleaned) == 2:
+    if sensitivity is not None:
+        panels = (
+            *panels,
+            DeterministicFigurePanelTemplate(
+                panel_id="sensitivity_contrasts",
+                article_role="robustness",
+                chart_type="sensitivity_forest",
+                source_products=(sensitivity,),
+            ),
+        )
+    if len(cleaned) in {2, 3}:
         return panels
     assert measurement is not None
     return (
