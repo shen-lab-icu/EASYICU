@@ -329,13 +329,39 @@ PALETTE_CLINICAL: Dict[str, str] = {
     "blue": "#0F4D92",
     "blue_soft": "#B4C0E4",
     "teal": "#42949E",
+    # Every series colour carries a soft twin, because the figure rule the
+    # Coder is told is "take fills from the _soft keys". Two soft entries out
+    # of four series colours made that rule a trap: a generated four-panel
+    # article figure followed it literally and died with
+    # ``KeyError: 'orange_soft'`` at 1.7 s, which failed the step closed and
+    # suppressed every deterministic renderer behind it (measured 2026-09-12).
+    "teal_soft": "#C7DFE1",
     "orange": "#E28E2C",
+    "orange_soft": "#F7DFC0",
     "red": "#B64342",
     "red_soft": "#F6CFCB",
     "neutral": "#8F8F8F",
     "neutral_light": "#D8D8D8",
     "band": "#F3F0EA",
 }
+
+#: The colours a series may be drawn in. A fill twin is required for each.
+SERIES_PALETTE_COLOURS: tuple[str, ...] = ("blue", "orange", "teal", "red")
+
+
+class PublicationPalette(Dict[str, str]):
+    """Palette whose unknown key names the choices it was rejecting.
+
+    A bare ``KeyError: 'x'`` in a sandbox log tells the Coder only that
+    something was wrong, so it guesses again; the key list is host-authored and
+    costs nothing to show.
+    """
+
+    def __missing__(self, key: str) -> str:
+        raise KeyError(
+            f"{key!r} is not a publication palette key; use one of: "
+            + ", ".join(sorted(self))
+        )
 
 
 def _normalise_statistics_note(
@@ -737,7 +763,7 @@ def apply_publication_style(
         "savefig.facecolor": "white",
     })
     _ = fig
-    return dict(palette or PALETTE_CLINICAL)
+    return PublicationPalette(palette or PALETTE_CLINICAL)
 
 
 def add_panel_label(

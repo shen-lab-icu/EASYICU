@@ -51,3 +51,58 @@ def test_the_palette_still_covers_the_roles_the_prompt_promises() -> None:
         assert role in PALETTE_CLINICAL, role
     # soft variants exist for fills and bands, which the prompt points at
     assert any(key.endswith("_soft") for key in PALETTE_CLINICAL)
+
+
+def test_every_series_colour_has_the_fill_twin_the_rule_promises() -> None:
+    """Telling the Coder to take fills from the `_soft` keys is only safe if
+    every series colour has one.
+
+    Two soft keys for four series colours was not a documented subset but an
+    accident of history, and the prompt said only "`_soft` variants for fills".
+    A generated article figure read that as a rule, wrote
+    `color=palette["orange_soft"]`, and died 1.7 seconds into the sandbox --
+    `KeyError` carries no hints, so the repair round had nothing to fix and the
+    run lost its tail to one missing hex (measured 2026-09-12).
+    """
+    from easyicu.research_agent.figures.publication import (
+        PALETTE_CLINICAL,
+        SERIES_PALETTE_COLOURS,
+    )
+
+    assert SERIES_PALETTE_COLOURS == ("blue", "orange", "teal", "red")
+    for colour in SERIES_PALETTE_COLOURS:
+        assert PALETTE_CLINICAL[f"{colour}_soft"].startswith("#"), colour
+
+    coder_prompt = _coder_prompt()
+    # The prompt may state the fill keys, never a generative pattern the guard
+    # above cannot resolve against the palette.
+    assert "_soft` variants" not in coder_prompt
+    for colour in SERIES_PALETTE_COLOURS:
+        assert f'palette["{colour}_soft"]' in coder_prompt, colour
+
+
+def test_an_invented_palette_key_shows_the_choices_it_rejected() -> None:
+    """A bare KeyError makes the next round guess again."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from easyicu.research_agent.figures.publication import (
+        PALETTE_CLINICAL,
+        apply_publication_style,
+    )
+
+    palette = apply_publication_style()
+
+    assert palette["blue"] == "#0F4D92"
+    # The returned mapping is still an ordinary palette by value: a renderer
+    # that dumps or compares it sees exactly the host colours.
+    assert dict(palette) == PALETTE_CLINICAL
+    try:
+        palette["green"]
+    except KeyError as error:
+        message = str(error)
+    else:  # pragma: no cover - the point of the test
+        raise AssertionError("an unknown palette key raised nothing")
+    assert "'green' is not a publication palette key" in message
+    for colour in sorted(PALETTE_CLINICAL):
+        assert colour in message
