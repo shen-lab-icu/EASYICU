@@ -619,6 +619,22 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             path = raw.get("path")
             if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(path):
                 projected["path"] = path
+            metrics = raw.get("metrics")
+            if isinstance(metrics, Mapping):
+                # The compiler's own boundary measurement. Keys are canonical
+                # snake_case and values non-negative integers, so a size finding
+                # can be acted on without re-failing the run to learn its numbers.
+                safe_metrics: Dict[str, int] = {}
+                for key, value in metrics.items():
+                    if (
+                        isinstance(key, str)
+                        and re.fullmatch(r"[a-z][a-z0-9_]{2,63}", key)
+                        and type(value) is int
+                        and 0 <= value <= 10**12
+                    ):
+                        safe_metrics[key] = value
+                if safe_metrics:
+                    projected["metrics"] = safe_metrics
             return projected
         if owner == "easyicu.providers.planner_efficiency_budget_v1":
             reason = raw.get("reason")

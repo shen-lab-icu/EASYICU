@@ -43,6 +43,58 @@ def test_outer_http_failure_takes_precedence_over_contextual_compiler_failure():
             ) == "research_pipeline_planner_provider_unavailable"
 
 
+def test_prompt_budget_failure_publishes_its_own_measurements():
+    """A size gate that hides its numbers cannot be acted on.
+
+    ``progressive_prompt_budget_exceeded`` aborted plan generation twice while
+    the Web diagnostic carried only "the host compiler rejected the bounded
+    Planner repairs": the request size and the envelope it crossed were already
+    computed at the check and then thrown away, so the only way to learn them
+    was to fail again. Integers under a canonical key are the one part of that
+    request that is safe to publish.
+    """
+    from easyicu.research_agent.planning.progressive_contract import (
+        ProgressivePlanCompileError,
+    )
+
+    failure = ProgressivePlanCompileError(
+        "progressive_prompt_budget_exceeded",
+        "initial request uses 96000 bytes; limit=90000",
+        path="planner_request",
+        metrics={
+            "request_bytes": 96000,
+            "byte_limit": 90000,
+            "message_bytes": 88000,
+            "schema_bytes": 8000,
+            # Anything that is not a canonical, bounded, non-negative integer
+            # stays out of a projection that is allowed to reach a browser.
+            "PromptText": "patient row 12345678",
+            "negative": -5,
+            "huge": 10 ** 30,
+            "floaty": 1.5,
+        },
+    )
+
+    projected = agent_pipeline_runs._safe_pipeline_typed_failure(failure)
+
+    assert projected == {
+        "owner": "easyicu.planning.progressive_compiler_v1",
+        "reason_code": "progressive_prompt_budget_exceeded",
+        "path": "planner_request",
+        "metrics": {
+            "request_bytes": 96000,
+            "byte_limit": 90000,
+            "message_bytes": 88000,
+            "schema_bytes": 8000,
+        },
+    }
+    assert "12345678" not in json.dumps(projected)
+    assert "96000 bytes" not in json.dumps(projected)
+    assert agent_pipeline_runs._pipeline_failure_code(failure) == (
+        "research_pipeline_progressive_compile_failed"
+    )
+
+
 @pytest.mark.parametrize("status", [401, 429, 503])
 def test_pipeline_failure_keeps_typed_http_status_across_exception_chain(tmp_path, status):
     secret = "sk-secret-provider-message-and-patient-fragment"

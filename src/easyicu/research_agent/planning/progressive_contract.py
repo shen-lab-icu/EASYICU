@@ -964,6 +964,7 @@ class ProgressivePlanCompileError(ValueError):
         step_index: Optional[int] = None,
         path: Optional[str] = None,
         findings: Sequence[Mapping[str, Any]] = (),
+        metrics: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             raise ValueError(
@@ -992,6 +993,21 @@ class ProgressivePlanCompileError(ValueError):
             "step_index": step_index,
             "path": path,
         }
+        # A boundary finding whose own measurement is discarded cannot be acted
+        # on: ``progressive_prompt_budget_exceeded`` says "too large" while
+        # dropping both numbers, so every retry had to rediscover the size by
+        # failing again. Host-authored non-negative integers under a canonical
+        # key are safe to publish, and nothing else about the request is.
+        safe_metrics = {
+            str(key): int(value)
+            for key, value in dict(metrics or {}).items()
+            if re.fullmatch(r"[a-z][a-z0-9_]{2,63}", str(key))
+            and type(value) is int
+            and 0 <= value <= 10**12
+        }
+        if safe_metrics:
+            self.easyicu_safe_diagnostic["metrics"] = safe_metrics
+            self.details["metrics"] = safe_metrics
         if findings:
             self.details["findings"] = [dict(item) for item in findings]
         coordinate = f" step={step_id!r}" if step_id else ""

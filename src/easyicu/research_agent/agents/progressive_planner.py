@@ -4126,6 +4126,12 @@ class ProgressivePlannerAgent:
                 f"initial request uses {total_bytes} bytes; "
                 f"limit={planner_prompt_byte_limit(self.llm)}",
                 path="planner_request",
+                metrics={
+                    "request_bytes": total_bytes,
+                    "byte_limit": planner_prompt_byte_limit(self.llm),
+                    "message_bytes": message_bytes,
+                    "schema_bytes": schema_bytes,
+                },
             )
         current_prompt_metrics = {
             "plan_revision_projection": revision_projection,
