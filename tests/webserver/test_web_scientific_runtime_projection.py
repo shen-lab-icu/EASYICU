@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -343,25 +345,43 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
     assert not landmark_spline_runtime_receipt_valid(altered)
 
     from easyicu.research_agent.schema import AnalysisStep
-    from easyicu.research_agent.contracts.functional_form import FunctionalFormSpec
+    from easyicu.research_agent.contracts.functional_form import (
+        FunctionalFormSpec, functional_form_products,
+    )
     from easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor import (
         run_landmark_spline_functional_form,
     )
     child = AnalysisStep(
         step_id="form_check", planned_analysis_role="sensitivity",
         intent="Expose the bound primary nonlinearity test.",
-        method="restricted_cubic_spline_sensitivity", inputs=[],
+        method="restricted_cubic_spline_sensitivity",
+        inputs=[authority.downstream_parent_product, authority.linear_sensitivity_product],
         sensitivity_spec_ids=["exposure_functional_form"],
         functional_form_spec=FunctionalFormSpec(
             target_column="lact_max", knot_quantiles=authority.spline_knot_quantiles,
         ),
-        expected_outputs=["table:form_check"],
+        expected_outputs=list(
+            functional_form_products("table:form_check", include_effects=True)
+        ),
     )
-    run_landmark_spline_functional_form(
+    source_paths = {
+        authority.downstream_parent_product: tmp_path / "out" / f"{authority.downstream_parent_product.partition(':')[2]}.csv",
+        authority.linear_sensitivity_product: tmp_path / "out" / f"{authority.linear_sensitivity_product.partition(':')[2]}.csv",
+    }
+    contrasts = pd.read_csv(source_paths[authority.downstream_parent_product])
+    child_summary = run_landmark_spline_functional_form(
         step=child, authority=authority,
         runtime_projection_sha256=projection.projection_sha256,
         linear_sensitivity=sensitivity, linear_evidence_id="source_linear",
-        out_dir=tmp_path / "child",
+        out_dir=tmp_path / "child", primary_contrasts=contrasts,
+        input_bindings=[
+            {
+                "input_key": key, "evidence_id": f"source_{key.partition(':')[2]}",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "loaded": True,
+                "row_count": 2 if key == authority.downstream_parent_product else 1,
+            }
+            for key, path in source_paths.items()
+        ],
     )
     projected = pd.read_csv(tmp_path / "child" / "form_check.csv")
     assert projected.loc[0, "method"] == comparison["method"]
@@ -371,12 +391,33 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
     )
     assert projected.loc[0, "statistic"] == pytest.approx(comparison["statistic"])
     assert "likelihood_ratio_statistic" not in projected.columns
+    # The cluster-robust primary sealed one linear row. Restating that row on the
+    # primary grid must say plainly that it refitted nothing.
+    assert child_summary["functional_form_effect_products"]["independent_refit"] is False
+    curve = pd.read_csv(tmp_path / "child" / "form_check_exposure_curve.csv")
+    points = pd.read_csv(tmp_path / "child" / "form_check_exposure_contrasts.csv")
+    assert len(curve) == authority.curve_points
+    assert len(points) == 2
+    reference = float(contrasts["reference_exposure_value"].iloc[0])
+    increment = float(sensitivity.loc[0, "exposure_increment"])
+    log_unit = float(np.log(sensitivity.loc[0, "adjusted_odds_ratio"]))
+    np.testing.assert_allclose(
+        curve["adjusted_odds_ratio"],
+        np.exp(log_unit * (curve["exposure_value"] - reference) / increment),
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        points["exposure_value"],
+        [contrasts["exposure_value"].min(), contrasts["exposure_value"].max()],
+        rtol=0.0, atol=1e-12,
+    )
     with pytest.raises(ValueError, match="method or target"):
         run_landmark_spline_functional_form(
             step=child, authority=authority,
             runtime_projection_sha256=projection.projection_sha256,
             linear_sensitivity=sensitivity.assign(nonlinearity_target_column="age"),
             linear_evidence_id="wrong_target", out_dir=tmp_path / "wrong",
+            primary_contrasts=contrasts,
         )
 
 

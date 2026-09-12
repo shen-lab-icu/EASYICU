@@ -1188,17 +1188,19 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             allow_draft_outputs and tuple(step.expected_outputs) == expected_outputs[:1]
         ):
             raise CurrentCaseScientificAuthorityError(
-                "covariate functional-form requires reviewed curve/contrast products; revise the complete plan"
+                "functional-form sensitivity requires reviewed curve/contrast products; revise the complete plan"
             )
         return spec
 
     def functional_form_outputs(self, step: AnalysisStep) -> tuple[str, ...]:
         if step.functional_form_spec is None or not step.expected_outputs:
             raise CurrentCaseScientificAuthorityError("functional-form output has no exact target")
-        return functional_form_products(
-            step.expected_outputs[0],
-            include_effects=step.functional_form_spec.target_column != self.exposure_column,
-        )
+        # Both targets publish effect tables. A covariate target refits; the
+        # exposure target projects the already sealed linear term onto the same
+        # primary grid. Neither may leave the article figure without a
+        # comparable specification contrast, because a one-row diagnostic cannot
+        # bind the display owner's contrast panel.
+        return functional_form_products(step.expected_outputs[0], include_effects=True)
 
     def functional_form_effect_parents(self, steps, *, consumer: AnalysisStep) -> tuple[AnalysisStep, ...]:
         """Select declared covariate refits; their effects must precede this consumer."""
@@ -1268,9 +1270,29 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
         generic_parent = "table:adjusted_association_estimates"
         replacement = self.downstream_parent_product
-        declared_products = {
-            product for step in plan.steps for product in step.expected_outputs
-        } | set(self.plan_outputs)
+        # Binding expands a reviewed functional-form sensitivity into its curve
+        # and contrast products mechanically, but only while binding that step,
+        # which happens after this assembly has chosen the composite inputs.
+        # Reading the planner's declared list alone would make the article
+        # figure's specification-contrast panel depend on the planner repeating
+        # names the host derives anyway. The guard keeps a malformed target on
+        # its existing rejection path instead of failing earlier here.
+        expanded_step_products = {
+            step.step_id: set(self.functional_form_outputs(step))
+            for step in plan.steps
+            if step.functional_form_spec is not None
+            and step.expected_outputs
+            and str(step.expected_outputs[0]).startswith("table:")
+        }
+        declared_products = (
+            {product for step in plan.steps for product in step.expected_outputs}
+            | set(self.plan_outputs)
+            | {
+                product
+                for products in expanded_step_products.values()
+                for product in products
+            }
+        )
         measurement_products = [
             product
             for product in declared_products
@@ -1290,7 +1312,11 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             and any(
                 step.planned_analysis_role == "sensitivity"
                 and step.method in RCS_LINEAR_SENSITIVITY_METHODS
-                and product in {str(output) for output in step.expected_outputs}
+                and product
+                in expanded_step_products.get(
+                    step.step_id,
+                    {str(output) for output in step.expected_outputs},
+                )
                 for step in plan.steps
             )
         ]

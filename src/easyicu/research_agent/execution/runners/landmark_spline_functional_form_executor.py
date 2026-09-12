@@ -8,7 +8,6 @@ refits both forms on the same primary model population and covariance policy.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import textwrap
 from pathlib import Path
@@ -201,6 +200,10 @@ def run_landmark_spline_functional_form(
     )
     if n <= 0 or events < 0 or events > n or extra_df <= 0:
         raise ValueError("signed functional-form diagnostic counts are invalid")
+    if primary_contrasts is None:
+        raise ValueError(
+            "exposure functional-form projection requires the sealed primary contrasts"
+        )
     result = {
         **comparison,
         "n_complete_case": n, "event_n": events,
@@ -211,8 +214,22 @@ def run_landmark_spline_functional_form(
         "additional_spline_parameters": extra_df, "nonlinearity_p_value": p_value,
         "execution_mode": "exact_primary_exposure_projection",
     }
-    return _write_result(step=step, row=result, out_dir=out_dir,
-                         source_evidence_id=linear_evidence_id, input_bindings=input_bindings or [])
+    from .functional_form_effect_products import seal_functional_form_projection
+
+    # The nested linear model is already fitted and sealed by the primary owner.
+    # Restating that line on the primary exposure grid is a coordinate change,
+    # not a second estimate, and it gives the article figure a comparable
+    # specification contrast instead of a one-row diagnostic.
+    curve, points, contract = seal_functional_form_projection(
+        step=step, authority=sealed, runtime_projection_sha256=runtime_projection_sha256,
+        contrasts=primary_contrasts, linear_sensitivity=linear_sensitivity,
+        input_bindings=input_bindings or [], nonlinearity_p_value=p_value,
+    )
+    return _write_result(
+        step=step, row=result, out_dir=out_dir,
+        source_evidence_id=linear_evidence_id, input_bindings=input_bindings or [],
+        effect_tables=(curve, points), effect_contract=contract,
+    )
 
 
 def _write_result(*, step, row, out_dir, source_evidence_id, input_bindings,
@@ -252,22 +269,15 @@ def _write_result(*, step, row, out_dir, source_evidence_id, input_bindings,
         "output_files": {output_product: output_path.name},
     }
     if effect_contract is not None:
+        from .functional_form_effect_products import effect_product_summary
+
         # Full parameters/covariance/lineage remain in both registered effect
         # tables. The downstream native robustness owner reads those bytes and
         # publishes its compact reportable_model_contrasts. Do not recursively
         # expose model internals to the Writer's bounded numeric-leaf budget.
-        summary["functional_form_effect_products"] = {
-            "contract_sha256": hashlib.sha256(effect_contract.model_dump_json().encode("utf-8")).hexdigest(),
-            "spec_id": effect_contract.spec_id,
-            "target_column": effect_contract.form.target_column,
-            "exposure": effect_contract.exposure,
-            "analysis_role": effect_contract.analysis_role,
-            "independent_refit": effect_contract.independent_refit,
-            "model_rows_sha256": effect_contract.model_rows_sha256,
-            "curve_product": step.expected_outputs[1],
-            "contrast_product": step.expected_outputs[2],
-            "primary_exposure_nonlinearity_p_value": effect_contract.primary_exposure_nonlinearity_p_value,
-        }
+        summary["functional_form_effect_products"] = effect_product_summary(
+            contract=effect_contract, step=step
+        )
         for product, table in zip(step.expected_outputs[1:], effect_tables, strict=True):
             name = product.partition(":")[2] + ".csv"
             table.to_csv(out_dir / name, index=False)

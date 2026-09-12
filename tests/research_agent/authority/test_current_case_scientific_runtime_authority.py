@@ -769,6 +769,10 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
     )
     assert selected is not None
     assert selected.analysis_kind == LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND
+    # The primary owner seals exp(beta) with a symmetric Wald interval, so the
+    # test row is built the same way instead of picking three unrelated numbers.
+    unit_log_odds = float(np.log(1.5))
+    unit_standard_error = 0.1
     summary = run_landmark_spline_functional_form(
         step=rebound,
         authority=authority,
@@ -785,16 +789,75 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
                     "likelihood_ratio_statistic": 14.0,
                     "additional_spline_parameters": 2,
                     "nonlinearity_p_value": 0.00091,
+                    "exposure_increment": authority.linear_sensitivity_per_unit,
+                    "adjusted_odds_ratio": float(np.exp(unit_log_odds)),
+                    "ci_low": float(np.exp(unit_log_odds - 1.96 * unit_standard_error)),
+                    "ci_high": float(np.exp(unit_log_odds + 1.96 * unit_standard_error)),
                 }
             ]
         ),
         linear_evidence_id="table_linear",
         out_dir=tmp_path,
+        primary_contrasts=pd.DataFrame(
+            {
+                "exposure": [authority.exposure_column] * 2,
+                "exposure_value": [1.0, 4.9],
+                "reference_exposure_value": [2.0, 2.0],
+                "adjusted_odds_ratio": [0.62, 3.4],
+                "ci_low": [0.55, 3.0],
+                "ci_high": [0.70, 3.9],
+            }
+        ),
+        input_bindings=[
+            {
+                "input_key": authority.downstream_parent_product,
+                "evidence_id": "table_contrasts",
+                "sha256": "a" * 64,
+                "loaded": True,
+                "row_count": 2,
+            },
+            {
+                "input_key": authority.linear_sensitivity_product,
+                "evidence_id": "table_linear",
+                "sha256": "b" * 64,
+                "loaded": True,
+                "row_count": 1,
+            },
+        ],
     )
     assert summary["n_complete_case"] == 44095
     projected = pd.read_csv(tmp_path / "functional_form_check.csv")
     assert projected.loc[0, "n_complete_case"] == 44095
     assert projected.loc[0, "nonlinearity_p_value"] == pytest.approx(0.00091)
+    # The exposure target projects the already sealed linear term instead of
+    # refitting, so it must still publish the comparable effect tables that the
+    # article figure's specification panel binds.
+    assert rebound.expected_outputs == [
+        "table:functional_form_check",
+        "table:functional_form_check_exposure_curve",
+        "table:functional_form_check_exposure_contrasts",
+    ]
+    assert len(summary["output_files"]) == 3
+    effects = summary["functional_form_effect_products"]
+    assert effects["independent_refit"] is False
+    assert effects["contrast_product"] == "table:functional_form_check_exposure_contrasts"
+    curve = pd.read_csv(tmp_path / "functional_form_check_exposure_curve.csv")
+    points = pd.read_csv(tmp_path / "functional_form_check_exposure_contrasts.csv")
+    assert len(curve) == authority.curve_points
+    assert len(points) == 2
+    grid = np.linspace(1.0, 4.9, authority.curve_points)
+    np.testing.assert_allclose(curve["exposure_value"], grid, rtol=0.0, atol=1e-10)
+    np.testing.assert_allclose(
+        curve["adjusted_odds_ratio"],
+        np.exp(unit_log_odds * (grid - 2.0) / authority.linear_sensitivity_per_unit),
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        points["adjusted_odds_ratio"],
+        curve["adjusted_odds_ratio"].iloc[[0, -1]],
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
