@@ -1140,6 +1140,136 @@ def test_typed_conditional_event_time_uses_event_positive_denominator(
     assert observed["n_complete"] == 4
 
 
+_PARTITION_COUNT_COLUMNS = (
+    "n_total",
+    "measured_one_n",
+    "value_missing_n",
+    "eligible_n",
+    "not_applicable_n",
+    "event_present_n",
+    "event_absent_n",
+)
+
+
+def _stated_identities(text: object) -> list[str]:
+    stated = str(text or "")
+    if "no partition" in stated:
+        return []
+    return [piece.strip() for piece in stated.split(";") if piece.strip()]
+
+
+def _identity_holds(identity: str, row) -> bool:
+    """Evaluate one published identity against the row it was published for."""
+
+    values = {column: float(row[column]) for column in _PARTITION_COUNT_COLUMNS}
+    left, _separator, right = identity.partition(" = ")
+    return sum(values[token.strip()] for token in left.split(" + ")) == values[
+        right.strip()
+    ]
+
+
+def test_event_timing_row_publishes_the_sums_it_actually_satisfies(
+    tmp_path: Path,
+) -> None:
+    """The count columns overlap, so the row must say which sums are real.
+
+    Measured 2026-09-12: a generated article-figure step fail-closed a whole
+    E2 run on the opposite assumption -- it added ``eligible_n``,
+    ``not_applicable_n``, ``event_present_n``, ``event_absent_n``,
+    ``before_origin_n`` and ``value_missing_n`` together and demanded
+    ``n_total`` (177,523 versus 94,418 on the real cohort).  Nothing in those
+    column names says the pair (eligible, not_applicable) and the pair
+    (present, absent) describe the same split twice, so the producer now states
+    the arithmetic it verified per row, and this test checks that what it
+    states is both true and complete.
+    """
+
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "death": [0, 1, 1, 0, 1],
+            "death_time": [np.nan, 12.0, np.nan, np.nan, 48.0],
+        }
+    )
+    context = {
+        "variables": [
+            {
+                "name": "death_time",
+                "observation_semantics": {
+                    "kind": "conditional_event_time",
+                    "event_status_column": "death",
+                    "representative_column": "death_time",
+                    "time_origin": "icu_admission",
+                    "time_unit": "h",
+                },
+            }
+        ]
+    }
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        context,
+        requested_inputs=["death_time"],
+    )
+
+    row = pd.read_csv(out_dir / "event_timing_audit.csv").iloc[0]
+    wide = pd.read_csv(out_dir / "missingness_measurement_audit.csv").iloc[0]
+    claimed_sum = sum(
+        int(row[column])
+        for column in (
+            "eligible_n",
+            "not_applicable_n",
+            "event_present_n",
+            "event_absent_n",
+            "before_origin_n",
+            "value_missing_n",
+        )
+    )
+    assert claimed_sum == 11
+    assert claimed_sum != int(row["n_total"])
+    stated = _stated_identities(row["partition_identities"])
+    assert stated == [
+        "eligible_n + not_applicable_n = n_total",
+        "event_present_n + event_absent_n = n_total",
+        "event_present_n = eligible_n",
+        "event_absent_n = not_applicable_n",
+    ]
+    assert all(_identity_holds(identity, wide) for identity in stated)
+    # The projections list their columns by hand, so a statement added to one
+    # and forgotten in another would leave half the consumers guessing again.
+    for other in ("missingness_audit.csv", "measurement_source_audit.csv"):
+        assert pd.read_csv(out_dir / other).iloc[0][
+            "partition_identities"
+        ] == row["partition_identities"]
+    assert summary["count_partition_audit"]["status"] == "ok"
+    assert summary["count_partition_audit"]["unverified_concepts"] == []
+
+
+def test_availability_row_does_not_claim_an_event_partition(
+    tmp_path: Path,
+) -> None:
+    """A concept with no event semantics must not borrow one from the shape."""
+
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        _cohort(),
+        {"variables": [{"name": "lactate"}]},
+        requested_inputs=["lactate"],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    row = audit.loc[audit["concept"] == "lactate"].iloc[0]
+
+    assert row["indicator_semantics"] == "measurement_availability"
+    stated = _stated_identities(row["partition_identities"])
+    assert "measured_one_n + value_missing_n = n_total" in stated
+    assert "eligible_n = n_total" in stated
+    assert "event_present_n + event_absent_n = n_total" not in stated
+    assert all(_identity_holds(identity, row) for identity in stated)
+    assert summary["count_partition_audit"]["status"] == "ok"
+
+
 def test_typed_conditional_event_time_before_origin_is_reported_for_protocol(
     tmp_path: Path,
 ) -> None:
