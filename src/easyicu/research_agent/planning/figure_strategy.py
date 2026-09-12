@@ -673,67 +673,6 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
     return bool(family_aliases.get(chart_type, set()) & accepted)
 
 
-def primary_publication_role_requirement(
-    strategy: ArticleFigureStrategy,
-) -> tuple[frozenset[str], int]:
-    """Which roles the reader's main figure must carry, and how many of them.
-
-    Exported because two earlier planning passes decide what that figure *is*
-    before this gate ever sees it: ``figures/skill.py`` picks which step bundle
-    is promoted, and ``planning/figure_plan_shaping.py`` can remove panels from
-    it.  Measured 2026-09-12 they disagreed with this gate by construction --
-    the shaper stripped both audit panels of a four-panel landmark composite
-    because dedicated displays already carry them, and this gate then reported
-    the resulting main figure for covering 2 < 3 required visual roles, a
-    shortfall no panel profile the renderer offered could have avoided.  One
-    formula, read by all three, so a plan cannot be shaped into a state the
-    gate can only fail.
-    """
-
-    required_main = frozenset(
-        role.role
-        for role in strategy.role_strategies
-        if role.required and role.placement == "main"
-    )
-    return required_main, min(
-        len(required_main),
-        _PRIMARY_PUBLICATION_MIN_ROLES.get(
-            str(strategy.analysis_family), min(3, len(required_main))
-        ),
-    )
-
-
-def primary_publication_figure_is_article_grade(
-    strategy: ArticleFigureStrategy,
-    panels: Sequence[tuple[str, str]],
-) -> bool:
-    """Whether ``(article_role, chart_type)`` pairs would clear the main-figure gate.
-
-    Deliberately narrower than the audit.  It checks the hero role, the covered
-    required-main roles and each role's accepted chart vocabulary -- everything
-    a deterministic panel template controls.  A role's required reader-facing
-    terms come from the renderer's canonical titles, so this is a guard against
-    a planning pass that *removes* a role, not a replacement for the gate that
-    still judges the sealed plan.
-    """
-
-    required_main, minimum = primary_publication_role_requirement(strategy)
-    roles = {str(role) for role, _chart_type in panels}
-    if strategy.hero_role not in roles:
-        return False
-    covered: Set[str] = set()
-    for role in strategy.role_strategies:
-        if role.role not in required_main:
-            continue
-        if any(
-            str(panel_role) == role.role
-            and _acceptable_chart_match(role, str(chart_type))
-            for panel_role, chart_type in panels
-        ):
-            covered.add(role.role)
-    return len(covered) >= minimum
-
-
 def summarize_article_figure_strategy_coverage(
     *,
     context: ResearchContext,
@@ -821,10 +760,19 @@ def summarize_article_figure_strategy_coverage(
                 )
 
     required_roles = {role.role for role in strategy.role_strategies if role.required}
-    required_main_roles, primary_minimum_required_role_count = (
-        primary_publication_role_requirement(strategy)
-    )
+    required_main_roles = {
+        role.role
+        for role in strategy.role_strategies
+        if role.required and role.placement == "main"
+    }
     errors = [*contracts.error_messages(), *role_errors]
+    primary_minimum_required_role_count = min(
+        len(required_main_roles),
+        _PRIMARY_PUBLICATION_MIN_ROLES.get(
+            str(strategy.analysis_family),
+            min(3, len(required_main_roles)),
+        ),
+    )
     if not primary_panels:
         errors.append("No primary publication figure contract was found.")
     elif strategy.hero_role not in primary_publication_roles:
