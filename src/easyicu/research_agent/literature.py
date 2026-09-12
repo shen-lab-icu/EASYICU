@@ -1590,25 +1590,126 @@ def _adult_population_required(context: ResearchContext) -> bool:
     return False
 
 
-def _adult_study_population_matches(record: CitationRecord) -> bool:
-    """Adult background text cannot promote an explicitly pediatric study."""
+def _excludes_adult_population(statement: str) -> bool:
+    """Recognize exclusion of the whole adult group, not a qualified subgroup."""
 
-    title = _normalise_clinical_text(record.title)
-    if re.search(r"\b(?:paediatric|pediatric|children|neonatal|neonates|infants)\b", title):
+    adult_group = r"(?:adults|adult\s+(?:ICU\s+)?patients)"
+    return bool(re.search(
+        rf"\b{adult_group}\s+(?:was|were|are)\s+excluded\b|"
+        rf"\b(?:excluded|did not include)\s+(?:all\s+)?{adult_group}"
+        r"(?=\s*(?:[,.;!?]|$)|\s+(?:and|but|whereas)\b)",
+        statement, flags=re.I,
+    ))
+
+
+def _study_population_statements(excerpt: str) -> List[str]:
+    """Keep explicit population statements from the retained source excerpt.
+
+    The excerpt selector retains background and result sentences as well as
+    design sentences. Its transport prefix is not itself population evidence.
+    Unknown prose stays unknown; this bounded lexical screen does not infer an
+    age population from a database or attempt to reconstruct missing full text.
+    """
+
+    text = re.sub(r"^(?:Study-design excerpt|Source excerpt):\s*", "", excerpt)
+    statements: List[str] = []
+    for sentence in re.split(
+        r"(?<=[.;!?])\s+|\n+|(?=\b(?:background|methods|results|conclusions?):)",
+        text, flags=re.I,
+    ):
+        normalized = _normalise_clinical_text(sentence)
+        if re.match(
+            r"(?:background|introduction|objectives?|conclusions?|discussion)\b",
+            normalized,
+        ) or re.search(
+            r"\b(?:previous|prior|earlier|other|published)\b.{0,35}"
+            r"\b(?:studies|study|cohorts?|research|reports?)\b",
+            normalized,
+        ):
+            continue
+        # Retain explicit contrary scope before removing ordinary exclusions.
+        # Otherwise an adult title can override "Adults were excluded".
+        if _excludes_adult_population(sentence):
+            statements.append(sentence)
+            continue
+        sentence = re.split(
+            r"(?:,\s*(?:(?:and|whereas)\s+)?|\s+(?:and|whereas)\s+)"
+            r"(?=[^.;,]{0,80}\b(?:was|were)\s+excluded\b)",
+            sentence, maxsplit=1, flags=re.I,
+        )[0]
+        normalized = _normalise_clinical_text(sentence)
+        if re.search(r"\b(?:was|were) excluded\b", normalized):
+            continue
+        sentence = re.split(
+            r"\b(?:excluding|excluded|but not|did not include)\b",
+            sentence, maxsplit=1, flags=re.I,
+        )[0]
+        normalized = _normalise_clinical_text(sentence)
+        if any(re.search(pattern, normalized) for pattern in (
+            r"\bwe (?:studied|included|enrolled|recruited|analy[sz]ed|evaluated)\b",
+            r"\b(?:study|cohort|population|analysis)\b.{0,60}"
+            r"\b(?:included|comprised|consisted|enrolled|studied)\b",
+            r"\b(?:patients?|participants?|subjects?|adults?|children|neonates)\b"
+            r".{0,100}\b(?:(?:were|was) (?:included|enrolled|studied|analy[sz]ed|"
+            r"evaluated|associated)|had|underwent|received)\b",
+            r"\b(?:retrospective|prospective|observational)\b.{0,60}"
+            r"\b(?:study|cohort|analysis)\b",
+            r"^methods\b",
+        )):
+            statements.append(sentence)
+    return statements
+
+
+def _adult_scope_in_population(statement: str) -> bool | None:
+    """Classify explicit age evidence in one study-population statement."""
+
+    normalized = _normalise_clinical_text(statement)
+    if _excludes_adult_population(statement):
         return False
-    blob = _normalise_clinical_text(" ".join((record.title, record.relevance or "")))
-    if any(token in f" {blob} " for token in (" adult ", " adults ")):
-        return True
-    return any(
-        marker in blob
-        for marker in (
-            "mimic iii",
-            "mimic iv",
-            "medical information mart for intensive care",
-            "multiparameter intelligent monitoring for intensive care",
-            "eicu",
-        )
+    if re.search(
+        r"\b(?:paediatric|pediatric|child|children|neonatal|neonates?|infants?|"
+        r"newborns?|adolescents?|all ages|all age groups|mixed age)\b",
+        normalized,
+    ):
+        return False
+    # A reported range describes the enrolled population, unlike a mean age.
+    age_ranges = re.findall(
+        r"\b(?:aged?|ages?)\s+(?:between\s+)?(\d+(?:\.\d+)?)\s*"
+        r"(?:years?\s*)?(?:[-–]|to|and)\s*(\d+(?:\.\d+)?)\s*years?\b",
+        statement, flags=re.I,
     )
+    if any(float(low) < 18 or float(high) < float(low) for low, high in age_ranges):
+        return False
+    if re.search(r"\b(?:under|younger than|less than)\s+18\s+years?\b", normalized):
+        return False
+    if re.search(r"\b(?:aged?|ages?)\s*<\s*18\s*years?\b", statement, flags=re.I):
+        return False
+    lower_bounds = re.findall(
+        r"\b(?:aged?|ages?)\s*(?:>=|≥|>|over|at least)\s*(\d+(?:\.\d+)?)\s*years?\b|"
+        r"\b(\d+(?:\.\d+)?)\s*years?\s+(?:or older|and older|or above)\b",
+        statement, flags=re.I,
+    )
+    if any(float(first or second) < 18 for first, second in lower_bounds):
+        return False
+    adult_population = re.search(
+        r"\badults\b|\badult(?:\s+(?:icu|critically|ill|intensive|critical|"
+        r"care|unit|hospital|hospitali[sz]ed|medical|surgical)){0,5}\s+"
+        r"(?:patients?|participants?|subjects?|cohort|population|stays?|admissions?)\b",
+        normalized,
+    )
+    if age_ranges or lower_bounds or adult_population:
+        return True
+    return None
+
+
+def _adult_study_population_matches(record: CitationRecord) -> bool:
+    """Require age evidence about the study, with contrary scope taking priority."""
+
+    scopes = [
+        _adult_scope_in_population(statement)
+        for statement in (record.title, *_study_population_statements(record.relevance or ""))
+    ]
+    return False not in scopes and True in scopes
 
 
 _EXPOSURE_ROLE_MARKERS = (

@@ -2947,6 +2947,59 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     }
 
 
+def _research_pipeline_intake_diagnostic(exc: BaseException) -> Dict[str, Any]:
+    """Publish owner codes and remedies, never exception text or private names."""
+
+    code = getattr(exc, "code", None)
+    if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", code):
+        code = "export_package_unreadable"
+    messages = {
+        "export_manifest_json_invalid": "The export manifest is not valid UTF-8 JSON.",
+        "export_manifest_missing": "The export manifest could not be read.",
+        "manifest_marker_invalid": "The export manifest must be a regular file.",
+        "manifest_marker_missing": "The export package has no supported manifest.",
+        "manifest_concept_ids_invalid": (
+            "Manifest concept_ids must contain unique non-empty strings. Data files "
+            "require this declaration unless explicitly marked as zero-row structural placeholders."
+        ),
+        "manifest_file_missing": "A manifest-listed package member is missing.",
+        "manifest_path_escape": "A manifest member must name a file within the export package.",
+        "manifest_file_symlink": "A manifest member must not traverse a symbolic link.",
+        "manifest_file_mutated": "A package member changed during intake validation.",
+        "manifest_format_invalid": "The manifest or a package member declares an unsupported format.",
+        "manifest_schema_invalid": "The export manifest schema is unsupported.",
+        "manifest_row_count_mismatch": "A package member's row count differs from the manifest.",
+        "column_metadata_required": "The export package requires column metadata.",
+        "column_metadata_digest_mismatch": "Column metadata differs from its recorded digest.",
+        "export_package_unreadable": "One or more export package files could not be read.",
+    }
+    message = messages.get(code, f"The export package failed intake contract {code}.")
+    detail: Dict[str, Any] = {
+        "intake_error_code": code,
+        "intake_error_message": (
+            f"{message} Check the package contract and prepare a current export "
+            "from the source database if its contents are incomplete or outdated."
+        ),
+    }
+    member = getattr(exc, "member", None)
+    if isinstance(member, str) and member:
+        # These are public package-format names. Arbitrary relative names can
+        # still contain private identifiers; absolute/Windows paths and control
+        # characters must not be reflected either. Keep an exact digest coordinate
+        # for every other member instead of guessing which filenames are safe.
+        if member in {
+            *_MODULE_MANIFESTS,
+            *_EXPORT_METADATA_FILES,
+            "column_metadata.json",
+        }:
+            detail["intake_member"] = member
+        else:
+            detail["intake_member_sha256"] = hashlib.sha256(
+                member.encode("utf-8", errors="surrogatepass")
+            ).hexdigest()
+    return detail
+
+
 def validate_research_pipeline_source(
     raw_path: str,
     *,
@@ -3043,23 +3096,8 @@ def validate_research_pipeline_source(
                     "observed_binding_sha256": None,
                 },
             ) from exc
-        # Carry the intake reason through. `validate_research_pipeline_source` is
-        # the first owner that opens the package, and the research-run preparer
-        # forwards `exc.detail` verbatim, so dropping it here is the only reason a
-        # stale export -- one whose manifest predates the `concept_ids` contract --
-        # surfaces as an unexplained code whose only offered remedy is to retry.
-        # The member name is reported, never the absolute path: this receipt is
-        # rendered into Copilot and Web payloads.
-        reason_code = getattr(exc, "code", None)
-        reason_detail: Dict[str, Any] = {
-            "intake_error_code": str(reason_code or "export_package_unreadable"),
-            "intake_error_message": str(exc).strip() or type(exc).__name__,
-        }
-        member = getattr(exc, "member", None)
-        if member:
-            reason_detail["intake_member"] = str(member)
         raise ExportCohortError(
-            "research_pipeline_manifest_invalid", reason_detail
+            "research_pipeline_manifest_invalid", _research_pipeline_intake_diagnostic(exc)
         ) from exc
 
     binding["binding_sha256"] = hashlib.sha256(

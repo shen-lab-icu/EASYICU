@@ -36,6 +36,19 @@ SCRIPT = r"""
   eval(__REPLAY_SOURCE__);
   const calls = [];
   let busy = false;
+  let releaseFirst;
+  let firstStarted;
+  const firstRequest = new Promise(resolve => {firstStarted = resolve;});
+  const pausedRequest = new Promise(resolve => {releaseFirst = resolve;});
+  let session = {
+    session_id: 'session', archived_child_jobs: [],
+    binding: {run_id: 'reviewed-candidate-plan', study_context_id: 'study',
+      study_revision: 22},
+    research_provider: {provider: 'openai', credential_source: 'pi_verified'},
+  };
+  let latestRun = CASE === 'no-projection'
+    ? {present: false}
+    : {present: true, run_id: 'failed-approved-execution'};
   const workflow = {
     next_action_code: 'failed_pipeline_execution_retry_available',
     plan_review_summary: null,
@@ -46,22 +59,33 @@ SCRIPT = r"""
     resourceButton: resource => `<button>${resource.label}</button>`,
     errorText: error => String(error), regeneration: {}, nextActions: {},
     replay: window.EU_GUIDED_PI_REPLAY,
-    session: () => ({
-      session_id: 'session', archived_child_jobs: [],
-      binding: {run_id: 'reviewed-candidate-plan', study_context_id: 'study',
-        study_revision: 22},
-      research_provider: {provider: 'openai', credential_source: 'pi_verified'},
-    }),
+    session: () => session,
     workflow: () => workflow, busy: () => busy,
-    latestRun: () => CASE === 'no-projection'
-      ? {present: false}
-      : {present: true, run_id: 'failed-approved-execution'},
+    latestRun: () => latestRun,
     sessionIsStale: () => false,
     api: () => ({
       loadStudyContext: async id => ({context: {
         id, question: 'Unchanged question', data_source: {path: '/prepared/miiv'},
       }}),
-      startAgentRun: async body => {calls.push(body); return {job_id: 'retry-job'};},
+      startAgentRun: async body => {
+        calls.push(body);
+        if (CASE.startsWith('restore-') || CASE === 'report-only') {
+          if (body.report_only) {
+            firstStarted();
+            await pausedRequest;
+            if (CASE !== 'restore-success') {
+              const error = new Error('Report inputs need host verification');
+              error.code = CASE === 'restore-unrelated-error'
+                ? 'WRITER_ONLY_SOURCE_UNAVAILABLE'
+                : CASE === 'restore-input-changed'
+                ? 'WRITER_ONLY_REGISTERED_INPUT_CHANGED'
+                : 'WRITER_ONLY_REPORT_PROJECTION_REFRESH_REQUIRED';
+              throw error;
+            }
+          }
+        }
+        return {job_id: 'retry-job'};
+      },
     }),
     projectId: () => 'project', turnGrants: () => [],
     setBusy: value => {busy = value;}, setError: value => calls.push(['error', value]),
@@ -74,7 +98,31 @@ SCRIPT = r"""
   const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create(host);
   (async () => {
     const spec = confirmation.workflowConfirmation();
-    await actions.confirmWorkflow(spec);
+    if (CASE.startsWith('restore-') || CASE === 'report-only') {
+      const pending = actions.retryFailedExecution(
+        CASE === 'report-only' ? 'report_only' : 'restore',
+      );
+      await firstRequest;
+      // Progress and terminal job events can have a workflow response in
+      // flight after the UI unsets busy. Resolve it during the first request.
+      latestRun = {present: true, run_id: 'other-approved-execution'};
+      if (CASE === 'restore-in-place') {
+        session.binding.study_context_id = 'other-study';
+        session.research_provider.provider = 'codex';
+      } else {
+        session = {...session,
+          binding: {...session.binding, study_context_id: 'other-study'},
+          research_provider: {provider: 'codex', credential_source: 'changed'},
+        };
+      }
+      if (CASE === 'restore-duplicate') {
+        await actions.retryFailedExecution('restore');
+      }
+      releaseFirst();
+      await pending;
+    } else {
+      await actions.confirmWorkflow(spec);
+    }
     process.stdout.write(JSON.stringify({spec, calls}));
   })().catch(error => {console.error(error); process.exit(1);});
 """
@@ -127,3 +175,40 @@ def test_retry_falls_back_to_the_binding_only_when_no_run_is_projected() -> None
 
     body = _launch(exercise("no-projection")["calls"])
     assert body["execution_resume_source_run_id"] == "reviewed-candidate-plan"
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["restore-refreshed", "restore-in-place", "restore-input-changed", "restore-duplicate"],
+)
+def test_restore_keeps_its_selected_run_and_session_during_refresh(case: str) -> None:
+    """A report fallback belongs to the same approved run as the first request."""
+
+    calls = exercise(case)["calls"]
+    bodies = [call for call in calls if not isinstance(call, list)]
+    assert len(bodies) == 2
+    assert bodies[0]["report_only"] is True
+    assert "report_only" not in bodies[1]
+    for body in bodies:
+        assert body["execution_resume_source_run_id"] == "failed-approved-execution"
+        assert body["study_context_id"] == "study"
+        assert body["llm_provider"] == "openai"
+        assert body["credential_source"] == "pi_verified"
+    assert sum(call[0] == "record" for call in calls if isinstance(call, list)) == 1
+    assert sum(call[0] == "watch" for call in calls if isinstance(call, list)) == 1
+
+
+@pytest.mark.parametrize("case", ["report-only", "restore-unrelated-error"])
+def test_report_only_and_unrelated_failures_never_submit_analysis_retry(case: str) -> None:
+    calls = exercise(case)["calls"]
+    body = _launch(calls)
+    assert body["report_only"] is True
+    assert body["execution_resume_source_run_id"] == "failed-approved-execution"
+    assert any(call[0] == "error" and call[1] for call in calls if isinstance(call, list))
+    assert not any(call[0] in {"record", "watch"} for call in calls if isinstance(call, list))
+
+
+def test_successful_report_restore_does_not_submit_a_second_request() -> None:
+    body = _launch(exercise("restore-success")["calls"])
+    assert body["report_only"] is True
+    assert body["execution_resume_source_run_id"] == "failed-approved-execution"

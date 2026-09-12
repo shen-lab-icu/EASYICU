@@ -2705,36 +2705,14 @@ def _reclassify_flag_only_plausibility_range_findings(
     return reclassified
 
 
-#: The lines only the host's injected flag-only plausibility receipt writes.
-#: ``execution/runners/plausibility_receipt.py`` owns that source, and a test
-#: here pins that every sentinel still appears in it, so this region cannot be
-#: claimed by drift.
-_HOST_PLAUSIBILITY_RECEIPT_SENTINELS = (
-    "plausibility_expected_columns = ",
-    '"Resolved plausibility contracts do not match the step authority"',
-    '"Flag-only plausibility scope is absent from the sealed contracts"',
-    '"coercion_loss_n"',
-)
-
-
 def _host_plausibility_receipt_region(script_text: str) -> Optional[Tuple[int, int]]:
-    """Return the first and last line of the host-injected receipt, or ``None``.
+    """Ask the renderer to verify the exact, bounded source being exempted."""
 
-    The receipt is appended, so the region runs from its earliest sentinel to
-    the end of the script.  Every sentinel must appear at or after that line: a
-    body that merely quotes one of them keeps its own authorship.
-    """
+    from ..execution.runners.plausibility_receipt import (
+        verified_host_plausibility_receipt_region,
+    )
 
-    lines = str(script_text or "").splitlines()
-    for index, line in enumerate(lines):
-        if not any(
-            sentinel in line for sentinel in _HOST_PLAUSIBILITY_RECEIPT_SENTINELS
-        ):
-            continue
-        tail = "\n".join(lines[index:])
-        if all(sentinel in tail for sentinel in _HOST_PLAUSIBILITY_RECEIPT_SENTINELS):
-            return index + 1, len(lines)
-    return None
+    return verified_host_plausibility_receipt_region(script_text)
 
 
 def _region_store_names(
@@ -2761,10 +2739,16 @@ def _region_store_names(
             record(node.id, getattr(node, "lineno", None))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             record(node.name, node.lineno)
+        elif isinstance(node, ast.arg):
+            record(node.arg, node.lineno)
         elif isinstance(node, ast.alias):
-            record(node.asname or node.name, getattr(node, "lineno", None))
+            record(node.asname or node.name.split(".")[0], getattr(node, "lineno", None))
         elif isinstance(node, ast.ExceptHandler) and node.name is not None:
             record(node.name, node.lineno)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name is not None:
+            record(node.name, node.lineno)
+        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+            record(node.rest, node.lineno)
     return inside, outside
 
 
