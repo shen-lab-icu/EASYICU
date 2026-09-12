@@ -905,6 +905,7 @@ rows = []
 semantic_complete_masks = {}
 observation_semantics_audit = {}
 temporal_semantics_findings = []
+unverified_partition_concepts = []
 for base in concepts:
     flag_col = base + "_measured"
     value_col = _representative_value_column(base)
@@ -1087,6 +1088,46 @@ for base in concepts:
         kind = "measurement_flag_conflict"
     else:
         kind = "measurement_missing"
+    # A row carries several count columns whose mutual exclusivity depends on
+    # ``indicator_semantics``: for a conditional event time ``event_present_n``
+    # duplicates ``eligible_n`` and ``event_absent_n`` duplicates
+    # ``not_applicable_n``, while for a complete binary event status the
+    # eligible/not-applicable pair is a constant.  They are never one five-way
+    # partition and the column names do not say so -- a generated figure step
+    # fail-closed an entire run by adding five of them against ``n_total``
+    # (sum 177,523 versus 94,418).  Publish the arithmetic this row actually
+    # satisfies, and publish only what is checked here, so the next consumer
+    # never has to invent a partition.
+    partition_identities = [
+        stated
+        for stated, holds in (
+            (
+                "measured_one_n + value_missing_n = n_total",
+                measured_one_n + value_missing_n == n_total,
+            ),
+            (
+                "eligible_n + not_applicable_n = n_total",
+                eligible_n + not_applicable_n == n_total,
+            ),
+            (
+                "event_present_n + event_absent_n = n_total",
+                event_present_n + event_absent_n == n_total,
+            ),
+            ("event_present_n = eligible_n", event_present_n == eligible_n),
+            ("event_absent_n = not_applicable_n",
+             event_absent_n == not_applicable_n),
+            ("eligible_n = n_total", eligible_n == n_total),
+        )
+        if holds
+    ]
+    if not partition_identities:
+        unverified_partition_concepts.append(base)
+    partition_identities_text = (
+        "; ".join(partition_identities)
+        if partition_identities
+        else "no partition of these count columns is verifiable for this row: "
+        "they overlap and must not be summed"
+    )
     rows.append(
         {
             "concept": base,
@@ -1127,6 +1168,7 @@ for base in concepts:
             "raw_value_missing_n": int(n_total - value_present_n),
             "raw_indicator_one_n": raw_indicator_one_n,
             "indicator_semantics": indicator_semantics,
+            "partition_identities": partition_identities_text,
             "event_count_column": (
                 count_col
                 if indicator_semantics == "binary_event_presence"
@@ -1153,6 +1195,7 @@ missingness_audit = audit[
         "not_applicable_n",
         "raw_value_missing_n",
         "indicator_semantics",
+        "partition_identities",
         "missingness_kind",
     ]
 ].copy()
@@ -1181,6 +1224,7 @@ source_audit = audit[
         "value_present_but_measured_zero_n",
         "measured_but_value_missing_n",
         "indicator_semantics",
+        "partition_identities",
         "missingness_kind",
         "has_measured_indicator",
     ]
@@ -1211,6 +1255,7 @@ event_timing_audit = audit[
         "before_origin_n",
         "value_missing_n",
         "indicator_semantics",
+        "partition_identities",
         "missingness_kind",
     ]
 ].copy()
@@ -1568,6 +1613,20 @@ summary = {
         ),
         "reason_codes": temporal_semantics_findings,
     },
+    # Which sums a consumer may take is a fact about the emitted row, not a
+    # reading exercise: each audit row now carries the identities that were
+    # checked for it, and this lists the rows where none could be.
+    "count_partition_audit": {
+        "status": (
+            "ok" if not unverified_partition_concepts else "unverified_rows"
+        ),
+        "unverified_concepts": unverified_partition_concepts,
+        "note": (
+            "partition_identities on every row states the arithmetic that row's "
+            "own counts satisfy; the count columns overlap, so any sum not "
+            "stated there is unauthorized."
+        ),
+    },
     "notes": [
         "Deterministic missingness audit (no LLM coder).",
         "measured_one_n uses the '<concept>_measured' availability indicator "
@@ -1576,6 +1635,9 @@ summary = {
         "Labs/vitals are NEVER imputed to 0; missing means unmeasured.",
         "structural_no_source = concept sourced for no stay in this cohort; "
         "measurement_missing = sourced but unmeasured for a given stay.",
+        "eligible/not_applicable and event_present/event_absent are two "
+        "overlapping partitions of n_total, not four disjoint categories; "
+        "partition_identities states which identity each row satisfies.",
     ],
     "output_files": declared_output_files or {
         "missingness_measurement_audit": "missingness_measurement_audit.csv",
