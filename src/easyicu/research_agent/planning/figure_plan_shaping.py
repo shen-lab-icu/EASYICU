@@ -58,6 +58,9 @@ from ..schema import (
 from .figure_strategy import (
     DATA_QUALITY_FIGURE_PRODUCT,
     DATA_QUALITY_FIGURE_REQUIRED_INPUTS,
+    build_article_figure_strategy,
+    primary_publication_figure_is_article_grade,
+    primary_publication_role_requirement,
 )
 from .sensitivity_plan_shaping import ensure_prespecified_sensitivity_steps
 
@@ -68,6 +71,11 @@ _AUDIT_PANEL_TOKENS = (
     "leakage",
     "calibration",
 )
+
+#: The landmark composite panels that duplicate a dedicated audit display.
+#: Spelled by panel id because ``omit_redundant_composite_audits`` is allowed to
+#: keep them when the reader's main figure needs the role coverage they carry.
+_COMPOSITE_AUDIT_PANEL_IDS = frozenset({"robustness_summary", "measurement_process"})
 
 _PRIMARY_RESULT_FIGURE_TEMPLATES = {
     EXPOSURE_OUTCOME_DISTRIBUTION_INPUT: (EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS),
@@ -1457,12 +1465,21 @@ def apply_deterministic_figure_panels(
 def omit_redundant_composite_audits(
     *,
     plan: AnalysisPlan,
+    context: ResearchContext | None = None,
 ) -> tuple[AnalysisPlan, list[ValidationFinding]]:
     """Keep audit displays with their closed dedicated owners before review.
 
     The primary curve pair can stand alone only when both former audit
     sources remain consumed by explicit deterministic displays elsewhere.
     No table, analysis, population, or historical reviewed plan is changed.
+
+    The omission is also bounded by what the reader's main figure has to show.
+    Measured 2026-09-12, dropping both audit panels unconditionally left an
+    association run's promoted main figure covering 2 of the 3 required visual
+    roles, which the article-figure gate reports as an error the plan had no
+    way to clear -- the two planning passes simply cancelled each other out.  So
+    the panels are dropped only while the remaining figure is still article
+    grade, and the least-needed one goes first.
     """
     sources, _owners, missing, ambiguous = _closed_data_quality_sources(plan.steps)
     if sources is None or missing or ambiguous:
@@ -1480,6 +1497,12 @@ def omit_redundant_composite_audits(
         for candidate in plan.steps
     ):
         return plan, []
+    # Without a bound research context the family requirement is unknown, so
+    # every profile is treated as article grade and the omission stays exactly
+    # what it was before this bound existed.
+    strategy = (
+        build_article_figure_strategy(context) if context is not None else None
+    )
     findings = []
     steps = []
     for step in plan.steps:
@@ -1497,10 +1520,67 @@ def omit_redundant_composite_audits(
         except ValueError:
             steps.append(step)
             continue
+        audit_panels = [
+            panel for panel in panels if panel.panel_id in _COMPOSITE_AUDIT_PANEL_IDS
+        ]
+        if not audit_panels:
+            steps.append(step)
+            continue
+        audit_ids = {panel.panel_id for panel in audit_panels}
+
+        def _article_grade(keeping: set[str]) -> bool:
+            return primary_publication_figure_is_article_grade(
+                strategy,
+                [
+                    (str(panel.article_role), str(panel.chart_type))
+                    for panel in panels
+                    if panel.panel_id in keeping
+                ],
+            )
+
+        # The composite template only offers the two-curve profile or the full
+        # audit profile -- there is no way to keep one audit panel and drop the
+        # other -- so the choice is binary: omit both, or leave the step as it
+        # was bound.  Leaving it bound is taken only when it actually cures the
+        # shortfall, so a plan that cannot reach article grade by either profile
+        # still gets today's plan plus the gate's own actionable error.
+        dropped: set[str] = set(audit_ids)
+        if (
+            strategy is not None
+            and not _article_grade(
+                {panel.panel_id for panel in panels} - audit_ids
+            )
+            and _article_grade({panel.panel_id for panel in panels})
+        ):
+            dropped = set()
+        if not dropped:
+            steps.append(step)
+            findings.append(
+                ValidationFinding(
+                    validator="deterministic_figure_plan_binding",
+                    severity="warning",
+                    message=(
+                        "Kept the composite's audit panels because the reader's "
+                        "main figure needs the coverage they carry."
+                    ),
+                    detail={
+                        "reason": "composite_audits_kept_for_main_figure_coverage",
+                        "step_id": step.step_id,
+                        "required_main_roles": sorted(
+                            primary_publication_role_requirement(strategy)[0]
+                        ),
+                        "duplicated_display_sources": sorted(
+                            str(source)
+                            for panel in audit_panels
+                            for source in panel.source_products
+                        ),
+                    },
+                )
+            )
+            continue
         audit_inputs = {
             source
-            for panel in panels
-            if panel.panel_id in {"robustness_summary", "measurement_process"}
+            for panel in audit_panels
             for source in panel.source_products
         }
         if not audit_inputs <= {*sources, "table:robustness_summary"}:
@@ -1556,19 +1636,27 @@ def omit_redundant_composite_audits(
 def apply_runtime_bound_figure_contracts(
     plan: AnalysisPlan,
     findings: list[ValidationFinding],
+    *,
+    context: ResearchContext | None = None,
 ) -> AnalysisPlan:
     """Close renderer contracts after a runtime owner replaces its products.
 
     Runtime binding can replace one generic primary output with a richer exact
     family. Re-running these idempotent selectors makes that late owner visible
     in the human-reviewed plan without duplicating pipeline policy.
+
+    ``context`` carries the study design the article-figure gate will later
+    judge the sealed plan against, so a panel omitted here cannot quietly remove
+    the coverage that gate requires.
     """
 
     revised, renderer_findings = select_deterministic_result_renderers(plan=plan)
     findings.extend(renderer_findings)
     revised, cohort_findings = ensure_cohort_accounting_figure_step(plan=revised)
     findings.extend(cohort_findings)
-    revised, audit_findings = omit_redundant_composite_audits(plan=revised)
+    revised, audit_findings = omit_redundant_composite_audits(
+        plan=revised, context=context
+    )
     findings.extend(audit_findings)
     return apply_deterministic_figure_panels(revised, findings)
 
