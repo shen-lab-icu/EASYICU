@@ -443,9 +443,9 @@ Code contract:
   separate notes table. If a visual cue is needed, summarize long
   provenance notes as a compact count or flag inside the panel and
   write the full notes as a separate table.
-- Do not draw figure captions, long footnotes, provenance sentences,
-  or "this step did not..." process notes as free text inside the
-  saved plotting canvas, including below the axes. Put reader-relevant
+- Do not draw figure captions, long footnotes, provenance sentences, or
+  "this step did not..." process notes as free text inside the saved plotting canvas,
+  including below the axes, so it cannot be clipped. Put reader-relevant
   definitions, denominators, model adjustment and limitations in the
   FigureContract `reader_caption`; keep audit details in step_summary or
   source-data notes. Retain axis labels, legends and source-backed numeric
