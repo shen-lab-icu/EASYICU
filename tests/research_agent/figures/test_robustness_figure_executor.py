@@ -598,6 +598,18 @@ def test_forest_requires_comparable_independent_estimates(tmp_path, mutation):
         summary = run_robustness_figure(**kwargs)
         assert summary["null_line_drawn"] and summary["anchor_line_drawn"]
         assert summary["chart_type"] == "sensitivity_forest"
+        # The legend has to describe the axis the reader is actually looking at:
+        # a logarithmic scale, a null line, and an anchor line are three separate
+        # claims, and each is drawn only under its own condition.
+        caption = json.loads(
+            (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )["reader_caption"]
+        assert "logarithmic" in caption
+        assert "dashed vertical line" in caption
+        assert "solid vertical line" in caption
+        assert "specification table" not in caption
 
 
 def test_failed_fit_with_numeric_placeholders_remains_not_estimable(tmp_path):
@@ -720,3 +732,52 @@ def test_specification_table_retains_declared_contrasts_and_omits_duplicate_scal
         assert '1.27 [1.25, 1.28]' in rendered
     finally:
         plt.close(fig)
+
+
+def test_the_specification_table_states_its_own_reader_legend(tmp_path):
+    """A figure a reader cannot explain is not an article figure.
+
+    ``build_manuscript_figures`` deliberately refuses to promote a bare
+    ``core_claim`` into a legend, so a contract that states no ``reader_caption``
+    is reported as an evidence error rather than papered over. This renderer was
+    the last article-facing owner still silent about its own panel, and on
+    2026-09-12 that single gap held an otherwise complete 13/13 run at
+    ``evidence_complete=false``, which also kept ``manuscript_ready`` false.
+    """
+    run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
+    summary = run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+    contract = json.loads(
+        (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    caption = contract["reader_caption"]
+
+    assert summary["status"] == "ok"
+    assert caption
+    # The field is a plain-text legend; a stray newline would fail model
+    # validation for every consumer that re-reads the registered contract.
+    assert not any(ord(character) < 32 for character in caption)
+    # It names the panel the contract declares, so the two cannot drift apart.
+    assert contract["panels"][0]["title"] in caption
+    # One sentence per element this drawing actually produced: a table rather
+    # than an axis, the refused comparability, and the row that did not fit.
+    assert "specification table" in caption
+    assert "not authorized as directly comparable" in caption
+    # These two real rows declare no contrast or effect unit, so the legend may
+    # not assert a pair the table cannot show.
+    assert "says so on its own line" in caption
+    assert "declared contrast and effect unit" not in caption
+    assert "Not estimable" in caption
+    assert f"{len(_REAL_ROWS)} locked specifications" in caption
+    assert "without recomputation" in caption
+    # And nothing about furniture a table never drew.
+    assert "logarithmic" not in caption
+    assert "dashed vertical line" not in caption
+    assert "solid vertical line" not in caption

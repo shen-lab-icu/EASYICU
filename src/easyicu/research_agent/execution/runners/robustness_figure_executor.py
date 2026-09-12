@@ -738,6 +738,130 @@ def _declared_label(row, key, fallback):
     return value if value and value.lower() not in {"nan", "none"} else fallback
 
 
+# The one panel this renderer owns. The contract panel title and the reader
+# legend lead from the same token, so the legend can never describe a panel
+# the figure stopped drawing.
+ROBUSTNESS_PANEL_TITLE = "Locked specification grid"
+
+
+def _plain_legend(parts: Sequence[str]) -> str:
+    """Collapse a legend into the single plain line a contract may carry.
+
+    ``FigureContract.reader_caption`` rejects control characters, and a
+    specification label or comparability message can legitimately carry a
+    newline, so joining here is the renderer's obligation, not the reader's.
+    """
+
+    return " ".join(" ".join(str(part).split()) for part in parts if str(part or "").strip())
+
+
+def _declared_identity_present(rows: pd.DataFrame) -> bool:
+    """Whether any drawn row really shows its contrast and effect unit.
+
+    ``_draw_specification_table`` prints that pair only when both halves are
+    declared, so the legend may claim it only when the table can show it.
+    """
+
+    for _, row in rows.iterrows():
+        contrast = _declared_label(
+            row, "contrast_label", _declared_label(row, "contrast_id", "")
+        )
+        unit = _declared_label(row, "effect_unit", "")
+        if contrast and unit:
+            return True
+    return False
+
+
+def _reader_legend(
+    *,
+    panel_title: str,
+    chart_type: str,
+    effect_scale: str,
+    declared_identity: bool,
+    specification_count: int,
+    multiplicative_axis: bool,
+    null_value_shown: bool,
+    anchor_line_shown: bool,
+    has_nonestimable_row: bool,
+    narrow_rows: Sequence[str],
+    axis_authorized: bool,
+    complete_case_n: Any,
+) -> str:
+    """State the reader-facing legend from what this renderer actually drew.
+
+    Every sentence names an element the code above either drew or deliberately
+    skipped, so nothing here is inferred from the image. The manuscript figure
+    projection refuses to invent a legend for a contract that lacks one, which
+    is what made an absent legend a delivery blocker rather than a cosmetic
+    gap: measured 2026-09-12, a run that completed all 13 steps and passed
+    numeric verification was still held at ``evidence_complete=false`` by this
+    renderer's silence.
+    """
+
+    parts: list[str] = [f"{panel_title}."]
+    if chart_type == "specification_grid":
+        parts.append(
+            "One row per prespecified analysis, giving its point estimate and "
+            f"interval in {_reader_label(effect_scale)} units"
+            + (
+                " together with the declared contrast and effect unit each row "
+                "was estimated on."
+                if declared_identity
+                else "; a row whose contrast or effect unit was not declared "
+                "says so on its own line."
+            )
+        )
+        parts.append(
+            "A specification table is drawn instead of a shared axis."
+            if axis_authorized
+            else "A specification table is drawn instead of a shared axis, "
+            "because these rows were not authorized as directly comparable; "
+            "no cross-row contrast is implied."
+        )
+    else:
+        parts.append(
+            "One row per prespecified analysis, plotted as a point estimate with "
+            "its confidence interval on a shared "
+            f"{_reader_label(effect_scale)} axis."
+        )
+        if multiplicative_axis:
+            parts.append(
+                "The effect axis is logarithmic, so equal distances are equal ratios."
+            )
+        if null_value_shown:
+            parts.append(
+                "The dashed vertical line marks the null value of that scale."
+            )
+        if anchor_line_shown:
+            parts.append(
+                "The solid vertical line labelled 'primary estimate' is the bound "
+                "primary result, reproduced from its registered statistic."
+            )
+    if has_nonestimable_row:
+        parts.append(
+            "A row labelled 'Not estimable' records a specification whose refit "
+            "did not yield an estimate; it is named rather than dropped."
+        )
+    if narrow_rows:
+        parts.append(
+            "An interval too narrow to resolve against this axis is printed "
+            "beside its marker: " + ", ".join(_reader_label(name) for name in narrow_rows) + "."
+        )
+    if complete_case_n is not None:
+        try:
+            parts.append(
+                f"The complete-case analysis denominator is n={int(complete_case_n):,}."
+            )
+        except (TypeError, ValueError):
+            pass
+    parts.append(
+        f"All {int(specification_count)} locked specifications are drawn, and "
+        "every value is reproduced from the bound robustness matrix without "
+        "recomputation."
+    )
+    return _plain_legend(parts)
+
+
 def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value):
     """Show each source estimate without implying a common contrast or axis."""
     records = []
@@ -1027,7 +1151,7 @@ def run_robustness_figure(
         panels=[
             {
                 "panel_id": panel_template.panel_id,
-                "title": "Locked specification grid",
+                "title": ROBUSTNESS_PANEL_TITLE,
                 "role": "robustness",
                 "claim": (
                     "One row per locked robustness specification, showing its "
@@ -1053,6 +1177,22 @@ def run_robustness_figure(
             }
         ],
         source_data=list(source_data_names),
+        reader_caption=_reader_legend(
+            panel_title=ROBUSTNESS_PANEL_TITLE,
+            chart_type=chart_type,
+            effect_scale=effect_scale,
+            declared_identity=_declared_identity_present(rows),
+            specification_count=len(rows),
+            multiplicative_axis=bool(scale_contract.multiplicative),
+            null_value_shown=null_value is not None,
+            anchor_line_shown=(
+                chart_type == "sensitivity_forest" and anchor_value is not None
+            ),
+            has_nonestimable_row=has_gap,
+            narrow_rows=narrow_rows,
+            axis_authorized=bool(comparability.authorized),
+            complete_case_n=complete_case_n,
+        ),
         statistics_note=[
             (
                 "Estimates and intervals are reproduced from the bound "

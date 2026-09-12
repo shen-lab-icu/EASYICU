@@ -638,6 +638,13 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "FigureContract.source_data and step_summary. Never replace them "
             "with generic value/count/denominator rows."
         )
+        # The manuscript projection refuses to write a legend a contract did not
+        # state, so a repair round that dropped reader_caption could trade the
+        # figure's only manuscript legend for a layout fix; measured 2026-09-12.
+        lines.append(
+            "- FIGURE READER LEGEND (binding): the rewritten contract still states "
+            "reader_caption in one plain line describing only what this figure draws."
+        )
         lines.extend(_figure_panel_scope_contract(step))
     lines.extend(
         [

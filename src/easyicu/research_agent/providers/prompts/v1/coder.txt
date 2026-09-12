@@ -356,6 +356,8 @@ Code contract:
   must hold JSON primitives. Define a
   claim-first `FigureContract`, map each panel to source evidence,
   and save the publication bundle from the same matplotlib figure.
+  State its `reader_caption` -- the figure's only reader-facing legend, one
+  plain line naming each panel and the limits a reader must not over-read.
   Treat this helper surface as EasyICU's default embedded
   `nature-figure` workflow. Call its stable host-owned keyword API directly
   and KEEP ITS RETURN VALUE -- it is a `{format: path}` mapping and the only
