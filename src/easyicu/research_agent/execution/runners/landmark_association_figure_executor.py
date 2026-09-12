@@ -613,6 +613,35 @@ def _draw_sensitivity_forest(
     ax.legend(frameon=False, fontsize=4.8, loc="upper right")
 
 
+def _draw_landmark_audits(
+    axes: Any,
+    *,
+    robustness: pd.DataFrame,
+    process: pd.DataFrame,
+    palette: Mapping[str, str],
+    first_panel_index: int = 0,
+) -> None:
+    """Draw the two audit panels on their actual bound display surface."""
+
+    draw_robustness_coverage(
+        axes[0], robustness, color=palette["blue"], label_formatter=display_label
+    )
+    denominator = pd.to_numeric(process["n_total"])
+    numerator = pd.to_numeric(process["measured_one_n"])
+    axes[1].barh(
+        np.arange(len(process)), 100 * numerator / denominator, color=palette["blue"]
+    )
+    axes[1].set_yticks(
+        np.arange(len(process)), [display_label(value) for value in process["concept"]]
+    )
+    axes[1].set_xlim(0, 100)
+    axes[1].set_xlabel("Measured (%)")
+    axes[1].set_title("Measurement availability", loc="left")
+    axes[1].invert_yaxis()
+    for index, axis in enumerate(axes, start=first_panel_index):
+        add_panel_label(axis, chr(ord("a") + index), x=-0.08, y=1.06, fontsize=7.0)
+
+
 def _run_legacy_landmark_article_figure(
     *,
     out_dir: Path,
@@ -996,6 +1025,15 @@ def run_landmark_association_figure(
 
     palette = apply_publication_style(font_size=7.0)
     placements = dict(panel_placements or {})
+    panel_templates = landmark_association_composite_panels(profile)
+    result_panels = tuple(panel for panel in panel_templates if not panel.separable_display)
+    result_placements = {
+        placements.get(panel.panel_id, panel.placement) for panel in result_panels
+    }
+    if len(result_placements) != 1 or not result_placements <= {"main", "supplementary"}:
+        raise ValueError("landmark result panels require one shared display placement")
+    result_placement = next(iter(result_placements))
+    combine_audits = has_audits and result_placement == "supplementary"
     # Audit panels have a separate exported display and exact runtime binding.
     show_process = placements.get("measurement_process", "supplementary") == "main"
     show_robustness = placements.get("robustness_summary", "supplementary") == "main"
@@ -1004,11 +1042,21 @@ def run_landmark_association_figure(
             "landmark audit panels require a supplementary display, not the primary curve figure"
         )
     figure_height_mm = 88.0 if sensitivity is not None else 78.0
+    if combine_audits:
+        figure_height_mm += max(85, 35 + 6 * max(len(process), len(robustness))) + 20
     fig = plt.figure(
         figsize=(183 / 25.4, figure_height_mm / 25.4),
     )
     grid_columns = 3 if sensitivity is not None else 2
-    grid = fig.add_gridspec(
+    outer_grid = (
+        fig.add_gridspec(
+            2, 1, hspace=0.45, left=0.08, right=0.985, bottom=0.09, top=0.95
+        )
+        if combine_audits else None
+    )
+    grid = outer_grid[0].subgridspec(
+        2, grid_columns, height_ratios=(5.2, 0.72), hspace=0.12, wspace=0.32
+    ) if combine_audits else fig.add_gridspec(
         2,
         grid_columns,
         height_ratios=(5.2, 0.72),
@@ -1190,16 +1238,18 @@ def run_landmark_association_figure(
             raise ValueError("measurement-process counts do not nest")
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
-    panel_templates = landmark_association_composite_panels(profile)
-    panels = tuple(
-        panel
-        for panel in panel_templates
-        if placements.get(panel.panel_id, panel.placement) == "main"
-    )
+    if combine_audits:
+        audit_grid = outer_grid[1].subgridspec(1, 2, wspace=0.5)
+        _draw_landmark_audits(
+            [fig.add_subplot(audit_grid[0]), fig.add_subplot(audit_grid[1])],
+            robustness=robustness, process=process, palette=palette,
+            first_panel_index=len(result_panels),
+        )
+    panels = panel_templates if combine_audits else result_panels
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
-            "The aligned main panels show the adjusted ratio-scale association, "
+            "The aligned result panels show the adjusted ratio-scale association, "
             "model-standardised absolute outcome risk, and an independent "
             "functional-form sensitivity comparison on the same prespecified "
             "contrasts with 95% confidence intervals. The source-backed "
@@ -1208,7 +1258,7 @@ def run_landmark_association_figure(
             "remain supplementary."
             if sensitivity is not None
             else (
-                "The aligned main panels show the adjusted ratio-scale association "
+                "The aligned result panels show the adjusted ratio-scale association "
                 "and model-standardised absolute outcome risk with 95% confidence "
                 "intervals across the prespecified exposure grid. The source-backed "
                 "distribution strips show where the complete-case cohort contributes "
@@ -1239,6 +1289,7 @@ def run_landmark_association_figure(
                 ),
                 "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
+                    "placement": result_placement,
                     "chart_type": (
                         robustness_display["chart_type"]
                         if panel.panel_id == "robustness_summary"
@@ -1294,6 +1345,12 @@ def run_landmark_association_figure(
             "Exposure-distribution strips show where the complete-case cohort contributes information at each grid value. "
             "All values are direct projections of registered source rows; no model was refit by the renderer. "
             "Robustness summaries are audit-only and do not authorize direct comparisons of heterogeneous specifications."
+            + (
+                f" Panel {chr(ord('a') + len(result_panels))} shows registered, "
+                "converged and independent specification counts for each declared contrast; "
+                f"panel {chr(ord('a') + len(result_panels) + 1)} shows measurement availability."
+                if combine_audits else ""
+            )
         ),
     )
     outputs = save_publication_figure(
@@ -1306,11 +1363,12 @@ def run_landmark_association_figure(
     plt.close(fig)
     supplemental_outputs = {}
     supplemental_name = f"{figure_product}_supplementary"
-    if has_audits:
+    separate_audits = has_audits and not combine_audits
+    if separate_audits:
         supplemental_panels = [
             panel
             for panel in panel_templates
-            if placements.get(panel.panel_id, panel.placement) == "supplementary"
+            if panel.separable_display
         ]
         supplemental_fig, supplemental_axes = plt.subplots(
             1,
@@ -1321,24 +1379,9 @@ def run_landmark_association_figure(
             ),
             layout="constrained",
         )
-        draw_robustness_coverage(
-            supplemental_axes[0],
-            robustness,
-            color=palette["blue"],
-            label_formatter=display_label,
+        _draw_landmark_audits(
+            supplemental_axes, robustness=robustness, process=process, palette=palette
         )
-        supplemental_axes[1].barh(
-            np.arange(len(process)), 100 * numerator / denominator, color=palette["blue"]
-        )
-        supplemental_axes[1].set_yticks(
-            np.arange(len(process)), [display_label(value) for value in process["concept"]]
-        )
-        supplemental_axes[1].set_xlim(0, 100)
-        supplemental_axes[1].set_xlabel("Measured (%)")
-        supplemental_axes[1].set_title("Measurement availability", loc="left")
-        supplemental_axes[1].invert_yaxis()
-        for axis, label in zip(supplemental_axes, ("a", "b")):
-            add_panel_label(axis, label)
         supplemental_contract = make_figure_contract(
             figure_id=f"figure:{supplemental_name}",
             core_claim="Supplementary source-backed specification coverage and measurement availability; no effect comparison is authorized.",
@@ -1417,12 +1460,16 @@ def run_landmark_association_figure(
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [
             f"{figure_product}.figure_contract.json",
-            *([f"{supplemental_name}.figure_contract.json"] if has_audits else []),
+            *([f"{supplemental_name}.figure_contract.json"] if separate_audits else []),
         ],
         "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
-        "supplementary_output_files": {
-            **({f"figure:{figure_product}": f"{supplemental_name}.png"} if has_audits else {})
-        },
+        "supplementary_output_files": (
+            {f"figure:{figure_product}": f"{supplemental_name}.png"}
+            if separate_audits
+            else {f"figure:{figure_product}": f"{figure_product}.png"}
+            if result_placement == "supplementary"
+            else {}
+        ),
     }
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

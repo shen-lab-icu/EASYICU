@@ -10,3 +10,9 @@ tests/governance/test_research_agent_critical_ci.py
 tests/research_agent/core/test_method_input_integrity.py
 tests/research_agent/core/test_dynamic_input_integrity.py
 tests/research_agent/execution/test_checkpoint_lock_portability.py
+tests/research_agent/gates/test_validators.py
+tests/research_agent/providers/test_literature_population_scope.py
+tests/research_agent/authority/test_robustness_display_authority.py
+tests/research_agent/figures/test_landmark_association_figure_executor.py
+tests/research_agent/figures/test_figure_plan_surface_binding.py
+tests/research_agent/execution/test_deterministic_missingness_runner.py

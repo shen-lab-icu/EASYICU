@@ -83,10 +83,10 @@ def resolve_docker_executable(
             return str(candidate) if _is_usable(candidate) else None
     except OSError:
         return None
-    # A bare alternative name (``podman``, or a caller-supplied wrapper) keeps
-    # its own identity first and only then falls back to the standard docker CLI.
-    names = (name,) if name in _EXECUTABLE_NAMES else (name, *_EXECUTABLE_NAMES)
-    return find_local_docker(names)
+    # Search additional locations for the selected command, not substitutes.
+    # A wrapper may bind a particular context/socket; replacing it with docker
+    # or podman would silently discard the caller's runtime selection.
+    return find_local_docker((name,))
 
 
 __all__ = [

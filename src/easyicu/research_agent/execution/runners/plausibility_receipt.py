@@ -35,6 +35,7 @@ collide with the agent's own ``numeric`` -- see
 
 from __future__ import annotations
 
+import ast
 import textwrap
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
@@ -42,6 +43,7 @@ from ...authority.plausibility import FlagOnlyPlausibilityScope
 __all__ = [
     "host_plausibility_receipt_injected",
     "render_standard_plausibility_receipt_code",
+    "verified_host_plausibility_receipt_region",
 ]
 
 
@@ -81,6 +83,10 @@ def host_plausibility_receipt_injected(
     if not body.strip():
         return body
 
+    return body.rstrip() + "\n\n" + _render_host_plausibility_receipt_tail(scope) + "\n"
+
+
+def _render_host_plausibility_receipt_tail(scope: FlagOnlyPlausibilityScope) -> str:
     receipt = render_standard_plausibility_receipt_code(
         scope,
         frame_name="plausibility_frame",
@@ -138,7 +144,90 @@ def host_plausibility_receipt_injected(
             ).strip(),
         )
     )
-    return body.rstrip() + "\n\n" + tail + "\n"
+    return tail
+
+
+def verified_host_plausibility_receipt_region(
+    script_text: str,
+) -> tuple[int, int] | None:
+    """Recognize only an exact, top-level copy of the complete generated tail.
+
+    Constants recovered here only parameterize a source comparison; they do not
+    grant scope or provenance authority. The generated code itself verifies its
+    sealed contracts at runtime. A marker, digest, modified block, or surrounding
+    agent source cannot gain the fixed receipt's audit exemption.
+    """
+
+    source = str(script_text or "").rstrip()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    assignment_index = next(
+        (
+            index
+            for index in range(len(tree.body) - 1, -1, -1)
+            if isinstance(tree.body[index], ast.Assign)
+            and len(tree.body[index].targets) == 1
+            and isinstance(tree.body[index].targets[0], ast.Name)
+            and tree.body[index].targets[0].id == "plausibility_expected_columns"
+        ),
+        None,
+    )
+    if assignment_index is None or assignment_index + 6 >= len(tree.body):
+        return None
+    columns = tree.body[assignment_index].value
+    if not (
+        isinstance(columns, ast.Tuple)
+        and 0 < len(columns.elts) <= 1024
+        and all(
+            isinstance(item, ast.Constant)
+            and isinstance(item.value, str)
+            and 0 < len(item.value) <= 256
+            for item in columns.elts
+        )
+    ):
+        return None
+    # This position and shape are owned by the renderer below. Any drift fails
+    # closed; the entire regenerated tail still has to match byte for byte.
+    guard = tree.body[assignment_index + 6]
+    if not (
+        isinstance(guard, ast.If)
+        and isinstance(guard.test, ast.BoolOp)
+        and len(guard.test.values) == 3
+    ):
+        return None
+    comparison = guard.test.values[1]
+    if not (
+        isinstance(comparison, ast.Compare)
+        and len(comparison.comparators) == 1
+        and isinstance(comparison.comparators[0], ast.Constant)
+        and isinstance(comparison.comparators[0].value, str)
+        and len(comparison.comparators[0].value) == 64
+    ):
+        return None
+    try:
+        scope = FlagOnlyPlausibilityScope(
+            step_id="source_comparison_only",
+            expected_columns=tuple(item.value for item in columns.elts),
+            source_contracts_sha256=comparison.comparators[0].value,
+            authority_kind="source_comparison_only",
+        )
+    except ValueError:
+        return None
+    tail = _render_host_plausibility_receipt_tail(scope)
+    if not source.endswith(tail):
+        return None
+    start = len(source) - len(tail)
+    if start and not source[:start].endswith("\n\n"):
+        return None
+    first_line = source[:start].count("\n") + 1
+    if not any(
+        isinstance(node, ast.Import) and node.lineno == first_line
+        for node in tree.body
+    ):
+        return None
+    return first_line, len(source.splitlines())
 
 
 def render_standard_plausibility_receipt_code(

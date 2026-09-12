@@ -617,6 +617,81 @@ def test_landmark_composite_keeps_audits_supplementary_for_five_inputs() -> None
     }
 
 
+@pytest.mark.parametrize("has_audits", [False, True])
+@pytest.mark.parametrize("has_sensitivity", [False, True])
+@pytest.mark.parametrize("placement", ["main", "supplementary"])
+def test_exported_surfaces_match_main_or_supplementary_strategy(
+    tmp_path: Path, has_audits: bool, has_sensitivity: bool, placement: str,
+) -> None:
+    keys = (
+        *INPUTS[:2],
+        *((SENSITIVITY_INPUT,) if has_sensitivity else ()),
+        *(INPUTS[2:] if has_audits else ()),
+    )
+    frames = _frames()
+    frames[SENSITIVITY_INPUT] = _sensitivity_frame()
+    bindings = {}
+    for key in keys:
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frames[key].to_csv(path, index=False)
+        bindings[key] = _binding(key, frames[key], path)
+    step = AnalysisStep(
+        step_id="display_suite", planned_analysis_role="auxiliary",
+        intent="Render the declared result and audit surfaces.", method="visualization",
+        inputs=list(keys), expected_outputs=["figure:display_suite"],
+        figure_panels=[
+            panel.bind(figure_output="figure:display_suite")
+            for panel in landmark_association_composite_panels(keys)
+        ],
+    )
+    # Reproduce the original failure: only robustness is demoted in the
+    # sensitivity profile, so the shaper must move the inseparable results.
+    demoted_role = "robustness" if has_sensitivity else "descriptive_result"
+    shaped = apply_article_figure_strategy_placements(
+        plan=AnalysisPlan(research_question="Association?", steps=[step]),
+        strategy=SimpleNamespace(role_strategies=[
+            SimpleNamespace(role=demoted_role, placement=placement)
+        ]),
+    ).steps[0]
+    placements = {panel.panel_id: panel.placement for panel in shaped.figure_panels}
+    summary = run_landmark_association_figure(
+        out_dir=tmp_path / "outputs", run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id, figure_product="display_suite", input_keys=keys,
+        panel_placements=placements,
+    )
+    assert validate_step_planned_figure_contract_binding(
+        step=shaped, out_dir=tmp_path / "outputs", step_summary=summary,
+    ) == []
+    split = has_audits and placement == "main"
+    assert len(summary["contract_files"]) == (2 if split else 1)
+    assert bool(summary["supplementary_output_files"]) == (
+        split or placement == "supplementary"
+    )
+    title_by_panel = {
+        "association_curve": "Adjusted association",
+        "absolute_risk_curve": "Absolute risk",
+        "sensitivity_contrasts": "Sensitivity to covariate",
+        "robustness_summary": "Sensitivity-analysis coverage",
+        "measurement_process": "Measurement availability",
+    }
+    for contract_file in summary["contract_files"]:
+        contract = json.loads((tmp_path / "outputs" / contract_file).read_text())
+        svg = (tmp_path / "outputs" / contract_file.replace(
+            ".figure_contract.json", ".svg"
+        )).read_text()
+        declared = {panel["panel_id"] for panel in contract["panels"]}
+        assert declared
+        drawn = {panel for panel, title in title_by_panel.items() if title in svg}
+        assert declared == drawn
+        expected_placement = (
+            "supplementary" if "_supplementary" in contract_file else placement
+        )
+        assert {panel["metadata"]["placement"] for panel in contract["panels"]} == {
+            expected_placement
+        }
+
+
 def test_audit_only_coverage_is_supplementary_even_when_robustness_is_main() -> None:
     step = AnalysisStep(
         step_id="display_suite",

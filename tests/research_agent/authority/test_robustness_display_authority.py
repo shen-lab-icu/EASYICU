@@ -90,7 +90,7 @@ def test_coverage_preserves_non_independence_as_an_audit_dimension() -> None:
     assert display["independent_specs"].tolist() == [1, 0]
 
 
-def test_coverage_aggregates_distinct_contrasts_within_one_axis() -> None:
+def test_coverage_preserves_distinct_contrasts_within_one_axis() -> None:
     summary = pd.DataFrame(
         {
             "axis": ["primary", "primary", "model", "model"],
@@ -103,12 +103,47 @@ def test_coverage_aggregates_distinct_contrasts_within_one_axis() -> None:
 
     display = prepare_robustness_coverage(summary)
 
-    assert display[["axis", "total_specs", "converged_specs"]].to_dict(
+    assert display[["axis", "contrast_id", "total_specs", "converged_specs"]].to_dict(
         orient="records"
     ) == [
-        {"axis": "primary", "total_specs": 2, "converged_specs": 2},
-        {"axis": "model", "total_specs": 2, "converged_specs": 1},
+        {"axis": "primary", "contrast_id": "1_vs_2", "total_specs": 1, "converged_specs": 1},
+        {"axis": "primary", "contrast_id": "5_vs_2", "total_specs": 1, "converged_specs": 1},
+        {"axis": "model", "contrast_id": "1_vs_2", "total_specs": 1, "converged_specs": 1},
+        {"axis": "model", "contrast_id": "5_vs_2", "total_specs": 1, "converged_specs": 0},
     ]
+
+
+def test_coverage_does_not_count_two_contrasts_as_two_refits() -> None:
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.landmark_spline_robustness_executor import (
+        _summary_rows,
+    )
+    from easyicu.research_agent.figures.robustness import draw_robustness_coverage
+
+    matrix = pd.DataFrame([
+        {"axis": "model", "contrast_id": contrast, "spec_id": "age_rcs",
+         "converged": converged, "independent_variant": True,
+         "ci_low": 0.8, "ci_high": 1.2}
+        for contrast, converged in (("low_vs_ref", True), ("high_vs_ref", False))
+    ])
+    summary = _summary_rows(matrix)
+    display = prepare_robustness_coverage(summary)
+    assert matrix["spec_id"].nunique() == 1
+    assert display["registered_specs"].tolist() == [1, 1]
+    assert display["converged_specs"].tolist() == [1, 0]
+    assert display["independent_specs"].tolist() == [1, 1]
+
+    fig, ax = plt.subplots()
+    try:
+        draw_robustness_coverage(ax, summary, color="#0F4D92")
+        assert [tick.get_text() for tick in ax.get_yticklabels()] == [
+            "model: low_vs_ref", "model: high_vs_ref"
+        ]
+        assert [text.get_text() for text in ax.texts] == [
+            "1/1", "1/1", "1/1", "1/1", "0/1", "1/1"
+        ]
+    finally:
+        plt.close(fig)
 
 
 def test_coverage_rejects_repeated_axis_without_distinct_contrasts() -> None:

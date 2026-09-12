@@ -195,9 +195,10 @@ def prepare_robustness_coverage(frame: pd.DataFrame) -> pd.DataFrame:
             raise ValueError(
                 "repeated robustness axes require unique non-empty contrast ids"
             )
-        result = repeated_rows.groupby(
-            "axis", sort=False, as_index=False
-        )[count_columns].sum()
+        # A single registered refit may contribute several contrasts. Keep
+        # their denominators separate: summing these rows would count that
+        # refit once per contrast as if each were another specification.
+        result = repeated_rows
 
     result["registered_specs"] = result["total_specs"]
     if "non_independent_specs" in result.columns:
@@ -288,9 +289,15 @@ def draw_robustness_coverage(
     ax.set_xticks(
         np.arange(len(columns)), [label for _, label in columns], fontsize=5.8
     )
+    row_labels = [formatter(value) for value in result["axis"]]
+    if result["axis"].duplicated().any():
+        row_labels = [
+            f"{axis}: {contrast}"
+            for axis, contrast in zip(row_labels, result["contrast_id"])
+        ]
     ax.set_yticks(
         np.arange(len(result)),
-        [formatter(value) for value in result["axis"]],
+        row_labels,
         fontsize=5.8,
     )
     ax.tick_params(length=0)

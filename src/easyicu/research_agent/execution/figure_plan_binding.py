@@ -216,6 +216,7 @@ def validate_step_planned_figure_contract_binding(
         ).append(panel)
 
     findings: list[ValidationFinding] = []
+    surface_placements: dict[str, str] = {}
     for (figure_output, placement), planned_panels in panels_by_output.items():
         binding_summary = step_summary
         if placement == "supplementary":
@@ -250,6 +251,32 @@ def validate_step_planned_figure_contract_binding(
                 )
             )
             continue
+        # A sidecar describes one exported display surface, including its
+        # alternate file formats. Slot-specific panel selectors may divide
+        # that surface among outputs, but cannot place it in both the main
+        # article and the supplement. Only consumed plan groups participate:
+        # an all-supplementary result may also retain its normal output_files
+        # entry without creating a second, main-article consumer.
+        previous_placement = surface_placements.get(contract_name)
+        if previous_placement is not None and previous_placement != placement:
+            findings.append(
+                _finding(
+                    step_id=str(step.step_id),
+                    figure_output=figure_output,
+                    reason="runtime_figure_surface_placement_conflict",
+                    message=(
+                        f"Runtime figure surface {contract_name!r} is consumed "
+                        "at both main and supplementary placements. Export "
+                        "separate figures or keep its panels at one placement."
+                    ),
+                    detail={
+                        "contract_file": contract_name,
+                        "placements": sorted({previous_placement, placement}),
+                    },
+                )
+            )
+            continue
+        surface_placements[contract_name] = placement
         runtime_panels, panel_error = _contract_panels_for_output(
             contract=contract,
             step_summary=binding_summary,

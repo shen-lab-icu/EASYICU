@@ -516,6 +516,18 @@
       const reportOnly = reason === 'report_only';
       const restore = reason === 'restore';
       const validationRepair = reason === 'validation_repair' || reportOnly || restore;
+      // A workflow/session refresh can settle while the report request is in
+      // flight. Its fallback must retain this action's approved run and route.
+      const session = host.session() || {};
+      const retryOptions = {
+        api: host.api(),
+        session: {
+          ...session,
+          binding: { ...session.binding },
+          research_provider: { ...session.research_provider },
+        },
+        resumeRunId: retrySourceRunId(),
+      };
       host.appendMessage({
         id: 'execution-retry-' + Date.now(), role: 'user', complete: true,
         text: restore
@@ -531,8 +543,7 @@
         let payload;
         try {
           payload = await replay.retryFailedExecution({
-            api: host.api(), session: host.session(), reportOnly: reportOnly || restore,
-            resumeRunId: retrySourceRunId(),
+            ...retryOptions, reportOnly: reportOnly || restore,
           });
         } catch (error) {
           // A general Restore action may revalidate the same approved run
@@ -552,8 +563,7 @@
             ),
           });
           payload = await replay.retryFailedExecution({
-            api: host.api(), session: host.session(), reportOnly: false,
-            resumeRunId: retrySourceRunId(),
+            ...retryOptions, reportOnly: false,
           });
         }
         await host.recordHostAction(
