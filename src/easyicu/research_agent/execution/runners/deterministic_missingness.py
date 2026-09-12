@@ -1238,22 +1238,77 @@ source_audit.to_csv(out_dir / "measurement_source_audit.csv", index=False)
 # plan means when it declares an event-timing product.  The frame is
 # written even when empty: "no audited concept is event-timed" is a
 # finding, and a silently absent file is not.
+#
+# This view used to carry TWO names for the same split -- for a
+# conditional event time ``event_present_n``/``event_absent_n`` were
+# assigned from ``eligible_n``/``not_applicable_n`` a few lines up, and
+# for a complete binary status that pair is the constant
+# (n_total, 0) -- plus two nested qualifiers wearing the same ``_n``
+# suffix as the partition members.  The host then published all seven
+# as one undifferentiated ``product_contract.numeric_columns`` bucket.
+# A consumer doing the obvious thing with that bucket -- add the
+# category counts and compare with the total -- was therefore wrong by
+# construction, and it fail-closed the reader's own article figure twice
+# on 2026-09-12 (sum 177,523 against n_total 94,418).  The run that
+# survived did so only because its generated code happened to pick a
+# different subset, so the same step was a coin flip.  Telling the
+# consumer which sums are real in a prose cell did not stop it, so the
+# shape changes instead: the ``_n`` columns of this view are exactly one
+# closed partition of ``n_total``, the residual is published rather than
+# left implicit, and what is nested inside a member is no longer
+# reachable as a number at all.
 event_timing_audit = audit[
     audit["indicator_semantics"].isin(
         ["conditional_event_time", "binary_event_presence"]
     )
-][
+].copy()
+_timing_known_n = (
+    event_timing_audit["event_present_n"] + event_timing_audit["event_absent_n"]
+)
+if bool((_timing_known_n > event_timing_audit["n_total"]).any()):
+    # The two branches that set these counts both partition the frame, so an
+    # overflow here means the producer stopped agreeing with itself.  Say so
+    # in host code instead of shipping a row whose categories cannot close.
+    raise ValueError(
+        "event-timing categories overlap for: "
+        + ", ".join(
+            sorted(
+                event_timing_audit.loc[
+                    _timing_known_n > event_timing_audit["n_total"], "concept"
+                ].astype(str)
+            )
+        )
+    )
+event_timing_audit["event_status_unknown_n"] = (
+    event_timing_audit["n_total"] - _timing_known_n
+)
+event_timing_audit["qualifier_counts"] = [
+    (
+        f"before_origin_within_present={int(before)}"
+        f"; missing_event_time_within_present={int(missing)}"
+    )
+    for before, missing in zip(
+        event_timing_audit["before_origin_n"].to_numpy(dtype=int),
+        event_timing_audit["value_missing_n"].to_numpy(dtype=int),
+    )
+]
+# The wide table's statement names columns this view no longer carries, so the
+# view states its own arithmetic in terms a consumer can see -- and every token
+# of it is a column of this view, so nothing here asks a reader to trust a
+# number it cannot look up.
+event_timing_audit["partition_identities"] = (
+    "event_present_n + event_absent_n + event_status_unknown_n = n_total"
+)
+event_timing_audit = event_timing_audit[
     [
         "concept",
         "variable",
         "value_column",
         "n_total",
-        "eligible_n",
-        "not_applicable_n",
         "event_present_n",
         "event_absent_n",
-        "before_origin_n",
-        "value_missing_n",
+        "event_status_unknown_n",
+        "qualifier_counts",
         "indicator_semantics",
         "partition_identities",
         "missingness_kind",
@@ -1638,6 +1693,10 @@ summary = {
         "eligible/not_applicable and event_present/event_absent are two "
         "overlapping partitions of n_total, not four disjoint categories; "
         "partition_identities states which identity each row satisfies.",
+        "event_timing_audit.csv is different on purpose: its only *_n columns "
+        "besides n_total are the members of one closed partition of n_total, "
+        "and a count nested inside a member is published as qualifier_counts "
+        "text so it cannot be mistaken for a category.",
     ],
     "output_files": declared_output_files or {
         "missingness_measurement_audit": "missingness_measurement_audit.csv",

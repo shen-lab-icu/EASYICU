@@ -1168,20 +1168,23 @@ def _identity_holds(identity: str, row) -> bool:
     ]
 
 
-def test_event_timing_row_publishes_the_sums_it_actually_satisfies(
+def test_event_timing_view_offers_exactly_one_closed_partition(
     tmp_path: Path,
 ) -> None:
-    """The count columns overlap, so the row must say which sums are real.
+    """Every count column a consumer can add must be a partition member.
 
-    Measured 2026-09-12: a generated article-figure step fail-closed a whole
-    E2 run on the opposite assumption -- it added ``eligible_n``,
-    ``not_applicable_n``, ``event_present_n``, ``event_absent_n``,
-    ``before_origin_n`` and ``value_missing_n`` together and demanded
-    ``n_total`` (177,523 versus 94,418 on the real cohort).  Nothing in those
-    column names says the pair (eligible, not_applicable) and the pair
-    (present, absent) describe the same split twice, so the producer now states
-    the arithmetic it verified per row, and this test checks that what it
-    states is both true and complete.
+    Measured 2026-09-12: the event-timing view published seven integer columns
+    for a five-row cohort -- ``n_total`` plus two names for the same split
+    (``eligible_n``/``not_applicable_n`` duplicate ``event_present_n``/
+    ``event_absent_n`` by construction here) plus two counts nested *inside* a
+    member.  A generated article-figure step added six of them and demanded
+    ``n_total`` (177,523 versus 94,418 on the real cohort), failing the run
+    closed; the run that survived only survived because its code picked a
+    different subset, which makes the reader's main figure a coin flip.
+    Stating the real identities in a text cell did not prevent it, so the shape
+    is now the guarantee: the only ``*_n`` columns in this view are the members
+    of one partition of ``n_total``, so the obvious arithmetic is correct
+    arithmetic.
     """
 
     cohort = pd.DataFrame(
@@ -1213,37 +1216,103 @@ def test_event_timing_row_publishes_the_sums_it_actually_satisfies(
         requested_inputs=["death_time"],
     )
 
-    row = pd.read_csv(out_dir / "event_timing_audit.csv").iloc[0]
-    wide = pd.read_csv(out_dir / "missingness_measurement_audit.csv").iloc[0]
-    claimed_sum = sum(
-        int(row[column])
-        for column in (
-            "eligible_n",
-            "not_applicable_n",
-            "event_present_n",
-            "event_absent_n",
-            "before_origin_n",
-            "value_missing_n",
-        )
+    view = pd.read_csv(out_dir / "event_timing_audit.csv")
+    row = view.iloc[0]
+    # This is the bucket the host publishes to the coder as
+    # ``product_contract.numeric_columns``, minus the denominator.
+    members = [
+        column
+        for column in view.select_dtypes(include=["integer"]).columns
+        if column != "n_total"
+    ]
+    assert sorted(members) == [
+        "event_absent_n",
+        "event_present_n",
+        "event_status_unknown_n",
+    ]
+    # The instinct this view used to reward is now the correct one.
+    assert sum(int(row[column]) for column in members) == int(row["n_total"])
+    assert int(row["event_present_n"]) == 3
+    assert int(row["event_absent_n"]) == 2
+    assert int(row["event_status_unknown_n"]) == 0
+    # Two spellings of one split and two nested counts left the view; a
+    # qualifier is reachable as text, so it cannot join a sum.
+    for gone in (
+        "eligible_n",
+        "not_applicable_n",
+        "before_origin_n",
+        "value_missing_n",
+    ):
+        assert gone not in view.columns
+    assert row["qualifier_counts"] == (
+        "before_origin_within_present=0; missing_event_time_within_present=1"
     )
-    assert claimed_sum == 11
-    assert claimed_sum != int(row["n_total"])
     stated = _stated_identities(row["partition_identities"])
     assert stated == [
-        "eligible_n + not_applicable_n = n_total",
-        "event_present_n + event_absent_n = n_total",
-        "event_present_n = eligible_n",
-        "event_absent_n = not_applicable_n",
+        "event_present_n + event_absent_n + event_status_unknown_n = n_total"
     ]
-    assert all(_identity_holds(identity, wide) for identity in stated)
-    # The projections list their columns by hand, so a statement added to one
-    # and forgotten in another would leave half the consumers guessing again.
+    # A view may not advertise a column it does not carry, and the statement
+    # must be checkable against the row it was published for.
+    visible = set(view.columns)
+    for identity in stated:
+        left, _separator, right = identity.partition(" = ")
+        tokens = {token.strip() for token in left.split(" + ")} | {right.strip()}
+        assert tokens <= visible
+        assert sum(int(row[token]) for token in left.split(" + ")) == int(
+            row[right.strip()]
+        )
+    wide = pd.read_csv(out_dir / "missingness_measurement_audit.csv").iloc[0]
+    assert all(_identity_holds(identity, wide) for identity in _stated_identities(
+        wide["partition_identities"]
+    ))
+    # The overlapping pair stays where its other consumers read it, and the
+    # projections list their columns by hand -- a statement added to one and
+    # forgotten in another would leave half the consumers guessing again.
     for other in ("missingness_audit.csv", "measurement_source_audit.csv"):
-        assert pd.read_csv(out_dir / other).iloc[0][
-            "partition_identities"
-        ] == row["partition_identities"]
+        assert pd.read_csv(out_dir / other).iloc[
+            0
+        ]["partition_identities"] == wide["partition_identities"]
     assert summary["count_partition_audit"]["status"] == "ok"
     assert summary["count_partition_audit"]["unverified_concepts"] == []
+
+
+def test_binary_event_status_row_also_closes_the_event_timing_partition(
+    tmp_path: Path,
+) -> None:
+    """The other semantics in this view must not be an exception to the rule.
+
+    A complete binary status was where the duplicated pair was a constant
+    (``eligible_n = n_total``, ``not_applicable_n = 0``), so it closed by
+    accident rather than by contract.  The residual column makes it close on
+    purpose.
+    """
+
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "rrt_first": [0, 0, 1, 0, 1],
+            "rrt_measured": [0, 0, 1, 0, 1],
+            "rrt_n": [0, 0, 1, 0, 2],
+        }
+    )
+    _summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=["rrt_first", "rrt_measured"],
+    )
+
+    view = pd.read_csv(out_dir / "event_timing_audit.csv")
+    row = view.loc[view["concept"] == "rrt"].iloc[0]
+    members = [
+        column
+        for column in view.select_dtypes(include=["integer"]).columns
+        if column != "n_total"
+    ]
+    assert row["indicator_semantics"] == "binary_event_presence"
+    assert sum(int(row[column]) for column in members) == int(row["n_total"]) == 5
+    assert int(row["event_present_n"]) == 2
+    assert int(row["event_status_unknown_n"]) == 0
 
 
 def test_availability_row_does_not_claim_an_event_partition(
