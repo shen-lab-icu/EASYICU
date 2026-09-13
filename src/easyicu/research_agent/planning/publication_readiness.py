@@ -22,7 +22,7 @@ from .figure_strategy import (
     figure_step_covers_role,
 )
 from .study_design import build_study_design_brief
-from .progressive_contract import progressive_module_ids_for_analysis_types
+from .progressive_module_ids import progressive_module_ids_for_analysis_types
 
 
 def _context_sensitivity_spec_ids(context: ResearchContext) -> set[str]:

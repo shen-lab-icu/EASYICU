@@ -546,10 +546,17 @@ def test_association_scientific_sensitivity_contract_shapes_and_renders(
     )
 
 
+@pytest.mark.parametrize("stage_count", [2, 6])
 def test_cohort_balance_association_profile_selects_and_renders(
-    tmp_path: Path,
+    tmp_path: Path, stage_count: int,
 ) -> None:
     frames = _cohort_balance_association_frames()
+    if stage_count == 6:
+        frames["table:cohort_flow"] = pd.DataFrame({
+            "concept_id": ["source cohort", "Stage 1", "Stage 2", "Stage 3",
+                           "Stage 4", "eligible cohort"],
+            "n_remaining": [120, 116, 112, 108, 104, 100],
+        })
     bindings = {}
     for key, frame in frames.items():
         path = tmp_path / f"{key.partition(':')[2]}.csv"
@@ -615,6 +622,18 @@ def test_cohort_balance_association_profile_selects_and_renders(
         "primary_estimand",
         "robustness",
     ]
+    # The composite contract carries only n_remaining, so the flow panel must
+    # derive the 120 -> 100 drop from adjacent bound counts instead of losing
+    # the exclusion on the way to the manuscript figure.
+    svg = (out_dir / "cohort_balance_figure.svg").read_text(encoding="utf-8")
+    if stage_count == 2:
+        assert "\u221220 excluded" in svg
+        assert "83.3% of previous" in svg
+    else:
+        assert svg.count("\u22124 excluded") == 5
+        assert contract["height_mm"] > 132.0
+    assert "83.3% of universe" in svg
+    assert "source cohort" in svg and "eligible cohort" in svg
 
 
 def test_balance_association_profile_shapes_selects_and_renders(
@@ -1023,10 +1042,16 @@ def test_source_aware_association_contract_uses_eligible_availability(
     assert panel_d["metadata"]["source_products"] == ["table:measurement_process_audit"]
 
 
+@pytest.mark.parametrize("stage_count", [1, 6, 12])
 def test_renderer_preserves_exact_source_rows_and_exports_figure(
-    tmp_path: Path,
+    tmp_path: Path, stage_count: int,
 ) -> None:
     frames = _frames()
+    if stage_count > 1:
+        frames["table:cohort_flow"] = pd.DataFrame({
+            "concept_id": [f"Eligibility {i}" for i in range(stage_count)],
+            "n_remaining": list(range(100 + stage_count - 1, 99, -1)),
+        })
     bindings = {}
     for key, frame in frames.items():
         path = tmp_path / f"{key.partition(':')[2]}.csv"
@@ -1054,6 +1079,13 @@ def test_renderer_preserves_exact_source_rows_and_exports_figure(
         assert source.drop(columns=["source_row_index", "source_table"]).equals(frame)
     for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
         assert (out_dir / f"primary_publication_figure.{suffix}").is_file()
+    contract = json.loads(
+        (out_dir / "primary_publication_figure.figure_contract.json").read_text()
+    )
+    if stage_count == 6:
+        assert 177.8 - 1e-8 <= contract["height_mm"] <= 8.75 * 25.4
+    elif stage_count == 12:
+        assert contract["height_mm"] > 178.0
     stored = json.loads((out_dir / "step_summary.json").read_text())
     assert set(item["input_key"] for item in stored["input_bindings"]) == set(
         COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS

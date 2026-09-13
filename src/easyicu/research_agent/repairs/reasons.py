@@ -575,6 +575,9 @@ _DETAIL_REASON_CODES = {
     "measurement_provenance_pair_undeclared": (
         RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
     ),
+    "registered_percentage_count_reconciliation_required": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
     "count_companion_closed_domain_invalid": (
         RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
     ),
@@ -670,6 +673,9 @@ _LLM_CONCEPT_ISSUE_CODE_REASONS = {
     ),
     "finalized_exposure_overridden": RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION,
     "finalized_exposure_forced_raw_reconciliation": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
+    "registered_percentage_count_reconciliation_required": (
         RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
     ),
     "plausibility_range_exclusion_required": (

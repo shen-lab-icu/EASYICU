@@ -192,7 +192,12 @@ def test_safe_auto_runner_uses_macos_sandbox_without_docker(monkeypatch):
         lambda name: "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None,
     )
 
-    assert runner_mod.select_safe_runner_kind() == "subprocess"
+    # Force the Docker probe to fail: a live daemon on the developer machine
+    # would otherwise make this "without docker" test take the Docker branch.
+    assert (
+        runner_mod.select_safe_runner_kind(docker_executable="/nonexistent/docker")
+        == "subprocess"
+    )
 
 
 def test_safe_auto_runner_fails_before_execution_without_safe_backend(monkeypatch):
@@ -202,7 +207,7 @@ def test_safe_auto_runner_fails_before_execution_without_safe_backend(monkeypatc
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: None)
 
     with pytest.raises(runner_mod.SafeRunnerUnavailableError, match="No safe"):
-        runner_mod.select_safe_runner_kind()
+        runner_mod.select_safe_runner_kind(docker_executable="/nonexistent/docker")
 
 
 def test_pipeline_default_auto_selects_probed_docker(ra, tmp_path, monkeypatch):

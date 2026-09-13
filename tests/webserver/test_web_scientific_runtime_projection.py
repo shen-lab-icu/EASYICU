@@ -394,8 +394,8 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
     # The cluster-robust primary sealed one linear row. Restating that row on the
     # primary grid must say plainly that it refitted nothing.
     assert child_summary["functional_form_effect_products"]["independent_refit"] is False
-    curve = pd.read_csv(tmp_path / "child" / "form_check_exposure_curve.csv")
-    points = pd.read_csv(tmp_path / "child" / "form_check_exposure_contrasts.csv")
+    curve = pd.read_csv(tmp_path / "child" / "form_check_sensitivity_exposure_curve.csv")
+    points = pd.read_csv(tmp_path / "child" / "form_check_sensitivity_exposure_contrasts.csv")
     assert len(curve) == authority.curve_points
     assert len(points) == 2
     reference = float(contrasts["reference_exposure_value"].iloc[0])

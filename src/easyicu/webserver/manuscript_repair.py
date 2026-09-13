@@ -35,8 +35,34 @@ from easyicu.webserver import agent_pipeline_runs as pipeline_owner
 from easyicu.webserver import provider_adapter, run_artifact_disclosure, study_contexts
 from easyicu.webserver import dataio
 from easyicu.webserver.report_revision_export import build_revision_figure_gallery, export_revision_pdf
-from easyicu.research_agent.reporting.revision_figures import build_revision_figure_bundle
+from easyicu.research_agent.execution.runners.deterministic_missingness import (
+    measurement_audit_product_filename,
+)
+from easyicu.research_agent.execution.runners.exposure_outcome_distribution_render import (
+    exposure_outcome_distribution_figure_owns_step,
+    run_exposure_outcome_distribution_figure,
+)
+from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
+    missingness_measurement_figure_executor_owns_step,
+    run_missingness_measurement_figure,
+)
+from easyicu.research_agent.reporting.revision_figures import (
+    RevisionFigureRenderers,
+    build_revision_figure_bundle,
+)
 from easyicu.webserver.report_revision_replay import load_failed_writer_replay
+
+
+# The Web repair/export entry surface wires the execution-owned deterministic
+# renderers into the reporting owner; reporting itself must not import the
+# execution layer (test_package_dependency_directions).
+REVISION_FIGURE_RENDERERS = RevisionFigureRenderers(
+    owns_exposure_outcome=exposure_outcome_distribution_figure_owns_step,
+    render_exposure_outcome=run_exposure_outcome_distribution_figure,
+    owns_missingness=missingness_measurement_figure_executor_owns_step,
+    render_missingness=run_missingness_measurement_figure,
+    measurement_audit_product_filename=measurement_audit_product_filename,
+)
 
 
 def _source_fingerprint(root: Path) -> str:
@@ -322,7 +348,11 @@ def make_report_only_run_runner(
             provenance = build_registered_report_reader(
                 run_dir, (output / "manuscript_bound.md").read_text(encoding="utf-8"),
             )
-            figure_bundle = build_revision_figure_bundle(prepared=prepared, output=output)
+            figure_bundle = build_revision_figure_bundle(
+                prepared=prepared,
+                output=output,
+                renderers=REVISION_FIGURE_RENDERERS,
+            )
             revision["figure_revision"] = {
                 "receipt_path": "figures/figure_revision_receipt.json",
                 "receipt_sha256": figure_bundle.receipt_sha256,

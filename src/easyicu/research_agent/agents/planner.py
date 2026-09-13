@@ -1569,80 +1569,130 @@ class PlannerAgent:
         direct_comparator_keys = _payload.normalize_literature_citation_keys(
             direct_comparator_literature_keys
         )
-        resolved_planning_contract_context, revision_projection = (
-            project_plan_revision_prompt(planning_contract_context)
-        )
-        if enforce_article_contract and not resolved_planning_contract_context:
-            from ..reporting.article_contract import (
-                build_article_analysis_contract,
-                render_article_analysis_contract_for_prompt,
-            )
-
-            resolved_planning_contract_context = (
-                render_article_analysis_contract_for_prompt(
-                    build_article_analysis_contract(article_contract_context or context)
-                )
-            )
-        resolved_planning_contract_context = _payload.bind_literature_citation_authority(
-            resolved_planning_contract_context,
-            allowed_citation_keys,
-            direct_comparator_keys=direct_comparator_keys,
-            required_method_layers=(
-                _payload.required_method_layers_for_context(context)
-            ),
-        )
         structured_output = None
         if llm_supports_strict_json_schema(self.llm):
             structured_output = _payload.planner_structured_output_request(
                 allowed_citation_keys
             )
         strict_transport_schema = structured_output is not None
-        messages = self.request_messages(
-            context,
-            know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
-            strict_transport_schema=strict_transport_schema,
-            structured_output=structured_output,
-        )
-        if structured_output is not None:
-            authority_note = _structured_output_authority_note(structured_output)
-            messages[0] = LLMMessage(
-                role=messages[0].role,
-                content=messages[0].content + authority_note,
-            )
-        self.last_prompt_metrics = self.request_metrics(
-            context,
-            know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
-            strict_transport_schema=strict_transport_schema,
-            structured_output=structured_output,
-        )
-        message_payload_bytes = sum(
-            len(message.content.encode("utf-8")) for message in messages
-        )
-        structured_output_bytes = (
-            structured_output.payload_bytes if structured_output is not None else 0
-        )
-        self.last_prompt_metrics["message_payload_bytes"] = message_payload_bytes
-        self.last_prompt_metrics["structured_output_payload_bytes"] = (
-            structured_output_bytes
-        )
-        self.last_prompt_metrics["structured_output_authority_sha256"] = (
-            structured_output.authority_sha256
+        authority_note = (
+            _structured_output_authority_note(structured_output)
             if structured_output is not None
-            else None
+            else ""
         )
-        self.last_prompt_metrics["total_bytes"] = (
-            message_payload_bytes + structured_output_bytes
-        )
-        self.last_prompt_metrics["plan_revision_projection"] = revision_projection
+
+        def _projected_contract(
+            byte_budget: int | None = None,
+            *,
+            elide_superseded_replans: bool = False,
+        ) -> tuple[str, list[dict[str, Any]]]:
+            projected, projection_receipts = project_plan_revision_prompt(
+                planning_contract_context,
+                byte_budget=byte_budget,
+                elide_superseded_replans=elide_superseded_replans,
+            )
+            if enforce_article_contract and not projected:
+                from ..reporting.article_contract import (
+                    build_article_analysis_contract,
+                    render_article_analysis_contract_for_prompt,
+                )
+
+                projected = render_article_analysis_contract_for_prompt(
+                    build_article_analysis_contract(article_contract_context or context)
+                )
+            bound = _payload.bind_literature_citation_authority(
+                projected,
+                allowed_citation_keys,
+                direct_comparator_keys=direct_comparator_keys,
+                required_method_layers=(
+                    _payload.required_method_layers_for_context(context)
+                ),
+                # A strict-transport request already carries the binding shape
+                # in its enforced schema; the illustrative examples would make
+                # a retry pay twice for the same syntax.
+                include_examples=structured_output is None,
+            )
+            return bound, projection_receipts
+
+        # The compact source plan keeps every declared requirement and is the
+        # only lossless view; measure the fully assembled request exactly, then
+        # either send it or try the one budget-pressure rung that exists:
+        # collapse ancestor failed-execution replans to digest pointers while
+        # the current source plan and the candidate seed keep their complete
+        # views. Nothing is elided unless the exactly assembled request
+        # actually overflows, so an ordinary request still restores every
+        # version from what is sent.
+        resolved_planning_contract_context = ""
+        revision_projection: list[dict[str, Any]] = []
+        messages: list[LLMMessage] = []
+        for elide_superseded_replans in (False, True):
+            resolved_planning_contract_context, revision_projection = (
+                _projected_contract(
+                    elide_superseded_replans=elide_superseded_replans,
+                )
+            )
+            messages = self.request_messages(
+                context,
+                know_how_context=know_how_context,
+                planning_contract_context=resolved_planning_contract_context,
+                strict_transport_schema=strict_transport_schema,
+                structured_output=structured_output,
+            )
+            if structured_output is not None:
+                messages[0] = LLMMessage(
+                    role=messages[0].role,
+                    content=messages[0].content + authority_note,
+                )
+            self.last_prompt_metrics = self.request_metrics(
+                context,
+                know_how_context=know_how_context,
+                planning_contract_context=resolved_planning_contract_context,
+                strict_transport_schema=strict_transport_schema,
+                structured_output=structured_output,
+            )
+            message_payload_bytes = sum(
+                len(message.content.encode("utf-8")) for message in messages
+            )
+            structured_output_bytes = (
+                structured_output.payload_bytes
+                if structured_output is not None
+                else 0
+            )
+            self.last_prompt_metrics["message_payload_bytes"] = message_payload_bytes
+            self.last_prompt_metrics["structured_output_payload_bytes"] = (
+                structured_output_bytes
+            )
+            self.last_prompt_metrics["structured_output_authority_sha256"] = (
+                structured_output.authority_sha256
+                if structured_output is not None
+                else None
+            )
+            self.last_prompt_metrics["total_bytes"] = (
+                message_payload_bytes + structured_output_bytes
+            )
+            self.last_prompt_metrics["plan_revision_projection"] = revision_projection
+            if (
+                self.last_prompt_metrics["total_bytes"]
+                <= planner_prompt_byte_limit(self.llm)
+            ):
+                break
         if self.last_prompt_metrics["total_bytes"] > planner_prompt_byte_limit(self.llm):
+            plan_bytes = sum(
+                int(receipt.get("projected_bytes") or 0)
+                for receipt in revision_projection
+            )
+            plan_note = (
+                f" The source-plan block is {plan_bytes} bytes and keeps every "
+                "declared requirement; it cannot be shrunk without deleting "
+                "inputs, scientific actions or typed specs."
+                if plan_bytes
+                else ""
+            )
             raise PlannerPromptBudgetError(
                 "Planner prompt transport budget exceeded: "
                 f"{self.last_prompt_metrics['total_bytes']} > "
-                f"{planner_prompt_byte_limit(self.llm)} bytes. No protocol claim, typed "
-                "input, or scientific coordinate was truncated; reduce selected "
-                "know-how cards or split the research context."
+                f"{planner_prompt_byte_limit(self.llm)} bytes.{plan_note} "
+                "Reduce selected know-how cards or split the research context."
             )
         from ..providers.structured_retry import call_llm_with_structured_retry
 

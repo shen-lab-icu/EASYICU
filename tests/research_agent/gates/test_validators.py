@@ -5354,3 +5354,59 @@ def test_statistical_validator_flags_single_group_partition(ra, tmp_path: Path):
         if "single-group" in f.message.lower() or "degenerate" in f.message.lower()
     ]
     assert deg and all(f.severity == "warning" for f in deg)
+
+
+def test_llm_concept_auditor_accepts_the_registered_percentage_issue_code(ra):
+    from easyicu.research_agent.audits.validators import (
+        parse_llm_concept_audit_response,
+    )
+
+    raw = (
+        '{"findings":[{"severity":"error","message":"Rendered percentages are '
+        'not reconciled to their count numerators and denominator.",'
+        '"detail":{"issue_code":'
+        '"registered_percentage_count_reconciliation_required",'
+        '"step_id":"display_package","variables":["measurement_missingness"]}}]}'
+    )
+    findings = parse_llm_concept_audit_response(raw, step_id="display_package")
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue_code"] == (
+        "registered_percentage_count_reconciliation_required"
+    )
+
+
+def test_registered_percentage_issue_code_routes_to_scientific_semantics():
+    from easyicu.research_agent.repairs.reasons import (
+        RepairReason,
+        repair_reason_for_finding,
+    )
+    from easyicu.research_agent.schema import ValidationFinding
+
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Rendered percentages are not reconciled to counts.",
+        detail={
+            "issue_code": "registered_percentage_count_reconciliation_required",
+            "step_id": "display_package",
+        },
+    )
+    assert (
+        repair_reason_for_finding(finding)
+        == RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    )
+
+    deterministic = ValidationFinding(
+        validator="analysis_pattern_auditor",
+        severity="error",
+        message="Rendered percentages are not reconciled to counts.",
+        detail={
+            "kind": "registered_percentage_count_reconciliation_required",
+            "step_id": "display_package",
+        },
+    )
+    assert (
+        repair_reason_for_finding(deterministic)
+        == RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    )

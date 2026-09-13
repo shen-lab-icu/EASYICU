@@ -48,6 +48,31 @@ class StepAttemptBootstrap:
     budget_runtime: StepProviderBudgetRuntime
 
 
+def _resume_requires_initial_regeneration(
+    *,
+    resume_state: Mapping[str, Any] | None,
+    prior_step_record: Mapping[str, Any] | None,
+) -> bool:
+    """Authorize one new generation epoch for an incomplete resumed step.
+
+    2026-09-13 E2 validation 7: an explicit governed retry resumed a step whose
+    previous attempt ended ``blocked_by_concept_audit`` (terminal transport, no
+    durable result).  The original execution window had consumed the one
+    terminal-restart allowance, so regeneration failed with
+    ``Initial-generation transport is already terminal`` even though the retry
+    was legitimate new authority.  A resume window may therefore append one
+    epoch for a step whose latest recorded status is not ``ok``; pending
+    transports keep their existing reuse/pay-once rules.
+    """
+
+    if not isinstance(resume_state, Mapping):
+        return False
+    if prior_step_record is None:
+        return False
+    status = str(prior_step_record.get("status") or "").strip().lower()
+    return bool(status) and status != "ok"
+
+
 def prepare_step_attempt_bootstrap(
     *,
     resume_state: Mapping[str, Any] | None,
@@ -155,6 +180,10 @@ def prepare_step_attempt_bootstrap(
         reserve_concept_audit=reserve_concept_audit,
         allow_terminal_initial_generation_restart=(
             allow_terminal_initial_generation_restart
+            or _resume_requires_initial_regeneration(
+                resume_state=resume_state,
+                prior_step_record=prior_step_record,
+            )
         ),
     )
     budget_runtime.repair_budget.bind_semantic_escalation_recorder(

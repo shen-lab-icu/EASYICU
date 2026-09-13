@@ -1887,6 +1887,8 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     source = (
         inspect.getsource(pipeline_execute.run_execute_phase)
         + "\n"
+        + inspect.getsource(pipeline_execute._step_resolve_run_halt)
+        + "\n"
         + inspect.getsource(pipeline_execute._step_resolve_run_transition)
         + "\n"
         + inspect.getsource(pipeline_execute._execute_step)

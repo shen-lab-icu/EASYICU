@@ -4014,25 +4014,39 @@ class ProgressivePlannerAgent:
             )
         )
         continuous_domain_variables = _continuous_planning_variable_names(context)
+        strict_transport_schema = llm_supports_strict_json_schema(self.llm)
         sealed_planning_contract_context = bind_literature_citation_authority(
             planning_contract_context,
             allowed_citations,
             direct_comparator_keys=direct_keys,
             required_method_layers=required_method_layers_for_context(context),
+            # The enforced outline/step schemas already carry the binding
+            # shape; illustrative JSON would be paid for twice.
+            include_examples=not strict_transport_schema,
         )
-        resolved_planning_contract_context, revision_projection = (
-            project_plan_revision_prompt(
-                sealed_planning_contract_context,
-                stage="outline",
+        outline_schema = None
+        if strict_transport_schema:
+            design_card_keys = tuple(
+                card.citation_key
+                for card in design_cards
+                if card.citation_key in set(comparison_keys)
             )
-        )
-        foundation_planning_contract_context, foundation_revision_projection = (
-            project_plan_revision_prompt(
-                sealed_planning_contract_context,
-                stage="foundation",
+            outline_schema = progressive_outline_structured_output_request(
+                analysis_types=analysis_types,
+                variable_names=variables,
+                scientific_action_ids=action_ids,
+                allowed_literature_citation_keys=allowed_citations,
+                design_card_citation_keys=design_card_keys,
             )
-        )
-        self._attempt.prompt_metrics["plan_revision_projection"] = revision_projection
+        # The compact source plan keeps every declared requirement and is the
+        # only outline projection offered; a smaller roster-style view would
+        # delete exactly the inputs, scientific actions and typed specs the
+        # planner must preserve. Measure the fully assembled request exactly,
+        # then try the one budget-pressure rung that exists: collapse ancestor
+        # failed-execution replans to digest pointers while the current source
+        # plan keeps its complete view. Nothing is elided unless the request
+        # actually overflows, so an ordinary request still restores every
+        # version from what is sent.
         required_custom_products = _required_separate_analysis_products(context)
         required_visualization_step = _requires_visualization_step(context)
         available_ordered_trend = _available_ordered_trend_action(
@@ -4078,53 +4092,80 @@ class ProgressivePlannerAgent:
             ),
             source_checkpoint=resume_checkpoint,
         )
-        outline_schema = None
-        if llm_supports_strict_json_schema(self.llm):
-            design_card_keys = tuple(
-                card.citation_key
-                for card in design_cards
-                if card.citation_key in set(comparison_keys)
-            )
-            outline_schema = progressive_outline_structured_output_request(
-                analysis_types=analysis_types,
-                variable_names=variables,
-                scientific_action_ids=action_ids,
-                allowed_literature_citation_keys=allowed_citations,
-                design_card_citation_keys=design_card_keys,
-            )
-        user_prompt = self._user_prompt(
-            context,
-            article_context=article_context,
-            analysis_types=analysis_types,
-            variables=variables,
-            action_rows=action_rows,
-            allowed_literature_citation_keys=allowed_citations,
-            literature_design_evidence_cards=design_cards,
-            know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
-        )
-        user_prompt_without_know_how = self._user_prompt(
-            context,
-            article_context=article_context,
-            analysis_types=analysis_types,
-            variables=variables,
-            action_rows=action_rows,
-            allowed_literature_citation_keys=allowed_citations,
-            literature_design_evidence_cards=design_cards,
-            planning_contract_context=resolved_planning_contract_context,
-        )
-        messages = [
-            LLMMessage(role="system", content=_GUIDE),
-            LLMMessage(role="user", content=user_prompt),
-        ]
-        message_bytes = sum(len(item.content.encode("utf-8")) for item in messages)
+        resolved_planning_contract_context = ""
+        foundation_planning_contract_context = ""
+        revision_projection: list[dict] = []
+        foundation_revision_projection: list[dict] = []
+        user_prompt = ""
+        user_prompt_without_know_how = ""
+        messages: list[LLMMessage] = []
+        message_bytes = 0
         schema_bytes = outline_schema.payload_bytes if outline_schema else 0
-        total_bytes = message_bytes + schema_bytes
+        total_bytes = 0
+        for elide_superseded_replans in (False, True):
+            resolved_planning_contract_context, revision_projection = (
+                project_plan_revision_prompt(
+                    sealed_planning_contract_context,
+                    stage="outline",
+                    elide_superseded_replans=elide_superseded_replans,
+                )
+            )
+            foundation_planning_contract_context, foundation_revision_projection = (
+                project_plan_revision_prompt(
+                    sealed_planning_contract_context,
+                    stage="foundation",
+                    elide_superseded_replans=elide_superseded_replans,
+                )
+            )
+            self._attempt.prompt_metrics["plan_revision_projection"] = (
+                revision_projection
+            )
+            user_prompt = self._user_prompt(
+                context,
+                article_context=article_context,
+                analysis_types=analysis_types,
+                variables=variables,
+                action_rows=action_rows,
+                allowed_literature_citation_keys=allowed_citations,
+                literature_design_evidence_cards=design_cards,
+                know_how_context=know_how_context,
+                planning_contract_context=resolved_planning_contract_context,
+            )
+            user_prompt_without_know_how = self._user_prompt(
+                context,
+                article_context=article_context,
+                analysis_types=analysis_types,
+                variables=variables,
+                action_rows=action_rows,
+                allowed_literature_citation_keys=allowed_citations,
+                literature_design_evidence_cards=design_cards,
+                planning_contract_context=resolved_planning_contract_context,
+            )
+            messages = [
+                LLMMessage(role="system", content=_GUIDE),
+                LLMMessage(role="user", content=user_prompt),
+            ]
+            message_bytes = sum(
+                len(item.content.encode("utf-8")) for item in messages
+            )
+            total_bytes = message_bytes + schema_bytes
+            if total_bytes <= planner_prompt_byte_limit(self.llm):
+                break
         if total_bytes > planner_prompt_byte_limit(self.llm):
+            plan_bytes = sum(
+                int(receipt.get("projected_bytes") or 0)
+                for receipt in revision_projection
+            )
+            plan_note = (
+                f"; source-plan block={plan_bytes} bytes keeps every declared "
+                "requirement"
+                if plan_bytes
+                else ""
+            )
             raise ProgressivePlanCompileError(
                 "progressive_prompt_budget_exceeded",
                 f"initial request uses {total_bytes} bytes; "
-                f"limit={planner_prompt_byte_limit(self.llm)}",
+                f"limit={planner_prompt_byte_limit(self.llm)}{plan_note}",
                 path="planner_request",
                 metrics={
                     "request_bytes": total_bytes,

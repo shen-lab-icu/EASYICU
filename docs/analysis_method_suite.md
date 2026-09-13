@@ -90,7 +90,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Stability / reproducibility (bootstrap, consensus, adjusted Rand) | standard_supporting | LLM-coded ⚠️ | stability report | — |
 | Typed trajectory-cluster stability refits | standard_supporting | deterministic ✅ | digest-bound stability specification, refit ledger, adjusted-Rand table, aligned assignments, and freeze/report decision | `trajectory_cluster_stability` |
 | Cluster sizes + degenerate-cluster flag | standard_supporting | deterministic ✅ | cluster_sizes.csv; figure panel | `phenotyping` |
-| Outcome-by-cluster descriptive comparison | standard_supporting | deterministic ✅ | outcome_by_cluster.csv; figure panel | `phenotyping` |
+| Outcome-by-cluster descriptive comparison | standard_supporting | deterministic ✅ | outcome_by_cluster.csv with clinical/outcome rows, observed denominators and missing counts | `phenotype_comparison` |
 | Trajectory-feature clustering | primary | LLM-coded ⚠️ | agent-declared feature representation + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory | `phenotyping` |
 | LCGA / group-based trajectory modelling (GBTM) | planned | planned ⛔ | latent-class trajectory model | — |
 | Mixed-effects / growth-mixture trajectory models | planned | planned ⛔ | mixed-effects / GMM trajectory model | — |

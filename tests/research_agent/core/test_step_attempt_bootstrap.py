@@ -141,3 +141,61 @@ def test_execute_worker_delegates_attempt_bootstrap_and_repair_reservation() -> 
     assert "prepare_step_attempt_bootstrap(" in source
     assert "StepRepairReservation(" in source
     assert "def _consume_llm_repair_budget(" not in source
+
+
+def _bootstrap_with_prior(tmp_path, prior, *, allow=False):
+    step = _step()
+    plan = AnalysisPlan(research_question="Summarize the cohort.", steps=[step])
+    universe = tmp_path / "cohort_universe.parquet"
+    cohort = tmp_path / "cohort_analysis.parquet"
+    universe.write_bytes(b"universe")
+    cohort.write_bytes(b"cohort")
+    return prepare_step_attempt_bootstrap(
+        resume_state={"step_attempt_history": [prior]},
+        per_step_records=[],
+        shared_lock=threading.Lock(),
+        step=step,
+        plan=plan,
+        run_id="run",
+        run_dir=tmp_path,
+        universe_path=universe,
+        cohort_path=cohort,
+        plan_scientific_signature=[{"step_id": step.step_id}],
+        findings=[],
+        max_provider_calls=5,
+        max_llm_repairs=2,
+        reserve_concept_audit=False,
+        allow_terminal_initial_generation_restart=allow,
+    )
+
+
+def test_resume_of_incomplete_step_authorizes_one_initial_regeneration(
+    tmp_path,
+) -> None:
+    prior = {
+        "step_id": "01_summary",
+        "status": "blocked_by_concept_audit",
+        "attempt_sequence": 1,
+    }
+
+    result = _bootstrap_with_prior(tmp_path, prior)
+
+    assert (
+        result.budget_runtime.provider_budget.terminal_initial_generation_restart_allowed
+        is True
+    )
+
+
+def test_resume_of_completed_step_keeps_terminal_restart_closed(tmp_path) -> None:
+    prior = {
+        "step_id": "01_summary",
+        "status": "ok",
+        "attempt_sequence": 1,
+    }
+
+    result = _bootstrap_with_prior(tmp_path, prior)
+
+    assert (
+        result.budget_runtime.provider_budget.terminal_initial_generation_restart_allowed
+        is False
+    )

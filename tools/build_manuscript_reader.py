@@ -7,7 +7,9 @@ import argparse
 import copy
 import hashlib
 import json
+import re
 import shutil
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +90,108 @@ def _publication_figure_exclusion_reason(run_dir: Path) -> str | None:
     if readiness.get("publication_figure_visual_qa_passed") is False:
         return "source_run_publication_figure_visual_qa_failed"
     return None
+
+
+def _display_index(
+    display_inventory: Mapping[str, Any] | None,
+) -> dict[str, dict[str, str]]:
+    """Map verified artifact digests to their registered display identity."""
+
+    index: dict[str, dict[str, str]] = {}
+    for row in (display_inventory or {}).get("displays") or ():
+        if not isinstance(row, Mapping):
+            continue
+        display_id = str(row.get("display_id") or "").strip()
+        if not display_id:
+            continue
+        contract_sha256 = str(row.get("contract_sha256") or "").strip().lower()
+        keys = [contract_sha256, str(row.get("source_sha256") or "").strip().lower(),
+                str(row.get("preferred_preview_sha256") or "").strip().lower()]
+        for export in (row.get("exports") or {}).values():
+            if isinstance(export, Mapping):
+                keys.append(str(export.get("sha256") or "").strip().lower())
+        for key in keys:
+            if re.fullmatch(r"[a-f0-9]{64}", key):
+                index.setdefault(
+                    key,
+                    {"display_id": display_id, "contract_sha256": contract_sha256},
+                )
+    return index
+
+
+def _step_method_summaries(
+    records: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, dict[str, str]]:
+    """Project bounded scalar step coordinates for the reader claim panel."""
+
+    summaries: dict[str, dict[str, str]] = {}
+    for record in records or []:
+        if not isinstance(record, Mapping):
+            continue
+        step_id = str(record.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        summary: dict[str, str] = {}
+        for key in ("intent", "planned_analysis_role"):
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                summary[key] = value.strip()[:400]
+        if summary:
+            summaries[step_id] = summary
+    return summaries
+
+
+_READER_NOTE_COPY = {
+    "strict_untraceable_numeric_sentence_removed": (
+        "A numeric sentence without a registered evidence source was removed "
+        "from the reader text."
+    ),
+    "source_run_publication_figure_visual_qa_failed": (
+        "Publication figure quality assurance did not pass for the source run, "
+        "so publication figures are withheld from this reader package."
+    ),
+}
+
+
+def _reader_verification_notes(
+    deterministic_repairs: Sequence[Mapping[str, Any]] | None,
+    *,
+    figure_exclusion_reason: str | None,
+) -> list[dict[str, Any]]:
+    """Turn bounded deterministic repair receipts into typed reader notes."""
+
+    notes: list[dict[str, Any]] = []
+    for repair in deterministic_repairs or []:
+        if not isinstance(repair, Mapping):
+            continue
+        code = str(
+            repair.get("reason_code") or repair.get("kind") or ""
+        ).strip()[:120]
+        if not code:
+            continue
+        notes.append(
+            {
+                "code": code,
+                "severity": "warning",
+                "text": _READER_NOTE_COPY.get(
+                    code, "Reader preparation applied a deterministic repair."
+                ),
+            }
+        )
+        if len(notes) >= 12:
+            break
+    if figure_exclusion_reason:
+        notes.append(
+            {
+                "code": str(figure_exclusion_reason)[:120],
+                "severity": "warning",
+                "text": _READER_NOTE_COPY.get(
+                    str(figure_exclusion_reason),
+                    "A registered display was withheld from this reader package.",
+                ),
+            }
+        )
+    return notes
 
 
 def _prepare_reader_manuscript(
@@ -300,20 +404,6 @@ def build_bundle(
     )
     if untraced:
         raise ValueError(f"unexpected untraced numeric values: {untraced[:8]}")
-    provenance = build_manuscript_provenance(
-        manuscript=corrected,
-        evidence=evidence,
-        binding_map=binding_map,
-    )
-
-    markdown_path = output_dir / "manuscript_scaffold_bound.md"
-    provenance_path = output_dir / "manuscript_provenance.json"
-    markdown_path.write_text(corrected, encoding="utf-8")
-    provenance_path.write_text(
-        json.dumps(provenance, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
     literature = _load_literature(run_dir)
     figure_exclusion_reason: str | None = None
     supplementary_figure_paths: list[tuple[str, str]] = []
@@ -335,6 +425,26 @@ def build_bundle(
                 run_dir=run_dir, output_dir=output_dir, evidence=evidence
             )
         )
+    provenance = build_manuscript_provenance(
+        manuscript=corrected,
+        evidence=evidence,
+        binding_map=binding_map,
+        verify="mark",
+        display_index=_display_index(display_inventory),
+        method_summaries=_step_method_summaries(verified_step_records),
+        reader_notes=_reader_verification_notes(
+            deterministic_repairs,
+            figure_exclusion_reason=figure_exclusion_reason,
+        ),
+    )
+
+    markdown_path = output_dir / "manuscript_scaffold_bound.md"
+    provenance_path = output_dir / "manuscript_provenance.json"
+    markdown_path.write_text(corrected, encoding="utf-8")
+    provenance_path.write_text(
+        json.dumps(provenance, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     tex = scaffold_to_latex(
         markdown=corrected,
         title=_load_reader_title(run_dir),

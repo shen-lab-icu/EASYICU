@@ -16,7 +16,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from ..authority.runtime_artifacts import current_successful_step_records
+from ..authority.runtime_artifacts import (
+    current_step_records,
+    current_successful_step_records,
+)
+
 from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
 
 PLANNED_FIGURE_CONTRACT_BINDING_VALIDATOR = "planned_figure_contract_binding"
@@ -374,6 +378,10 @@ def validate_planned_figure_contract_bindings(
         str(record.get("step_id") or "").strip(): record
         for record in current_successful_step_records(per_step_records)
     }
+    latest = {
+        str(record.get("step_id") or "").strip(): record
+        for record in current_step_records(per_step_records)
+    }
     findings: list[ValidationFinding] = []
     for step in plan.steps:
         if not step.figure_panels:
@@ -382,6 +390,44 @@ def validate_planned_figure_contract_bindings(
         record = current.get(step_id)
         summary = record.get("step_summary") if isinstance(record, Mapping) else None
         if not isinstance(summary, Mapping):
+            latest_record = latest.get(step_id)
+            latest_status = str(
+                (latest_record or {}).get("status") or ""
+            ).strip()
+            if latest_status == "skipped_dependency_failed":
+                # The execution-time dependency gate already names the failed
+                # producer and records this step as diagnostic-only. Keep the
+                # error (a planned panel still has no bound runtime contract)
+                # but say which producer caused the skip instead of reporting a
+                # bare missing summary the reader must cross-reference.
+                dependency_step_id = str(
+                    (latest_record or {}).get("dependency_step_id") or ""
+                )
+                dependency_record = latest.get(dependency_step_id)
+                dependency_status = str(
+                    (dependency_record or {}).get("status") or ""
+                ).strip()
+                for figure_output in {
+                    str(panel.figure_output) for panel in step.figure_panels
+                }:
+                    findings.append(
+                        _finding(
+                            step_id=step_id,
+                            figure_output=figure_output,
+                            reason="figure_step_skipped_dependency_failed",
+                            message=(
+                                f"Planned figure panels for {step_id!r} were not "
+                                "rendered because required step "
+                                f"{dependency_step_id!r} did not pass."
+                            ),
+                            detail={
+                                "dependency_step_id": dependency_step_id,
+                                "dependency_status": dependency_status,
+                                "diagnostic_only": True,
+                            },
+                        )
+                    )
+                continue
             for figure_output in {
                 str(panel.figure_output) for panel in step.figure_panels
             }:

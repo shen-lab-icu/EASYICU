@@ -418,9 +418,18 @@ def test_pipeline_scopes_run_concepts_while_revalidating_the_final_cohort() -> N
         if isinstance(node, ast.FunctionDef)
         and node.name == "_validate_and_persist_plan"
     )
+    # The fresh-plan shaping block was extracted to a module-level helper so
+    # the phase-size guard measures the stage function; walk both nodes in
+    # call order (the helper runs inside the method's first branch).
+    helper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_shape_fresh_plan"
+    )
     scoped_calls = [
         called.func.id
-        for node in ast.walk(method)
+        for function in (helper, method)
+        for node in ast.walk(function)
         if isinstance(node, ast.With)
         and any(
             isinstance(item.context_expr, ast.Call)
@@ -438,8 +447,13 @@ def test_pipeline_scopes_run_concepts_while_revalidating_the_final_cohort() -> N
 def test_pipeline_binds_signed_runtime_after_generic_input_closure() -> None:
     from easyicu.research_agent import pipeline as pipeline_module
 
-    source = inspect.getsource(
-        pipeline_module.ResearchAgentPipeline._validate_and_persist_plan
+    source = "\n".join(
+        (
+            inspect.getsource(pipeline_module._shape_fresh_plan),
+            inspect.getsource(
+                pipeline_module.ResearchAgentPipeline._validate_and_persist_plan
+            ),
+        )
     )
 
     assert source.index("close_measurement_companion_inputs") < source.index(

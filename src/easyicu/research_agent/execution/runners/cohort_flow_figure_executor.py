@@ -1,9 +1,9 @@
 """Deterministic rendering of one digest-bound cohort-flow table.
 
 The cohort-definition owner has already fixed every eligibility predicate and
-count.  This renderer verifies those exact bytes and draws the remaining
-denominator after each recorded step; it never reloads the cohort or invents
-another inclusion rule.
+count.  This renderer verifies those exact bytes and draws the sequential
+flow, every exclusion and the retained share of each recorded stage; it
+never reloads the cohort or invents another inclusion rule.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 import re
 import textwrap
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -32,6 +32,7 @@ __all__ = [
     "COHORT_ACCOUNTING_DENOMINATOR_ONLY",
     "cohort_flow_figure_executor_code",
     "cohort_flow_figure_executor_owns_step",
+    "render_cohort_flow_axis",
     "run_cohort_flow_figure",
 ]
 
@@ -322,6 +323,19 @@ def _unfiltered_universe(frame: pd.DataFrame) -> bool:
         return False
 
 
+def _humanize_token(value: Any) -> str:
+    """Format a bound predicate/concept token for readers, without inventing.
+
+    ``str.title()`` over ``first_icu_stay`` produced mechanical
+    ``First_Icu_Stay`` labels on a manuscript figure.  Only whitespace and
+    underscore normalisation plus sentence capitalisation happen here; no
+    clinical word is added or translated.
+    """
+
+    text = re.sub(r"\s+", " ", str(value or "").replace("_", " ")).strip()
+    return f"{text[:1].upper()}{text[1:]}" if text else ""
+
+
 def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
     if not complete:
         return [
@@ -335,16 +349,383 @@ def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
         if index == 0:
             labels.append("Source universe")
             continue
-        concept = str(row.get("concept_id") or "").strip()
+        concept = _humanize_token(row.get("concept_id"))
         label = (
-            f"{kind.title()}: {concept}"
+            f"{_humanize_token(kind)} · {concept}"
             if concept and kind.casefold() in {"inclusion", "exclusion"}
-            else kind.replace("_", " ").strip().title()
+            else _humanize_token(kind)
         )
         if index == len(frame) - 1:
             label = f"Final · {label}"
         labels.append(label)
     return labels
+
+
+def _retention_text(numerator: int, denominator: int) -> str | None:
+    """Display-only retained share; ``None`` when the share is unprovable.
+
+    A numerator above its denominator would print a misleading >100% share, so
+    a non-monotone series keeps its counts and makes no share claim.
+    """
+
+    if denominator <= 0 or numerator > denominator:
+        return None
+    value = 100.0 * numerator / denominator
+    if abs(value - round(value)) < 0.05:
+        return f"{round(value)}%"
+    return f"{value:.1f}%"
+
+
+def _axes_size_pt(ax: Any) -> tuple[float, float]:
+    """The axes' drawable rectangle in points, for legibility arithmetic."""
+
+    figure = ax.get_figure()
+    box = ax.get_position()
+    width_in, height_in = figure.get_size_inches()
+    return box.width * float(width_in) * 72.0, box.height * float(height_in) * 72.0
+
+
+def _wrapped_lines(label: str, wrap: int) -> int:
+    return max(1, len(textwrap.wrap(str(label), wrap)))
+
+
+def _flow_type_scale(
+    *,
+    labels: Sequence[str],
+    counts: Sequence[int],
+    excluded: Sequence[int],
+    panel_width_pt: float,
+    panel_height_pt: float,
+    step: float,
+    width: float,
+    side_x: float,
+    compact: bool,
+    base_label: float,
+    base_count: float,
+    base_note: float,
+    base_wrap: int,
+) -> tuple[float, int, float, int] | None:
+    """Largest type scale at which every stage still clears its neighbours.
+
+    Each stage owns a vertical pitch band of ``step`` axes units. The node
+    block (wrapped label + count line) must stay inside its band and the
+    side annotations (exclusion count, retained-share notes) inside their own
+    column's pitch band. Type shrinks toward a legible floor; below it the stage
+    set cannot be drawn without overlap at this height. Return ``None`` so
+    the caller can enlarge the canvas before drawing the stage set.
+    """
+
+    box_width_pt = width * panel_width_pt
+    side_width_pt = max(0.0, (1.0 - side_x - 0.02)) * panel_width_pt
+    scale = 1.0
+    while True:
+        label_fs = base_label * scale
+        count_fs = base_count * scale
+        note_fs = base_note * scale
+        if label_fs < 4.5 or count_fs < 5.0 or note_fs < 4.0:
+            return None
+        wrap = min(
+            max(14, int(round(base_wrap / scale))),
+            max(14, int(box_width_pt * 0.92 / (label_fs * 0.5))),
+        )
+        label_line_pt = label_fs * 1.25
+        count_line_pt = count_fs * 1.25
+        note_line_pt = note_fs * 1.25
+        max_node_pt = 0.0
+        for label in labels:
+            node_pt = (
+                _wrapped_lines(label, wrap) * label_line_pt + count_line_pt + 3.0
+            )
+            max_node_pt = max(max_node_pt, node_pt)
+        node_frac = max_node_pt / panel_height_pt
+        if node_frac > step * 0.85:
+            scale -= 0.05
+            continue
+        # The band leftover after the node text is what the inter-stage
+        # annotations may use; the box stays a visual container sized to the
+        # text so it never pretends the text is smaller than it is.
+        height = min(0.24, max(step * 0.62, node_frac * 1.12))
+        height = min(height, step * 0.9)
+        # Notes sit to the right of the boxes, so they may share vertical
+        # coordinates with node text. Only neighbouring note blocks compete
+        # for the same column. Charging them to the narrow gap between boxes
+        # needlessly stretches even a six-stage composite to a very tall page.
+        note_offset = min(0.008, step * 0.05)
+        note_band_pt = (step * 0.95 - 2 * note_offset) * panel_height_pt
+        # Annotation tiers, least load-bearing first: derived retained-share
+        # notes may be dropped under space pressure because every count stays
+        # on the nodes and in the source data; the per-stage exclusion note is
+        # bound-ledger arithmetic and never degrades silently.
+        for draw_shares in (True, False):
+            shares_lines = 2 if compact else 1
+            max_up_pt = 0.0
+            max_down_pt = 0.0
+            for index in range(1, len(labels)):
+                max_up_pt = max(
+                    max_up_pt, note_line_pt if excluded[index] else 0.0
+                )
+                if draw_shares:
+                    parts = [
+                        text
+                        for text in (
+                            _retention_text(counts[index], counts[index - 1]),
+                            _retention_text(counts[index], counts[0]),
+                        )
+                        if text
+                    ]
+                    if parts:
+                        joined = " \u00b7 ".join(
+                            f"{value} of {scope}"
+                            for value, scope in zip(
+                                parts, ("previous", "universe")[-len(parts) :]
+                            )
+                        )
+                        if (
+                            not compact
+                            and shares_lines == 1
+                            and len(joined) * note_fs * 0.5 > side_width_pt * 0.92
+                        ):
+                            shares_lines = 2
+                        max_down_pt = max(
+                            max_down_pt,
+                            note_line_pt * (shares_lines if len(parts) == 2 else 1),
+                        )
+            if max_up_pt + max_down_pt <= note_band_pt:
+                return scale, wrap, height, shares_lines if draw_shares else 0
+        scale -= 0.05
+
+
+def _add_flow_node(
+    ax: Any,
+    y: float,
+    label: str,
+    count: int,
+    *,
+    height: float,
+    x: float,
+    width: float,
+    label_fontsize: float = 8.5,
+    count_fontsize: float = 9.0,
+    wrap: int = 36,
+) -> None:
+    from matplotlib.patches import FancyBboxPatch
+
+    ax.add_patch(
+        FancyBboxPatch(
+            (x - width / 2, y - height / 2),
+            width,
+            height,
+            boxstyle=(
+                f"round,pad={min(0.006, height * 0.05)},"
+                f"rounding_size={min(0.012, height * 0.15)}"
+            ),
+            linewidth=0.9,
+            edgecolor=PALETTE_CLINICAL["blue"],
+            facecolor=PALETTE_CLINICAL["blue_soft"],
+            alpha=0.45,
+            zorder=2,
+        )
+    )
+    wrapped = textwrap.fill(str(label), wrap)
+    _panel_w, panel_h_pt = _axes_size_pt(ax)
+    label_block = _wrapped_lines(label, wrap) * label_fontsize * 1.25 / panel_h_pt
+    count_block = count_fontsize * 1.25 / panel_h_pt
+    inner_gap = 2.0 / panel_h_pt
+    text_block = label_block + inner_gap + count_block
+    ax.text(
+        x,
+        y + text_block / 2 - label_block / 2,
+        wrapped,
+        ha="center",
+        va="center",
+        fontsize=label_fontsize,
+        color=PALETTE_CLINICAL["baseline"],
+        zorder=3,
+    )
+    ax.text(
+        x,
+        y - text_block / 2 + count_block / 2,
+        f"n = {int(count):,}",
+        ha="center",
+        va="center",
+        fontsize=count_fontsize,
+        fontweight="bold",
+        color=PALETTE_CLINICAL["blue"],
+        zorder=3,
+    )
+
+
+def render_cohort_flow_axis(
+    ax: Any,
+    frame: pd.DataFrame,
+    labels: list[str],
+    *,
+    complete: bool = True,
+    compact: bool = False,
+) -> None:
+    """Draw the bound ledger as a top-to-bottom participant-flow diagram.
+
+    Every box height, arrow, exclusion count and percentage is computed from
+    the verified frame; the axis carries no prose claim of its own.  A lone
+    denominator is drawn with the same node grammar instead of a caption card.
+    ``compact`` shrinks type and shortens the share notes for the small
+    sub-panel of a multi-panel publication figure; ``n_excluded`` is optional
+    because composite contracts guarantee only ``n_remaining``.
+    """
+
+    from matplotlib.patches import FancyArrowPatch
+
+    ax.set_axis_off()
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    counts = [int(value) for value in frame["n_remaining"].tolist()]
+    if not counts:
+        return
+    if "n_excluded" in frame:
+        excluded = [int(value) for value in frame["n_excluded"].tolist()]
+    else:
+        # Composite contracts guarantee only ``n_remaining``. The drop between
+        # adjacent bound counts is the same arithmetic the ledger itself
+        # proves, so it may be annotated; an increase makes no exclusion claim.
+        excluded = [0]
+        for previous, current in zip(counts, counts[1:]):
+            drop = previous - current
+            excluded.append(drop if drop > 0 else 0)
+    body_fontsize = 6.0 if compact else 8.5
+    count_fontsize = 6.4 if compact else 9.0
+    note_fontsize = 5.4 if compact else 7.5
+    wrap = 24 if compact else 36
+    hub_x = 0.36 if compact else 0.40
+    side_x = 0.66 if compact else 0.74
+    width = 0.56 if compact else 0.52
+    if not complete:
+        _add_flow_node(
+            ax,
+            0.55,
+            labels[0],
+            counts[0],
+            height=0.26,
+            x=0.5,
+            width=width,
+            label_fontsize=body_fontsize,
+            count_fontsize=count_fontsize,
+            wrap=wrap,
+        )
+        return
+    stages = len(frame)
+    top, bottom = 0.93, 0.07
+    step = (top - bottom) / stages
+    note_offset = min(0.008, step * 0.05)
+    while True:
+        panel_width_pt, panel_height_pt = _axes_size_pt(ax)
+        if panel_width_pt <= 0 or panel_height_pt <= 0:
+            raise ValueError("cohort-flow panel must have positive dimensions")
+        fitted = _flow_type_scale(
+            labels=labels,
+            counts=counts,
+            excluded=excluded,
+            panel_width_pt=panel_width_pt,
+            panel_height_pt=panel_height_pt,
+            step=step,
+            width=width,
+            side_x=side_x,
+            compact=compact,
+            base_label=body_fontsize,
+            base_count=count_fontsize,
+            base_note=note_fontsize,
+            base_wrap=wrap,
+        )
+        if fitted is not None and fitted[0] == 1.0 and fitted[3]:
+            break
+        # A valid ledger must not fail just because a composite panel started
+        # too short. Grow the shared canvas before drawing any flow artists;
+        # all axes keep their grid positions and every stage keeps its count
+        # and intended font size. Callers record the resulting canvas height.
+        figure = ax.get_figure()
+        figure.set_size_inches(
+            figure.get_figwidth(), figure.get_figheight() * 1.25, forward=False
+        )
+    scale, wrap, height, shares_lines = fitted
+    body_fontsize *= scale
+    count_fontsize *= scale
+    note_fontsize *= scale
+    universe = counts[0]
+    node_x = 0.5 if stages == 1 else hub_x
+    for index, count in enumerate(counts):
+        y = top - step * (index + 0.5)
+        _add_flow_node(
+            ax,
+            y,
+            labels[index],
+            count,
+            height=height,
+            x=node_x,
+            width=width,
+            label_fontsize=body_fontsize,
+            count_fontsize=count_fontsize,
+            wrap=wrap,
+        )
+        if index == 0:
+            continue
+        y_previous = top - step * (index - 0.5)
+        ax.add_patch(
+            FancyArrowPatch(
+                (hub_x, y_previous - height / 2),
+                (hub_x, y + height / 2),
+                arrowstyle="-|>",
+                mutation_scale=11 if not compact else 8,
+                linewidth=0.9 if not compact else 0.7,
+                color=PALETTE_CLINICAL["baseline"],
+                shrinkA=0.0,
+                shrinkB=0.0,
+                zorder=1,
+            )
+        )
+        middle = (y_previous + y) / 2
+        if excluded[index]:
+            ax.plot(
+                [hub_x + 0.015, side_x - 0.012],
+                [middle, middle],
+                color=PALETTE_CLINICAL["neutral_light"],
+                linewidth=0.6,
+                zorder=0,
+            )
+            ax.text(
+                side_x,
+                middle + note_offset,
+                f"\u2212{excluded[index]:,} excluded",
+                ha="left",
+                va="bottom",
+                fontsize=note_fontsize,
+                color=PALETTE_CLINICAL["red"],
+            )
+        previous_text = _retention_text(count, counts[index - 1])
+        universe_text = _retention_text(count, universe)
+        # A one-line share note that would overflow the axes edge is stacked;
+        # the fit pass already proved the taller block still clears the gap.
+        separator = "\n" if compact or shares_lines == 2 else " \u00b7 "
+        shares = (
+            separator.join(
+                text
+                for text in (
+                    f"{previous_text} of previous" if previous_text else "",
+                    f"{universe_text} of universe" if universe_text else "",
+                )
+                if text
+            )
+            if shares_lines
+            else ""
+        )
+        if shares:
+            ax.text(
+                side_x,
+                middle - note_offset,
+                shares,
+                ha="left",
+                va="top",
+                fontsize=note_fontsize,
+                color=PALETTE_CLINICAL["neutral"],
+            )
 
 
 def run_cohort_flow_figure(
@@ -388,66 +769,13 @@ def run_cohort_flow_figure(
     source.to_csv(source_path, index=False)
 
     apply_publication_style()
-    height = max(3.2, 0.42 * len(frame) + 1.5)
+    height = max(3.4, 1.05 * len(frame) + 1.8)
     fig, ax = plt.subplots(figsize=(7.2, height))
-    if complete:
-        positions = list(range(len(frame)))
-        bars = ax.barh(
-            positions,
-            frame["n_remaining"],
-            color=PALETTE_CLINICAL["blue"],
-        )
-        ax.set_yticks(positions)
-        ax.set_yticklabels(display_labels)
-        ax.invert_yaxis()
-        ax.set_xlabel("ICU stays remaining")
-        ax.set_title("Cohort accounting", loc="left")
-        ax.grid(axis="x", color=PALETTE_CLINICAL["neutral_light"], linewidth=0.6)
-        for bar, remaining, excluded in zip(
-            bars, frame["n_remaining"], frame["n_excluded"]
-        ):
-            suffix = f"  (-{int(excluded):,})" if int(excluded) else ""
-            ax.annotate(
-                f"{int(remaining):,}{suffix}",
-                (bar.get_width(), bar.get_y() + bar.get_height() / 2),
-                xytext=(5, 0),
-                textcoords="offset points",
-                va="center",
-                fontsize=7,
-            )
-    else:
-        # A ONE-STAGE FLOW IS STILL A FLOW.
-        #
-        # This branch used to switch the axes off and centre three lines of
-        # text, so a manuscript figure slot shipped a caption card. The stage
-        # is real and countable, so it is drawn on the same axis the
-        # multi-stage ledger uses; what changes is only how many stages there
-        # are. The source-bound reader caption explains which one-row case
-        # applies, without adding a prose footer to the plotting canvas.
-        denominator = int(frame.iloc[0]["n_remaining"])
-        # A lone bar drawn at the multi-stage height fills the panel; keep it
-        # at the thickness a stage has when the ledger has several.
-        bar = ax.barh([0], [denominator], height=0.42, color=PALETTE_CLINICAL["blue"])[
-            0
-        ]
-        ax.set_yticks([0])
-        ax.set_yticklabels(display_labels)
-        ax.set_ylim(-0.9, 0.9)
-        ax.invert_yaxis()
-        ax.set_xlabel("ICU stays remaining")
-        ax.set_title(
-            "Cohort accounting · single stage",
-            loc="left",
-        )
-        ax.grid(axis="x", color=PALETTE_CLINICAL["neutral_light"], linewidth=0.6)
-        ax.annotate(
-            f"{denominator:,}",
-            (bar.get_width(), bar.get_y() + bar.get_height() / 2),
-            xytext=(5, 0),
-            textcoords="offset points",
-            va="center",
-            fontsize=7,
-        )
+    render_cohort_flow_axis(ax, frame, display_labels, complete=complete)
+    ax.set_title(
+        "Cohort accounting" if complete else "Cohort accounting \u00b7 single stage",
+        loc="left",
+    )
     fig.tight_layout()
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
@@ -468,7 +796,7 @@ def run_cohort_flow_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=92.0,
+        height_mm=float(fig.get_figheight()) * 25.4,
         panels=[
             {
                 "panel_id": COHORT_FLOW_FIGURE_PANELS[0].panel_id,
@@ -560,7 +888,7 @@ def run_cohort_flow_figure(
         "paper_grade_cohort_accounting": complete,
         "upstream_attrition_available": complete,
         "rendering_mode": (
-            "sequential_attrition_bars" if complete else "denominator_only_node"
+            "sequential_attrition_flow" if complete else "denominator_only_node"
         ),
         "input_bindings": [
             {

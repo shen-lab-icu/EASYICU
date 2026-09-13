@@ -28,6 +28,7 @@ from ...figures.robustness import (
     draw_robustness_coverage,
     robustness_matrix_to_coverage,
 )
+from .cohort_flow_figure_executor import render_cohort_flow_axis
 from .typed_input_binding import BoundTypedInput, sha256_file
 
 
@@ -444,17 +445,13 @@ def _render_cohort_balance_association_figure(
         constrained_layout=True,
     )
 
-    positions = np.arange(len(flow))
-    axes[0, 0].barh(positions, flow["n_remaining"], color=palette["blue_soft"])
     flow_labels = []
     for index, row in flow.iterrows():
         label = row.get("concept_id")
         if label is None or (not isinstance(label, str) and pd.isna(label)):
             label = row.get("predicate_kind")
         flow_labels.append(_label(label) if label is not None else f"Step {index + 1}")
-    axes[0, 0].set_yticks(positions, flow_labels, fontsize=5.5)
-    axes[0, 0].invert_yaxis()
-    axes[0, 0].set_xlabel("ICU stays remaining")
+    render_cohort_flow_axis(axes[0, 0], flow, flow_labels, compact=True)
     axes[0, 0].set_title("Cohort accounting", loc="left", pad=12)
     add_panel_label(axes[0, 0], "A", x=-0.12, y=1.04)
 
@@ -533,7 +530,7 @@ def _render_cohort_balance_association_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=178.0,
+        height_mm=float(fig.get_figheight()) * 25.4,
         panels=[
             {
                 "panel_id": panel_id,
