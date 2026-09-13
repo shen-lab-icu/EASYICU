@@ -7,6 +7,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from easyicu.research_agent.execution.runners.deterministic_missingness import (
+    measurement_audit_product_filename,
+)
+from easyicu.research_agent.execution.runners.exposure_outcome_distribution_render import (
+    exposure_outcome_distribution_figure_owns_step,
+    run_exposure_outcome_distribution_figure,
+)
+from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
+    missingness_measurement_figure_executor_owns_step,
+    run_missingness_measurement_figure,
+)
 from easyicu.research_agent.reporting import revision_figures as owner
 from easyicu.research_agent.reporting.manuscript_figures import ManuscriptFigure, ManuscriptFigures
 from easyicu.research_agent.schema import AnalysisStep, EvidenceRecord, ValidationFinding
@@ -54,16 +65,27 @@ def revision_source(tmp_path, monkeypatch):
             panels=[{'panel_id':'a', 'title':'Result', 'role':'distribution', 'claim':'Verified result', 'evidence_ids':[table.evidence_id]}],
             reader_caption='Current source-bound caption')
         (path / 'display.figure_contract.json').write_text(contract.model_dump_json())
-    monkeypatch.setattr(owner, 'run_exposure_outcome_distribution_figure', render)
+    registry = owner.RevisionFigureRenderers(
+        owns_exposure_outcome=exposure_outcome_distribution_figure_owns_step,
+        render_exposure_outcome=render,
+        owns_missingness=missingness_measurement_figure_executor_owns_step,
+        render_missingness=run_missingness_measurement_figure,
+        measurement_audit_product_filename=measurement_audit_product_filename,
+    )
     output = tmp_path / 'revision'
     output.mkdir()
-    return SimpleNamespace(source=source, prepared=prepared, records=records, output=output, calls=calls)
+    return SimpleNamespace(
+        source=source, prepared=prepared, records=records, output=output,
+        calls=calls, renderers=registry,
+    )
 
 
 def test_one_render_binds_both_exports_and_preserves_source(revision_source):
     source = revision_source
     before = {str(p): p.read_bytes() for p in source.source.rglob('*') if p.is_file()}
-    bundle = owner.build_revision_figure_bundle(prepared=source.prepared, output=source.output)
+    bundle = owner.build_revision_figure_bundle(
+        prepared=source.prepared, output=source.output, renderers=source.renderers
+    )
     assert len(source.calls) == 1
     assert source.calls[0]['display_labels'] == {'column':'Clinical label'}
     assert bundle.png.figures[0].caption == bundle.pdf.figures[0].caption == 'Current source-bound caption'
@@ -117,9 +139,11 @@ def test_revision_projects_legacy_caption_from_registered_panel_contract(
         return ManuscriptFigures((figure,), (), (finding,))
 
     monkeypatch.setattr(owner, 'build_manuscript_figures', projection)
-    monkeypatch.setattr(owner, 'exposure_outcome_distribution_figure_owns_step', lambda _: False)
+    renderers = replace(
+        source.renderers, owns_exposure_outcome=lambda _: False
+    )
     bundle = owner.build_revision_figure_bundle(
-        prepared=source.prepared, output=source.output
+        prepared=source.prepared, output=source.output, renderers=renderers
     )
     expected = (
         '(A) Result. Observed source values without model refitting. '
@@ -149,8 +173,14 @@ def test_revision_rejects_changed_or_widened_inputs_before_render(revision_sourc
     # Even if a changed declaration no longer belongs to this renderer, it must
     # not invoke that renderer. Unsupported families retain original exports.
     if mutation == 'consumption':
-        owner.build_revision_figure_bundle(prepared=source.prepared, output=source.output)
+        owner.build_revision_figure_bundle(
+            prepared=source.prepared, output=source.output,
+            renderers=source.renderers,
+        )
     else:
         with pytest.raises(owner.WriterOnlyMigrationError):
-            owner.build_revision_figure_bundle(prepared=source.prepared, output=source.output)
+            owner.build_revision_figure_bundle(
+                prepared=source.prepared, output=source.output,
+                renderers=source.renderers,
+            )
     assert not source.calls

@@ -1985,6 +1985,41 @@ def _persist_literature_audit(
         ))
 
 
+def _restore_binding_context_citations(
+    scaffold: str,
+    *,
+    literature: Optional[LiteratureBundle],
+    findings: List[ValidationFinding],
+) -> str:
+    """Re-apply the claim-free comparator citation repair at binding time.
+
+    Binding-stage filtering and the strict writer repair pass can rewrite
+    sections after the write-phase citation repair, dropping the neutral
+    screened-comparator sentence while the comparative citation survives
+    elsewhere (2026-09-13 E2 validation 8).  Re-applying the same deterministic
+    repair to the exact text the audit and bound manuscript will carry keeps
+    the repair idempotent and claim-free.
+    """
+
+    scaffold, repairs = repair_missing_context_section_citations(
+        scaffold,
+        literature,
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Restored neutral section citation(s) from the exact "
+                    "run-bound contextual literature authority at binding time."
+                ),
+                detail={"repairs": repairs},
+            )
+        )
+    return scaffold
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -2044,6 +2079,8 @@ def _bind_and_review_manuscript(
                 },
             )
         )
+    # Rewrites after the write-phase repair can drop the comparator citation.
+    scaffold = _restore_binding_context_citations(scaffold, literature=literature, findings=findings)
     _persist_literature_audit(
         scaffold, literature=literature, evidence=evidence,
         run_dir=run_dir, findings=findings,

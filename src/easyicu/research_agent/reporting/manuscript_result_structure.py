@@ -32,10 +32,34 @@ def required_result_subsections(plan: AnalysisPlan) -> tuple[str, ...]:
 def result_section_instruction(plan: AnalysisPlan) -> str:
     """Use the same requirements at initial drafting and every repair."""
     headings = required_result_subsections(plan)
+    roles = {step.planned_analysis_role for step in plan.steps}
+    role_guidance: list[str] = []
+    if "secondary" in roles and "Secondary analyses" in headings:
+        role_guidance.append(
+            "In Secondary analyses report the prespecified secondary results from "
+            "the machine digest's `reportable_descriptive_results` or "
+            "`reportable_secondary_results` blocks: the overall outcome count and "
+            "risk, the question-relevant exposure-source or exposure-level groups, "
+            "and their supplied uncertainty. When an executed step supplies neither "
+            "block, write one sentence stating only that the prespecified secondary "
+            "analysis was executed and its registered results are bound to the named "
+            "evidence id; never leave this subsection empty and never invent numbers."
+        )
+    if "sensitivity" in roles and "Sensitivity and subgroup analyses" in headings:
+        role_guidance.append(
+            "In Sensitivity and subgroup analyses report the supplied sensitivity or "
+            "subgroup results, including any registered multiplicity, heterogeneity "
+            "or E-value output, from the same machine digest. When the digest records "
+            "zero sensitivity result rows, report only that registered count with its "
+            "exact evidence id and never claim stability, convergence, or a performed "
+            "analysis."
+        )
     return (
         "Write `## Results` with these required subsections, in order:\n"
         + "\n".join(f"### {heading}" for heading in headings)
-        + "\nIn Cohort characteristics report the analysis unit, cohort count and "
+        + "\n"
+        + ("\n".join(role_guidance) + "\n" if role_guidance else "")
+        + "In Cohort characteristics report the analysis unit, cohort count and "
         "relevant baseline summaries. Cite Table 1 when registered. In the primary "
         "results subsection answer the original question using every supplied "
         "primary metric, endpoint and comparison level. A figure callout alone "

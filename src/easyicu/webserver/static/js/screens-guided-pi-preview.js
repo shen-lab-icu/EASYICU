@@ -732,6 +732,22 @@
         }, state.projectId, state.workflowContext);
         return;
       }
+      const displayLink = event.target.closest('[data-gpi-display]');
+      if (displayLink) {
+        event.preventDefault();
+        const displayId = String(displayLink.dataset.gpiDisplay || '').trim();
+        if (/^[A-Za-z0-9 _.:-]{1,160}$/.test(displayId)) {
+          const anchor = Array.from(host.querySelectorAll('[data-gpi-display-anchor]'))
+            .find(node => String(node.dataset.gpiDisplayAnchor || '') === displayId);
+          if (anchor) {
+            anchor.scrollIntoView({ block: 'start' });
+            anchor.classList.add('is-focused');
+            const clearFocus = () => anchor.classList.remove('is-focused');
+            if (typeof window.setTimeout === 'function') window.setTimeout(clearFocus, 1600);
+          }
+        }
+        return;
+      }
       const claimButton = event.target.closest('[data-gpi-claim]');
       if (claimButton) {
         showClaimLineage(String(claimButton.dataset.gpiClaim || '').trim());

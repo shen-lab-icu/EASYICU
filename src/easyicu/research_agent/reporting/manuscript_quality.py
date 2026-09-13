@@ -181,12 +181,20 @@ def _has_prose(text: str) -> bool:
     cleaned = _strip_audit_markup(visible)
     cleaned = _LITERATURE_CITATION_RE.sub("", cleaned)
     cleaned = re.sub(r"^#{1,6}\s+.*$", "", cleaned, flags=re.M)
+    # Chinese writer mode is a supported production mode; CJK prose is prose.
+    # Without this, every zh section looks empty and the bounded repair loop
+    # can never satisfy the reader-quality contract.
+    #
     # A complete claim token will become prose at binding; a citation or an
     # evidence identifier alone never will. The authority owner validates the
     # claim separately, so this structural check does not grant permission.
-    return bool(re.search(r"[A-Za-z]{2,}", cleaned) or re.search(
-        rf"^\s*{_CLAIM_PLACEHOLDER_RE.pattern}[.!?]?\s*$", visible, re.M,
-    ))
+    return bool(
+        re.search(r"[A-Za-z]{2,}", cleaned)
+        or re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", cleaned)
+        or re.search(
+            rf"^\s*{_CLAIM_PLACEHOLDER_RE.pattern}[.!?]?\s*$", visible, re.M,
+        )
+    )
 
 
 def _abstract_label_has_prose(abstract: str, label: str) -> bool:

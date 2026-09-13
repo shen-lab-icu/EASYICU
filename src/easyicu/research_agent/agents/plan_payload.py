@@ -886,6 +886,7 @@ def bind_literature_citation_authority(
     *,
     direct_comparator_keys: Sequence[str] = (),
     required_method_layers: Sequence[str] = (),
+    include_examples: bool = True,
 ) -> str:
     """Append role-bound LiteratureBundle authority to the Planner profile.
 
@@ -893,6 +894,11 @@ def bind_literature_citation_authority(
     to know which source supports which methodological decision, and which
     retrieved records survived the direct-comparator screen.  This projection
     is deliberately assembled by the host from the sealed pre-plan bundle.
+
+    ``include_examples=False`` drops only the illustrative schema-valid
+    binding JSON, for strict-transport requests where the enforced schema
+    already carries that shape; the keys, roles, method cards and every
+    binding requirement stay.
     """
 
     if not allowed_keys:
@@ -987,7 +993,11 @@ def bind_literature_citation_authority(
                 ensure_ascii=False,
                 sort_keys=True,
             )
-            + "\n- Minimal schema-valid examples by required layer (copy only "
+            if required_binding_options
+            else ""
+        )
+        + (
+            "\n- Minimal schema-valid examples by required layer (copy only "
             "the layers that truly govern a scientific estimator; support "
             "steps remain auxiliary): "
             + json.dumps(
@@ -995,7 +1005,7 @@ def bind_literature_citation_authority(
                 ensure_ascii=False,
                 sort_keys=True,
             )
-            if required_binding_options
+            if required_binding_options and include_examples
             else ""
         )
     )

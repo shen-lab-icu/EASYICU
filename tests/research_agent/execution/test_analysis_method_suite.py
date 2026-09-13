@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from easyicu.research_agent.execution.runners.selection import STANDARD_EXECUTORS
 from easyicu.research_agent.figures import FAMILY_RENDERERS
 from easyicu.research_agent.contracts.method_kernels import KERNEL_MODULE_NAMES
 from easyicu.research_agent.contracts.method_packages import (
@@ -142,6 +143,7 @@ def test_planned_methods_carry_no_runner():
 
 def test_deterministic_methods_name_a_real_runner():
     renderer_keys = set(FAMILY_RENDERERS.keys())
+    executor_keys = {executor.key for executor in STANDARD_EXECUTORS.executors}
     for suite, m in _ALL_METHODS:
         if m.implementation != "deterministic":
             continue
@@ -149,6 +151,7 @@ def test_deterministic_methods_name_a_real_runner():
         known = (
             m.runner in ams.KNOWN_PRIMARY_RUNNER_NAMES
             or m.runner in renderer_keys
+            or m.runner in executor_keys
             or importlib.util.find_spec(f"easyicu.research_agent.{m.runner}")
             is not None
             or importlib.util.find_spec(f"easyicu.research_agent.methods.{m.runner}")
@@ -157,7 +160,8 @@ def test_deterministic_methods_name_a_real_runner():
         assert known, (
             f"{suite.family}.{m.key} deterministic runner {m.runner!r} is neither a "
             f"capability_registry primary/auxiliary runner, a FAMILY_RENDERERS key, "
-            f"nor an importable research_agent methods module"
+            f"a wired standard executor, nor an importable research_agent methods "
+            f"module"
         )
 
 

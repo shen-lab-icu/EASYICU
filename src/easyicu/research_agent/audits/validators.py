@@ -991,6 +991,14 @@ class LLMConceptAuditor:
             "without reconciling them to counts and denominators, or select an "
             "alternate per-stay summary in place of the authoritative exposure; "
             "those behaviors can change the displayed scientific result. "
+            "When the bound typed product carries count components and a "
+            "denominator for a rendered percentage, a script that only checks "
+            "that percentage pairs sum to 100 has not reconciled them: use "
+            "issue_code `registered_percentage_count_reconciliation_required` "
+            "unless the script computes or verifies each percentage against its "
+            "count numerator and denominator (a fail-closed comparison, for "
+            "example np.isclose(missing_pct, missing_n / n_total * 100.0), is "
+            "compliant; registered values must not be silently replaced). "
             "Do not assume that a generically named `n` field is the total "
             "denominator when the typed upstream product does not declare that "
             "meaning. If non-negative integer `n_nonmissing` and `missing_n` "
@@ -1065,8 +1073,9 @@ class LLMConceptAuditor:
             "`strict_numeric_nonfinite_guard_required`, "
             "`finalized_exposure_missing_reconciliation`, "
             "`finalized_exposure_overridden`, or "
-            "`finalized_exposure_forced_raw_reconciliation`, or "
-            "`plausibility_range_exclusion_required`; use `other` for "
+            "`finalized_exposure_forced_raw_reconciliation`, "
+            "`plausibility_range_exclusion_required`, or "
+            "`registered_percentage_count_reconciliation_required`; use `other` for "
             "anything else. Message text is explanatory only, never routing.\n\n"
             "Return JSON only: "
             '{"findings":[{"severity":"info|warning|error",'
@@ -1130,6 +1139,7 @@ _LLM_CONCEPT_ISSUE_CODES = frozenset(
         "finalized_exposure_overridden",
         "finalized_exposure_forced_raw_reconciliation",
         "plausibility_range_exclusion_required",
+        "registered_percentage_count_reconciliation_required",
         "other",
     }
 )
@@ -2708,7 +2718,7 @@ def _reclassify_flag_only_plausibility_range_findings(
 def _host_plausibility_receipt_region(script_text: str) -> Optional[Tuple[int, int]]:
     """Ask the renderer to verify the exact, bounded source being exempted."""
 
-    from ..execution.runners.plausibility_receipt import (
+    from ..authority.plausibility_receipt_code import (
         verified_host_plausibility_receipt_region,
     )
 

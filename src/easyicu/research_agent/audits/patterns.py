@@ -58,6 +58,107 @@ from ..trajectory.contract import (
 # Pattern table — names of (sklearn / scipy / numpy) call sites we react to
 # ---------------------------------------------------------------------------
 
+# Registered missingness percentage columns and the exact count numerator(s)
+# that must appear in the script for the percentage to be reconciled against
+# its denominator.  Absence of every numerator is the mechanical signature of
+# "rendered percentages without reconciling them to counts and denominators"
+# (llm_concept_auditor, 2026-09-13 E2 validation 7).
+_REGISTERED_MISSINGNESS_PCT_NUMERATORS: Dict[str, Tuple[str, ...]] = {
+    "measured_one_pct": ("measured_one_n",),
+    "measured_pct": ("measured_n",),
+    "missing_pct": ("missing_n",),
+    "value_missing_pct": ("value_missing_n",),
+    "applicable_pct": ("eligible_n",),
+    "available_within_applicable_pct": ("n_nonmissing",),
+    "missing_within_applicable_pct": ("n_nonmissing",),
+    "event_present_pct": ("event_present_n",),
+}
+
+# Host helpers that construct a closed count/denominator/percentage partition
+# by construction; a script that calls one already reconciles its percentages.
+_MISSINGNESS_RECONCILIATION_HELPER_NAMES = frozenset(
+    {
+        "reconcile_measurement_source_status",
+        "reconcile_conditional_event_time",
+        "reconcile_binary_event_presence",
+        "measurement_provenance_receipt",
+    }
+)
+
+
+def registered_missingness_percentage_findings(
+    *,
+    step: Optional[AnalysisStep],
+    script_text: str,
+) -> List[ValidationFinding]:
+    """Require registered missingness percentages to reconcile to counts.
+
+    The bound ``table:measurement_missingness`` product carries both count
+    components and their percentages.  Plotting the percentages without
+    comparing them to the counts and the denominator lets a stale or
+    mislabeled percentage survive even when the pair still sums to 100.
+    """
+
+    if step is None:
+        return []
+    inputs = {str(value).strip() for value in (step.inputs or [])}
+    if "table:measurement_missingness" not in inputs:
+        return []
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        return []
+
+    referenced: Set[str] = set()
+    called_names: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            referenced.add(node.value.strip())
+        elif isinstance(node, ast.Name):
+            referenced.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            referenced.add(node.attr)
+        elif isinstance(node, ast.Call):
+            name = _call_target_name(node)
+            if name:
+                called_names.add(name.rsplit(".", 1)[-1])
+
+    if called_names & _MISSINGNESS_RECONCILIATION_HELPER_NAMES:
+        return []
+
+    unreconciled: Dict[str, List[str]] = {}
+    for pct_column, numerator_columns in _REGISTERED_MISSINGNESS_PCT_NUMERATORS.items():
+        if pct_column not in referenced:
+            continue
+        if referenced & set(numerator_columns):
+            continue
+        unreconciled[pct_column] = list(numerator_columns)
+    if not unreconciled:
+        return []
+
+    return [
+        ValidationFinding(
+            validator="analysis_pattern_auditor",
+            severity="error",
+            message=(
+                "The script renders registered missingness percentages "
+                f"{sorted(unreconciled)} without reconciling them to their "
+                "count numerators and denominator. Verify each percentage "
+                "against counts (for example missing_pct == missing_n / n_total "
+                "* 100; available_within_applicable_pct == n_nonmissing / "
+                "eligible_n * 100) with a fail-closed comparison, or use the "
+                "source-status reconciliation helpers; do not plot an "
+                "unreconciled registered percentage."
+            ),
+            detail={
+                "kind": "registered_percentage_count_reconciliation_required",
+                "step_id": step.step_id,
+                "percentage_columns": sorted(unreconciled),
+                "expected_numerator_columns": unreconciled,
+            },
+        )
+    ]
+
 
 _DISTANCE_BASED_ESTIMATORS = (
     "KMeans",
@@ -416,6 +517,12 @@ class AnalysisPatternAuditor:
         findings.extend(
             trajectory_script_findings(
                 context=context,
+                step=step,
+                script_text=script_text,
+            )
+        )
+        findings.extend(
+            registered_missingness_percentage_findings(
                 step=step,
                 script_text=script_text,
             )

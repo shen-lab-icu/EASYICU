@@ -374,3 +374,138 @@ def test_pipeline_pattern_auditor_fires_on_clustering_skill(
     # Pipeline should complete without error.
     assert result.evidence_count > 0
     assert result.findings_count > 0
+
+
+def _missingness_step(ra, inputs=None):
+    return ra.schema.AnalysisStep(
+        step_id="display_package",
+        planned_analysis_role="auxiliary",
+        intent="Render the registered measurement and missingness audit.",
+        expected_outputs=["figure:measurement_process_audit"],
+        inputs=(
+            ["table:measurement_missingness"]
+            if inputs is None
+            else list(inputs)
+        ),
+    )
+
+
+def test_registered_missingness_percentages_require_count_reconciliation(ra):
+    auditor = ra.AnalysisPatternAuditor()
+    code = textwrap.dedent("""\
+        import numpy as np
+        missing = pd.read_csv("missingness.csv")
+        for _, row in missing.iterrows():
+            available = row["measured_pct"]
+            missing_pct = row["missing_pct"]
+            denominator = row["n_total"]
+            if not np.isclose(available + missing_pct, 100.0, atol=0.15):
+                raise RuntimeError("percentages do not reconcile")
+    """)
+
+    findings = auditor.audit(
+        context=_ctx(ra),
+        script_text=code,
+        step=_missingness_step(ra),
+    )
+
+    matched = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("kind")
+        == "registered_percentage_count_reconciliation_required"
+    ]
+    assert len(matched) == 1
+    assert matched[0].severity == "error"
+    assert "missing_pct" in matched[0].detail["percentage_columns"]
+    assert "measured_pct" in matched[0].detail["percentage_columns"]
+
+
+def test_registered_missingness_percentages_pass_when_reconciled(ra):
+    auditor = ra.AnalysisPatternAuditor()
+    code = textwrap.dedent("""\
+        import numpy as np
+        missing = pd.read_csv("missingness.csv")
+        for _, row in missing.iterrows():
+            if not np.isclose(
+                row["measured_pct"],
+                float(row["measured_n"]) / float(row["n_total"]) * 100.0,
+                atol=1e-6,
+            ):
+                raise RuntimeError("measured percentage is not reconciled")
+            if not np.isclose(
+                row["missing_pct"],
+                float(row["missing_n"]) / float(row["n_total"]) * 100.0,
+                atol=1e-6,
+            ):
+                raise RuntimeError("missing percentage is not reconciled")
+    """)
+
+    findings = auditor.audit(
+        context=_ctx(ra),
+        script_text=code,
+        step=_missingness_step(ra),
+    )
+
+    assert not [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("kind")
+        == "registered_percentage_count_reconciliation_required"
+    ]
+
+
+def test_registered_missingness_helper_call_is_exempt(ra):
+    auditor = ra.AnalysisPatternAuditor()
+    code = textwrap.dedent("""\
+        from easyicu.research_agent.methods.source_status import (
+            reconcile_measurement_source_status,
+        )
+        result = reconcile_measurement_source_status(
+            frame,
+            measured_column="measured",
+            count_column="measured_n",
+            value_column="lact",
+        )
+        table = result.status_table
+        ax.bar(table["source_status"], table["percentage"])
+    """)
+
+    findings = auditor.audit(
+        context=_ctx(ra),
+        script_text=code,
+        step=_missingness_step(ra),
+    )
+
+    assert not [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("kind")
+        == "registered_percentage_count_reconciliation_required"
+    ]
+
+
+def test_registered_missingness_check_is_scoped_to_its_bound_step(ra):
+    auditor = ra.AnalysisPatternAuditor()
+    code = textwrap.dedent("""\
+        import numpy as np
+        missing = pd.read_csv("missingness.csv")
+        for _, row in missing.iterrows():
+            if not np.isclose(
+                row["missing_pct"] + row["measured_pct"], 100.0, atol=0.15
+            ):
+                raise RuntimeError("percentages do not reconcile")
+    """)
+
+    findings = auditor.audit(
+        context=_ctx(ra),
+        script_text=code,
+        step=_missingness_step(ra, inputs=["table:absolute_risk_context"]),
+    )
+
+    assert not [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("kind")
+        == "registered_percentage_count_reconciliation_required"
+    ]

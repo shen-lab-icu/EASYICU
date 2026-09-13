@@ -398,6 +398,7 @@ def test_the_plan_phase_answers_the_same_question_before_the_planner_is_done():
             textwrap.dedent(
                 inspect.getsource(pipeline.ResearchAgentPipeline._run_plan_phase)
             ),
+            textwrap.dedent(inspect.getsource(pipeline._shape_fresh_plan)),
             textwrap.dedent(
                 inspect.getsource(
                     pipeline.ResearchAgentPipeline._validate_and_persist_plan

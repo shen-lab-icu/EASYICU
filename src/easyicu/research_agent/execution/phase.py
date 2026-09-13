@@ -1756,10 +1756,25 @@ def run_execute_phase(
 
     _validator_messages = _step_validator_messages
 
+    def _plan_step_outputs() -> Dict[str, tuple[str, ...]]:
+        """Live typed-output index for the dependency gate.
+
+        Reads the current plan variable, so a replan that replaces the queue
+        also replaces the producer map the gate consults.
+        """
+
+        return {
+            str(step.step_id): tuple(
+                str(item) for item in (step.expected_outputs or ())
+            )
+            for step in plan.steps
+        }
+
     _failed_dependency_record = functools.partial(
         _step_failed_dependency_record,
         per_step_records=per_step_records,
         shared_lock=shared_lock,
+        step_outputs_supplier=_plan_step_outputs,
     )
 
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
@@ -1927,12 +1942,17 @@ def run_execute_phase(
             probe_summary=probe_summary,
         )
 
-        _resolve_run_transition = functools.partial(
-            _step_resolve_run_transition,
+        _resolve_run_halt = functools.partial(
+            _step_resolve_run_halt,
             run_input_authority_state=run_input_authority_state,
             emit_progress=emit_progress,
             run_id=run_id,
             requested_stop_after_step_id=requested_stop_after_step_id,
+            _replan_state=_replan_state,
+        )
+
+        _resolve_run_transition = functools.partial(
+            _step_resolve_run_transition,
             _maybe_directed_model_replan=_maybe_directed_model_replan,
             _replan_state=_replan_state,
             pipeline=pipeline,
@@ -1967,9 +1987,11 @@ def run_execute_phase(
                 executed_step_ids=set(preexecuted_step_ids),
                 stop_on_failure=(pipeline._submission_profile_name is not None),
                 stop_failure_roles=frozenset({"primary"}),
+                stop_after_step_id=requested_stop_after_step_id,
             ),
             execute_step=_execute_one_step,
             resolve_transition=_resolve_run_transition,
+            resolve_run_halt=_resolve_run_halt,
             apply_revised_plan=_apply_revised_plan,
             on_step_exception=_record_step_exception,
         )
@@ -2286,8 +2308,8 @@ def _step_prepare_execution_authority(
                     validator="dependency_gate",
                     severity="warning",
                     message=(
-                        f"Skipped downstream figure step {step.step_id} because "
-                        f"required analysis step {parent_step_id} did not pass."
+                        f"Skipped downstream step {step.step_id} because "
+                        f"required step {parent_step_id} did not pass."
                     ),
                     detail={
                         "step_id": step.step_id,
@@ -4464,23 +4486,23 @@ def _step_maybe_directed_model_replan(
     )
 
 
-def _step_resolve_run_transition(
+def _step_resolve_run_halt(
     step: AnalysisStep,
     record: Dict[str, Any],
-    has_remaining: bool,
     *,
     run_input_authority_state: Any,
     emit_progress: Any,
     run_id: str,
     requested_stop_after_step_id: Optional[str],
-    _maybe_directed_model_replan: Any,
     _replan_state: Dict[str, Any],
-    pipeline: Any,
-    _maybe_replan: Any,
-    plan_supplier: Callable[[], AnalysisPlan],
-    probe_summary: Optional[Dict[str, Any]],
-    per_step_records: List[Dict[str, Any]],
-) -> RunTransition:
+) -> Optional[RunTransition]:
+    """Host-level halt checks, separate from every replan decision.
+
+    The coordinator runs this after each step -- successful or failed -- so a
+    failed auxiliary step cannot skip input-authority corruption, a requested
+    stop, or a pending replan review on its way to the independent tail.
+    """
+
     if run_input_authority_state.corrupted:
         emit_progress(
             "audit",
@@ -4499,6 +4521,42 @@ def _step_resolve_run_transition(
             step_id=step.step_id,
         )
         return RunTransition.stop("requested_stop_after_step")
+    return replan_review.runtime_replan_pause_transition(_replan_state)
+
+
+def _step_resolve_run_transition(
+    step: AnalysisStep,
+    record: Dict[str, Any],
+    has_remaining: bool,
+    *,
+    _maybe_directed_model_replan: Any,
+    _replan_state: Dict[str, Any],
+    pipeline: Any,
+    _maybe_replan: Any,
+    plan_supplier: Callable[[], AnalysisPlan],
+    probe_summary: Optional[Dict[str, Any]],
+    per_step_records: List[Dict[str, Any]],
+    # Compatibility for direct callers of the pre-split signature: when the
+    # host halt coordinates are supplied, resolve the run-level halt first.
+    # Production wiring passes them to ``_step_resolve_run_halt`` instead and
+    # never reaches this branch.
+    run_input_authority_state: Any = None,
+    emit_progress: Any = None,
+    run_id: str = "",
+    requested_stop_after_step_id: Optional[str] = None,
+) -> RunTransition:
+    if run_input_authority_state is not None:
+        halt = _step_resolve_run_halt(
+            step,
+            record,
+            run_input_authority_state=run_input_authority_state,
+            emit_progress=emit_progress or (lambda *args, **kwargs: None),
+            run_id=run_id,
+            requested_stop_after_step_id=requested_stop_after_step_id,
+            _replan_state=_replan_state,
+        )
+        if halt is not None:
+            return halt
     directed_plan = _maybe_directed_model_replan(
         failed_step=step, failed_record=record
     )

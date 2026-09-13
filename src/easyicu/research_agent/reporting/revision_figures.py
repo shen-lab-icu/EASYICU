@@ -9,19 +9,12 @@ import hashlib
 import inspect
 import json
 from pathlib import Path
+from typing import Any, Callable
 
 import pandas as pd
 
 from ..authority.runtime_artifacts import current_step_records, verified_run_evidence_path
 from ..authority.evidence_store import evidence_artifact_basename_stem
-from ..execution.runners.exposure_outcome_distribution_render import (
-    exposure_outcome_distribution_figure_owns_step,
-    run_exposure_outcome_distribution_figure,
-)
-from ..execution.runners.missingness_measurement_figure_executor import (
-    missingness_measurement_figure_executor_owns_step, run_missingness_measurement_figure,
-)
-from ..execution.runners.deterministic_missingness import measurement_audit_product_filename
 from ..contracts.figure_plan import resolve_data_quality_figure_inputs
 from ..figures.publication import FigureContract
 from .manuscript_figures import ManuscriptFigures, build_manuscript_figures
@@ -37,6 +30,23 @@ class RevisionFigureBundle:
     png: ManuscriptFigures
     receipt: dict
     receipt_sha256: str
+
+
+@dataclass(frozen=True)
+class RevisionFigureRenderers:
+    """Execution-owned deterministic renderers injected by the entry surface.
+
+    Report revision selects and drives presentation work, but reporting must
+    not import the execution layer (see ``test_package_dependency_directions``).
+    The Web repair entry surface binds the exact deterministic owners here; the
+    renderer hash recorded in the receipt is taken from the injected callable.
+    """
+
+    owns_exposure_outcome: Callable[[Any], bool]
+    render_exposure_outcome: Callable[..., Any]
+    owns_missingness: Callable[..., bool]
+    render_missingness: Callable[..., Any]
+    measurement_audit_product_filename: Callable[[str], str | None]
 
 
 def _fail(message):
@@ -134,7 +144,7 @@ def _source_owner(figure, records):
     return candidates[0] if candidates else None
 
 
-def _render_inputs(step, owner, execution, records, root, *, audit=False):
+def _render_inputs(step, owner, execution, records, root, renderers, *, audit=False):
     """Rebind only the exact aggregates consumed by the completed figure step."""
     rows = [r for r in execution if r.get("step_id") == step.step_id]
     if len(rows) != 1 or rows[0].get("status") != "ok":
@@ -148,7 +158,9 @@ def _render_inputs(step, owner, execution, records, root, *, audit=False):
     inputs = {}
     for key in step.inputs:
         kind, product = key.split(":", 1)
-        filename = measurement_audit_product_filename(product) if audit else None
+        filename = (
+            renderers.measurement_audit_product_filename(product) if audit else None
+        )
         stems = {product, Path(filename).stem} if filename else {product}
         candidates = [r for r in sources if r.kind == kind == "table"
                       and evidence_artifact_basename_stem(Path(r.relative_path), r.evidence_id) in stems]
@@ -179,7 +191,12 @@ def _render_inputs(step, owner, execution, records, root, *, audit=False):
     return {"step_id": step.step_id, "inputs": inputs}
 
 
-def build_revision_figure_bundle(*, prepared, output: Path) -> RevisionFigureBundle:
+def build_revision_figure_bundle(
+    *,
+    prepared,
+    output: Path,
+    renderers: RevisionFigureRenderers,
+) -> RevisionFigureBundle:
     """Render once per revision and share these exact exports between Web/PDF."""
     evidence = ReadOnlyReportEvidence(prepared.source_run_dir)
     root = evidence.root
@@ -218,14 +235,20 @@ def build_revision_figure_bundle(*, prepared, output: Path) -> RevisionFigureBun
                  "mode": "preserved_export", "exports": {}}
         renderer = None
         options = {}
-        if step and exposure_outcome_distribution_figure_owns_step(step):
-            binding = _render_inputs(step, owner, execution, records, root)
-            renderer = run_exposure_outcome_distribution_figure
+        if step and renderers.owns_exposure_outcome(step):
+            binding = _render_inputs(
+                step, owner, execution, records, root, renderers
+            )
+            renderer = renderers.render_exposure_outcome
         elif step and (roles := resolve_data_quality_figure_inputs(step.inputs, steps=prepared.plan.steps)):
-            binding = _render_inputs(step, owner, execution, records, root, audit=True)
-            if not missingness_measurement_figure_executor_owns_step(step, plan=prepared.plan, resolved_bindings=binding["inputs"]):
+            binding = _render_inputs(
+                step, owner, execution, records, root, renderers, audit=True
+            )
+            if not renderers.owns_missingness(
+                step, plan=prepared.plan, resolved_bindings=binding["inputs"]
+            ):
                 _fail("Data-quality rendering contract is incomplete")
-            renderer = run_missingness_measurement_figure
+            renderer = renderers.render_missingness
             options = {"missingness_input": roles["measurement_missingness"],
                        "process_input": roles["measurement_process"]}
         if renderer:

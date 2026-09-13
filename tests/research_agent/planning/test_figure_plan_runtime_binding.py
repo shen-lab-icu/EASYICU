@@ -118,6 +118,65 @@ def test_exact_role_chart_and_source_products_bind_to_runtime_contract(
     assert findings == []
 
 
+def test_a_skipped_dependency_figure_step_names_the_blocking_producer(
+    tmp_path: Path,
+) -> None:
+    """The error stays fail-closed but carries the cause the gate recorded.
+
+    A planned panel with no bound summary is still an error; when the step was
+    skipped because its producer failed, the finding must name that producer
+    and its status instead of forcing a cross-reference to the dependency-gate
+    warning.
+    """
+
+    run_dir = tmp_path / "run"
+    (run_dir / "steps" / STEP_ID / "outputs").mkdir(parents=True)
+    records: list[dict[str, object]] = [
+        {"step_id": "04_concept_audit", "status": "concept_audit_blocked"},
+        {
+            "step_id": STEP_ID,
+            "status": "skipped_dependency_failed",
+            "dependency_step_id": "04_concept_audit",
+            "diagnostic_only": True,
+        },
+    ]
+
+    findings = validate_planned_figure_contract_bindings(
+        plan=_plan(),
+        run_dir=run_dir,
+        per_step_records=records,
+    )
+
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.severity == "error"
+    assert finding.detail["reason"] == "figure_step_skipped_dependency_failed"
+    assert finding.detail["dependency_step_id"] == "04_concept_audit"
+    assert finding.detail["dependency_status"] == "concept_audit_blocked"
+    assert finding.detail["diagnostic_only"] is True
+
+
+def test_a_failed_figure_step_keeps_the_generic_missing_summary_reason(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "steps" / STEP_ID / "outputs").mkdir(parents=True)
+    records: list[dict[str, object]] = [
+        {"step_id": STEP_ID, "status": "execution_failed"},
+    ]
+
+    findings = validate_planned_figure_contract_bindings(
+        plan=_plan(),
+        run_dir=run_dir,
+        per_step_records=records,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["reason"] == (
+        "figure_step_has_no_current_successful_summary"
+    )
+
+
 def test_planned_coverage_heatmap_rejects_runtime_horizontal_bar(
     tmp_path: Path,
 ) -> None:

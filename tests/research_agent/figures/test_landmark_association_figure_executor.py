@@ -215,6 +215,11 @@ def test_renderer_exports_two_claim_led_panels_and_four_source_tables(
         "robustness_summary",
         "measurement_process",
     ]
+    supplementary_caption = supplementary_contract["reader_caption"]
+    assert "robustness-specification coverage" in supplementary_caption
+    assert "measurement-availability" in supplementary_caption
+    assert "without refitting" in supplementary_caption
+    assert "audit-only" in supplementary_caption
     source = pd.read_csv(tmp_path / "outputs" / summary["source_data_files"][0])
     assert source["source_row_index"].tolist() == [0, 1, 2]
     assert source["source_table"].nunique() == 1

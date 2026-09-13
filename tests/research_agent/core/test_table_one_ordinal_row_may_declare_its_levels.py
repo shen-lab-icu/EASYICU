@@ -227,6 +227,6 @@ def test_the_directive_states_the_rule_per_variable_kind():
         )
     )
 
-    assert "Levels follow the variable kind" in directive
-    assert "'ordinal' row summarised numerically may declare" in directive
-    assert "'continuous' row must leave levels empty" in directive
+    assert "Categorical count_percent rows require at least two closed" in directive
+    assert "ordinal numerical rows may declare levels" in directive
+    assert "continuous rows leave levels empty" in directive

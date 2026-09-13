@@ -1177,6 +1177,128 @@ def _run_preplan_literature_and_hypothesis(
     )
 
 
+def _shape_fresh_plan(
+    pipeline: "ResearchAgentPipeline",
+    *,
+    plan: AnalysisPlan,
+    context: Any,
+    agent_context: Any,
+    long_trajectory_bound: bool,
+    findings: List[ValidationFinding],
+) -> AnalysisPlan:
+    """Apply every plan-shaping transform to a freshly generated plan.
+
+    Extracted verbatim from ``_validate_and_persist_plan`` so the phase
+    size guard measures a stage function rather than the shaping
+    catalogue. Only called when the plan was not reused from a
+    digest-verified resume: the saved plan is already final, and
+    re-running split/cap/ensure_* could rename or reorder step_ids and
+    break the resume skip set.
+    """
+
+    plan, plan_contract_findings = _final_plan._enforce_advanced_plan_contract(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    )
+    findings.extend(plan_contract_findings)
+    plan, split_findings = _final_plan._split_table_and_figure_outputs_in_plan(plan=plan)
+    findings.extend(split_findings)
+    plan = _figure_plan.apply_required_plan_obligations(
+        plan, context, findings,
+        runtime_authority=pipeline._scientific_runtime_authorities.current_case,
+    )
+    plan, report_input_findings = _final_plan._augment_report_typed_product_inputs(
+        plan=plan
+    )
+    findings.extend(report_input_findings)
+    # Bind before deterministic figure selection; the universal gate below rechecks every source.
+    plan = bind_context_dependence_authority(plan=plan, context=agent_context)
+    # Force a declared figure step whenever the publication-figure skill
+    # will produce one regardless of the plan: the scorer reads
+    # analysis_plan.json, and a question-only heuristic misses tasks
+    # that never say "figure" yet still require one. Likewise
+    # ensure a declared audit/robustness panel, since that evidence is
+    # produced (locked robustness specs, data-quality summaries) but the
+    # plan often never presents it.
+    plan, result_renderer_findings = (
+        _figure_plan.select_deterministic_result_renderers(plan=plan)
+    )
+    findings.extend(result_renderer_findings)
+    plan, figure_guard_findings = _final_plan._ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=context,
+        force=pipeline._enable_publication_figure_skill,
+    )
+    findings.extend(figure_guard_findings)
+    plan, cohort_figure_findings = (
+        _figure_plan.ensure_cohort_accounting_figure_step(
+            plan=plan,
+        )
+    )
+    findings.extend(cohort_figure_findings)
+    plan, audit_panel_findings = _figure_plan.ensure_data_quality_figure_step(
+        plan=plan,
+        context=context,
+    )
+    findings.extend(audit_panel_findings)
+    plan, empty_figure_findings = (
+        _figure_plan.close_empty_deterministic_figure_contracts(plan=plan)
+    )
+    findings.extend(empty_figure_findings)
+    plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
+    # Measurement provenance companions are public Coder inputs. Close
+    # them before lifecycle sealing and human review so Execute cannot
+    # change the exact Plan payload that the decision approved.
+    plan, companion_input_findings = close_measurement_companion_inputs(
+        plan=plan,
+        context=context,
+    )
+    findings.extend(companion_input_findings)
+    cap = pipeline._max_total_steps
+    plan, cap_findings = _final_plan._cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+    findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
+    plan, trajectory_product_findings = augment_trajectory_plan_products(
+        plan=plan,
+        context=context,
+    )
+    findings.extend(trajectory_product_findings)
+    # The probe-aware replanner receives these structural issues before
+    # execution. Keep the initial snapshot advisory so a successfully
+    # repaired plan is not blocked by its superseded pre-probe shape.
+    findings.extend(
+        finding.model_copy(
+            update={
+                "validator": "plan_contract_pending",
+                "severity": "warning",
+                "detail": {
+                    **dict(finding.detail or {}),
+                    "pending_probe_replan": True,
+                },
+            }
+        )
+        for finding in trajectory_plan_dag_findings(
+            plan=plan,
+            context=context,
+            long_trajectory_bound=long_trajectory_bound,
+        )
+    )
+    with cohort_concept_id_scope(
+        progressive_cohort_concept_ids(
+            agent_context,
+            tuple(variable.name for variable in agent_context.variables),
+        )
+    ):
+        plan = ensure_cohort_definition(plan)
+    plan = ensure_robustness_specs(plan)
+    # Final gate: if the plan implies a cohort but still has no
+    # structured inclusion/exclusion (the retry above didn't recover
+    # it), record a loud, auditable contract error instead of silently
+    # running the analysis on the full universe.
+    findings.extend(_final_plan._cohort_definition_contract_findings(plan))
+    return plan
+
+
 class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
@@ -2502,106 +2624,14 @@ class ResearchAgentPipeline:
         # ensure_* could rename or reorder step_ids and break the resume skip
         # set. A freshly generated plan still gets the full treatment.
         if not reused_prior_plan:
-            plan, plan_contract_findings = _final_plan._enforce_advanced_plan_contract(
+            plan = _shape_fresh_plan(
+                pipeline=self,
                 plan=plan,
                 context=context,
+                agent_context=agent_context,
                 long_trajectory_bound=long_trajectory_bound,
+                findings=findings,
             )
-            findings.extend(plan_contract_findings)
-            plan, split_findings = _final_plan._split_table_and_figure_outputs_in_plan(plan=plan)
-            findings.extend(split_findings)
-            plan = _figure_plan.apply_required_plan_obligations(
-                plan, context, findings,
-                runtime_authority=self._scientific_runtime_authorities.current_case,
-            )
-            plan, report_input_findings = _final_plan._augment_report_typed_product_inputs(
-                plan=plan
-            )
-            findings.extend(report_input_findings)
-            # Bind before deterministic figure selection; the universal gate below rechecks every source.
-            plan = bind_context_dependence_authority(plan=plan, context=agent_context)
-            # Force a declared figure step whenever the publication-figure skill
-            # will produce one regardless of the plan: the scorer reads
-            # analysis_plan.json, and a question-only heuristic misses tasks
-            # that never say "figure" yet still require one. Likewise
-            # ensure a declared audit/robustness panel, since that evidence is
-            # produced (locked robustness specs, data-quality summaries) but the
-            # plan often never presents it.
-            plan, result_renderer_findings = (
-                _figure_plan.select_deterministic_result_renderers(plan=plan)
-            )
-            findings.extend(result_renderer_findings)
-            plan, figure_guard_findings = _final_plan._ensure_publication_figure_step_in_plan(
-                plan=plan,
-                context=context,
-                force=self._enable_publication_figure_skill,
-            )
-            findings.extend(figure_guard_findings)
-            plan, cohort_figure_findings = (
-                _figure_plan.ensure_cohort_accounting_figure_step(
-                    plan=plan,
-                )
-            )
-            findings.extend(cohort_figure_findings)
-            plan, audit_panel_findings = _figure_plan.ensure_data_quality_figure_step(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(audit_panel_findings)
-            plan, empty_figure_findings = (
-                _figure_plan.close_empty_deterministic_figure_contracts(plan=plan)
-            )
-            findings.extend(empty_figure_findings)
-            plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
-            # Measurement provenance companions are public Coder inputs. Close
-            # them before lifecycle sealing and human review so Execute cannot
-            # change the exact Plan payload that the decision approved.
-            plan, companion_input_findings = close_measurement_companion_inputs(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(companion_input_findings)
-            cap = self._max_total_steps
-            plan, cap_findings = _final_plan._cap_plan_preserving_figure_steps(plan=plan, cap=cap)
-            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
-            plan, trajectory_product_findings = augment_trajectory_plan_products(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(trajectory_product_findings)
-            # The probe-aware replanner receives these structural issues before
-            # execution. Keep the initial snapshot advisory so a successfully
-            # repaired plan is not blocked by its superseded pre-probe shape.
-            findings.extend(
-                finding.model_copy(
-                    update={
-                        "validator": "plan_contract_pending",
-                        "severity": "warning",
-                        "detail": {
-                            **dict(finding.detail or {}),
-                            "pending_probe_replan": True,
-                        },
-                    }
-                )
-                for finding in trajectory_plan_dag_findings(
-                    plan=plan,
-                    context=context,
-                    long_trajectory_bound=long_trajectory_bound,
-                )
-            )
-            with cohort_concept_id_scope(
-                progressive_cohort_concept_ids(
-                    agent_context,
-                    tuple(variable.name for variable in agent_context.variables),
-                )
-            ):
-                plan = ensure_cohort_definition(plan)
-            plan = ensure_robustness_specs(plan)
-            # Final gate: if the plan implies a cohort but still has no
-            # structured inclusion/exclusion (the retry above didn't recover
-            # it), record a loud, auditable contract error instead of silently
-            # running the analysis on the full universe.
-            findings.extend(_final_plan._cohort_definition_contract_findings(plan))
         # One boundary for every plan source: LLM, deterministic skill and
         # digest-verified resume. Planner parsing also binds early for prompt
         # diagnostics, but execution authority cannot depend on which producer

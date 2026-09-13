@@ -170,3 +170,33 @@ def test_context_deletion_preserves_exact_source_owned_method_facts():
     )
     assert fact.scaffold in filtered.scaffold
     assert "It was represented" not in filtered.scaffold
+
+
+def test_role_guidance_names_every_plan_derived_results_subsection():
+    from easyicu.research_agent.reporting.manuscript_result_structure import (
+        result_section_instruction,
+    )
+    from .test_plan_driven_result_structure import _plan
+
+    instruction = result_section_instruction(
+        _plan("association_study", ("primary", "secondary", "sensitivity"))
+    )
+
+    assert "### Secondary analyses" in instruction
+    assert "reportable_descriptive_results" in instruction
+    assert "never leave this subsection empty" in instruction
+    assert "### Sensitivity and subgroup analyses" in instruction
+    assert "registry count" not in instruction
+    assert "zero sensitivity result rows" in instruction
+
+
+def test_role_guidance_omits_roles_absent_from_the_plan():
+    from easyicu.research_agent.reporting.manuscript_result_structure import (
+        result_section_instruction,
+    )
+    from .test_plan_driven_result_structure import _plan
+
+    instruction = result_section_instruction(_plan("association_study", ("primary",)))
+
+    assert "### Secondary analyses" not in instruction
+    assert "### Sensitivity and subgroup analyses" not in instruction

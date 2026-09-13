@@ -834,15 +834,17 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
     # article figure's specification panel binds.
     assert rebound.expected_outputs == [
         "table:functional_form_check",
-        "table:functional_form_check_exposure_curve",
-        "table:functional_form_check_exposure_contrasts",
+        "table:functional_form_check_sensitivity_exposure_curve",
+        "table:functional_form_check_sensitivity_exposure_contrasts",
     ]
     assert len(summary["output_files"]) == 3
     effects = summary["functional_form_effect_products"]
     assert effects["independent_refit"] is False
-    assert effects["contrast_product"] == "table:functional_form_check_exposure_contrasts"
-    curve = pd.read_csv(tmp_path / "functional_form_check_exposure_curve.csv")
-    points = pd.read_csv(tmp_path / "functional_form_check_exposure_contrasts.csv")
+    assert effects["contrast_product"] == (
+        "table:functional_form_check_sensitivity_exposure_contrasts"
+    )
+    curve = pd.read_csv(tmp_path / "functional_form_check_sensitivity_exposure_curve.csv")
+    points = pd.read_csv(tmp_path / "functional_form_check_sensitivity_exposure_contrasts.csv")
     assert len(curve) == authority.curve_points
     assert len(points) == 2
     grid = np.linspace(1.0, 4.9, authority.curve_points)

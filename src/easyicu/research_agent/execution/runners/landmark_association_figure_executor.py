@@ -1413,6 +1413,13 @@ def run_landmark_association_figure(
                 for source in panel.source_products
             ],
             statistics_note="Counts only; robustness effect comparability remains unresolved. No patient rows or model fitting.",
+            reader_caption=(
+                "Supplementary panels show registered robustness-specification "
+                "coverage and measurement-availability counts projected from the "
+                "bound source tables. All values are direct projections without "
+                "refitting; robustness rows are audit-only and do not authorize "
+                "comparisons between heterogeneous specifications."
+            ),
         )
         supplemental_outputs = save_publication_figure(
             supplemental_fig,

@@ -28,6 +28,7 @@ JS = ROOT / "src" / "easyicu" / "webserver" / "static" / "js"
 CONTRACTS: dict[str, list[str]] = {
     "agent_render_security.test.js": ["screens-agent-render.js"],
     "composer_keyboard.test.js": ["composer-keyboard.js"],
+    "copilot_history.test.js": [],
     "crossdb_job_continuity.test.js": ["screens-viz-crossdb-job-continuity.js"],
     "crossdb_progress_owner.test.js": ["screens-viz-crossdb-progress.js"],
     "crossdb_raw_scope.test.js": ["screens-viz-crossdb-raw.js"],
@@ -74,6 +75,8 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_side_panels.test.js": ["screens-guided-panels.js"],
     # Reads the whole js/ directory itself; takes no arguments.
     "job_continuity_404.test.js": [],
+    "manuscript_reader_navigation.test.js": ["screens-guided-pi-preview.js"],
+    "report_progress_refresh.test.js": ["screens-guided-pi-childjob.js"],
     "patient_browse_owners.test.js": [
         "screens-viz-patient-navigation.js",
         "screens-viz-patient-tables.js",

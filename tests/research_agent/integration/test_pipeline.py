@@ -9595,9 +9595,49 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
         evidence_digest=None,
         **_kwargs,
     ):
+        # The section-based writer contract rejects an unsectioned draft before
+        # filtering can run; every required subsection must carry prose, and
+        # the unsupported first sentence must still be removed by filtering.
         return (
-            "The model's performance was consistent across folds, indicating robustness.\n\n"
-            "The analysis materials are available in the run evidence record "
+            "# Title\n\n**Keywords:** ICU, cohort, association\n\n"
+            "## Abstract\n\n"
+            "**Background:** SOFA-2 severity may relate to ICU mortality; the "
+            "registered baseline display is summarized in the evidence record "
+            "{evidence:table_one}.\n\n"
+            "**Methods:** Adults were followed from admission; the analysis "
+            "materials are described in the registered evidence record "
+            "{evidence:table_one}.\n\n"
+            "**Results:** The model's performance was consistent across folds, "
+            "indicating robustness. The prespecified analysis was performed "
+            "{evidence:table_one}.\n\n"
+            "**Conclusions:** This study describes baseline characteristics "
+            "{evidence:table_one}.\n\n"
+            "## Introduction\n\nThe analysis materials are recorded in the "
+            "registered evidence record {evidence:table_one}.\n\n"
+            "## Methods\n\n"
+            "### Study design and cohort\n\nThe cohort design follows the "
+            "registered analysis materials {evidence:table_one}.\n\n"
+            "### Variables\n\nThe variable roster is summarized in the "
+            "registered baseline display {evidence:table_one}.\n\n"
+            "### Statistical analysis\n\nThe statistical analysis plan is "
+            "summarized in the registered evidence record {evidence:table_one}.\n\n"
+            "### Software and reproducibility\n\nThe software and "
+            "reproducibility materials are recorded in the registered evidence "
+            "record {evidence:table_one}.\n\n"
+            "## Results\n\n"
+            "### Cohort characteristics\n\nThis study describes baseline "
+            "characteristics.\n\n"
+            "### Primary outcome\n\nThe prespecified analysis was "
+            "performed.\n\n"
+            "### Primary association\n\nThis section explains the "
+            "prespecified study design.\n\n"
+            "### Sensitivity and subgroup analyses\n\nIndependent validation "
+            "is required.\n\n"
+            "## Discussion\n\nThe discussion follows the registered analysis "
+            "materials {evidence:table_one}.\n\n"
+            "## Limitations\n\nThe limitations follow from the registered "
+            "analysis materials {evidence:table_one}.\n\n"
+            "## Conclusion\n\nContext for the analysis is described here "
             "{evidence:table_one}.\n"
         )
 
@@ -9624,14 +9664,20 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     assert critique["unsupported_claims"] == []
     assert critique["suggested_repairs"]
     assert "performance was consistent" not in filtered
-    # Filtering the unsupported result sentence succeeds, but a deliberately
-    # citation-free mock manuscript must still fail the independent literature
-    # authority gate introduced for article-grade outputs.
+    # Filtering the unsupported result sentence succeeds, but the mock draft is
+    # still not publishable: the host binds the sealed literature bundle into
+    # the draft (its independent audit passes), while the deterministic quality
+    # audit blocks a scaffold that never supplied host-owned administrative
+    # sections or a complete structured abstract.
     assert run_status["gates"]["evidence_complete"] is False
     assert any(
-        "Manuscript literature authority is incomplete" in error
+        "Deterministic manuscript quality audit requires changes" in error
         for error in run_status["gates"]["evidence_errors"]
     )
+    literature_audit = json.loads(
+        (run_dir / "manuscript_literature_audit.json").read_text(encoding="utf-8")
+    )
+    assert literature_audit["status"] == "pass"
     assert any(
         finding["validator"] == "manuscript_quality"
         for finding in manifest["findings"]

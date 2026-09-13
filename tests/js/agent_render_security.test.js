@@ -184,4 +184,43 @@ for (const invalid of [NaN, Infinity, '23.456789']) {
   assert.ok(!rejected.includes('data-evidence-source-value="23.4568"'));
 }
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 21 }));
+
+const readerContext = renderer.manuscriptProvenanceView({
+  claims: [{
+    claim_id: 'claim_7',
+    display_value: '1.96',
+    source_field: 'adjusted.odds_ratio',
+    source_json_pointer: '/adjusted/odds_ratio',
+    source_value: '1.96',
+    canonical_value: 1.964,
+    step_id: 'primary_adjusted_model',
+    status: 'stale',
+    method_summary: { intent: 'Estimate the adjusted association.' },
+    evidence: { evidence_id: 'primary_summary', sha256: 'a'.repeat(64), kind: 'statistic' },
+    related_artifacts: [{
+      evidence_id: 'table_one', role: 'supporting_artifact', kind: 'table',
+      sha256: 'b'.repeat(64), display_id: 'Table 1', display_contract_sha256: 'c'.repeat(64),
+    }],
+  }],
+  article_blocks: [
+    { kind: 'paragraph', segments: [{ kind: 'claim', claim_id: 'claim_7', text: '1.96' }] },
+    { kind: 'verification_notes', notes: [{
+      code: 'strict_untraceable_numeric_sentence_removed', severity: 'warning',
+      text: 'A numeric sentence without a registered evidence source was removed.',
+    }] },
+  ],
+  tables: [{ display_id: 'Table 1', label: 'Table 1', caption: 'Registered table.' }],
+  figure_gallery: { figures: [{ display_id: 'Figure 1', label: 'Figure 1', data_url: safePng }] },
+});
+const staleNumber = readerContext.match(/<button[^>]*data-gpi-claim="claim_7"[^>]*>/)[0];
+assert.ok(!staleNumber.includes('data-gpi-evidence-open'), 'a stale chain must open its status and lineage before any evidence preview');
+assert.match(readerContext, /data-gpi-display="Table 1"/, 'a registered display id must render a locate control');
+assert.match(readerContext, /data-gpi-display-anchor="Table 1"/, 'the display block must carry its anchor');
+assert.match(readerContext, /<figure[^>]*data-gpi-display-anchor="Figure 1"/, 'the actual figure must carry a locate target');
+assert.match(readerContext, /gpi-verification-notes/, 'typed verification notes must render as reader text');
+assert.match(readerContext, /strict_untraceable_numeric_sentence_removed/, 'the note code must remain visible');
+assert.match(readerContext, /<span class="pill warn">stale<\/span>/, 'stale links must show their status');
+assert.ok(readerContext.includes('Estimate the adjusted association.'), 'method summary must stay readable');
+assert.ok(!readerContext.includes('relative_path'), 'reader markup must not leak host paths');
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 22 }));

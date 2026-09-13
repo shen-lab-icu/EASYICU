@@ -99,6 +99,49 @@ def test_the_same_table_with_the_row_labelled_is_accepted(tmp_path: Path) -> Non
     assert unlabelled_aggregate_row_findings(step_id="04_x", out_dir=out) == []
 
 
+def test_a_positional_source_row_index_cannot_manufacture_a_total_row(
+    tmp_path: Path,
+) -> None:
+    """A faithful figure export must not be refused by its own row coordinate.
+
+    ``source_row_index`` is 0..n-1, so a four-row table's last row equals the
+    sum of the others *by construction*. Counted as independent evidence it let
+    one real count column satisfy the two-column agreement rule and refused a
+    faithful ``*_source_data.csv`` export; positional row coordinates are not
+    count columns.
+    """
+
+    frame = pd.DataFrame({"source_row_index": [0, 1, 2, 3], "n": [13, 17, 30, 60]})
+    out = tmp_path / "outputs"
+    out.mkdir()
+    frame.to_csv(out / "x_source_data.csv", index=False)
+
+    assert unlabelled_aggregate_row_findings(step_id="07_figure", out_dir=out) == []
+
+
+def test_two_genuine_count_columns_still_refuse_an_unlabelled_total(
+    tmp_path: Path,
+) -> None:
+    """Excluding the index must not weaken the real agreement rule."""
+
+    frame = pd.DataFrame(
+        {
+            "source_row_index": [0, 1, 2],
+            "n": [660, 340, 1000],
+            "deaths": [57, 45, 102],
+        }
+    )
+    out = tmp_path / "outputs"
+    out.mkdir()
+    frame.to_csv(out / "absolute_risk_context.csv", index=False)
+
+    findings = unlabelled_aggregate_row_findings(step_id="04_x", out_dir=out)
+
+    assert len(findings) == 1
+    assert findings[0].detail["row_position"] == 2
+    assert set(findings[0].detail["agreeing_count_columns"]) == {"n", "deaths"}
+
+
 def test_the_refusal_names_a_spelling_the_host_already_writes() -> None:
     """The Coder is told an existing name, not asked to invent one."""
 

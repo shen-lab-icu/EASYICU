@@ -115,6 +115,15 @@ def _role_column(columns: Sequence[Any]) -> str | None:
     return None
 
 
+#: Positional row coordinates are not count columns.  A source-data export
+#: carries ``source_row_index`` 0..n-1, and in any four-row table its last row
+#: equals the sum of the others *by construction*; counting it as independent
+#: evidence let ONE real count column satisfy the two-column agreement rule and
+#: refused a faithful figure export.  Same spelling set the figure source-data
+#: validator already excludes.
+_POSITIONAL_ROW_INDEX_COLUMNS = ("source_row_index", "_source_row_index")
+
+
 def _count_columns(frame: pd.DataFrame) -> dict[str, pd.Series]:
     """Columns of non-negative whole numbers: the ones that can partition.
 
@@ -140,6 +149,8 @@ def _count_columns(frame: pd.DataFrame) -> dict[str, pd.Series]:
 
     counts: dict[str, pd.Series] = {}
     for column in frame.columns:
+        if str(column).strip().lower() in _POSITIONAL_ROW_INDEX_COLUMNS:
+            continue
         values = pd.to_numeric(frame[column], errors="coerce")
         if values.isna().any():
             continue
