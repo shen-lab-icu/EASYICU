@@ -139,6 +139,7 @@ tests/research_agent/test_case_b_bootstrap.py
 !.env.template
 /AGENTS.md
 /CLAUDE.md
+!.github/pull_request_template.md
 /uv.lock
 .learnings/
 .streamlit/
