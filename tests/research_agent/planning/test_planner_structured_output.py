@@ -21,6 +21,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     PlannedModelRequirement,
     ResearchContext,
+    TrajectoryStabilitySpec,
 )
 
 
@@ -281,6 +282,57 @@ def test_ten_source_run_bound_literature_schema_keeps_retry_headroom():
     assert request.payload_bytes < 30_000
     assert "CandidateLiteratureDesignDecision" not in request.schema_json
     assert len(schema["$defs"]["LiteratureDesignBinding"]["anyOf"]) == 6
+
+
+def test_trajectory_stability_transport_keeps_only_planner_decisions():
+    request = planner_structured_output_request()
+    schema = json.loads(request.schema_json)
+    properties = schema["$defs"]["TrajectoryStabilitySpec"]["properties"]
+
+    assert set(properties) == {
+        "n_resamples",
+        "sample_fraction",
+        "sample_size",
+        "minimum_mean_stability",
+        "base_seed",
+        "refit_max_iter",
+        "refit_tolerance",
+        "refit_regularization",
+    }
+    assert "resampling_method" not in properties
+    assert "minimum_successful_resamples" not in properties
+    assert "decision_mode" not in properties
+
+    decoded = decode_planner_transport_payload(
+        {
+            "steps": [
+                {
+                    "trajectory_stability_spec": {
+                        "n_resamples": 25,
+                        "sample_fraction": 0.8,
+                        "sample_size": None,
+                        "minimum_mean_stability": None,
+                        "base_seed": 123,
+                        "refit_max_iter": None,
+                        "refit_tolerance": None,
+                        "refit_regularization": None,
+                    }
+                }
+            ]
+        }
+    )
+    raw_spec = decoded["steps"][0]["trajectory_stability_spec"]
+    assert raw_spec == {
+        "n_resamples": 25,
+        "sample_fraction": 0.8,
+        "sample_size": None,
+        "minimum_mean_stability": None,
+        "base_seed": 123,
+    }
+    spec = TrajectoryStabilitySpec.model_validate(raw_spec)
+    assert spec.base_seed == 123
+    assert spec.minimum_successful_resamples == 25
+    assert spec.decision_mode == "report_only"
 
 
 def test_empty_run_bound_literature_schema_requires_empty_arrays():
