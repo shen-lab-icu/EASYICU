@@ -1588,11 +1588,16 @@
         '请先选择并验证本地 ICU 数据文件夹。'
       )));
     }
-    store.update(
-      { data_source: snapshot.data_source },
-      { persist: false, reason: 'extraction-source-binding' },
-    );
-    return Promise.resolve(store.persist()).then(saved => ({
+    const refreshed = typeof store.refreshActiveFromServer === 'function'
+      ? store.refreshActiveFromServer()
+      : Promise.resolve();
+    return Promise.resolve(refreshed).then(() => {
+      store.update(
+        { data_source: snapshot.data_source },
+        { persist: false, reason: 'extraction-source-binding' },
+      );
+      return store.persist();
+    }).then(saved => ({
       id: 'source-binding-' + Date.now(),
       receipt_kind: 'data_source_binding',
       database: snapshot.data_source.database,
