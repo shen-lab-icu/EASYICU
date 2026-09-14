@@ -2653,6 +2653,7 @@ def _stream_special_extraction_batches(
     *,
     use_sofa2: bool,
     published_output_dir: str,
+    failure_context: Optional[Dict] = None,
 ) -> None:
     """Derive Sepsis labels from already-streamed dependency module artifacts.
 
@@ -2708,6 +2709,22 @@ def _stream_special_extraction_batches(
     source_root = Path(published_output_dir)
     context = (SepsisContextRecorder(Path(output_dir), database=database, data_path=data_path)
                if need_sofa1 else None)
+    batch_count = (
+        (len(all_ids) + safe_batch_size - 1) // safe_batch_size if all_ids else 0
+    )
+
+    def _mark_failure_stage(stage: str, **details) -> None:
+        if failure_context is None:
+            return
+        failure_context["stage"] = stage
+        failure_context.update(details)
+
+    _mark_failure_stage(
+        "special_stream_init",
+        special_batch_size=safe_batch_size,
+        batch_count=batch_count,
+        batch_index=None,
+    )
 
     def _read_dependency(
         module_name: str,
@@ -2833,6 +2850,21 @@ def _stream_special_extraction_batches(
     try:
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
+            batch_index = start // safe_batch_size
+            _mark_failure_stage(
+                "special_stream_batch_start",
+                batch_index=batch_index,
+                batch_count=batch_count,
+                batch_start=start,
+                batch_stop=start + len(ids),
+                batch_ids_sha256=_sha256_bytes(
+                    json.dumps(
+                        [str(value) for value in ids],
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ),
+            )
+            _mark_failure_stage("special_stream_read_sepsis_shared")
             susp = _read_dependency(
                 "sepsis_shared",
                 ids,
@@ -2843,6 +2875,7 @@ def _stream_special_extraction_batches(
             # derived modules empty so the native publisher can emit typed
             # structural placeholders.
             if susp.empty:
+                _mark_failure_stage("special_stream_empty_si")
                 if context is not None:
                     context.record(None, susp, ids=ids, id_col=id_col,
                                    time_col=None, action="empty_si")
@@ -2851,6 +2884,7 @@ def _stream_special_extraction_batches(
                 errors.append("streamed Sepsis dependency sepsis_shared lacks susp_inf")
                 continue
             suspicion_time_col = _time_column(susp)
+            _mark_failure_stage("special_stream_validate_suspicion")
             _require_timed_positive_suspicion(
                 susp,
                 id_col=id_col,
@@ -2860,10 +2894,12 @@ def _stream_special_extraction_batches(
             # A batch without a positive timed SI event cannot yield Sepsis-3.
             # Avoid reading either multi-million-row score dependency for it.
             if not bool(susp["susp_inf"].eq(True).fillna(False).any()):
+                _mark_failure_stage("special_stream_no_positive_si")
                 if context is not None:
                     context.record(None, susp, ids=ids, id_col=id_col,
                                    time_col=suspicion_time_col, action="no_positive_si")
                 continue
+            _mark_failure_stage("special_stream_read_sofa1_score")
             sofa1 = (
                 _read_dependency(
                     "sofa1_score",
@@ -2873,6 +2909,7 @@ def _stream_special_extraction_batches(
                 if need_sofa1
                 else None
             )
+            _mark_failure_stage("special_stream_read_sofa2_score")
             sofa2 = (
                 _read_dependency(
                     "sofa2_score",
@@ -2894,6 +2931,7 @@ def _stream_special_extraction_batches(
                 if time_col is None:
                     errors.append("streamed SOFA-1 dependency lacks a time index")
                 else:
+                    _mark_failure_stage("special_stream_consolidate_sofa1")
                     sofa1 = _consolidate_special_score_dependency(
                         sofa1,
                         score_name="sofa",
@@ -2905,6 +2943,7 @@ def _stream_special_extraction_batches(
                         source_time_col=suspicion_time_col,
                         target_time_col=time_col,
                     )
+                    _mark_failure_stage("special_stream_derive_sep3_sofa1")
                     frame = context.derive(
                         sofa1[[id_col, time_col, "sofa"]],
                         susp1,
@@ -2912,6 +2951,7 @@ def _stream_special_extraction_batches(
                     ).rename(columns={"sep3": "sep3_sofa1"})
                     if "sep3_sofa1" in frame.columns:
                         frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
+                    _mark_failure_stage("special_stream_append_sep3_sofa1")
                     _append_frame("sep3_sofa1", frame)
             if need_sofa2 and sofa2 is not None:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
@@ -2920,6 +2960,7 @@ def _stream_special_extraction_batches(
                 if time_col is None:
                     errors.append("streamed SOFA-2 dependency lacks a time index")
                 else:
+                    _mark_failure_stage("special_stream_consolidate_sofa2")
                     sofa2 = _consolidate_special_score_dependency(
                         sofa2,
                         score_name="sofa2",
@@ -2932,6 +2973,7 @@ def _stream_special_extraction_batches(
                         source_time_col=suspicion_time_col,
                         target_time_col=time_col,
                     )
+                    _mark_failure_stage("special_stream_derive_sep3_sofa2")
                     frame = _sep3_sofa2(
                         sofa2[[id_col, time_col, "sofa2"]],
                         susp2,
@@ -2940,8 +2982,10 @@ def _stream_special_extraction_batches(
                     )
                     if "sep3_sofa2" in frame.columns:
                         frame["sep3_sofa2"] = frame["sep3_sofa2"].fillna(0).astype(int)
+                    _mark_failure_stage("special_stream_append_sep3_sofa2")
                     _append_frame("sep3_sofa2", frame)
 
+        _mark_failure_stage("special_stream_finalize_outputs")
         saved = {}
         for concept, writer in writers.items():
             writer.close()
@@ -2956,6 +3000,7 @@ def _stream_special_extraction_batches(
         module_memory_sampler.stop()
         raise
 
+    _mark_failure_stage("special_stream_write_manifest")
     manifest = {
         "module": "special_concepts",
         "saved": saved,
@@ -2964,9 +3009,7 @@ def _stream_special_extraction_batches(
         "errors": errors,
         "elapsed_sec": round(time.time() - started, 1),
         "batch_size": safe_batch_size,
-        "batch_count": (
-            (len(all_ids) + safe_batch_size - 1) // safe_batch_size if all_ids else 0
-        ),
+        "batch_count": batch_count,
         "patient_partition_strategy": "source_order_interleaved_v1",
         "initial_planned_partition_count": planned_partition_count,
         **module_memory_sampler.stop(),
@@ -2985,6 +3028,7 @@ def _run_special_extraction(
     use_sofa2: bool = False,
     stream_output_batches: bool = False,
     published_output_dir: Optional[str] = None,
+    failure_context: Optional[Dict] = None,
 ) -> None:
     """加载特殊概念（Sepsis-3 等）并写入 parquet + _manifest.json。
 
@@ -2999,6 +3043,8 @@ def _run_special_extraction(
     import pandas as pd
     from easyicu import load_concepts as _lc
 
+    if failure_context is not None:
+        failure_context["stage"] = "special_dependency_discovery"
     dependency_root = Path(published_output_dir or output_dir)
     required_dependency_modules = ["sepsis_shared"]
     if any("sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules):
@@ -3011,6 +3057,8 @@ def _run_special_extraction(
     )
 
     if stream_output_batches or published_dependencies_ready:
+        if failure_context is not None:
+            failure_context["stage"] = "special_stream_dispatch"
         if not patient_ids_filter or not batch_size:
             raise ValueError(
                 "streamed special export requires patient_ids and batch_size"
@@ -3024,6 +3072,7 @@ def _run_special_extraction(
             output_dir,
             use_sofa2=use_sofa2,
             published_output_dir=published_output_dir or output_dir,
+            failure_context=failure_context,
         )
         return
 
@@ -3062,6 +3111,8 @@ def _run_special_extraction(
     context = (SepsisContextRecorder(Path(output_dir), database=database, data_path=data_path)
                if need_sofa1 else None)
 
+    if failure_context is not None:
+        failure_context["stage"] = "special_load_dependencies"
     try:
         merged = _lc(concepts=deps, **load_kw)
     except Exception:
@@ -3120,6 +3171,8 @@ def _run_special_extraction(
             # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
             # module export (unified to delta 2026-06-22).
             if need_sofa1 and "sofa" in merged.columns:
+                if failure_context is not None:
+                    failure_context["stage"] = "special_derive_sep3_sofa1"
                 context_ids = (next(iter(patient_ids_filter.values()))
                                if patient_ids_filter else merged[id_col].drop_duplicates())
                 result = context.derive(
@@ -3130,11 +3183,15 @@ def _run_special_extraction(
                 if "sep3_sofa1" in result.columns:
                     result["sep3_sofa1"] = result["sep3_sofa1"].fillna(0).astype(int)
                 if len(result) > 0:
+                    if failure_context is not None:
+                        failure_context["stage"] = "special_write_sep3_sofa1"
                     path = os.path.join(output_dir, "sep3_sofa1.parquet")
                     result.to_parquet(path, index=False, engine="pyarrow")
                     saved["sep3_sofa1"] = {"path": path, "rows": len(result)}
 
             if need_sofa2 and "sofa2" in merged.columns:
+                if failure_context is not None:
+                    failure_context["stage"] = "special_derive_sep3_sofa2"
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
 
                 result = _sep3_sofa2(
@@ -3146,6 +3203,8 @@ def _run_special_extraction(
                 if "sep3_sofa2" in result.columns:
                     result["sep3_sofa2"] = result["sep3_sofa2"].fillna(0).astype(int)
                 if len(result) > 0:
+                    if failure_context is not None:
+                        failure_context["stage"] = "special_write_sep3_sofa2"
                     path = os.path.join(output_dir, "sep3_sofa2.parquet")
                     result.to_parquet(path, index=False, engine="pyarrow")
                     saved["sep3_sofa2"] = {"path": path, "rows": len(result)}
@@ -3172,6 +3231,8 @@ def _run_special_extraction(
         context.record(None, merged, ids=empty_ids, id_col=empty_id_col,
                        time_col=None, action="empty_si")
     elapsed = time.time() - t0
+    if failure_context is not None:
+        failure_context["stage"] = "special_write_manifest"
     manifest = {
         "module": "special_concepts",
         "saved": saved,
@@ -3251,6 +3312,7 @@ def _capture_worker_failure(
     batch_size: Optional[int],
     stream_output_batches: bool,
     retry_attempt: int,
+    failure_context: Optional[Mapping[str, object]] = None,
 ) -> Optional[str]:
     """Persist an in-worker traceback before the parent removes its temp tree."""
     import datetime as _datetime
@@ -3285,6 +3347,24 @@ def _capture_worker_failure(
         "private": True,
         "external_llm_allowed": False,
     }
+    if failure_context:
+        allowed_failure_context = {
+            "stage",
+            "module",
+            "batch_index",
+            "batch_count",
+            "batch_start",
+            "batch_stop",
+            "batch_ids_sha256",
+            "special_batch_size",
+        }
+        record.update(
+            {
+                key: value
+                for key, value in failure_context.items()
+                if key in allowed_failure_context
+            }
+        )
     try:
         record["runtime_provenance"] = _native_export_runtime_provenance()
     except Exception as exc:
@@ -3484,6 +3564,12 @@ def _extract_module_group_worker(
         for module_name, concepts in module_specs:
             out_dir = os.path.join(output_root, module_name)
             os.makedirs(out_dir, exist_ok=True)
+            failure_context = {
+                "stage": "module_dispatch",
+                "module": module_name,
+                "batch_index": None,
+                "batch_count": None,
+            }
             try:
                 _run_module_extraction(
                     module_name,
@@ -3511,6 +3597,7 @@ def _extract_module_group_worker(
                         batch_size=batch_size,
                         stream_output_batches=stream_output_batches,
                         retry_attempt=0,
+                        failure_context=failure_context,
                     )
                 except Exception:
                     traceback.print_exc()
@@ -3518,6 +3605,11 @@ def _extract_module_group_worker(
         if special_modules:
             sp_dir = os.path.join(output_root, _SPECIAL_OUTPUT_DIRNAME)
             os.makedirs(sp_dir, exist_ok=True)
+            failure_context = {
+                "stage": "special_dispatch",
+                "batch_index": None,
+                "batch_count": None,
+            }
             try:
                 _run_special_extraction(
                     special_modules,
@@ -3529,6 +3621,7 @@ def _extract_module_group_worker(
                     use_sofa2=use_sofa2,
                     stream_output_batches=stream_output_batches,
                     published_output_dir=published_output_dir,
+                    failure_context=failure_context,
                 )
             except Exception:
                 try:
@@ -3541,6 +3634,7 @@ def _extract_module_group_worker(
                         batch_size=batch_size,
                         stream_output_batches=stream_output_batches,
                         retry_attempt=0,
+                        failure_context=failure_context,
                     )
                 except Exception:
                     traceback.print_exc()
