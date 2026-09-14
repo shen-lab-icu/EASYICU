@@ -191,7 +191,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260827-no-fab1" in index_html
     assert "js/app.js?v=20260908-conversation-files1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
-    assert "js/screens-extraction.js?v=20260829-data-scope1" in index_html
+    assert "js/screens-extraction.js?v=20260914-source-refresh1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
