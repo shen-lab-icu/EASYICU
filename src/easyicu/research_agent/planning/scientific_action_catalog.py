@@ -126,6 +126,17 @@ _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
         purpose="Measure agreement conditional on fixed primary preprocessing and K; this does not establish full-pipeline or external reproducibility.",
         execution_parameters=CROSS_SECTIONAL_PHENOTYPING_POLICY.parameters("phenotyping.cluster_stability"),
     ),
+    "time_to_event.rmst": ScientificActionRuntimeContract(
+        outputs=(
+            ("table:rmst_summary", "custom"),
+            ("log:rmst_runtime_receipt", "custom"),
+        ),
+        required_product_inputs=("artifact:analysis_cohort",),
+        standard_executor="signed_rmst_contrast",
+        display_name="Restricted mean survival time contrast",
+        purpose="Report the reviewed two-group Kaplan-Meier restricted-mean survival difference at the prespecified horizon; descriptive analysis only, with no proportional-hazards assumption and no Coder fallback.",
+        execution_parameters=(("estimator", "kaplan_meier_rmst_difference"),),
+    ),
     "prediction.discrimination_calibration": ScientificActionRuntimeContract(
         outputs=(
             ("table:prediction_scores", "custom"),

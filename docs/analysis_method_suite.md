@@ -33,7 +33,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Kaplan-Meier curves + log-rank by exposure | standard_supporting | deterministic ✅ | kaplan_meier curve data + log-rank; KM panel | `time_to_event` |
 | Proportional-hazards check (Schoenfeld residuals / PH test) | standard_supporting | deterministic ✅ | schoenfeld_test.csv (covariate, chi2, p) + schoenfeld_plot (diagnostics panel slot) | `survival_primary_cox` |
 | Subgroup hazard ratios / interaction forest | standard_supporting | LLM-coded ⚠️ | subgroup HR forest | — |
-| Restricted mean survival time (RMST) | standard_supporting | LLM-coded ⚠️ | rmst.csv (group, rmst, ci) + difference | — |
+| Restricted mean survival time (RMST) | standard_supporting | deterministic ✅ | rmst_summary.csv (group rmst/ci + difference) + receipt | `signed_rmst_contrast` |
 | Competing-risks cumulative incidence (Fine-Gray / CIF) | planned | planned ⛔ | cause-specific CIF | — |
 | Time-varying coefficients / landmark survival | planned | planned ⛔ | time-varying HR / landmark curves | — |
 

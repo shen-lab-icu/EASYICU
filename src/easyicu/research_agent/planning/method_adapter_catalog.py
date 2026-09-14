@@ -220,6 +220,22 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
         ),
     ),
     *_adapter_group(
+        ("time_to_event.rmst",),
+        owner_module=(
+            "easyicu.research_agent.execution.runners.rmst_executor"
+        ),
+        owner_entrypoint="rmst_executor_code",
+        selection_kind="signed_rmst_contrast",
+        required_declarations=(
+            "one digest-bound typed cohort",
+            "one reviewed two-group time/event/group/horizon RMST specification",
+        ),
+        validation_test_refs=(
+            "tests/research_agent/execution/test_rmst_executor.py::test_rmst_contrast_runs_and_matches_the_reviewed_kernel",
+            "tests/research_agent/execution/test_rmst_executor.py::test_rmst_contrast_fails_closed_on_invalid_inputs",
+        ),
+    ),
+    *_adapter_group(
         (
             "phenotyping.cluster_solution",
             "phenotyping.k_selection",

@@ -15,6 +15,7 @@ from ..authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from ..schema import AnalysisPlan, ValidationFinding
+from ..authority.rmst_runtime import RmstRuntimeAuthority
 from ..authority.time_varying_runtime import TimeVaryingRuntimeAuthority
 from ..trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
@@ -110,6 +111,16 @@ class ScientificRuntimeAuthorities:
                 validator="scientific_runtime_plan_compiler", severity="warning",
                 message="Compiled the explicit time-updated analysis-only plan; incompatible static-model analyses are not inherited.",
                 detail={"reason_code": "time_varying_exposure_host_compiled", "analysis_only": True,
+                        "execution_contract_sha256": authority.execution_contract_sha256},
+            )]
+        if isinstance(authority, RmstRuntimeAuthority):
+            bound = authority.bind_plan(plan)
+            step = authority.governed_step(bound)
+            return bound, [ValidationFinding(
+                validator="scientific_runtime_plan_compiler", severity="warning",
+                message="Validated the reviewed RMST sensitivity against its deterministic host executor.",
+                detail={"reason_code": "rmst_contrast_host_validated", "analysis_only": True,
+                        "step_id": step.step_id, "output_products": list(authority.plan_outputs),
                         "execution_contract_sha256": authority.execution_contract_sha256},
             )]
         if isinstance(authority, SourceFeasibilityRuntimeAuthority):

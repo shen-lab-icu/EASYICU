@@ -19,6 +19,7 @@ from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from .rmst_runtime import RmstRuntimeAuthority
 from .time_varying_runtime import TimeVaryingRuntimeAuthority
 
 from ..contracts.association_execution import (
@@ -2231,6 +2232,7 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
         LandmarkSurvivalRuntimeAuthority,
         SourceFeasibilityRuntimeAuthority,
         TimeVaryingRuntimeAuthority,
+        RmstRuntimeAuthority,
     ],
     Field(discriminator="authority_kind"),
 ]
@@ -2249,6 +2251,7 @@ def load_current_case_scientific_runtime_authority(
             LandmarkSurvivalRuntimeAuthority,
             SourceFeasibilityRuntimeAuthority,
             TimeVaryingRuntimeAuthority,
+            RmstRuntimeAuthority,
         ),
     ):
         return value

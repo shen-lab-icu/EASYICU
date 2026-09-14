@@ -12,11 +12,13 @@ from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..contracts.rmst import RMSTSpec
 from ..contracts.time_varying_exposure import TimeVaryingExposureSpecification
 
 
 SensitivityAxis = Literal[
     "timing",
+    "estimand",
     "repeated_stays",
     "functional_form",
     "missing_data",
@@ -35,6 +37,7 @@ SensitivityStrategy = Literal[
     "linear_per_unit",
     "fractional_polynomial",
     "categorical",
+    "restricted_mean_survival",
     "complete_case",
     "multiple_imputation",
     "inverse_probability_weighting",
@@ -44,6 +47,7 @@ SensitivityStrategy = Literal[
 
 _STRATEGIES_BY_AXIS: dict[str, frozenset[str]] = {
     "timing": frozenset({"landmark", "time_varying", "alternate_window"}),
+    "estimand": frozenset({"restricted_mean_survival"}),
     "repeated_stays": frozenset(
         {
             "first_stay",
@@ -92,6 +96,9 @@ EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
     ),
     "fractional_polynomial": frozenset({"fractional_polynomial_sensitivity"}),
     "categorical": frozenset({"categorical_functional_form_sensitivity"}),
+    # A host-owned deterministic executor claims this strategy; the reviewed KM
+    # kernel owns the estimate and no Coder fallback is permitted.
+    "restricted_mean_survival": frozenset({"rmst"}),
     "complete_case": frozenset({"complete_case_sensitivity"}),
     "multiple_imputation": frozenset({"multiple_imputation_sensitivity"}),
     "inverse_probability_weighting": frozenset(
@@ -133,6 +140,7 @@ class PrespecifiedSensitivitySpec(BaseModel):
     )
     observation_duration_unit: Literal["hours", "days"] | None = None
     time_varying_execution: TimeVaryingExposureSpecification | None = None
+    rmst_execution: RMSTSpec | None = None
 
     @model_validator(mode="after")
     def _closed_strategy(self) -> "PrespecifiedSensitivitySpec":
@@ -141,6 +149,19 @@ class PrespecifiedSensitivitySpec(BaseModel):
                 raise ValueError("time-varying execution requires the time_varying strategy")
             if self.execution_variables != (self.time_varying_execution.exposure_concept,):
                 raise ValueError("time-varying execution must bind the exact exposure source")
+        if self.rmst_execution is not None:
+            if self.strategy != "restricted_mean_survival":
+                raise ValueError(
+                    "RMST execution requires the restricted_mean_survival strategy"
+                )
+            if self.execution_variables:
+                raise ValueError(
+                    "RMST coordinates are declared in its execution contract"
+                )
+        elif self.strategy == "restricted_mean_survival":
+            raise ValueError(
+                "restricted_mean_survival requires one complete RMST execution contract"
+            )
         if self.strategy not in _STRATEGIES_BY_AXIS[self.axis]:
             raise ValueError(
                 f"strategy {self.strategy!r} is not valid for axis {self.axis!r}"
