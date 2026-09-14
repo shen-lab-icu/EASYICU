@@ -478,6 +478,34 @@ def test_oversize_stay_is_refused_without_truncation(tmp_path, monkeypatch):
     assert not recorder.batches
 
 
+def test_long_stay_timeline_above_previous_bound_is_retained(tmp_path):
+    rows = 70_000
+    sofa = pd.DataFrame(
+        {
+            "stay_id": 1,
+            "charttime": [float(value) for value in range(rows)],
+            "sofa": 0.0,
+        }
+    )
+    suspicion = pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "susp_inf": [True]}
+    )
+    recorder = ctx.SepsisContextRecorder(
+        tmp_path, database="miiv", data_path="/synthetic"
+    )
+    recorder.record(
+        sofa,
+        suspicion,
+        ids=[1],
+        id_col="stay_id",
+        time_col="charttime",
+    )
+    payload = ctx._read_json(tmp_path, recorder.finish(expected_ids=[1]))
+    batch = payload["batches"][0]
+    retained = ctx._read_frame(tmp_path, batch["sofa"], dependency=True)
+    assert len(retained) == rows
+
+
 def test_oversize_dependency_rejected_before_pandas_read(tmp_path, monkeypatch):
     frame = pd.DataFrame({"stay_id": [1] * 5, "charttime": range(5), "sofa": 0.0})
     ref = ctx._store(tmp_path, frame=frame)
