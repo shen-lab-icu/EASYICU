@@ -270,6 +270,26 @@ def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
     assert plan.advisory_zh is None
 
 
+def test_corrected_hirid_renal_is_one_shot_under_8gib_only_for_measured_scope():
+    plan = plan_extraction_resources(
+        "hirid", ["renal"], 33_905, available_memory_mb=8192,
+    )
+    assert plan.mode == "one_shot"
+    assert plan.batch_size == 33_905
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.measured_peak_rss_mb == pytest.approx(3483.5)
+    assert plan.required_available_memory_mb == pytest.approx(3831.85)
+    assert set(_MEASURED_ONESHOT_PROFILES["hirid"]) == {"renal"}
+    larger = plan_extraction_resources(
+        "hirid", ["renal"], 33_906, available_memory_mb=8192,
+    )
+    assert larger.reason_code != "measured_profile_fast_path"
+    too_small = plan_extraction_resources(
+        "hirid", ["renal"], 33_905, available_memory_mb=3072,
+    )
+    assert too_small.reason_code == "measured_profile_insufficient_memory"
+
+
 def test_measured_eicu_profile_can_authorize_full_cohort_above_legacy_size_cap():
     plan = plan_extraction_resources(
         "eicu",
