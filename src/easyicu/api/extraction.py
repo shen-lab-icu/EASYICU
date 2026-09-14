@@ -3187,6 +3187,247 @@ def _run_special_extraction(
         json.dump(manifest, f)
 
 
+_EXTRACTION_WORKER_FAILURE_SCHEMA = "easyicu.extraction_worker_failure/1"
+_EXTRACTION_WORKER_FAILURE_DIRNAME = ".easyicu-failures"
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _failure_output_inventory(root: Union[str, Path]) -> tuple[List[Dict], str]:
+    """Hash files that survived a failed worker without inventing file metadata."""
+    import hashlib
+    import json
+
+    root_path = Path(root)
+    entries: List[Dict] = []
+    if root_path.is_dir():
+        for path in sorted(root_path.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                relative = path.relative_to(root_path).as_posix()
+            except ValueError:
+                continue
+            if relative == _EXTRACTION_WORKER_FAILURE_DIRNAME or relative.startswith(
+                f"{_EXTRACTION_WORKER_FAILURE_DIRNAME}/"
+            ):
+                continue
+            digest = hashlib.sha256()
+            try:
+                with path.open("rb") as handle:
+                    for block in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(block)
+                size = path.stat().st_size
+            except OSError as exc:
+                entries.append(
+                    {
+                        "file": relative,
+                        "bytes": None,
+                        "sha256": None,
+                        "hash_error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            entries.append(
+                {"file": relative, "bytes": size, "sha256": digest.hexdigest()}
+            )
+    canonical = json.dumps(
+        entries, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return entries, _sha256_bytes(canonical)
+
+
+def _capture_worker_failure(
+    output_root: Union[str, Path],
+    *,
+    database: str,
+    phase: str,
+    modules: Sequence[str],
+    special_modules: Sequence[str],
+    batch_size: Optional[int],
+    stream_output_batches: bool,
+    retry_attempt: int,
+) -> Optional[str]:
+    """Persist an in-worker traceback before the parent removes its temp tree."""
+    import datetime as _datetime
+    import json
+    import sys
+    import time
+    import traceback
+
+    traceback_text = traceback.format_exc()
+    exception_type = sys.exc_info()[0]
+    probe_root = Path(output_root)
+    partial_outputs, partial_outputs_sha256 = _failure_output_inventory(probe_root)
+    failure_id = f"{time.time_ns()}-{os.getpid()}"
+    record: Dict[str, object] = {
+        "schema_version": _EXTRACTION_WORKER_FAILURE_SCHEMA,
+        "failure_id": failure_id,
+        "created_at": _datetime.datetime.now(_datetime.timezone.utc).isoformat(),
+        "observed_by": "extraction_worker",
+        "database": database,
+        "phase": phase,
+        "modules": list(modules),
+        "special_modules": list(special_modules),
+        "batch_size": batch_size,
+        "stream_output_batches": bool(stream_output_batches),
+        "retry_attempt": int(retry_attempt),
+        "worker_pid": os.getpid(),
+        "exception_type": exception_type.__name__ if exception_type else None,
+        "traceback": traceback_text,
+        "traceback_sha256": _sha256_bytes(traceback_text.encode("utf-8")),
+        "partial_outputs": partial_outputs,
+        "partial_outputs_sha256": partial_outputs_sha256,
+        "private": True,
+        "external_llm_allowed": False,
+    }
+    try:
+        record["runtime_provenance"] = _native_export_runtime_provenance()
+    except Exception as exc:
+        record["runtime_provenance"] = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
+    failure_dir = probe_root / _EXTRACTION_WORKER_FAILURE_DIRNAME
+    failure_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination = failure_dir / f"worker-failure-{failure_id}.json"
+    temporary = failure_dir / f".worker-failure-{failure_id}.tmp"
+    temporary.write_text(
+        json.dumps(record, indent=2, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(temporary, destination)
+    return str(destination)
+
+
+def _persist_worker_failures(
+    *,
+    output_dir: Optional[str],
+    temp_root: Union[str, Path],
+    database: str,
+    group_modules: Sequence[str],
+    group_special: Sequence[str],
+    failed_modules: Sequence[str],
+    special_incomplete: bool,
+    worker_exit_code: Optional[int],
+    batch_size: Optional[int],
+    stream_output_batches: bool,
+    retry_attempt: int,
+) -> List[Dict[str, object]]:
+    """Seal worker failure records after join and before temporary cleanup."""
+    import datetime as _datetime
+    import json
+    import time
+
+    temp_path = Path(temp_root)
+    partial_outputs, partial_outputs_sha256 = _failure_output_inventory(temp_path)
+    source_dir = temp_path / _EXTRACTION_WORKER_FAILURE_DIRNAME
+    records: List[Dict[str, object]] = []
+    if source_dir.is_dir():
+        for source in sorted(source_dir.glob("worker-failure-*.json")):
+            try:
+                record = json.loads(source.read_text(encoding="utf-8"))
+            except Exception as exc:
+                record = {
+                    "schema_version": _EXTRACTION_WORKER_FAILURE_SCHEMA,
+                    "failure_id": f"unreadable-{time.time_ns()}-{os.getpid()}",
+                    "observed_by": "extraction_worker",
+                    "database": database,
+                    "phase": "worker_failure_record",
+                    "modules": list(group_modules),
+                    "special_modules": list(group_special),
+                    "exception_type": type(exc).__name__,
+                    "traceback": f"failed to read worker failure record: {exc}",
+                }
+            records.append(record)
+    if not records:
+        records.append(
+            {
+                "schema_version": _EXTRACTION_WORKER_FAILURE_SCHEMA,
+                "failure_id": f"parent-{time.time_ns()}-{os.getpid()}",
+                "created_at": _datetime.datetime.now(
+                    _datetime.timezone.utc
+                ).isoformat(),
+                "observed_by": "parent_extraction",
+                "database": database,
+                "phase": (
+                    "special_extraction"
+                    if special_incomplete
+                    else (str(failed_modules[0]) if failed_modules else "group_worker")
+                ),
+                "modules": list(group_modules),
+                "special_modules": list(group_special),
+                "exception_type": None,
+                "traceback": None,
+                "traceback_sha256": None,
+                "failure_kind": "worker_exit_without_failure_record",
+            }
+        )
+
+    persisted: List[Dict[str, object]] = []
+    durable_dir = (
+        Path(output_dir) / _EXTRACTION_WORKER_FAILURE_DIRNAME
+        if output_dir is not None
+        else None
+    )
+    if durable_dir is not None:
+        durable_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for record in records:
+        record.update(
+            {
+                "worker_exit_code": worker_exit_code,
+                "attempt": int(retry_attempt) + 1,
+                "retry_attempt": int(retry_attempt),
+                "batch_size": batch_size,
+                "stream_output_batches": bool(stream_output_batches),
+                "failed_modules": list(failed_modules),
+                "special_incomplete": bool(special_incomplete),
+                "partial_outputs": partial_outputs,
+                "partial_outputs_sha256": partial_outputs_sha256,
+                "private": True,
+                "external_llm_allowed": False,
+            }
+        )
+        traceback_text = record.get("traceback")
+        if isinstance(traceback_text, str):
+            record["traceback_sha256"] = _sha256_bytes(
+                traceback_text.encode("utf-8")
+            )
+        payload = json.dumps(
+            record, indent=2, ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")
+        summary: Dict[str, object] = {
+            "failure_id": record.get("failure_id"),
+            "phase": record.get("phase"),
+            "modules": record.get("modules", []),
+            "special_modules": record.get("special_modules", []),
+            "worker_exit_code": worker_exit_code,
+            "exception_type": record.get("exception_type"),
+            "traceback_sha256": record.get("traceback_sha256"),
+            "partial_outputs_sha256": partial_outputs_sha256,
+            "file": None,
+            "sha256": _sha256_bytes(payload),
+            "bytes": len(payload),
+        }
+        if durable_dir is not None:
+            destination = durable_dir / f"worker-failure-{record['failure_id']}.json"
+            temporary = destination.with_name(f".{destination.name}.tmp")
+            temporary.write_bytes(payload)
+            os.replace(temporary, destination)
+            try:
+                summary["file"] = destination.relative_to(Path(output_dir)).as_posix()
+            except ValueError:
+                summary["file"] = str(destination)
+        else:
+            summary["traceback"] = traceback_text
+        persisted.append(summary)
+    return persisted
+
+
 def _extract_special_worker(
     special_modules: List[str],
     database: str,
@@ -3260,6 +3501,19 @@ def _extract_module_group_worker(
             except Exception:
                 # _run_module_extraction 已内部捕获常规异常并写 manifest；
                 # 这里兜底保证一个模块的意外崩溃不拖垮组内后续模块。
+                try:
+                    _capture_worker_failure(
+                        output_root,
+                        database=database,
+                        phase="module",
+                        modules=[module_name],
+                        special_modules=[],
+                        batch_size=batch_size,
+                        stream_output_batches=stream_output_batches,
+                        retry_attempt=0,
+                    )
+                except Exception:
+                    traceback.print_exc()
                 traceback.print_exc()
         if special_modules:
             sp_dir = os.path.join(output_root, _SPECIAL_OUTPUT_DIRNAME)
@@ -3277,6 +3531,19 @@ def _extract_module_group_worker(
                     published_output_dir=published_output_dir,
                 )
             except Exception:
+                try:
+                    _capture_worker_failure(
+                        output_root,
+                        database=database,
+                        phase="special_extraction",
+                        modules=[],
+                        special_modules=list(special_modules),
+                        batch_size=batch_size,
+                        stream_output_batches=stream_output_batches,
+                        retry_attempt=0,
+                    )
+                except Exception:
+                    traceback.print_exc()
                 traceback.print_exc()
 
 
@@ -6387,6 +6654,7 @@ def extract_database(
         "resource_budget_mb": round(planning_available_mb, 1),
         "resource_execution_limits": resource_execution_limits,
         "modules": {},
+        "worker_failures": [],
         "total_elapsed": 0,
         "output_dir": output_dir,
     }
@@ -6765,6 +7033,24 @@ def extract_database(
         )
         can_split = len(group_mods) + (1 if group_special else 0) > 1
         incomplete = bool(incomplete_mods or special_incomplete)
+        worker_failure_path = os.path.join(
+            tmp_root, _EXTRACTION_WORKER_FAILURE_DIRNAME
+        )
+        if os.path.isdir(worker_failure_path) or incomplete:
+            persisted_worker_failures = _persist_worker_failures(
+                output_dir=output_dir,
+                temp_root=tmp_root,
+                database=database,
+                group_modules=group_mods,
+                group_special=group_special,
+                failed_modules=incomplete_mods,
+                special_incomplete=special_incomplete,
+                worker_exit_code=proc.exitcode,
+                batch_size=group_batch_size,
+                stream_output_batches=group_stream_output_batches,
+                retry_attempt=stream_retry_attempt,
+            )
+            result["worker_failures"].extend(persisted_worker_failures)
         can_retry_smaller = (
             crashed
             and incomplete
