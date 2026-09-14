@@ -8,6 +8,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
 from easyicu.api import extraction as api
 
 
@@ -187,7 +192,17 @@ def test_special_worker_exception_records_special_phase(tmp_path, monkeypatch):
     output_dir = tmp_path / "output"
     worker_roots: list[Path] = []
 
-    def failing_special(*_args, **_kwargs):
+    def failing_special(*_args, failure_context=None, **_kwargs):
+        failure_context.update(
+            {
+                "stage": "special_stream_derive_sep3_sofa1",
+                "batch_index": 3,
+                "batch_count": 8,
+                "batch_start": 3,
+                "batch_stop": 4,
+                "batch_ids_sha256": _sha256(b"[4]"),
+            }
+        )
         raise RuntimeError("synthetic special worker stop")
 
     class InlineProcess:
@@ -245,5 +260,76 @@ def test_special_worker_exception_records_special_phase(tmp_path, monkeypatch):
     assert record["special_modules"] == ["sepsis3_sofa1"]
     assert record["exception_type"] == "RuntimeError"
     assert "synthetic special worker stop" in record["traceback"]
+    assert record["stage"] == "special_stream_derive_sep3_sofa1"
+    assert record["batch_index"] == 3
+    assert record["batch_count"] == 8
+    assert record["batch_start"] == 3
+    assert record["batch_stop"] == 4
+    assert record["batch_ids_sha256"] == _sha256(b"[4]")
     assert result["worker_failures"][0]["phase"] == "special_extraction"
     assert all(not worker_root.exists() for worker_root in worker_roots)
+
+
+def test_streaming_special_worker_records_latest_batch_stage(tmp_path, monkeypatch):
+    output_dir = tmp_path / "special-output"
+    dependency_dir = tmp_path / "dependencies"
+    output_dir.mkdir()
+    dependency_dir.mkdir()
+    patient_ids = [1, 2]
+
+    pd.DataFrame(
+        {
+            "stay_id": patient_ids,
+            "charttime": [0.0, 0.0],
+            "susp_inf": [True, True],
+        }
+    ).to_parquet(dependency_dir / "sepsis_shared.parquet", index=False)
+    sofa = pd.DataFrame(
+        {
+            "stay_id": patient_ids,
+            "charttime": [0.0, 0.0],
+            **{component: [1.0, 1.0] for component in api._SOFA1_COMPONENT_NAMES},
+        }
+    )
+    table = pa.Table.from_pandas(sofa, preserve_index=False)
+    table = table.replace_schema_metadata(
+        {
+            **(table.schema.metadata or {}),
+            api._SOFA1_TIME_BASIS_KEY: api._SOFA1_TIME_BASIS,
+        }
+    )
+    pq.write_table(table, dependency_dir / "sofa1_score.parquet")
+
+    class FailingContext:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def record(self, *_args, **_kwargs):
+            return None
+
+        def derive(self, *_args, **_kwargs):
+            raise RuntimeError("synthetic derive stop")
+
+    monkeypatch.setattr(api, "SepsisContextRecorder", FailingContext)
+    failure_context: dict[str, object] = {}
+
+    with pytest.raises(RuntimeError, match="synthetic derive stop"):
+        api._stream_special_extraction_batches(
+            ["sepsis3_sofa1"],
+            "miiv",
+            "/synthetic",
+            {"stay_id": patient_ids},
+            1,
+            str(output_dir),
+            use_sofa2=False,
+            published_output_dir=str(dependency_dir),
+            failure_context=failure_context,
+        )
+
+    assert failure_context["stage"] == "special_stream_derive_sep3_sofa1"
+    assert failure_context["special_batch_size"] == 1
+    assert failure_context["batch_count"] == 2
+    assert failure_context["batch_index"] in {0, 1}
+    assert failure_context["batch_start"] in {0, 1}
+    assert failure_context["batch_stop"] in {1, 2}
+    assert len(failure_context["batch_ids_sha256"]) == 64
