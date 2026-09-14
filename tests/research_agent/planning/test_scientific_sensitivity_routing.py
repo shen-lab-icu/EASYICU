@@ -26,9 +26,14 @@ def _survival_sensitivity_payload() -> dict:
     sensitivity = deepcopy(payload["steps"][5])
     sensitivity.update(
         scientific_action_id="time_to_event.rmst", custom_method="rmst",
+        depends_on=["01_cohort", "05_primary"],
         product_inputs=[{
-            "producer_step_id": "05_primary", "product_id": "table:cox_results",
+            "producer_step_id": "01_cohort", "product_id": "artifact:analysis_cohort",
         }],
+        outputs=[
+            {"product_id": "table:rmst_summary", "semantic_role": "custom"},
+            {"product_id": "log:rmst_runtime_receipt", "semantic_role": "custom"},
+        ],
     )
     payload["steps"] = [payload["steps"][0], primary, sensitivity]
     return payload
@@ -43,7 +48,7 @@ def test_survival_sensitivity_keeps_its_action_without_binary_authority() -> Non
 
     assert step.scientific_action_id == "time_to_event.rmst"
     assert step.scientific_capability is None
-    assert "table:cox_results" in step.inputs
+    assert "artifact:analysis_cohort" in step.inputs
     assert "table:adjusted_association_estimates" not in step.inputs
 
 
@@ -51,6 +56,15 @@ def test_survival_sensitivity_keeps_its_action_without_binary_authority() -> Non
 def test_unowned_sensitivity_does_not_bypass_action_or_parent_validation(action) -> None:
     payload = _survival_sensitivity_payload()
     payload["steps"][-1]["scientific_action_id"] = action
+    if action is None:
+        payload["steps"][-1]["product_inputs"] = [{
+            "producer_step_id": "05_primary",
+            "product_id": "table:cox_results",
+        }]
+        payload["steps"][-1]["outputs"] = [{
+            "product_id": "table:scientific_sensitivity",
+            "semantic_role": "scientific_sensitivity",
+        }]
 
     with pytest.raises(ProgressivePlanCompileError) as caught:
         compile_progressive_plan(
@@ -72,7 +86,7 @@ def test_binary_scientific_sensitivity_retains_its_closed_owner() -> None:
     assert step.scientific_capability == "association_freeform_v1"
 
 
-def test_survival_action_still_rejects_an_invented_binary_parent_product() -> None:
+def test_survival_action_rejects_an_invented_binary_runtime_input() -> None:
     payload = _survival_sensitivity_payload()
     payload["steps"][-1]["product_inputs"][0]["product_id"] = (
         "table:adjusted_association_estimates"
@@ -83,4 +97,4 @@ def test_survival_action_still_rejects_an_invented_binary_parent_product() -> No
             skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context(),
         )
 
-    assert caught.value.reason_code == "progressive_product_reference_mismatch"
+    assert caught.value.reason_code == "progressive_scientific_action_inputs_mismatch"
