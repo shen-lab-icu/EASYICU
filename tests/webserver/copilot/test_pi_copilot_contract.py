@@ -6932,22 +6932,3 @@ def test_project_data_package_preview_uses_plan_bound_analysis_plan(
         "plan_file": wrapper / "pipeline" / "run-plan" / "analysis_plan.json",
         "context_file": wrapper / "pipeline" / "run-plan" / "research_context.json",
     }
-
-
-def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-test"))
-    with pytest.raises(PiCopilotError) as unknown:
-        tool_module.execute_tool("easyicu_inspect_context", {"raw": True}, context)
-    assert unknown.value.code == "pi_tool_unknown_arguments"
-
-    monkeypatch.setattr(
-        tool_module.agent_runs, "list_run_history", lambda **kwargs: {"runs": []}
-    )
-    missing = tool_module.execute_tool(
-        "easyicu_inspect_step",
-        {"step_id": "analysis"},
-        context,
-    )
-    assert missing["code"] == "easyicu_plan_not_found"

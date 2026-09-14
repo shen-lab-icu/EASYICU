@@ -218,8 +218,9 @@ def test_the_real_run_now_publishes_what_its_number_means() -> None:
 def test_the_chain_resolves_across_the_recorded_corpus() -> None:
     """Read off the corpus, not restated from it.
 
-    73 resolve, 16 fail closed, and nothing in between: a partially-resolved
-    interpretation would mean the digest is publishing a scale it inferred.
+    Every recorded interpretation must either resolve with a declared scale or
+    fail closed. Dedicated synthetic cases above keep the refusal branch under
+    test even when the mounted corpus gains repaired evidence over time.
     """
 
     if not _CORPUS.exists():
@@ -246,7 +247,6 @@ def test_the_chain_resolves_across_the_recorded_corpus() -> None:
     if not resolved and not refused:
         pytest.skip("no recorded panel publishes a primary row")
     assert resolved, "the corpus must still contain runs this fix serves"
-    assert refused, "the fail-closed branch must still be exercised by the corpus"
 
 
 def test_a_panel_without_a_primary_row_gains_nothing() -> None:

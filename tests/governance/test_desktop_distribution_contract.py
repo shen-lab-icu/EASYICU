@@ -55,7 +55,8 @@ def test_desktop_build_is_reproducible_and_source_checkout_independent():
     assert '"--collect-data"' in script
     assert 'os.environ["EASYICU_HOME"]' in backend
     assert 'parser.add_argument("--parent-pid", required=True' in backend
-    assert "psutil.pid_exists(parent_pid)" in backend
+    assert "psutil.Process(parent_pid)" in backend
+    assert "while parent.is_running()" in backend
     assert "PROJECT_ROOT" not in backend
     assert '"--paths"' not in script
 

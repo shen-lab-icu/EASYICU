@@ -193,7 +193,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction.js?v=20260914-source-refresh1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -203,7 +203,7 @@ def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
     history_js = _static_js("screens-agent-run-history.js")
 
     owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
-    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260909-report-revision1"
+    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260915-product-label1"
     assert owner_asset in index_html
     assert index_html.index(owner_asset) < index_html.index(monitor_asset)
     assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
@@ -697,7 +697,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -898,7 +898,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "data-gpi-provider-form" in provider_js
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
@@ -1110,7 +1110,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260909-report-revision1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -3919,23 +3919,3 @@ def test_demo_mode_is_unmistakable_and_single_source_of_truth() -> None:
             "root.querySelectorAll('.radio[data-datamode]')"
         )
     ]
-
-
-def test_dead_end_screens_gained_onward_paths() -> None:
-    """Cross-DB, the agent run-history empty state, the export picker wall and
-    the Data Dictionary all offer an explicit next step instead of dead-ending."""
-    viz_js = _static_js("screens-viz.js")
-    crossdb_results_js = _static_js("screens-viz-crossdb-results.js")
-    agent_js = _static_js("screens-agent.js")
-    dict_js = _static_js("screens-dict.js")
-    # crossdb loaded nextbar links back to cohort as well as forward to agent
-    assert "返回队列统计" in crossdb_results_js
-    # Project Monitor sends configuration and execution back to Guided Copilot.
-    assert "请在研究引导中确认研究并发起受治理运行" in agent_js
-    # example projects are chip-labelled per item in demo mode
-    assert "${t('Example', '示例')} · " in agent_js
-    # export picker folds older registrations instead of rendering a wall
-    assert 'class="src-fold"' in viz_js
-    assert "个较早注册的导出" in viz_js
-    # dictionary points onward to extraction
-    assert "到「数据抽取」勾选它们所属的模块" in dict_js

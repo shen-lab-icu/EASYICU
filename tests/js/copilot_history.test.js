@@ -7,6 +7,7 @@ global.addEventListener = () => {};
 let owner;
 global.EasyICU = { guidedPi: { declare(_name, value) { owner = value; } } };
 global.EU_HTML = { esc: String };
+require(path.resolve(__dirname, '../../src/easyicu/webserver/static/js/product-labels.js'));
 require(path.resolve(__dirname, '../../src/easyicu/webserver/static/js/screens-guided-pi-run-files.js'));
 
 const run = (id, study = 'a') => ({ run_id: id, study_id: study, project_dir: `/runs/${study}/${id}` });
