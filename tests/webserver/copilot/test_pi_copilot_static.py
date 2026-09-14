@@ -1618,6 +1618,10 @@ def test_new_conversation_binds_only_a_source_before_model_guided_setup() -> Non
     assert "cohort" not in source_persist
     assert "modules" not in source_persist
     assert "export_format" not in source_persist
+    assert "store.refreshActiveFromServer()" in source_persist
+    assert source_persist.index("store.refreshActiveFromServer()") < source_persist.index(
+        "store.update("
+    )
     assert "confirmDataSourceBinding" in shell
     assert "action: 'confirm_selected_source'" in data_binding_owner
     assert "MODULES.optional('preview')" in shell
