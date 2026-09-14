@@ -571,6 +571,12 @@ def test_aumc_respiratory_uses_measured_batch_process_isolation() -> None:
     assert api._requires_isolated_stream_batch("aumc", "other_scores") is False
 
 
+def test_miiv_other_scores_uses_measured_batch_process_isolation() -> None:
+    assert api._requires_isolated_stream_batch("miiv", "other_scores") is True
+    assert api._requires_isolated_stream_batch("miiv_demo", "other_scores") is False
+    assert api._requires_isolated_stream_batch("mimic", "other_scores") is False
+
+
 def test_append_isolated_stream_batch_aligns_to_frozen_schema(tmp_path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
