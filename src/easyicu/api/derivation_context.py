@@ -24,7 +24,11 @@ CONTEXT_SCHEMA = "easyicu_derivation_context_v1"
 CONCEPT = "sep3_sofa1"
 MODULE = "sepsis3_sofa1"
 MAX_CONTEXT_STAYS = 128
-MAX_CONTEXT_ROWS = 65536
+# Full-cohort MIMIC-IV produced two long-stay score timelines at ~105k rows
+# per stay. Keep a hard guard against pathological expansion, while allowing
+# the observed complete timeline to replay; the decoded-byte bound below
+# remains the independent memory ceiling.
+MAX_CONTEXT_ROWS = 131072
 MAX_CONTEXT_DECODED_BYTES = 32 * 1024 * 1024
 
 
