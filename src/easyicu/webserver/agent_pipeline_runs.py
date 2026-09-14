@@ -4054,6 +4054,7 @@ class _ExecutionResumeTarget:
     wrapper_dir: Path
     pipeline_run_id: str
     pipeline_config_sha256: str
+    resume_from_step_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -4346,11 +4347,24 @@ def _resolve_execution_resume_wrapper(
             "research_pipeline_execution_retry_checkpoint_ambiguous",
             "The failed run contains more than one resumable execution checkpoint.",
         )
-    run_dir, checkpoint, _ = resumable[0]
+    run_dir, checkpoint, status = resumable[0]
+    gates = status.get("gates") if isinstance(status, Mapping) else {}
+    failed_steps = (
+        list(gates.get("failed_steps") or ())
+        if isinstance(gates, Mapping)
+        else []
+    )
+    first_failed = failed_steps[0] if failed_steps else None
+    resume_from_step_id = (
+        _clean_text(first_failed.get("step_id"), 160)
+        if isinstance(first_failed, Mapping)
+        else ""
+    )
     return _ExecutionResumeTarget(
         wrapper_dir=wrapper_dir,
         pipeline_run_id=run_dir.name,
         pipeline_config_sha256=str(checkpoint.pipeline_config_sha256),
+        resume_from_step_id=resume_from_step_id or None,
     )
 
 
@@ -5451,6 +5465,11 @@ def make_research_pipeline_run_runner(
                 notes=_clean_text(study.get("analysis_goal"), 1_200) or None,
                 resume_run_id=(
                     execution_resume_target.pipeline_run_id
+                    if execution_resume_target is not None
+                    else None
+                ),
+                resume_from_step_id=(
+                    execution_resume_target.resume_from_step_id
                     if execution_resume_target is not None
                     else None
                 ),

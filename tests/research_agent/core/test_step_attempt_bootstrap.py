@@ -169,7 +169,7 @@ def _bootstrap_with_prior(tmp_path, prior, *, allow=False):
     )
 
 
-def test_resume_of_incomplete_step_authorizes_one_initial_regeneration(
+def test_implicit_resume_of_incomplete_step_keeps_terminal_restart_closed(
     tmp_path,
 ) -> None:
     prior = {
@@ -179,6 +179,23 @@ def test_resume_of_incomplete_step_authorizes_one_initial_regeneration(
     }
 
     result = _bootstrap_with_prior(tmp_path, prior)
+
+    assert (
+        result.budget_runtime.provider_budget.terminal_initial_generation_restart_allowed
+        is False
+    )
+
+
+def test_explicit_rerun_of_incomplete_step_authorizes_one_initial_regeneration(
+    tmp_path,
+) -> None:
+    prior = {
+        "step_id": "01_summary",
+        "status": "blocked_by_concept_audit",
+        "attempt_sequence": 1,
+    }
+
+    result = _bootstrap_with_prior(tmp_path, prior, allow=True)
 
     assert (
         result.budget_runtime.provider_budget.terminal_initial_generation_restart_allowed

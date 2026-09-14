@@ -21,6 +21,7 @@ from .administrative_authority import (
 )
 from .manuscript_baseline import baseline_naming_instruction, baseline_reporting_mentions
 from .manuscript_result_structure import required_result_subsections, result_section_instruction
+from .manuscript_surface import MANUSCRIPT_SECTION_LENGTH_TARGETS
 from ..schema import AnalysisPlan
 
 
@@ -108,8 +109,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="abstract",
         section_name="Abstract",
-        word_target=(200, 300),
-        paragraph_target=(4, 4),
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["abstract"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["abstract"][1],
         instruction=(
             "Write `## Abstract` with four labelled paragraphs:\n"
             "- **Background:** 2-3 sentences (clinical importance, knowledge "
@@ -148,8 +149,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="introduction",
         section_name="Introduction",
-        word_target=(300, 500),
-        paragraph_target=(3, 5),
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["introduction"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["introduction"][1],
         instruction=(
             "Write `## Introduction` with 3-5 concise paragraphs (roughly 300-500 words; "
             "scale to the question, not a mandatory quota):\n"
@@ -177,7 +178,7 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="methods",
         section_name="Methods",
-        word_target=(400, 600),
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["methods"][0],
         instruction=(
             "Write `## Methods` with sub-sections:\n"
             "### Study design and cohort\n"
@@ -234,7 +235,7 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="results",
         section_name="Results",
-        word_target=(400, 600),
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["results"][0],
         instruction=(
             "Write `## Results` with sub-sections:\n"
             "### Cohort characteristics\n"
@@ -318,8 +319,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="discussion",
         section_name="Discussion",
-        word_target=(400, 650),
-        paragraph_target=(4, 5),
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["discussion"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["discussion"][1],
         instruction=(
             "Write `## Discussion` with 4-5 concise paragraphs (roughly 400-650 words; "
             "do not inflate a descriptive study to meet a quota):\n"
@@ -353,8 +354,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="limitations",
         section_name="Limitations",
-        word_target=(150, 250),
-        paragraph_target=(1, 1),
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["limitations"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["limitations"][1],
         instruction=(
             "Write `## Limitations` — one paragraph, 150-250 words. Include at "
             "least:\n"

@@ -20,6 +20,13 @@ from ..authority.reader_numeric_display import (
 from .manuscript_sentence_context import has_dependent_opener
 from .manuscript_baseline import missing_baseline_method_mentions
 from .manuscript_result_structure import PRIMARY_RESULT_HEADINGS, required_result_subsections
+from .manuscript_surface import (
+    _CLAIM_MARKER_RE,
+    _CLAIM_PLACEHOLDER_RE,
+    _EVIDENCE_LINK_RE,
+    _strip_audit_markup,
+    render_reader_manuscript,
+)
 from ..schema import AnalysisPlan
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
@@ -58,13 +65,6 @@ _READER_FACING_SECTIONS = frozenset(
         "Conclusion",
     }
 )
-_EVIDENCE_LINK_RE = re.compile(r"\[[^\]]+\]\(evidence/[^\n)]*(?:\"[^\"]*\")?\)")
-_EVIDENCE_PLACEHOLDER_RE = re.compile(r"\{evidence:[^}\n]+\}")
-_CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
-_CLAIM_PLACEHOLDER_RE = re.compile(
-    r"\{claim:[A-Za-z0-9_-]+\.[a-z][a-z0-9_]*\}"
-)
-_CLAIM_DEFINITION_RE = re.compile(r"^\[\^claim_\d+\]:.*$", flags=re.M)
 _LITERATURE_CITATION_RE = re.compile(
     r"\[@[A-Za-z0-9_.:-]+(?:\s*;\s*@[A-Za-z0-9_.:-]+)*\]"
 )
@@ -211,27 +211,6 @@ def _abstract_label_has_prose(abstract: str, label: str) -> bool:
 
 def _words(text: str) -> int:
     return len(re.findall(r"[A-Za-z][A-Za-z0-9'-]*", text))
-
-
-def _strip_audit_markup(text: str) -> str:
-    cleaned = _EVIDENCE_LINK_RE.sub("", text)
-    cleaned = _EVIDENCE_PLACEHOLDER_RE.sub("", cleaned)
-    cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
-    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
-    cleaned = _CLAIM_PLACEHOLDER_RE.sub("", cleaned)
-    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
-    return cleaned
-
-
-def render_reader_manuscript(bound_text: str) -> str:
-    """Remove audit-only markup without changing claims, numbers, or citations."""
-
-    cleaned = _strip_audit_markup(str(bound_text or ""))
-    cleaned = re.sub(r"[ \t]+([,.;:])", r"\1", cleaned)
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.strip() + "\n"
 
 
 def repair_section_opening_connectors(manuscript: str) -> str:

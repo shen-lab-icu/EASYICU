@@ -15,6 +15,11 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from easyicu.research_agent.planning.cohort_contract import (
+    CohortDefinition,
+    cohort_definition_sha,
+)
+
 
 DomainName = Literal["idea", "literature", "data", "analysis", "manuscript"]
 DomainState = Literal["passed", "review_required", "blocked", "not_assessed"]
@@ -313,27 +318,48 @@ def _data_status(
                 )
             )
         )
-        digest_is_valid = (
-            len(analysis_sha) == 64
-            and all(character in "0123456789abcdef" for character in analysis_sha)
+        try:
+            observed_analysis_sha = cohort_definition_sha(
+                CohortDefinition.from_dict(dict(analysis_definition))
+            )
+        except (TypeError, ValueError, KeyError):
+            observed_analysis_sha = ""
+        digest_is_valid = bool(
+            observed_analysis_sha and analysis_sha == observed_analysis_sha
         )
         locked_definition = locked_cohort.get("cohort")
         locked_sha = _text(locked_cohort.get("cohort_sha256"), 64)
+        try:
+            observed_locked_sha = (
+                cohort_definition_sha(
+                    CohortDefinition.from_dict(dict(locked_definition))
+                )
+                if isinstance(locked_definition, Mapping)
+                else ""
+            )
+        except (TypeError, ValueError, KeyError):
+            observed_locked_sha = ""
         lock_bound = (
             not lock_present
             or (
-                isinstance(locked_definition, Mapping)
-                and analysis_definition == locked_definition
+                observed_locked_sha
+                and locked_sha == observed_locked_sha
                 and analysis_sha == locked_sha
             )
         )
-        try:
-            n_universe = int(analysis_provenance.get("n_universe"))
-            n_analysis_cohort = int(analysis_provenance.get("n_analysis_cohort"))
-        except (TypeError, ValueError):
+        raw_n_universe = analysis_provenance.get("n_universe")
+        raw_n_analysis_cohort = analysis_provenance.get("n_analysis_cohort")
+        if (
+            not isinstance(raw_n_universe, int)
+            or isinstance(raw_n_universe, bool)
+            or not isinstance(raw_n_analysis_cohort, int)
+            or isinstance(raw_n_analysis_cohort, bool)
+        ):
             denominator_is_valid = False
         else:
-            analysis_cohort_denominator = n_analysis_cohort
+            n_universe = raw_n_universe
+            n_analysis_cohort = raw_n_analysis_cohort
+            analysis_cohort_denominator = raw_n_analysis_cohort
             denominator_is_valid = (
                 n_universe >= 0
                 and n_analysis_cohort >= 0
