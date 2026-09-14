@@ -1,24 +1,40 @@
 {
-  "finalized": true,
-  "finalized_note": "2026-09-06：HiRID 参考 AKI 速率修复的正式单模块更新与逐列检查通过后定稿。五项 foundation 资源 SHA 与已封存 v4 完全相同，并与 v4 发布锁 bfa903af 核对；当前分支原仍保留 v3 锁，故补齐版本对应关系。没有改字典内容、KDIGO 阈值、其他数据库或体重策略。EX-A01 仍须逐项验收后才可封存，不等于独立临床认证。",
-  "locked_for_extraction_run": "full6_native_v5_hirid_aki_rate_e0621aa1_20260906",
-  "concept_dict_sha256": "fd122adc01693d78e760e19e61cb415ce8aef849ff2712f747dd79c289d48313",
+  "finalized": false,
+  "finalized_note": "2026-09-15 待重新提取与质控：Dev9 在已发布 v5 之后以 6fd512344 引入共享住院死亡结局绑定，并以 639718e9f 补充 legacy service 的 EYE 外科映射；当前 concept-dict 因此不再等于 v5 运行所绑定的字典。v5 及其 HiRID AKI 修复保留为不可变历史发布，不能用当前字典摘要重新标记旧输出。新的 full6 发布须从当前字典重新生成受影响输出并完成既有封存门禁。",
+  "locked_for_extraction_run": "pending_dev9_foundation_refresh_6fd512344_639718e9f_20260915",
+  "concept_dict_sha256": "389e2988a6d601974cf7dd5b303929964ec8c9d66a82c63821646e956cc1ceec",
   "sofa2_dict_sha256": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
   "total_concepts": 256,
   "new_this_round": [],
+  "pending_foundation_changes": [
+    {
+      "git_commit": "6fd51234447ddd9fafafc0d34dc7f762c2a529e2",
+      "change": "Bind MIMIC admission mortality to the shared clinical owner."
+    },
+    {
+      "git_commit": "639718e9f4584799bf162d5bb8d0c1aac52f8208",
+      "change": "Map legacy EYE service values to the surgical category."
+    }
+  ],
   "previous_published_lock": {
+    "git_commit": "f40de5266f9182b7a78b51c5d390773992e7c9fe",
+    "path": "src/easyicu/data/concept-dict.LOCK.json",
+    "sha256": "f32c9d4d419e972475b2de45b63037a5219a4aed75cbfc4d917f450cec8c81dd",
+    "release": "full6_native_v5_hirid_aki_rate_e0621aa1_20260906"
+  },
+  "historical_v4_published_lock": {
     "git_commit": "bfa903af20147d3d432772177516f34df33a9863",
     "path": "src/easyicu/data/concept-dict.LOCK.json",
     "sha256": "5c966a245c138c453e982a490c813e7c2ec95f2be9a65db8d78da40534d24f07",
     "release": "full6_native_v4_imv_sofa_1a445fad_20260906"
   },
-  "extraction_contract": {
+  "previous_release_extraction_contract": {
     "scope": "Only hirid/renal re-extracted; the other 113 Parquet SHA256 values match sealed v4. Renal keys, row/stay counts, schema and all non-target columns match v4.",
     "batching": "Measured per-database/per-module policy. HiRID renal: 33905 stays in one shot; no batch override, no adaptive growth, no changes to other module policies.",
     "execution_limits": "8192 MiB contract; 2 workers, Arrow 2, DuckDB 2 with 2048 MiB buffer, resolver cache 512 MiB. External MemoryMax=8G, no swap, 7447 MiB sampled RSS stop.",
     "retained_semantics": "Existing weight selection, observation policy, stage-0/NULL rules, creatinine and RRT policies retained. The reference profile now receives the existing HiRID rate flag and extraction interval."
   },
-  "gates_passed": {
+  "previous_release_gates": {
     "runtime_commit": "e0621aa1",
     "aki_fix_commit": "273d20df",
     "formal_runtime_dirty": false,
@@ -36,7 +52,7 @@
     "tests": "2185 passed, 52 skipped, 1 deselected: core plus release governance. One earlier stat-cache regression failure passed isolated and full reruns; retained as a separate intermittent observation, not patched here.",
     "evidence_directory": "00-data-foundation/easyicu_full6_runs/candidates/hirid_rate_fix_273d20df_DRifkq"
   },
-  "claim_limits": "No global current promotion, no globally optimal runtime claim. Historical checks below are not evidence for the current correction. Downstream risks/models require new sealed-input runs.",
+  "claim_limits": "Current foundation is not finalized and cannot be sealed. The v5 checks below apply only to the previous published lock and do not validate current Dev9 resources. Downstream risks/models require new sealed-input runs.",
   "historical_own_concepts_not_in_ricu": 131,
   "historical_new_this_round": [
     "crrt_mode_input"
