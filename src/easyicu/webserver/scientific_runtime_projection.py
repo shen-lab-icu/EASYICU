@@ -56,6 +56,11 @@ def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientif
     projection = compile_time_varying_runtime_projection(**coordinates)
     if projection is not None:
         return projection
+    from .rmst_runtime_projection import compile_rmst_runtime_projection
+
+    projection = compile_rmst_runtime_projection(**coordinates)
+    if projection is not None:
+        return projection
     landmark_coordinates = dict(coordinates)
     landmark_coordinates.pop("literature_citation_keys", None)
     landmark_coordinates.pop("direct_comparator_literature_keys", None)

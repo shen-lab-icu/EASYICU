@@ -12,6 +12,7 @@ from ...authority.current_case_scientific_runtime import (
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from ...authority.rmst_runtime import RmstRuntimeAuthority
 from ...authority.time_varying_runtime import TimeVaryingRuntimeAuthority
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
@@ -223,6 +224,10 @@ from .survival_primary_executor import (
     survival_primary_executor_verdict,
 )
 from .table_one_executor import table_one_executor_code, table_one_executor_owns_step
+from .rmst_executor import (
+    RMST_CONTRAST_ANALYSIS_KIND,
+    rmst_executor_code,
+)
 from .time_varying_executor import time_varying_executor_code
 from .trajectory_scientific_candidate_executor import (
     SCIENTIFIC_CANDIDATE_INPUTS,
@@ -433,6 +438,27 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind=TIME_VARYING_ANALYSIS_KIND,
             selection_reason="signed_time_varying_contract_preflight",
             progress_message="Using source-bound time-varying Cox executor",
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
+        ),
+        StepExecutor(
+            key=RMST_CONTRAST_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                RmstRuntimeAuthority,
+            ),
+            owns=lambda c: (
+                c.current_case_scientific_runtime_authority.governed_step(c.plan)
+                == c.step
+            ),
+            render=lambda c: rmst_executor_code(
+                c.step,
+                authority=c.current_case_scientific_runtime_authority,
+                runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=RMST_CONTRAST_ANALYSIS_KIND,
+            selection_reason="reviewed_rmst_contrast_preflight",
+            progress_message="Using the reviewed RMST contrast executor",
             consumed_input_keys=lambda c: c.typed_cohort_inputs(),
         ),
         StepExecutor(

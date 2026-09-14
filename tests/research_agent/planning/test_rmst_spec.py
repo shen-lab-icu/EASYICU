@@ -42,6 +42,11 @@ def test_rmst_spec_rejects_nonpositive_horizon() -> None:
         _spec(tau=0.0)
 
 
+def test_rmst_spec_reserves_zero_for_censoring() -> None:
+    with pytest.raises(ValueError, match="censor code 0"):
+        _spec(event_code=0.0)
+
+
 def test_rmst_spec_is_frozen_and_forbids_unknown_coordinates() -> None:
     spec = _spec()
     with pytest.raises(ValueError):

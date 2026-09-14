@@ -38,4 +38,6 @@ class RMSTSpec(BaseModel):
             raise ValueError("rmst_spec time/event/group columns must be distinct")
         if self.group_levels[0] == self.group_levels[1]:
             raise ValueError("rmst_spec group levels must be two distinct labels")
+        if self.event_code == 0:
+            raise ValueError("rmst_spec event_code must differ from censor code 0")
         return self
