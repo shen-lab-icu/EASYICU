@@ -1747,6 +1747,12 @@ _VITAL_STREAM_DERIVED_CONCEPTS = (
 # database's execution strategy.
 _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
     {
+        # The 2026-09-14 full MIIV run completed demographics and outcome,
+        # then crossed the 4-GiB cgroup ceiling inside other_scores. Its first
+        # batch matched the 445-stay pilot, but successive batches retained
+        # native allocator pages until the streamed writer was killed. A fresh
+        # interpreter per batch makes the measured one-batch envelope real.
+        ("miiv", "other_scores"),
         ("eicu", "sofa2_score"),
         # Full-cohort AUMC respiratory boundary runs retained Arrow/native
         # allocator pages across successive batches: 8k, 7k and 6k all crossed
