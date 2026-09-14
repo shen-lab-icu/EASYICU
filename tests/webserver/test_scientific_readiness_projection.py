@@ -153,6 +153,11 @@ def test_exact_owner_receipts_can_project_publication_ready(tmp_path: Path) -> N
 
 
 def test_analysis_cohort_receipt_closes_source_scope(tmp_path: Path) -> None:
+    from easyicu.research_agent.planning.cohort_contract import (
+        CohortDefinition,
+        cohort_definition_sha,
+    )
+
     definition = {
         "name": "web_study_test",
         "inclusion": [],
@@ -161,7 +166,7 @@ def test_analysis_cohort_receipt_closes_source_scope(tmp_path: Path) -> None:
         "locked_at": "not_locked",
         "selection_mode": "all_input_rows",
     }
-    definition_sha = "c" * 64
+    definition_sha = cohort_definition_sha(CohortDefinition.from_dict(definition))
     _write(
         tmp_path / "cohort_provenance.json",
         {
@@ -210,10 +215,62 @@ def test_analysis_cohort_receipt_closes_source_scope(tmp_path: Path) -> None:
         "export_authority_present": True,
     }
 
+    (tmp_path / "cohort_locked.json").unlink()
+    _write(
+        tmp_path / "cohort_analysis_provenance.json",
+        {
+            "cohort_definition": definition,
+            "cohort_sha256": "c" * 64,
+            "n_universe": 94_418,
+            "n_analysis_cohort": 94_418,
+        },
+    )
+    tampered = build_scientific_readiness_projection(
+        run_id="run-analysis-cohort-tampered",
+        run_dir=tmp_path,
+        axes={
+            "analysis_validated": True,
+            "manuscript_ready": False,
+            "publication_ready": False,
+            "paper_authorized": False,
+        },
+        literature_evidence={},
+        study={},
+    )
+    assert tampered.facts["data"]["cohort_definition_explicit"] is False
+
+    _write(
+        tmp_path / "cohort_analysis_provenance.json",
+        {
+            "cohort_definition": definition,
+            "cohort_sha256": definition_sha,
+            "n_universe": True,
+            "n_analysis_cohort": 1,
+        },
+    )
+    invalid_denominator = build_scientific_readiness_projection(
+        run_id="run-analysis-cohort-invalid-denominator",
+        run_dir=tmp_path,
+        axes={
+            "analysis_validated": True,
+            "manuscript_ready": False,
+            "publication_ready": False,
+            "paper_authorized": False,
+        },
+        literature_evidence={},
+        study={},
+    )
+    assert invalid_denominator.facts["data"]["cohort_definition_explicit"] is False
+
 
 def test_tampered_analysis_cohort_receipt_keeps_source_scope_blocked(
     tmp_path: Path,
 ) -> None:
+    from easyicu.research_agent.planning.cohort_contract import (
+        CohortDefinition,
+        cohort_definition_sha,
+    )
+
     definition = {
         "name": "web_study_test",
         "inclusion": [],
@@ -222,6 +279,7 @@ def test_tampered_analysis_cohort_receipt_keeps_source_scope_blocked(
         "locked_at": "not_locked",
         "selection_mode": "all_input_rows",
     }
+    definition_sha = cohort_definition_sha(CohortDefinition.from_dict(definition))
     _write(
         tmp_path / "cohort_provenance.json",
         {
@@ -234,14 +292,14 @@ def test_tampered_analysis_cohort_receipt_keeps_source_scope_blocked(
         tmp_path / "cohort_analysis_provenance.json",
         {
             "cohort_definition": definition,
-            "cohort_sha256": "0" * 64,
+            "cohort_sha256": definition_sha,
             "n_universe": 100,
             "n_analysis_cohort": 100,
         },
     )
     _write(
         tmp_path / "cohort_locked.json",
-        {"cohort": definition, "cohort_sha256": "c" * 64},
+        {"cohort": definition, "cohort_sha256": "0" * 64},
     )
 
     projection = build_scientific_readiness_projection(

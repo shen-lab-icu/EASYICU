@@ -7958,6 +7958,7 @@ def test_execution_retry_preserves_sealed_coordinates_and_prior_projection(
         lambda **_kwargs: agent_pipeline_runs._ExecutionResumeTarget(
             wrapper_dir=wrapper, pipeline_run_id="run-analysis",
             pipeline_config_sha256="a" * 64,
+            resume_from_step_id="02_model",
         ),
     )
     monkeypatch.setattr(
@@ -8021,6 +8022,7 @@ def test_execution_retry_preserves_sealed_coordinates_and_prior_projection(
         assert request["outcome_columns"] == ("death", "los_icu")
         assert request["cohort"] == cohort
         assert request["resume_run_id"] == "run-analysis"
+        assert request["resume_from_step_id"] == "02_model"
     for name, content in original.items():
         assert (wrapper / name).read_text(encoding="utf-8") == content
     assert legacy_diagnostic.read_text(encoding="utf-8") == '{"earlier_failure":true}'

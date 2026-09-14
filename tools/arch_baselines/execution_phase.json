@@ -4,38 +4,38 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5636,
-      "sha256": "f1c1ce99e0d8e70d4bd1b61319ad1c911ff7e8de336a8b36d1c4785974d8a43e",
+      "loc": 5675,
+      "sha256": "1616539e8c1bb86b25d588ddb7c7cac312521a59422667fd6ea7eb15381df6a3",
       "intra_package_import_edges": 100,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3745,
-      "sha256": "e380b0a0fa275d77fb30963bb4c7ded5290b18764c16e371a49be8a9237dbf3a",
-      "intra_package_import_edges": 58,
+      "loc": 3780,
+      "sha256": "1715b24d1b81683587438379e619933bd0e37c4da36605a8d037f02c8a50fcc0",
+      "intra_package_import_edges": 59,
       "shim_bypass_violations": []
     },
     "execution/run_coordination.py": {
-      "loc": 239,
-      "sha256": "99d7fc3afb8ba5a968f1921a79e6d3b3a1ea6ec637f71f5f2c23ff93a62c4b4d",
-      "intra_package_import_edges": 1,
+      "loc": 288,
+      "sha256": "c4403f62265fe4759f580fa81075360e62744af9c609cb3b602a8cfc6c5b9919",
+      "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 7062,
-      "sha256": "d807de6caa31ceb2507b2d1a5db6b36923a61334165476e8e656eed22b6ce0de",
-      "intra_package_import_edges": 127,
+      "loc": 7138,
+      "sha256": "54a8bdff1ea056a5400d0ce0a3340ff7167f72ba9e3661d199bc3194683680b8",
+      "intra_package_import_edges": 130,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
       "loc": 2794,
-      "sha256": "4ddf80ed830157b2b93275cd4b2a1c5cd82f3196a6cc0aeb43ca306110d2b5a8",
+      "sha256": "9b8c3f2ee19c6542483319e9695b9e2a90f720627c46b6679e0cc211f48bbde8",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 3009,
-      "sha256": "12a3374d3f7cbf72660deb556a0284a918c22448bdcfeac8ef2d89b5ac214015",
+      "loc": 3067,
+      "sha256": "af100f29de908622435da32b5c8e727f37f4e2f68a722f9cf24e6cf1119d9c6d",
       "intra_package_import_edges": 40,
       "shim_bypass_violations": []
     },
@@ -77,7 +77,7 @@
     },
     "gates/preflight.py": {
       "loc": 6228,
-      "sha256": "99af5a0eb5ef4f77778316378016d2428b5df52fb2ba49ae4c04e0f2b97204f1",
+      "sha256": "938ef3631b255ef3439f9209637db9be15ed6c9ebdd520e0a2aadc21ceed6984",
       "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
@@ -112,14 +112,14 @@
       "shim_bypass_violations": []
     },
     "audits/validators.py": {
-      "loc": 2806,
-      "sha256": "eda551cf6a32cc56710ecec4d96609bf23577c5b093625682ad5bd6085f08ee7",
-      "intra_package_import_edges": 23,
+      "loc": 2933,
+      "sha256": "aa16d967447398c6d51e31ab3205bd2ae72377554ae6e3d914cb829addfc8d0d",
+      "intra_package_import_edges": 24,
       "shim_bypass_violations": []
     },
     "audits/cohort.py": {
       "loc": 132,
-      "sha256": "0af285c496908e6fb5f293cbb7d1685d38d257aa1b6c80e6c32f83c0cfba5b2a",
+      "sha256": "71303bcab1467d974361cdc6e878921753aace47023c7015d2a0785c05130d40",
       "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
@@ -136,8 +136,8 @@
       "shim_bypass_violations": []
     },
     "audits/figures.py": {
-      "loc": 5626,
-      "sha256": "3923d6101d8413e2eb4f1201ef219158f4ffc28f0c3fbb3c1324ee0d7fabcf4a",
+      "loc": 5643,
+      "sha256": "3bbd4ebaace84eea837fd05d4ca7b381646b2aaa037301029f060066b048fb7c",
       "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
@@ -185,8 +185,8 @@
     },
     "agents/core.py": {
       "loc": 158,
-      "sha256": "ebae8debffb032db058440ca42c230bd9bb5d1b2e046779927f5e492b7880448",
-      "intra_package_import_edges": 13,
+      "sha256": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
+      "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
     "agents/_support.py": {
@@ -196,9 +196,9 @@
       "shim_bypass_violations": []
     },
     "agents/planner.py": {
-      "loc": 2024,
-      "sha256": "eaf03b422afabec41388e0400aae7566e9b407d883a3d0551c3c54736aa7bbb7",
-      "intra_package_import_edges": 27,
+      "loc": 2066,
+      "sha256": "8658b2b6024a796d28e7dc23d4a46f2542b3322e2b3412c0c5230addc1bcff1d",
+      "intra_package_import_edges": 29,
       "shim_bypass_violations": []
     },
     "agents/replanner.py": {
@@ -220,14 +220,14 @@
       "shim_bypass_violations": []
     },
     "agents/roles.py": {
-      "loc": 595,
-      "sha256": "716de1e85951aa3cbe67fc8b9eca4e44447b3bd45a1d1bc02caeccb0303e3a29",
-      "intra_package_import_edges": 8,
+      "loc": 511,
+      "sha256": "c1d276208d11456198db3437b2631fef426ffabf8b5d21de3d8e0607efc0f71e",
+      "intra_package_import_edges": 7,
       "shim_bypass_violations": []
     },
     "agents/coder.py": {
-      "loc": 1627,
-      "sha256": "d8de85c73ee86eff7c56b1209b0f5aaf2111dd8fb1b4089d10cf88f168f54894",
+      "loc": 1645,
+      "sha256": "287e76b413dcfe9fe367f8f7f5450e8ae53b2f5b2217651d688a13645715d1c2",
       "intra_package_import_edges": 27,
       "shim_bypass_violations": []
     },
@@ -238,15 +238,15 @@
       "shim_bypass_violations": []
     },
     "agents/reporting.py": {
-      "loc": 457,
-      "sha256": "db38b4076d8be54ce75ab6b130151546f859fc812d15d756daa609efe8ef82e3",
-      "intra_package_import_edges": 10,
+      "loc": 538,
+      "sha256": "281ff3a740cb77db023a2e844eb5a67ce175c573be7341e7c159d2a032e432fe",
+      "intra_package_import_edges": 12,
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3036,
-      "sha256": "9c137e22700684cbb4482d224d3dc1c65e791365a10403cfa3d976e1dd0c8714",
-      "intra_package_import_edges": 19,
+      "loc": 3115,
+      "sha256": "a1e58810ac0246ceeaf44a3b87017fc8fd36fd89bb70f0c16ec9e5db3aebdef9",
+      "intra_package_import_edges": 22,
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
@@ -268,27 +268,27 @@
       "shim_bypass_violations": []
     },
     "numeric_scalars.py": {
-      "loc": 31,
-      "sha256": "957b5195d68f5cbf415b8af673b0c9a8af8f3e9c12242566def4107d66171f86",
+      "loc": 30,
+      "sha256": "bee430f1746ae628b83258d7b3173201faebefc73f1d474f1d0302543f337f2a",
       "intra_package_import_edges": 0,
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
       "loc": 3772,
-      "sha256": "423b915b533fda94956f29be7597845a4e82cde0694a4c3b78bc8ed28e080306",
+      "sha256": "e7dfb53a1a2ad485d6198d1eb05eb1611362e67df96dcfa04e3f1ca6eb9aa0cb",
       "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
     "figures/promotion_contract.py": {
-      "loc": 116,
-      "sha256": "150c8bd9eff39e416a5447aea4ccb6adaebea9866ccddbd0edb5f02103e4a7bf",
+      "loc": 120,
+      "sha256": "f67ac44bf178785ff02122b6edb7c029dc465d365630048e9d3e5a1533d90089",
       "intra_package_import_edges": 1,
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3431,
-      "sha256": "b6f4e338b7a1dd8184f6db93537cff17525fcf0d7686e482809df14c060e01d4",
-      "intra_package_import_edges": 8,
+      "loc": 3483,
+      "sha256": "5d033d6c817560bf0f0853b6e00fbe244d576b01336781ce0a84ab69b76bd6fb",
+      "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
     "orchestration/resume_plan_migration.py": {
@@ -298,15 +298,15 @@
       "shim_bypass_violations": []
     },
     "discovery/idea_mining.py": {
-      "loc": 3654,
-      "sha256": "d64a46a840d4b0b08e5f6b68fd6f6877ec5ab6b4cbd428e2f2d3e3070fa98bc4",
+      "loc": 3680,
+      "sha256": "122bdf41580d389671ecade87ab1dbda2e46551d494349f35d1b98d9ce64f3b8",
       "intra_package_import_edges": 16,
       "shim_bypass_violations": []
     },
     "execution/runner.py": {
-      "loc": 3498,
-      "sha256": "da12b351e7b692e31fb76671e43c3ecf21568fce3df3a2adb4d354a269033f39",
-      "intra_package_import_edges": 9,
+      "loc": 3520,
+      "sha256": "7efbd1c8677110e08db2fcc8b9c32046e08656e0fec78b2a9bf36ee3f55a33c4",
+      "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
     "execution/runners/deterministic_robustness.py": {
@@ -316,16 +316,16 @@
       "shim_bypass_violations": []
     },
     "agents/progressive_planner.py": {
-      "loc": 4119,
-      "sha256": "7305a0d3066aaaa4aad6a3ffb553c5aaf57fb7fe9f9dc83f24b242e3b33758ad",
-      "intra_package_import_edges": 37,
+      "loc": 4690,
+      "sha256": "9e878558596a47b6676b4a3c6409d6faa95672330c4f52aaca6430d8830a1b99",
+      "intra_package_import_edges": 42,
       "shim_bypass_violations": []
     }
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1766,
+      "line_start": 1780,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -336,18 +336,18 @@
       "callable_closure_captured_names": 0
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 928,
-      "line_start": 1159,
-      "direct_nested_funcs": 3,
-      "total_nested_funcs": 5,
-      "own_bound_names": 134,
+      "lines": 944,
+      "line_start": 1158,
+      "direct_nested_funcs": 4,
+      "total_nested_funcs": 6,
+      "own_bound_names": 135,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 69
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3783,
+      "line_start": 3756,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -357,7 +357,7 @@
     },
     "execution/phase.py::_prepare_execute_phase_authority": {
       "lines": 147,
-      "line_start": 1010,
+      "line_start": 1009,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 32,
@@ -366,28 +366,28 @@
       "callable_closure_captured_names": 0
     },
     "audits/figures.py::_compare_source_to_upstream": {
-      "lines": 873,
-      "line_start": 3897,
+      "lines": 887,
+      "line_start": 3900,
       "direct_nested_funcs": 12,
       "total_nested_funcs": 12,
-      "own_bound_names": 128,
+      "own_bound_names": 131,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 15
     },
     "pipeline.py::run": {
-      "lines": 790,
-      "line_start": 4084,
+      "lines": 802,
+      "line_start": 4150,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
-      "own_bound_names": 107,
+      "own_bound_names": 109,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 43
     },
     "pipeline.py::_generate_or_resume_plan": {
-      "lines": 440,
-      "line_start": 1998,
+      "lines": 444,
+      "line_start": 2132,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 55,
@@ -396,17 +396,83 @@
       "callable_closure_captured_names": 0
     },
     "pipeline.py::_run_plan_phase": {
-      "lines": 618,
-      "line_start": 2889,
+      "lines": 634,
+      "line_start": 2939,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
-      "own_bound_names": 83,
+      "own_bound_names": 85,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Accept only the round-3 Analyzer validation (+3 LOC) and coordinator hard-stop propagation (+22 LOC). Retain the pre-existing 81-line reporting overage and all unrelated limits; this is not a current-checkout baseline refresh.",
+  "baseline_reason": "Re-adjudicate the stale ratchet at remote base ec7b7d46d5ab, where 17 lower-is-better deviations already existed, then accept the reviewed 43-commit contract batch through ae3ca0fdf6. New growth is confined to prompt projection, hard-stop coordination, deterministic validation, RMST, and Docker-locality ownership; the six-module reporting cycle found in review was removed before this refresh. Evidence: docs/architecture/prepush_review_20260914.md.",
+  "baseline_accepted_growth": {
+    "execution/phase.py": {
+      "loc_was": 5636,
+      "loc_now": 5675
+    },
+    "execution/phase_support.py": {
+      "loc_was": 3745,
+      "loc_now": 3780
+    },
+    "execution/run_coordination.py": {
+      "loc_was": 239,
+      "loc_now": 288
+    },
+    "pipeline.py": {
+      "loc_was": 7062,
+      "loc_now": 7138
+    },
+    "reporting/readiness.py": {
+      "loc_was": 3009,
+      "loc_now": 3067
+    },
+    "audits/validators.py": {
+      "loc_was": 2806,
+      "loc_now": 2933
+    },
+    "audits/figures.py": {
+      "loc_was": 5626,
+      "loc_now": 5643
+    },
+    "agents/planner.py": {
+      "loc_was": 2024,
+      "loc_now": 2066
+    },
+    "agents/coder.py": {
+      "loc_was": 1627,
+      "loc_now": 1645
+    },
+    "agents/reporting.py": {
+      "loc_was": 457,
+      "loc_now": 538
+    },
+    "schema.py": {
+      "loc_was": 3036,
+      "loc_now": 3115
+    },
+    "figures/promotion_contract.py": {
+      "loc_was": 116,
+      "loc_now": 120
+    },
+    "authority/evidence_store.py": {
+      "loc_was": 3431,
+      "loc_now": 3483
+    },
+    "discovery/idea_mining.py": {
+      "loc_was": 3654,
+      "loc_now": 3680
+    },
+    "execution/runner.py": {
+      "loc_was": 3498,
+      "loc_now": 3520
+    },
+    "agents/progressive_planner.py": {
+      "loc_was": 4119,
+      "loc_now": 4690
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -980,6 +1046,75 @@
       ],
       "source_head": "aa4f3a95f66b9fa0805e111e26c865c04e48253a",
       "evidence": "docs/qa/review_round3_remediation_20260910.md"
+    },
+    {
+      "reason": "Re-adjudicate the stale ratchet at remote base ec7b7d46d5ab, where 17 lower-is-better deviations already existed, then accept the reviewed 43-commit contract batch through ae3ca0fdf6. New growth is confined to prompt projection, hard-stop coordination, deterministic validation, RMST, and Docker-locality ownership; the six-module reporting cycle found in review was removed before this refresh. Evidence: docs/architecture/prepush_review_20260914.md.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5636,
+          "loc_now": 5675
+        },
+        "execution/phase_support.py": {
+          "loc_was": 3745,
+          "loc_now": 3780
+        },
+        "execution/run_coordination.py": {
+          "loc_was": 239,
+          "loc_now": 288
+        },
+        "pipeline.py": {
+          "loc_was": 7062,
+          "loc_now": 7138
+        },
+        "reporting/readiness.py": {
+          "loc_was": 3009,
+          "loc_now": 3067
+        },
+        "audits/validators.py": {
+          "loc_was": 2806,
+          "loc_now": 2933
+        },
+        "audits/figures.py": {
+          "loc_was": 5626,
+          "loc_now": 5643
+        },
+        "agents/planner.py": {
+          "loc_was": 2024,
+          "loc_now": 2066
+        },
+        "agents/coder.py": {
+          "loc_was": 1627,
+          "loc_now": 1645
+        },
+        "agents/reporting.py": {
+          "loc_was": 457,
+          "loc_now": 538
+        },
+        "schema.py": {
+          "loc_was": 3036,
+          "loc_now": 3115
+        },
+        "figures/promotion_contract.py": {
+          "loc_was": 116,
+          "loc_now": 120
+        },
+        "authority/evidence_store.py": {
+          "loc_was": 3431,
+          "loc_now": 3483
+        },
+        "discovery/idea_mining.py": {
+          "loc_was": 3654,
+          "loc_now": 3680
+        },
+        "execution/runner.py": {
+          "loc_was": 3498,
+          "loc_now": 3520
+        },
+        "agents/progressive_planner.py": {
+          "loc_was": 4119,
+          "loc_now": 4690
+        }
+      }
     }
   ]
 }

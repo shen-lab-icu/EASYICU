@@ -1,10 +1,154 @@
-"""Conservative cleanup after claim filtering; never compose new scientific prose."""
+"""Conservative manuscript-surface projections and shared display targets.
+
+This leaf module never composes scientific prose.  It owns deterministic
+reader cleanup and the advisory length targets already stated by the Writer's
+section instructions so reporting layers can share them without importing one
+another.
+"""
 
 import re
+from typing import Any, Mapping
 
 
 _REGION = re.compile(r"(?=^#{1,6} |^\*\*(?:Background|Methods|Results|Conclusions):\*\*)", re.M)
 _CLAIM = re.compile(r"\{claim:[^{}\s]+\}[.!?]?")
+_EVIDENCE_LINK_RE = re.compile(r'\[[^\]]+\]\(evidence/[^\n)]*(?:"[^"]*")?\)')
+_EVIDENCE_PLACEHOLDER_RE = re.compile(r"\{evidence:[^}\n]+\}")
+_CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
+_CLAIM_PLACEHOLDER_RE = re.compile(
+    r"\{claim:[A-Za-z0-9_-]+\.[a-z][a-z0-9_]*\}"
+)
+_CLAIM_DEFINITION_RE = re.compile(r"^\[\^claim_\d+\]:.*$", flags=re.M)
+
+
+# Each value is ``(word_target, paragraph_target)``.  ``None`` means the
+# Writer instruction states no numeric bound; no target is inferred.  These
+# targets are advisory and never replace the scientific-maturity anti-stub
+# floors.
+MANUSCRIPT_SECTION_LENGTH_TARGETS: Mapping[
+    str,
+    tuple[tuple[int, int] | None, tuple[int, int] | None],
+] = {
+    "abstract": ((200, 300), (4, 4)),
+    "introduction": ((300, 500), (3, 5)),
+    "methods": ((400, 600), None),
+    "results": ((400, 600), None),
+    "discussion": ((400, 650), (4, 5)),
+    "limitations": ((150, 250), (1, 1)),
+}
+
+_PROSE_SECTION_ALIASES = {
+    "abstract": {"abstract"},
+    "introduction": {"introduction", "background"},
+    "methods": {"methods", "method", "materials and methods"},
+    "results": {"results"},
+    "discussion": {"discussion"},
+    "limitations": {"limitations", "strengths and limitations"},
+    "conclusion": {"conclusion", "conclusions"},
+}
+
+
+def _strip_audit_markup(text: str) -> str:
+    cleaned = _EVIDENCE_LINK_RE.sub("", text)
+    cleaned = _EVIDENCE_PLACEHOLDER_RE.sub("", cleaned)
+    cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
+    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
+    cleaned = _CLAIM_PLACEHOLDER_RE.sub("", cleaned)
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
+    return cleaned
+
+
+def render_reader_manuscript(bound_text: str) -> str:
+    """Remove audit-only markup without changing claims, numbers, or citations."""
+
+    cleaned = _strip_audit_markup(str(bound_text or ""))
+    cleaned = re.sub(r"[ \t]+([,.;:])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip() + "\n"
+
+
+def manuscript_section_prose_metrics(manuscript: str) -> dict[str, dict[str, int]]:
+    """Measure reader-facing prose without crediting audit-only markup."""
+
+    reader = render_reader_manuscript(manuscript)
+    matches = list(
+        re.finditer(r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$", reader, re.MULTILINE)
+    )
+    measured: dict[str, dict[str, int]] = {}
+    for index, match in enumerate(matches):
+        normalized = " ".join(
+            re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+",
+                " ",
+                match.group("title").casefold(),
+            ).split()
+        )
+        section = next(
+            (
+                key
+                for key, values in _PROSE_SECTION_ALIASES.items()
+                if normalized in values
+            ),
+            None,
+        )
+        if section is None:
+            continue
+        level = len(match.group("marks"))
+        end = len(reader)
+        for candidate in matches[index + 1 :]:
+            if len(candidate.group("marks")) <= level:
+                end = candidate.start()
+                break
+        body = reader[match.end() : end]
+        paragraphs = [block for block in re.split(r"\n\s*\n", body) if block.strip()]
+        measured[section] = {
+            "words": len(re.findall(r"\b[\w'-]+\b", body)),
+            "paragraphs": len(paragraphs),
+        }
+    return measured
+
+
+def manuscript_section_target_deviations(
+    manuscript: str,
+) -> list[dict[str, Any]]:
+    """Compare reader prose with the Writer's non-gating length targets."""
+
+    measured = manuscript_section_prose_metrics(manuscript)
+    deviations: list[dict[str, Any]] = []
+    for key, (word_target, paragraph_target) in MANUSCRIPT_SECTION_LENGTH_TARGETS.items():
+        section = measured.get(key)
+        if section is None:
+            continue
+        issues: list[str] = []
+        if word_target:
+            low, high = word_target
+            if section["words"] < low:
+                issues.append("below_word_target")
+            elif section["words"] > high:
+                issues.append("above_word_target")
+        if paragraph_target:
+            low, high = paragraph_target
+            if section["paragraphs"] < low:
+                issues.append("below_paragraph_target")
+            elif section["paragraphs"] > high:
+                issues.append("above_paragraph_target")
+        if issues:
+            deviations.append(
+                {
+                    "section": key,
+                    "observed_words": section["words"],
+                    "observed_paragraphs": section["paragraphs"],
+                    "word_target": list(word_target) if word_target else None,
+                    "paragraph_target": (
+                        list(paragraph_target) if paragraph_target else None
+                    ),
+                    "issues": issues,
+                    "gating": False,
+                }
+            )
+    return deviations
 
 
 def collapse_repeated_label_prefix(text: str, labels) -> tuple[str, tuple[dict[str, str], ...]]:

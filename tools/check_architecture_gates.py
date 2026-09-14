@@ -35,6 +35,7 @@ run here means that job will not fail on its architecture step.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -94,11 +95,24 @@ GATES: Sequence[Tuple[str, List[str]]] = (
 
 def main() -> int:
     failures: List[str] = []
+    environment = os.environ.copy()
+    source_root = str(ROOT / "src")
+    existing_python_path = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [source_root, existing_python_path]
+        if existing_python_path
+        else [source_root]
+    )
     for name, argv in GATES:
         print(f"\n=== {name} ===", flush=True)
         started = time.monotonic()
         try:
-            completed = subprocess.run(argv, cwd=ROOT, check=False)
+            completed = subprocess.run(
+                argv,
+                cwd=ROOT,
+                check=False,
+                env=environment,
+            )
         except FileNotFoundError:
             # A missing dev tool is a real failure: reporting it as "passed"
             # would be the exact silent-green failure this script exists to
