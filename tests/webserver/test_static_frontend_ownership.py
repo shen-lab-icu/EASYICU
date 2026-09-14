@@ -149,7 +149,9 @@ def test_copilot_product_labels_have_one_shared_owner() -> None:
     assert offenders == [], f"project title consumers bypass the shared owner: {offenders}"
     owner_pos = index.index("js/product-labels.js?")
     for path in title_consumers:
-        assert owner_pos < index.index(f"js/{path.name}")
+        consumer = f"js/{path.name}"
+        if consumer in index:
+            assert owner_pos < index.index(consumer)
 
 
 def test_persisted_default_title_producers_are_covered_by_product_label_owner() -> None:

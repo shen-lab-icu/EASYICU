@@ -106,7 +106,7 @@ def test_resume_prefers_allowlisted_study_context_then_maps_legacy_branches() ->
     assert "startHomeStudy(" not in resume
 
 
-def test_sidebar_follows_research_lifecycle_and_agent_comes_last() -> None:
+def test_sidebar_follows_research_lifecycle_with_one_copilot_entry() -> None:
     source = _asset("js", "app.js")
     sidebar = source.split("function sidebar()", 1)[1].split("function topbar()", 1)[0]
 
@@ -114,11 +114,11 @@ def test_sidebar_follows_research_lifecycle_and_agent_comes_last() -> None:
     guided = sidebar.index('data-nav="guided"')
     data_review = sidebar.index("Data & Review")
     workspace = sidebar.index('class="wsnav"')
-    analysis = sidebar.index("Analysis & Evidence")
-    agent = sidebar.index('class="cp-entry agent-entry')
+    reference = sidebar.index("Reference")
 
-    assert discovery < guided < data_review < workspace < analysis < agent
+    assert discovery < guided < data_review < workspace < reference
     assert 'data-nav="ideas"' not in sidebar
+    assert 'data-nav="agent"' not in sidebar
 
 
 def test_data_workspace_breadcrumb_is_a_non_clickable_group_label() -> None:

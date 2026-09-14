@@ -6,6 +6,7 @@
   const modules = window.EasyICU.guidedPi;
   const tr = (en, zh) => window.EU_LANG === 'zh' ? zh : en;
   const esc = value => window.EU_HTML.esc(value == null ? '' : value);
+  const projectTitle = window.EU_PRODUCT_LABELS.projectTitle;
   const rows = value => Array.isArray(value) ? value : [];
   const confirmations = [
     ['evidence_reviewed', 'I reviewed the evidence artifacts', '我已审阅证据产物'],
@@ -46,12 +47,12 @@
       });
       const projects = new Map();
       rows(payloads[0].contexts).forEach(study => projects.set(study.id, {
-        id: study.id, title: study.title || study.question || study.id, study,
+        id: study.id, title: projectTitle(study.title, study.question || study.id), study,
       }));
       rows(payloads[1].projects).forEach(seed => {
         const existing = projects.get(seed.study_id) || {};
         projects.set(seed.study_id, { ...existing, id: seed.study_id,
-          title: existing.title || seed.title || seed.study_id, seed,
+          title: projectTitle(existing.title, projectTitle(seed.title, seed.study_id)), seed,
           seedDir: seed.project_dir, readOnly: Boolean(seed.seed_kind === 'canonical9_import' || seed.benchmark || seed.read_only_import || seed.read_only) });
       });
       rows(payloads[3].runs).forEach(run => {
@@ -59,7 +60,7 @@
       });
       if (context && context.studyId) {
         projects.set(context.studyId, { ...(projects.get(context.studyId) || {}),
-          id: context.studyId, title: context.title || context.studyId, projectId: context.projectId,
+          id: context.studyId, title: projectTitle(context.title, context.studyId), projectId: context.projectId,
           readOnly: !Array.isArray(payloads[1].projects) || Boolean((projects.get(context.studyId) || {}).readOnly) });
       }
       state.drafts = rows(payloads[2].drafts);

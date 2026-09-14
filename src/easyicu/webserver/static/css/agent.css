@@ -17,7 +17,7 @@
 .ag-title{ font-size:21px; font-weight:600; letter-spacing:-0.02em; display:flex; align-items:center; gap:9px; }
 .ag-title .editmk{ color:var(--ink-4); cursor:pointer; opacity:0; transition:opacity .12s; }
 .ag-title:hover .editmk{ opacity:1; }
-/* .ag-src row moved to css/agent.css (owner file), 2026-07-07 design pass. */
+/* Project source identity rules live in css/agent-project-source.css. */
 
 /* mode switch */
 .ag-pipe{ display:flex; align-items:center; gap:0; margin:20px 0 0; padding:14px 16px; border:1px solid var(--hair); border-radius:var(--r-3); background:var(--surface-2); overflow-x:auto; }
@@ -520,7 +520,6 @@
   .ag-detail,
   .ag-dtop,
   .ag-title,
-  .ag-src,
   .ag-body,
   .ag-tabs,
   .ag-pipe{
@@ -537,10 +536,7 @@
     overflow-wrap: anywhere;
   }
 
-  .ag-src .lk,
-  .ag-src .mono,
-  .sc-name,
-  .sc-folder{
+  .sc-name{
     max-width: 100%;
   }
 
@@ -592,14 +588,3 @@
 .ag-tab.gated:hover{ color: var(--ink-3); }
 .ag-tab.gated .ag-tab-lock{ display: inline-flex; align-items: center; margin-left: 1px; color: var(--ink-4); opacity: 0.75; }
 .ag-tab.on.gated{ opacity: 1; }
-
-/* Rail-card folder line + detail-header source row (moved here from redesign.css,
-   2026-07-07 design pass — agent.css owns Project Monitor). Paths are compacted in
-   JS (compactMiddlePath) and de-emphasized here so the project NAME stays the
-   focal point of each card and the header. */
-.sc-folder{ display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; color:var(--ink-4); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sc-folder .ic{ flex:none; color:var(--ink-4); }
-.ag-src{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-3); margin-top:7px; flex-wrap:wrap; }
-.ag-src .lk{ display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border:1px solid var(--hair-2); border-radius:var(--r-pill); background:var(--surface-2); cursor:pointer; max-width:380px; overflow:hidden; }
-.ag-src .lk:hover{ border-color:var(--hair-3); }
-.ag-src .mid{ width:3px; height:3px; border-radius:50%; background:var(--hair-3); }
