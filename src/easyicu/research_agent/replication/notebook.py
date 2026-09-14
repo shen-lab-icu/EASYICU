@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import importlib.metadata as _im
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,8 @@ def build_requirements_lockfile(
     first comment so downstream tooling can verify before installing.
     When ``captured_runtime_path`` is supplied, return the runner-captured
     execution environment instead of incorrectly freezing the host process.
+    Repeated editable-install metadata for the same normalized name and version
+    is emitted once so a resume cannot drift as metadata paths appear or vanish.
     """
     if captured_runtime_path is not None:
         path = Path(captured_runtime_path)
@@ -57,7 +60,7 @@ def build_requirements_lockfile(
         if "# runtime=docker" not in text or "==" not in text:
             raise ValueError(f"invalid runner requirements lockfile: {path}")
         return text if text.endswith("\n") else text + "\n"
-    rows: List[str] = []
+    rows_by_pin: Dict[tuple[str, str], str] = {}
     try:
         dists = list(_im.distributions())
     except Exception:
@@ -70,8 +73,10 @@ def build_requirements_lockfile(
             continue
         if not name or not version:
             continue
-        rows.append(f"{name}=={version}")
-    rows.sort(key=lambda s: s.lower())
+        normalized_name = re.sub(r"[-_.]+", "-", str(name)).lower()
+        pin = (normalized_name, str(version))
+        rows_by_pin[pin] = f"{normalized_name}=={version}"
+    rows = sorted(rows_by_pin.values(), key=lambda s: (s.lower(), s))
     header = [
         "# easyicu.research_agent — requirements.lock",
         f"# python_version={sys.version.split(' ')[0]}",
