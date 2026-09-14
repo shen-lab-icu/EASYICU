@@ -630,7 +630,8 @@ def test_preflight_separates_unbound_draft_from_delivered_manuscript(
     payload = writer_only_preflight_payload(prepared)
 
     draft_codes = [finding["code"] for finding in payload["source_quality_findings"]]
-    assert draft_codes.count("MANUSCRIPT_SECTION_TRUNCATED") == 2, draft_codes
+    assert "MANUSCRIPT_ABSTRACT_LABEL_MISSING_OR_EMPTY" in draft_codes
+    assert "MANUSCRIPT_SECTION_TRUNCATED" in draft_codes, draft_codes
     assert payload["source_quality_audited_artifact"] == "manuscript_scaffold.md"
     assert payload["delivered_manuscript_artifact"] == "manuscript_scaffold_bound.md"
     assert payload["delivered_source_quality_status"] == "pass"

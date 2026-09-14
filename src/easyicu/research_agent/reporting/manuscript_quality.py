@@ -717,6 +717,21 @@ def _normalise_adjustment_set(
         maxsplit=1,
         flags=re.I,
     )[0]
+    # Model implementation clauses can follow the covariate list without
+    # becoming adjustment variables themselves.
+    cleaned = re.split(
+        r",?\s+(?:we\s+)?used\s+(?:patient[- ])?cluster[- ]robust\s+"
+        r"variance\s+estimation\b",
+        cleaned,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    cleaned = re.split(
+        r",?\s+(?:and\s+)?began\s+at\s+(?:the\s+)?\d+-hour\s+landmark\b",
+        cleaned,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
     cleaned = re.sub(r"\[@[^\]]+\]", "", cleaned)
     cleaned = re.sub(r"\band\b", ",", cleaned, flags=re.I)
     values: list[str] = []
@@ -1015,7 +1030,12 @@ _TERMINAL_PUNCTUATION = ".!?)]}" + "。！？）］｝】〕」』"
 
 
 def _section_has_truncated_ending(section_text: str) -> bool:
-    prose = _strip_audit_markup(section_text).rstrip()
+    # A complete host claim token is a valid terminal sentence in the canonical
+    # pre-binding draft. ``_strip_audit_markup`` removes it as audit markup, so
+    # preserve its sentence boundary before the reader-surface projection.
+    visible = re.sub(r"<!--.*?-->", "", section_text, flags=re.S)
+    visible = _CLAIM_PLACEHOLDER_RE.sub(".", visible)
+    prose = _strip_audit_markup(visible).rstrip()
     if not prose:
         return False
     return prose[-1] not in _TERMINAL_PUNCTUATION

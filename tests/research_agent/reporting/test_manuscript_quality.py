@@ -491,6 +491,38 @@ def test_display_labels_resolve_adjustment_sets_without_hiding_real_conflicts() 
     }
 
 
+def test_adjustment_parser_stops_before_model_execution_clauses() -> None:
+    labels = {
+        "age": "Patient age",
+        "sex": "Patient sex",
+        "adm": "Patient admission type",
+    }
+    text = _valid_manuscript().replace(
+        "The adjustment set comprised age and sex.",
+        (
+            "The adjustment set comprised patient age, patient sex, and "
+            "patient admission type, used patient-cluster-robust variance "
+            "estimation, and began at the 24-hour landmark."
+        ),
+    ).replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        (
+            "After adjustment for age, sex, and adm, Sepsis-3 status was "
+            "associated with mortality."
+        ),
+    )
+
+    audit = audit_manuscript_quality(text, reader_display_labels=labels)
+
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in audit.findings
+    }
+    assert audit.adjustment_sets == {
+        "Methods": ("adm", "age", "sex"),
+        "Results": ("adm", "age", "sex"),
+    }
+
+
 def test_internal_runtime_terms_are_rejected_in_reader_facing_prose() -> None:
     text = _valid_manuscript().replace(
         "Sepsis status was associated with in-hospital mortality.",
@@ -618,6 +650,18 @@ def test_truncated_section_ending_is_rejected() -> None:
         if item.code == "MANUSCRIPT_SECTION_TRUNCATED"
     )
     assert finding.section == "Methods"
+
+
+def test_complete_claim_token_is_not_a_truncated_section_ending() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        "{claim:primary.adjusted_association}",
+        1,
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_SECTION_TRUNCATED" not in _codes(text)
 
 
 def test_machine_precision_is_rejected_in_reader_facing_sections() -> None:
