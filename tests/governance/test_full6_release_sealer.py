@@ -271,6 +271,14 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
 ) -> None:
     run_root = tmp_path / "full6_test"
     _build_synthetic_release(run_root)
+    private = (
+        run_root
+        / "exports"
+        / "miiv"
+        / sealer.PRIVATE_DERIVATION_CONTEXT_DIRECTORY
+    )
+    private.mkdir()
+    (private / "replay-shard.parquet").write_bytes(b"PAR1private")
 
     destination = sealer.seal_release(
         run_root=run_root, execution_profile="server-adaptive"
