@@ -1389,6 +1389,11 @@ def _new_run_manifest(
             "launcher": str(SCRIPT_PATH.relative_to(REPOSITORY_ROOT)),
             "launcher_sha256": _sha256(SCRIPT_PATH),
         },
+        "publication_checkout": {
+            "easyicu_git_commit": identity["commit"],
+            "easyicu_git_dirty": False,
+            "scope": "fresh_full_extraction",
+        },
         "data_paths": dict(data_paths),
         "resource_policy": args.resource_policy,
         "resource_monitoring": dict(monitoring),
@@ -1426,6 +1431,15 @@ def _load_resume_manifest(
         or checkout.get("easyicu_git_dirty") is not False
     ):
         raise ExtractionRunError("resume requires the exact original clean EasyICU commit")
+    publication_checkout = manifest.get("publication_checkout") or {}
+    if (
+        publication_checkout.get("easyicu_git_commit") != identity["commit"]
+        or publication_checkout.get("easyicu_git_dirty") is not False
+        or publication_checkout.get("scope") != "fresh_full_extraction"
+    ):
+        raise ExtractionRunError(
+            "resume publication checkout differs from the original full extraction"
+        )
     if manifest.get("data_paths") != dict(data_paths):
         raise ExtractionRunError("resume source data paths differ from the original run")
     if manifest.get("resource_policy") != resource_policy:
