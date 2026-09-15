@@ -884,6 +884,7 @@ def _primary_row_from_step_records(
         evidence_id=str(payload.get("evidence_id") or ""),
         converged=True,
         notes=notes,
+        ci_source=str(payload.get("ci_source") or ""),
     )
 
 

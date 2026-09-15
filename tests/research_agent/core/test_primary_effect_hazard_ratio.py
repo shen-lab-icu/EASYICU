@@ -30,6 +30,10 @@ from easyicu.research_agent.robustness.primary_effect import (
     _infer_primary_predictor_from_run_dir,
 )
 from easyicu.research_agent.robustness.panel import default_robustness_specs
+from easyicu.research_agent.robustness.panel import _primary_row_from_records
+from easyicu.research_agent.replication.report import (
+    _render_cross_database_comparison_markdown,
+)
 from tests.research_agent.planning.test_research_context_v2_authority_join import (
     _prepare_typed_run,
 )
@@ -101,6 +105,7 @@ def test_extractor_recognizes_hazard_ratio_as_primary_effect():
     assert round(payload["primary_or"], 2) == 1.82  # canonical field, HR value
     assert round(payload["primary_ci_low"], 2) == 1.74
     assert round(payload["primary_ci_high"], 2) == 1.91
+    assert payload["ci_source"] == "model_reported"
     assert payload["effect_measure"] == "HR"
 
 
@@ -186,7 +191,42 @@ def test_extractor_recognizes_adjusted_effect_scale_from_iptw_runner():
     assert round(payload["primary_or"], 2) == 3.04
     assert round(payload["primary_ci_low"], 2) == 2.87
     assert round(payload["primary_ci_high"], 2) == 3.21
+    assert payload["ci_source"] == "model_reported"
     assert payload["effect_measure"] == "OR"
+
+
+def test_reconstructed_wald_ci_provenance_reaches_panel_and_report():
+    records = [
+        _host_role_record(
+            {
+                "step_id": "01_primary",
+                "status": "ok",
+                "step_summary_evidence_id": "primary_stat",
+                "step_summary": {
+                    "primary_predictor": "exposure",
+                    "primary_or": 1.5,
+                    "primary_or_se": 0.1,
+                    "n": 900,
+                },
+            }
+        )
+    ]
+
+    payload = _extract_primary_effect_payload_from_records(records)
+    assert payload is not None
+    assert payload["ci_source"] == "reconstructed_wald"
+    for row in (
+        _primary_row_from_records(records),
+        _primary_row_from_step_records(records),
+    ):
+        assert row is not None
+        assert row.ci_source == "reconstructed_wald"
+
+    markdown = _render_cross_database_comparison_markdown(
+        [{"database": "synthetic", **payload}]
+    )
+    assert "| ci_source |" in markdown
+    assert "reconstructed_wald" in markdown
 
 
 def test_extractor_keeps_odds_ratio_backward_compatible():
