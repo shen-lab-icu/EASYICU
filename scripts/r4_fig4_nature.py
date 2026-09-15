@@ -95,13 +95,14 @@ def main() -> None:
     comps = [c for c in COMP_LABEL if c in lo.index]
     labels = [COMP_LABEL[c] for c in comps]
 
-    # reference complete-case n (from crossdb naive row for the same DB)
+    # reference complete-case n (from crossdb naive row for the same DB);
+    # a missing row fails loudly like the other panel lookups instead of
+    # printing "n = 0" into the Panel-A title
     _cd0 = pd.read_csv(indir / "crossdb_comparability.csv")
-    try:
-        _ref_n = int(_cd0[(_cd0["comparison"] == "naive") &
-                          (_cd0["cohort"] == args.db)]["n"].iloc[0])
-    except Exception:
-        _ref_n = 0
+    _ref_n = int(
+        _cd0[(_cd0["comparison"] == "naive") & (_cd0["cohort"] == args.db)]["n"]
+        .iloc[0]
+    )
 
     fig = plt.figure(figsize=(7.2, 5.8))  # ~183 mm wide
     gs = fig.add_gridspec(2, 3, height_ratios=[1.0, 1.0], hspace=0.62, wspace=0.42,

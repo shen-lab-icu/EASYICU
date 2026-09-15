@@ -351,6 +351,7 @@ def main() -> int:
     _append_log(log_path, f"Models={models}")
     _append_log(log_path, f"Items={items}")
     _append_log(log_path, f"Out root={out_root}")
+    aggregation_failures: List[str] = []
 
     for model_idx, model in enumerate(models, start=1):
         model_root = (
@@ -410,7 +411,7 @@ def main() -> int:
 
         if args.aggregate_after_each_model:
             _append_log(log_path, f"Aggregating completed items for model: {model}")
-            _run_command(
+            aggregate_rc = _run_command(
                 cmd=_aggregate_command(
                     python_bin=args.python_bin,
                     runner_path=runner_path,
@@ -425,10 +426,12 @@ def main() -> int:
                 env=env,
                 log_path=log_path,
             )
+            if aggregate_rc != 0:
+                aggregation_failures.append(f"model:{model}")
 
     if len(models) == 1:
         _append_log(log_path, "Running final single-model aggregation pass")
-        _run_command(
+        final_aggregation_rc = _run_command(
             cmd=_aggregate_command(
                 python_bin=args.python_bin,
                 runner_path=runner_path,
@@ -445,7 +448,7 @@ def main() -> int:
         )
     else:
         _append_log(log_path, "Running final multi-model matrix aggregation pass")
-        _run_command(
+        final_aggregation_rc = _run_command(
             cmd=_matrix_command(
                 python_bin=args.python_bin,
                 runner_path=runner_path,
@@ -460,10 +463,37 @@ def main() -> int:
             env=env,
             log_path=log_path,
         )
+    if final_aggregation_rc != 0:
+        aggregation_failures.append(
+            "final:single-model" if len(models) == 1 else "final:multi-model-matrix"
+        )
 
     _append_log(log_path, f"Overnight analysis bench finished at {_utc_now()}")
-    _write_json(progress_path, _progress_payload(state))
-    return 0
+
+    # Resolve the final per-item status from the attempt history: an item is
+    # ok only when one of its attempts exited 0; every other terminal state
+    # stays in the failure denominator so the wrapper is usable as a gate.
+    item_status: Dict[str, str] = {}
+    for attempt in state.attempts:
+        key = f"{attempt.model}:{attempt.item}"
+        if attempt.status == "ok":
+            item_status[key] = "ok"
+        else:
+            item_status.setdefault(key, "failed")
+    failed_items = sorted(k for k, s in item_status.items() if s != "ok")
+    if failed_items:
+        _append_log(log_path, f"Failed items: {', '.join(failed_items)}")
+    if aggregation_failures:
+        _append_log(
+            log_path,
+            f"Failed aggregations: {', '.join(aggregation_failures)}",
+        )
+    payload = _progress_payload(state)
+    payload["item_final_status"] = item_status
+    payload["failed_items"] = failed_items
+    payload["aggregation_failures"] = aggregation_failures
+    _write_json(progress_path, payload)
+    return 1 if failed_items or aggregation_failures else 0
 
 
 if __name__ == "__main__":  # pragma: no cover
