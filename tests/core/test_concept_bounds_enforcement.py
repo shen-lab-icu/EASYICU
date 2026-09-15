@@ -577,6 +577,13 @@ def test_miiv_other_scores_uses_measured_batch_process_isolation() -> None:
     assert api._requires_isolated_stream_batch("mimic", "other_scores") is False
 
 
+def test_miiv_medications_uses_isolated_batches_and_deferred_merge() -> None:
+    assert api._requires_isolated_stream_batch("miiv", "medications") is True
+    assert ("miiv", "medications") in api._DEFERRED_STREAM_MERGE_TARGETS
+    assert api._requires_isolated_stream_batch("miiv_demo", "medications") is False
+    assert api._requires_isolated_stream_batch("mimic", "medications") is False
+
+
 def test_append_isolated_stream_batch_aligns_to_frozen_schema(tmp_path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
