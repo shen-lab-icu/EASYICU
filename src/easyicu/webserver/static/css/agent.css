@@ -16,7 +16,7 @@
 .ag-dtop{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
 .ag-title{ font-size:21px; font-weight:600; letter-spacing:-0.02em; display:flex; align-items:center; gap:9px; }
 .ag-title .editmk{ color:var(--ink-4); cursor:pointer; opacity:0; transition:opacity .12s; }
-.ag-title:hover .editmk{ opacity:1; }
+.ag-title:hover .editmk, .ag-title:focus-within .editmk{ opacity:1; }
 /* Project source identity rules live in css/agent-project-source.css. */
 
 /* mode switch */

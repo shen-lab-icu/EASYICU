@@ -254,7 +254,7 @@
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-feature-scope]').forEach(b => b.addEventListener('click', () => {
-        const next = b.dataset.state.featureScope === 'all' ? 'all' : 'recommended';
+        const next = b.dataset.cohortFeatureScope === 'all' ? 'all' : 'recommended';
         if (next === state.featureScope) return;
         state.featureScope = next;
         window.EU_STALE = true;
@@ -282,7 +282,7 @@
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-sofa-matrix-mode]').forEach(b => b.addEventListener('click', () => {
-        const next = b.dataset.state.sofaMatrixMode === 'count' ? 'count' : 'pct';
+        const next = b.dataset.cohortSofaMatrixMode === 'count' ? 'count' : 'pct';
         if (next === state.sofaMatrixMode) return;
         state.sofaMatrixMode = next;
         repaintScreen('cohort');
@@ -294,7 +294,7 @@
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-feature-module]').forEach(b => b.addEventListener('click', () => {
-        state.featureModule = b.dataset.state.featureModule || 'all';
+        state.featureModule = b.dataset.cohortFeatureModule || 'all';
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-feature-toggle]').forEach(b => b.addEventListener('click', () => {
@@ -526,4 +526,3 @@
     },
   };
 })();
-

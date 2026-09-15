@@ -259,6 +259,31 @@
       if (!section) return false;
       const dir = section.dataset.runFiles;
       const entry = entries.get(dir);
+      const evidence = target.closest('[data-gpi-evidence-open]');
+      if (evidence) {
+        event.preventDefault();
+        const state = entry && entry.controller.state;
+        const review = state && state.review;
+        const artifact = state && state.artifact;
+        const preview = modules.optional('preview');
+        if (review && artifact && context().projectId && preview && preview.openRunEvidence) {
+          const manifest = rows(review.artifacts).find(item => item.name === artifact.name);
+          preview.openRunEvidence({
+            kind: 'research_artifact', run_id: review.run_id, artifact: artifact.name,
+            sha256: manifest && manifest.sha256,
+          }, context().projectId, evidence);
+        }
+        return true;
+      }
+      const display = target.closest('[data-gpi-display]');
+      if (display) {
+        event.preventDefault();
+        const id = String(display.dataset.gpiDisplay || '').trim();
+        const anchor = Array.from(section.querySelectorAll('[data-gpi-display-anchor]'))
+          .find(node => node.dataset.gpiDisplayAnchor === id);
+        if (anchor) anchor.scrollIntoView({ block: 'start' });
+        return true;
+      }
       const reference = target.closest('[data-gpi-reference]');
       if (reference) {
         event.preventDefault();

@@ -878,6 +878,12 @@ class PipelineConfig:
             profile = get_submission_profile(
                 f"{self.submission_profile_name}/{self.submission_profile_version}"
             )
+            for coordinate in ("planner_only", "require_human_plan_review"):
+                expected = getattr(profile, coordinate)
+                if expected is not None and getattr(self, coordinate) != expected:
+                    raise ValueError(
+                        f"{coordinate} must match submission profile {profile.ref!r}"
+                    )
             expected_outline_stop = bool(
                 profile.development_stop_after_planner_outline
             )

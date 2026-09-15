@@ -71,7 +71,6 @@ def test_native_static_route_registry_contains_fallback_only_routes() -> None:
         "patient",
         "cohort",
         "crossdb",
-        "agent",
         "ideas",
         "settings",
         "dictionary",
@@ -152,7 +151,6 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     app_js = _static_js("app.js")
     dock_js = _static_js("copilot-dock.js")
     extraction_js = _static_js("screens-extraction.js")
-    agent_js = _static_js("screens-agent.js")
     help_js = _static_js("screens-help.js")
     index_html = _static_html("index.html")
 
@@ -162,8 +160,6 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "t('EasyICU Copilot', 'EasyICU 研究助手')" in app_js
     # All shell affordances open the one #guided Pi conversation. Project
     # Monitor must not add an agent-specific conversation opener.
-    assert "Agent guide" not in agent_js
-    assert "data-cpopen" not in agent_js
     assert "function open()" in dock_js
     assert "location.hash = '#guided'" in dock_js
     assert "The historical page-guide dock intentionally is not constructed" in dock_js
@@ -174,7 +170,6 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Cancel accepted. Stopping the current database query" in extraction_js
     assert "Stopping extraction" in extraction_js
     assert "当前数据库读取可能会先完成" not in extraction_js
-    assert "Continue in Guided Copilot" in agent_js
     assert "Open EasyICU Copilot" in help_js
 
     assert "Quick help" not in app_js
@@ -185,7 +180,6 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Guided Copilot" not in dock_js
     assert '<div class="cp-name">Copilot</div>' not in dock_js
     assert "Let Copilot drive" not in extraction_js
-    assert "Continue in Copilot" not in agent_js
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
@@ -199,7 +193,6 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
     index_html = _static_html("index.html")
-    monitor_js = _static_js("screens-agent.js")
     history_js = _static_js("screens-agent-run-history.js")
 
     owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
@@ -207,14 +200,11 @@ def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
     assert owner_asset in index_html
     assert index_html.index(owner_asset) < index_html.index(monitor_asset)
     assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
-    assert "const RUN_HISTORY_VIEW = window.EU_AGENT_RUN_HISTORY_VIEW" in monitor_js
-    assert "function historyRunForStudy" not in monitor_js
 
 
 def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
     index_html = _static_html("index.html")
     api_js = _static_js("api.js")
-    agent_js = _static_js("screens-agent.js")
     science_js = _static_js("screens-agent-science.js")
     science_css = _static_css("agent-science.css")
     science_detail_css = _static_css("agent-science-detail.css")
@@ -231,8 +221,6 @@ def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
     assert "checkCapabilityTool" in api_js
     assert "searchZotero" in api_js
     assert "loadCapabilityAuditEvents" in api_js
-    assert "window.EU_AGENT_SCIENCE.render" in agent_js
-    assert "window.EU_AGENT_SCIENCE.wire" in agent_js
 
     assert "window.EU_AGENT_SCIENCE" in science_js
     assert "artifact_history" in science_js
@@ -685,7 +673,6 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "IDEA.isGuidedIdeaIntent(v)" in guided_js
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
-    agent_js = _static_js("screens-agent.js")
     render_js = _static_js("screens-agent-render.js")
     agent_css = _static_css("agent.css")
     agent_layout_css = _static_css("agent-layout.css")
@@ -703,39 +690,6 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
     assert "css/agent-capabilities.css?v=20260627-agent-capabilities" in index_html
-    assert "function artifactsForLive(live)" in agent_js
-    assert "function reviewableRunForStudy()" in agent_js
-    assert "let agListMode = 'auto';" in agent_js
-    assert (
-        "const AG_FOCUS_TABS = new Set(['science', 'runs', 'outputs', 'notes', 'draft']);"
-        in agent_js
-    )
-    assert "function agentListCollapsed()" in agent_js
-    assert "const detail = document.querySelector('#agHost .ag-detail');" in agent_js
-    assert "document.querySelector('#agHost .ag-body');" not in agent_js
-    assert "data-ag-toggle-list" in agent_js
-    assert 'aria-controls="agStudyList"' in agent_js
-    assert "ag-wrap ${listCollapsed ? 'list-collapsed' : 'list-open'}" in agent_js
-    assert "data-ag-list-state=\"${listCollapsed ? 'collapsed' : 'open'}\"" in agent_js
-    assert "const compactHeader = agTab !== 'overview';" in agent_js
-    assert "ag-dhead ${compactHeader ? 'compact' : ''}" in agent_js
-    assert "function outputCountForStudy()" in agent_js
-    assert "ag-review-layout" in agent_js
-    assert "ag-review-claims" in agent_js
-    assert "Show all artifacts" in agent_js
-    assert "visibleArtifacts = artifacts.slice(0, 6)" in agent_js
-    assert "['outputs', t('Outputs', '产出'), outputCountForStudy()]" in agent_js
-    assert "No real output artifacts yet" in agent_js
-    assert "placeholders are not shown in Real mode" in agent_js
-    assert (
-        "It will not show demo Table 1, missingness, ROC, or calibration placeholders"
-        in agent_js
-    )
-    assert 'data-ag-artifact-view="${esc(name)}"' in agent_js
-    assert "artifactTitle(name)" in agent_js
-    assert "artifactSummary(name)" in agent_js
-    assert "artifactCategory(name)" in agent_js
-    assert "Primary review outputs" in agent_js
     # Artifact renderers live in the screens-agent-render.js owner file.
     assert "function artifactStructuredView(name, payload)" in render_js
     assert "Readable artifact summary" in render_js
@@ -747,23 +701,6 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
         "Raw JSON is kept for audit, but the default view is table-based." in render_js
     )
     # The raw-JSON <details> lives in artifactViewer, which stays in main.
-    assert "View raw JSON" in agent_js
-    assert "查看原始 JSON" in agent_js
-    assert "function featuredFigurePreview(live)" in agent_js
-    assert "Result figures" in agent_js
-    assert "function evidenceLinkPanel(live, s)" in agent_js
-    assert "function crossDataPanel(live, s)" in agent_js
-    assert "function capabilityHighlights(live, s)" in agent_js
-    assert "Evidence Link" in agent_js
-    assert "证据链接" in agent_js
-    assert "Cross-data scope" in agent_js
-    assert "跨数据范围" in agent_js
-    assert "data-ag-artifact-jump" in agent_js
-    assert "Completed analysis outputs" in agent_js
-    assert "Download bundle" in agent_js
-    assert "['outputs', t('Outputs', '产出'), 6]" not in agent_js
-    assert "Seeded demo artifacts." not in agent_js
-    assert "Illustrative outputs for layout" not in agent_js
     assert "Project Monitor route-owned layout fixes" in agent_css
     assert ".ag-pipe .pline" in agent_layout_css
     assert ".ag-pipe .pstep" in agent_layout_css
@@ -807,23 +744,9 @@ def test_project_monitor_renders_one_load_state_and_fits_the_pipeline() -> None:
     Blank states omit the project header, pipeline, and tabs instead of
     presenting an invented active Plan while the local index is unavailable.
     """
-    agent_js = _static_js("screens-agent.js")
     agent_css = _static_css("agent.css")
     layout_css = _static_css("agent-layout.css")
 
-    assert "function monitorViewState(studies)" in agent_js
-    assert "if (studies.length) return 'ready';" in agent_js
-    assert "if (agIdeaProjects.error) return 'error';" in agent_js
-    assert "if (monitorState !== 'ready') return" in agent_js
-    assert 'data-ag-monitor-state="${monitorState}"' in agent_js
-    assert "const count = monitorState === 'loading' || monitorState === 'error' ? '—' : studies.length;" in agent_js
-    assert "Checking project index" in agent_js
-    for state in ("Loading projects", "Could not load local projects", "No projects to monitor yet"):
-        assert state in agent_js
-    assert "No project selected for monitoring" not in agent_js
-    assert "Local research projects unavailable" not in agent_js
-    assert "ideas-empty-list" not in agent_js
-    assert "ag-empty-steps" not in agent_js
 
     for selector in (".ag-wrap-blank", ".ag-detail-blank", ".ag-monitor-state", ".ag-list-state"):
         assert selector in layout_css
@@ -835,21 +758,14 @@ def test_project_monitor_renders_one_load_state_and_fits_the_pipeline() -> None:
 
 
 def test_project_monitor_loads_persisted_run_history_before_claiming_zero() -> None:
-    agent_js = _static_js("screens-agent.js")
     history_js = _static_js("screens-agent-run-history.js")
 
     assert "function rows(history, study)" in history_js
     assert "function count(history, study, realMode)" in history_js
-    assert "return live || historyRunForStudy(selected)" in agent_js
     assert "persisted && persisted.project_dir" in history_js
-    assert "requestRunHistory();\n      if (window.__euRender)" in agent_js
-    assert "const noRun = monitorRunCount(s) === 0;" in agent_js
-    assert "Checking run history" in agent_js
-    assert "Run history unavailable" in agent_js
 
 
 def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
-    agent_js = _static_js("screens-agent.js")
     render_js = _static_js("screens-agent-render.js")
     agent_css = _static_css("agent.css")
     app_js = _static_js("app.js")
@@ -875,7 +791,6 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
         "function startDemoRun",
     )
     for marker in forbidden_js:
-        assert marker not in agent_js
         assert marker not in render_js
 
     for marker in (".ag-block", ".ag-wf", ".ag-lib"):
@@ -883,13 +798,6 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
         assert marker not in screens_css
         assert marker not in redesign_css
 
-    assert "Requirements, model setup, and run initiation stay in Guided Copilot" in agent_js
-    assert "Requirements and execution live in Guided Copilot" in agent_js
-    assert "Continue in Guided Copilot" in agent_js
-    assert "data-ag-guided" in agent_js
-    assert "loadAgentRunHistory" in agent_js
-    assert "loadAgentRunReview" in agent_js
-    assert "signoffAgentRun" in agent_js
     assert "Project Monitor" not in app_js
     assert "__euHistoryRequested" not in app_js
     assert "runs · outputs · evidence · review" not in app_js
@@ -902,11 +810,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
-    """The fixture data and pure artifact
-    renderers are owned by screens-agent-render.js, not inlined in the
-    screens-agent.js monolith (owner-file carve-out, 2026-07-03). The main
-    file rebinds them from window.AGENT_RENDER so call sites stay unchanged."""
-    agent_js = _static_js("screens-agent.js")
+    """Guided run review uses the shared pure artifact-render owner."""
     render_js = _static_js("screens-agent-render.js")
     index_html = _static_html("index.html")
 
@@ -919,24 +823,13 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert "function thumb(kind)" in render_js
     assert "window.AGENT_RENDER = {" in render_js
 
-    # they are NOT re-defined in the main file (no duplicate definitions)
-    assert "const DEMO_STUDIES = [" not in agent_js
-    assert "const BLOCK_LIBRARY = [" not in agent_js
-    assert "function artifactStructuredView(name, payload)" not in agent_js
-    assert "function runStatusLabel(status)" not in agent_js
-
-    # main file rebinds the exports so call sites stay unchanged
-    assert "} = R;" in agent_js
-    assert "window.AGENT_RENDER" in agent_js
-    assert "artifactStructuredView" in agent_js  # still called
-
-    # render file loads BEFORE the main file in index.html
+    # The renderer must load before the Guided run-file consumer.
     render_pos = index_html.find("screens-agent-render.js")
     main_pos = index_html.find("screens-guided-pi-run-files.js?")
     assert render_pos != -1 and main_pos != -1
     assert (
         render_pos < main_pos
-    ), "screens-agent-render.js must load before screens-agent.js"
+    ), "screens-agent-render.js must load before screens-guided-pi-run-files.js"
     assert "js/screens-agent-render.js?v=20260914-reader-lineage1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
@@ -962,7 +855,6 @@ def test_candidate_plan_styles_have_one_explicit_owner() -> None:
 
 
 def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
-    agent_js = _static_js("screens-agent.js")
     guided_js = _static_js("screens-guided-pi.js")
     provider_js = _static_js("screens-guided-pi-provider.js")
     provider_control_js = _static_js("screens-guided-pi-provider-control.js")
@@ -982,9 +874,6 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert "research_provider: state.researchProvider" in guided_js
     assert "startPiCopilotCodexLogin" in provider_control_js
     assert "startPiCopilotCodexLogin" not in guided_js
-    assert "AGENT_PROVIDER_PANEL" not in agent_js
-    assert "data-ag-codex-login" not in agent_js
-    assert "data-ag-external-run" not in agent_js
     assert "screens-agent-provider.js" not in index_html
 
     provider_pos = index_html.find("screens-guided-pi-provider.js?")
@@ -1001,20 +890,9 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
         assert foreign_marker not in provider_js
 
 
-def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
-    agent_js = _static_js("screens-agent.js")
-
-    assert "function seedPlanStepDisplay(row)" in agent_js
-    assert "typeof row === 'object'" in agent_js
-    assert "row.title || row.action" in agent_js
-    assert "const step = seedPlanStepDisplay(x);" in agent_js
-    assert "return [step.title, step.detail, 'ready'];" in agent_js
-    assert '<div class="pi-t">${esc(ti)}</div>' in agent_js
-    assert "seedPlan.map(x => [x," not in agent_js
 
 
 def test_native_agent_historical_evaluation_import_uses_normal_project_surface() -> None:
-    agent_js = _static_js("screens-agent.js")
     agent_css = _static_css("agent.css")
     agent_cap_css = _static_css("agent-capabilities.css")
     agent_question_css = _static_css("agent-question.css")
@@ -1034,63 +912,15 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
         / "agent_runs.py"
     ).read_text(encoding="utf-8")
 
-    assert "canonical9_import" in agent_js
-    assert "function importedRunForStudy(s)" in agent_js
-    assert "function reviewableRunForStudy()" in agent_js
     # runStatusLabel / readableArtifactText moved to the render owner file.
     assert "function runStatusLabel(status)" in _static_js("screens-agent-render.js")
     assert "function readableArtifactText(value)" in _static_js(
         "screens-agent-render.js"
     )
-    assert "function evidenceLinkPanel(live, s)" in agent_js
-    assert "function crossDataPanel(live, s)" in agent_js
-    assert "function capabilityHighlights(live, s)" in agent_js
-    assert "function questionParts(text)" in agent_js
-    assert "function questionTags(s, raw)" in agent_js
-    assert "function renderStructuredQuestion(s)" in agent_js
-    assert "function focusAgentBody()" in agent_js
-    assert "function importedResultSummary(s)" in agent_js
-    assert "function featuredFigurePreview(live)" in agent_js
-    assert "function benchmarkPanel(s)" not in agent_js
-    assert "data-ag-open-seed-run" in agent_js
-    assert (
-        "artifactStructuredView(artifact.name || agArtifact.name || '', data.payload || {})"
-        in agent_js
-    )
-    assert "benchmark_scorecard.json" in agent_js
     # workflow_graph.json only appears in the moved artifact label maps.
     assert "workflow_graph.json" in _static_js("screens-agent-render.js")
-    assert "figure_gallery.json" in agent_js
-    assert "source_run_manifest.json" in agent_js
-    assert "Completed analysis" in agent_js
-    assert "Research idea" in agent_js
-    assert "Read-only review · manuscript not unlocked" in agent_js
-    assert "Study brief" in agent_js
-    assert "汇报摘要" in agent_js
     # "verification passed" is a runStatusLabel string, now in the render file.
     assert "verification passed" in _static_js("screens-agent-render.js")
-    assert "readableArtifactText(row.text || '')" in agent_js
-    assert "Claim-to-artifact trace is explicit" in agent_js
-    assert "Open Cross-DB workspace" in agent_js
-    assert "Core question" in agent_js
-    assert "Analysis requirements" in agent_js
-    assert "Data context" in agent_js
-    assert "scrollIntoView({ block: 'start', behavior: 'auto' })" in agent_js
-    assert "function studyListContext(studies)" in agent_js
-    assert "Demo mode includes example projects for exploration" in agent_js
-    assert "function agentTermStrip(s)" in agent_js
-    assert "automated checks passed; human review is still required" in agent_js
-    assert "想法种子" not in agent_js
-    assert "九问运行" not in agent_js
-    assert "Idea seed" not in agent_js
-    assert "Canonical run" not in agent_js
-    assert "s.id === 'aki' ? 'kdigo' : 'lactate'" not in agent_js
-    assert "Figure 2 question package" not in agent_js
-    assert "Figure 2 问题包" not in agent_js
-    assert "clinical benchmark task" not in agent_js
-    assert "临床 benchmark 问题" not in agent_js
-    assert "Current canonical9 package" not in agent_js
-    assert "当前 canonical9 包" not in agent_js
     assert ".ag-list-context" in agent_css
     assert ".ag-term-strip" in agent_css
     assert ".ag-bench-card" not in agent_css
@@ -1539,7 +1369,6 @@ def test_native_ui_does_not_prefill_author_machine_paths() -> None:
             _static_js("screens-extraction.js"),
             _static_js("screens-viz.js"),
             _static_js("screens-guided.js"),
-            _static_js("screens-agent.js"),
             _static_js("screens-settings.js"),
         ]
     )
@@ -1589,7 +1418,6 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     icons_js = _static_js("icons.js")
     ideas_js = _static_js("screens-ideas.js")
     ideas_zotero_js = _static_js("screens-ideas-zotero.js")
-    agent_js = _static_js("screens-agent.js")
     redesign_css = _static_css("redesign.css")
     ideas_css = _static_css("ideas.css")
     ideas_review_css = _static_css("ideas-review.css")
@@ -1834,20 +1662,9 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert ".ideas-zotero-source" not in redesign_css
     assert ".ideas-zotero-paste" not in ideas_css
     assert ".ideas-zotero-paste" not in redesign_css
-    assert "loadIdeaAgentProjects" in agent_js
-    assert "seedStudy(row)" in agent_js
     # DEMO_STUDIES data moved to screens-agent-render.js; the consumer stays.
     assert "const DEMO_STUDIES" in _static_js("screens-agent-render.js")
-    assert "const base = realMode() ? [] : DEMO_STUDIES" in agent_js
-    assert "No projects to monitor yet" in agent_js
     # Real mode must not fabricate studies or collect setup on the monitor.
-    assert "Start a study in Guided Copilot" in agent_js
-    assert "Open Guided Copilot" in agent_js
-    assert "data-ag-new" not in agent_js
-    assert "data-ag-runbtn" not in agent_js
-    assert "data-ag-mode" not in agent_js
-    assert "Idea exploration" not in agent_js
-    assert "Open Idea Mining" not in agent_js
 
 
 def test_native_extraction_cohort_controls_are_continuous_and_icd_is_empty() -> None:
@@ -2474,7 +2291,6 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
         for name in [
             "app.js",
             "copilot-dock.js",
-            "screens-agent.js",
             "screens-extraction.js",
             "screens-guided.js",
             "screens-guided-projects.js",
@@ -2524,7 +2340,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     api_js = _static_js("api.js")
     index_html = _static_html("index.html")
 
-    assert "loadAgentRunReview(row.project_dir)" in guided_js
+    assert "loadAgentRunReview(run.project_dir)" in _static_js("screens-guided-pi-run-files.js")
     assert "/api/guided/drafts" in api_js
     assert "/api/guided/drafts/list" in api_js
     assert "/api/guided/drafts/remove" in api_js
@@ -2782,7 +2598,6 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
 
 
 def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
-    agent_js = _static_js("screens-agent.js")
     provider_js = _static_js("screens-guided-pi-provider.js")
     api_js = _static_js("api.js")
 
@@ -2796,29 +2611,13 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     assert (
         "postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/cancel'" in api_js
     )
-    assert "easyicu.agent.activeJob.v1" in agent_js
-    assert "rememberAgentJob" in agent_js
-    assert "maybeRestoreAgentJob" in agent_js
-    assert "restoreAgentJobFromSnapshot" in agent_js
-    assert "data-ag-cancel-job" in agent_js
-    assert "data-ag-reconnect" in agent_js
-    assert "Resume stream" in agent_js
-    assert "Restart from active export" not in agent_js
-    assert "continue safely from Guided Copilot" in agent_js
-    assert "Continue in Guided Copilot" in agent_js
-    assert "seedGateBlocksRun" in agent_js
-    assert "host.clientWidth < 1040" in agent_js
     assert "data-ag-" not in provider_js
-    assert "project_seed_dir" in agent_js
-    assert "Project readiness checks are not complete" in agent_js
     # The remedy sentences moved out of a regex-over-English table in
     # screens-agent.js into gate-remedy.js, keyed on the backend reason code.
     # Assert the property at its new owner rather than dropping it.
     remedy_js = _static_js("gate-remedy.js")
     assert "prior_art_not_reviewed" in remedy_js
     assert "prior-art review" in remedy_js
-    assert "/prior-art/i" not in agent_js
-    assert "Continue in Guided Copilot so it can refresh" in agent_js
 
 
 def test_native_patient_source_radios_are_real_controls() -> None:
@@ -3605,12 +3404,9 @@ def test_agent_run_status_labels_cover_success_statuses() -> None:
     """[11] The two most common completed-run statuses must be humanized, and the
     Runs history tab must route status through runStatusLabel (no raw snake_case)."""
     render_js = _static_js("screens-agent-render.js")
-    agent_js = _static_js("screens-agent.js")
     assert "publication_ready: t('publication-ready'" in render_js
     assert "manuscript_ready: t('manuscript-ready'" in render_js
     # Runs history tab humanizes the status token + the tampered tag (no raw snake_case)
-    assert "runStatusLabel(status)" in agent_js
-    assert "changed since sign-off" in agent_js
 
 
 def test_crossdb_selected_density_plot_has_readable_axis_and_legend() -> None:
@@ -3733,16 +3529,13 @@ def test_science_tab_is_merged_into_agent_flow_as_evidence() -> None:
     into the Project Monitor flow. The tab is named 'Evidence', the panel no longer
     announces a separate app, the Claude-Science reference card is removed, and the
     Evidence view is cross-linked bidirectionally with Outputs."""
-    agent_js = _static_js("screens-agent.js")
     science_js = _static_js("screens-agent-science.js")
     science_css = _static_css("agent-science.css")
 
     # Tab renamed Science -> Evidence (both idea + full tab arrays); no user-facing
     # "Science" / "科学工作台" identity strings survive in either owner file.
-    assert "t('Evidence', '证据')" in agent_js
-    assert "t('Science', '科学工作台')" not in agent_js
-    assert "Science Workbench" not in agent_js and "Science Workbench" not in science_js
-    assert "科学工作台" not in agent_js and "科学工作台" not in science_js
+    assert "Science Workbench" not in science_js
+    assert "科学工作台" not in science_js
 
     # The panel is framed as Evidence & provenance, not a self-announcing app card.
     assert "Evidence & provenance" in science_js
@@ -3754,7 +3547,6 @@ def test_science_tab_is_merged_into_agent_flow_as_evidence() -> None:
     assert "visual_reference" not in science_js
 
     # Bidirectional cross-links: Outputs -> Evidence and Evidence -> Outputs.
-    assert 'data-ag-tab="science"' in agent_js  # Outputs header link
     assert 'data-ag-tab="outputs"' in science_js  # Evidence "Back to Outputs"
 
     # Inner section nav is de-emphasised to a subordinate sub-control (still a

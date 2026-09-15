@@ -622,7 +622,7 @@ def main() -> int:
     )
     print(out_root / "validation_results.json")
     print(out_root / "validation_results.md")
-    return 0
+    return 0 if summary["n_failed"] == 0 and summary["n_tasks"] else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

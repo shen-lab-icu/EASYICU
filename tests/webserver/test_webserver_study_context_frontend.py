@@ -164,7 +164,6 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
 def test_guided_owns_run_submission_and_monitor_reuses_the_same_context() -> None:
     guided = _read("js/screens-guided.js")
     guided_owner = _read("js/screens-guided-study-context.js")
-    agent = _read("js/screens-agent.js")
     agent_owner = _read("js/screens-agent-study-context.js")
     assert "window.EU_GUIDED_CONTEXT" in guided
     assert "EU_STUDY_CONTEXT" not in guided
@@ -174,31 +173,21 @@ def test_guided_owns_run_submission_and_monitor_reuses_the_same_context() -> Non
     assert "study_id: runToken.study_id" in guided
     assert "study_context_id: runToken.context_id" in guided
     assert "persistForRun('agent_preflight')" in guided
-    assert "EU_STUDY_CONTEXT" not in agent
     assert "projectKind: 'study_context'" in agent_owner
     assert "function projects()" in agent_owner
     assert "function activate(id)" in agent_owner
-    assert "persistForRun(s)" not in agent
-    assert "window.EU_API.startAgentRun" not in agent
     assert "markContextRunning(runToken.context_id, runToken.job_id" in guided
     assert "markContextFinished(" in guided
     assert "markActiveRunning" not in guided
     assert "markActiveFinished" not in guided
     # The monitor may finish a reconnected stream, but cannot initiate a run.
-    assert "window.EU_AGENT_STUDY_CONTEXT.markContextFinished(" in agent
-    assert "result && result.study_context_revision" in agent
     assert "createRunChannel" in agent_owner
     assert "createJobMemory" in agent_owner
     assert "prepareGuidedHandoff" in agent_owner
     assert "takeGuidedHandoff" in agent_owner
     assert "easyicu.pi-project-binding-handoff/1" in agent_owner
-    assert 'data-ag-guided' in agent
-    assert 'data-nav="guided"' not in agent[agent.index('<div class="handoff">'):agent.index('</div>`;', agent.index('<div class="handoff">'))]
-    assert "prepareGuidedHandoff(selected)" in agent
     assert "takeGuidedHandoff()" in guided
     assert "binding_receipt: guidedBinding.binding_receipt || null" in guided
-    assert "agJobMemory.get(studyId)" in agent
-    assert "agRunChannel.isCurrent(runToken)" in agent
     assert "guidedRunChannel.isCurrent(runToken)" in guided
     assert "StudyContext persistence is unavailable; the real Guided run was not submitted." in guided
     assert "No active registered export is selected; no real run was submitted." in guided
@@ -209,9 +198,6 @@ def test_guided_owns_run_submission_and_monitor_reuses_the_same_context() -> Non
     assert "Applied when the run starts" in agent_owner
     assert "Informational until the analysis pipeline consumes them" in agent_owner
     assert "window.addEventListener('easyicu:study-context'" in agent_owner
-    assert "${esc(t(s.name[0], s.name[1]))}" in agent
-    assert "${esc(s.cohort)}" in agent
-    assert "${esc(linkedPath || linked)}" in agent
 
 
 def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() -> None:
@@ -220,7 +206,6 @@ def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() ->
     extraction_owner = _read("js/screens-extraction-study-context.js")
     guided_owner = _read("js/screens-guided-study-context.js")
     agent_owner = _read("js/screens-agent-study-context.js")
-    agent = _read("js/screens-agent.js")
     # The plan-only handoff button lives with the crossdb results owner. It had
     # silently degraded to a bare data-nav during the owner split, so nothing
     # ever set crossdb_plan_only and the Agent-side gate below was unreachable.
@@ -237,48 +222,25 @@ def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() ->
     assert "function runBlocker(study)" in agent_owner
     assert "crossdb_selection" in viz_owner
     assert "crossdb_selection" in agent_owner
-    assert "EU_SOURCES.crossdbPaths" not in agent
     assert "study.planOnly || selectedSources.length > 1" in agent_owner
-    assert "No single export path or stay count is substituted" in agent
-    assert "Cross-DB selection receipt bound" in agent
 
 
 def test_nonfatal_agent_submission_warnings_are_visible_in_both_surfaces() -> None:
     guided = _read("js/screens-guided.js")
-    agent = _read("js/screens-agent.js")
     owner = _read("js/screens-agent-study-context.js")
     assert "audit_warning" in owner
     # A run whose active-job reservation failed is now refused outright, so
     # there is deliberately no "the pointer did not sync but it runs anyway"
     # warning left for this screen to render.
     assert "context_sync_warning" not in owner
-    assert "submissionWarning(r)" not in agent
-    assert "warningNote(agRun.warning)" in agent
     assert "submissionWarning(r)" in guided
     assert "warningNote(guidedAgent.warning)" in guided
 
 
 def test_agent_blocked_gate_planning_copy_and_tabs_are_truthful() -> None:
-    agent = _read("js/screens-agent.js")
     owner = _read("js/screens-agent-study-context.js")
-    assert "review_blocked" in agent
-    assert "Evidence verification blocked" in agent
-    assert "result.gate && result.gate.status === 'blocked'" in agent
-    assert "gate && Array.isArray(gate.checks)" in agent
-    assert "Waiting for verification results" in agent
-    assert "Denominators resolved" not in agent
     assert "markContextStage(boundId, terminalStage(status, result), null, jobId, revision)" in owner
     assert "if (!updated) return null" in owner
-    assert "Planning Blocks" not in agent
-    assert "规划块" not in agent
-    assert "window.EU_API.startAgentRun" not in agent
-    assert "data-ag-guided" in agent
-    assert "Workflow Blocks" not in agent
-    assert 'role="tablist"' in agent
-    assert 'role="tab"' in agent
-    assert 'role="tabpanel"' in agent
-    assert 'aria-selected="${selected}"' in agent
-    assert "remembered.study_id === selected.id" in agent
 
 
 def test_agent_and_guided_run_tokens_reject_interleaved_callbacks() -> None:

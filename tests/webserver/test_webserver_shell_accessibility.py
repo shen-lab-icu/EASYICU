@@ -113,7 +113,6 @@ ROUTE_HEADINGS = {
         "<h1 style=\"margin-top:0;\">${t('Cross-database comparison', '跨库对比')}</h1>",
     ],
     "screens-ideas.js": ["<h1"],
-    "screens-agent.js": ["<h1"],
     "screens-settings.js": ["<h1"],
     "screens-dict.js": ["<h1"],
     "screens-states.js": ["<h1"],

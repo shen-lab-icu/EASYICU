@@ -357,18 +357,8 @@ def test_remedies_are_keyed_on_codes_not_matched_against_prose() -> None:
     screens-agent.js ran /prior-art/i and friends over the backend's English
     sentences, so rewording a backend string silently dropped the remedy.
     """
-    agent_js = (STATIC_JS / "screens-agent.js").read_text(encoding="utf-8")
     remedy_js = (STATIC_JS / "gate-remedy.js").read_text(encoding="utf-8")
 
-    for pattern in (
-        "/prior-art/i",
-        "/re-extract/i",
-        "/idea feasibility/i",
-        "/same active export/i",
-    ):
-        assert pattern not in agent_js
-    assert "gate.blocker_codes" in agent_js
-    assert "window.EU_GATE_REMEDY" in agent_js
     # Unknown codes yield nothing rather than a guess.
     assert "return build ? Object.assign" in remedy_js
 
@@ -434,25 +424,6 @@ def test_crossdb_states_its_scope_limit_before_the_agent_refuses() -> None:
     assert "跨库计划止于计划本身" in crossdb
 
 
-def test_the_provenance_card_declares_scope_and_never_infers_it() -> None:
-    """The one card whose job is naming the data must not guess from prose.
-
-    It tested the user's own question text for "mimic-iv" and announced the
-    MIMIC-IV canonical universe on a hit — so asking whether a MIMIC-IV finding
-    replicates, while the active export is eICU, named the wrong database. It
-    then decided "multi-database" by regexing that label for the word
-    "database", which any single-database scope name would satisfy.
-    """
-    agent_js = (STATIC_JS / "screens-agent.js").read_text(encoding="utf-8")
-
-    assert "/mimic-iv/i.test(questionText)" not in agent_js
-    assert "/cross|multi|six|database/i" not in agent_js
-    assert "const isCross = crossScope;" in agent_js
-    assert "s.id === 'crossdb' || !!s.planOnly" in agent_js
-    # An undeclared scope must say so rather than borrow a confident label.
-    assert "Not declared by this run" in agent_js
-    assert "本次运行未声明" in agent_js
-    assert "undeclared" in agent_js
 
 
 def test_missing_job_branch_is_reachable_executable_contract() -> None:

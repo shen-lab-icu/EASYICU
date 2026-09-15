@@ -652,6 +652,7 @@ def test_e1_progressive_profile_is_public_and_rejects_strategy_override(
 
     config = PipelineConfig(
         workdir=tmp_path / "matching",
+        planner_only=True,
         submission_profile_name=public_profile.name,
         submission_profile_version=public_profile.version,
         planner_strategy="progressive_v2",

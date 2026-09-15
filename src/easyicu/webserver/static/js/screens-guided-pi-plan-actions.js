@@ -167,6 +167,12 @@
         && automaticRevisionBlocked()) return false;
       const request = generationRequest(String(reasonCode || ''));
       const session = host.session() || {};
+      const expectedProjectId = host.projectId();
+      const expectedSessionId = session.session_id;
+      const selectionRevision = host.selectionRevision ? host.selectionRevision() : null;
+      const isCurrent = () => host.projectId() === expectedProjectId
+        && host.session() && host.session().session_id === expectedSessionId
+        && (!host.selectionRevision || host.selectionRevision() === selectionRevision);
       const binding = session.binding || {};
       const provider = session.research_provider || {};
       const studyContextId = String(binding.study_context_id || '').trim();
@@ -229,8 +235,17 @@
         });
       }
       setPending(true);
+      let jobStarted = false;
+      const stillCurrent = () => {
+        if (isCurrent()) return true;
+        // A stale request that has not crossed the job-creation boundary did
+        // not consume this transition. Let the same session retry if reopened.
+        if (guardedTransition && !jobStarted) startedTransitions.delete(guardKey);
+        return false;
+      };
       try {
         const response = await api.loadStudyContext(studyContextId);
+        if (!stillCurrent()) return false;
         const study = response && (response.context || response.study || response);
         const source = study && study.data_source;
         const sourcePath = String((source && source.path) || '').trim();
@@ -259,6 +274,8 @@
               : 'fresh',
           plan_revision_source_run_id: revisionSourceRunId,
         });
+        jobStarted = true;
+        if (!stillCurrent()) return false;
         await host.recordHostAction(
           automatic && !executionUpgrade
             ? reasonCode === 'provider_ready_to_generate_plan'
@@ -270,6 +287,7 @@
           String(payload.job_id || ''),
           String(payload.job_id || ''),
         );
+        if (!stillCurrent()) return false;
         host.setBusy(false);
         host.watchChildJob(
           String(payload.job_id || ''),
@@ -279,6 +297,7 @@
         );
         return true;
       } catch (error) {
+        if (!stillCurrent()) return false;
         if (guardedTransition) startedTransitions.delete(guardKey);
         host.setBusy(false);
         host.setError(host.errorText(error));

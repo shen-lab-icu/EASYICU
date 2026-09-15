@@ -55,7 +55,6 @@ OVER_BUDGET_JS = {
     "screens-guided.js": 4906,
     # Project setup/run initiation moved to Guided Copilot; this route is now
     # a project monitor only.
-    "screens-agent.js": 1974,
     "screens-extraction.js": 2060,
     # Browser-safe activity rendering moved to screens-guided-pi-activity.js.
     "screens-guided-pi.js": 1787,
