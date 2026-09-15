@@ -22,6 +22,7 @@ def _load_refresher():
 
 def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
     refresher = _load_refresher()
+    assert refresher._validate_modules(["demographics"]) == ("demographics",)
     assert refresher._validate_modules(["outcome"]) == ("outcome",)
     assert refresher._validate_modules(["renal"]) == ("renal",)
     assert refresher._validate_modules(["respiratory"]) == ("respiratory",)
@@ -37,6 +38,9 @@ def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
 
 def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
     refresher = _load_refresher()
+    assert refresher._expand_module_dependency_closure(["demographics"]) == (
+        "demographics",
+    )
     assert refresher._expand_module_dependency_closure(["outcome"]) == ("outcome",)
     assert refresher._expand_module_dependency_closure(["respiratory"]) == (
         "respiratory",
@@ -202,8 +206,9 @@ def test_per_database_module_scope_preserves_minimal_refresh_boundaries() -> Non
     refresher = _load_refresher()
     parsed = refresher._parse_database_module_scopes(
         [
+            "hirid=demographics",
             "eicu=respiratory",
-            "mimic=respiratory",
+            "mimic=demographics,outcome",
             "miiv=sofa1_score,sofa2_score",
         ]
     )
@@ -214,7 +219,7 @@ def test_per_database_module_scope_preserves_minimal_refresh_boundaries() -> Non
         database_module_scope=parsed,
     )
 
-    assert databases == ("eicu", "mimic", "miiv")
+    assert databases == ("eicu", "hirid", "mimic", "miiv")
     assert requested["eicu"] == ("respiratory",)
     assert closed["eicu"] == (
         "respiratory",
@@ -231,6 +236,48 @@ def test_per_database_module_scope_preserves_minimal_refresh_boundaries() -> Non
     )
     assert "respiratory" not in closed["miiv"]
     assert "sepsis_shared" not in closed["miiv"]
+    assert requested["mimic"] == ("demographics", "outcome")
+    assert closed["mimic"] == ("demographics", "outcome")
+    assert closed["hirid"] == ("demographics",)
+
+
+def test_demographics_and_outcome_plan_excludes_unaffected_modules() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            database: {"module_metrics": {"outcome": {"rows": rows}}}
+            for database, rows in {
+                "hirid": 33_905,
+                "mimic": 61_532,
+                "miiv": 94_458,
+            }.items()
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=(),
+        databases=(),
+        memory_budget_mb=8 * 1024,
+        database_module_scope={
+            "hirid": ("demographics",),
+            "mimic": ("demographics", "outcome"),
+            "miiv": ("demographics", "outcome"),
+        },
+    )
+
+    assert {
+        database: tuple(record["modules"])
+        for database, record in plan["databases"].items()
+    } == {
+        "hirid": ("demographics",),
+        "mimic": ("demographics", "outcome"),
+        "miiv": ("demographics", "outcome"),
+    }
+    assert plan["unmeasured_or_overridden_modules"] == {
+        "hirid": ["demographics"]
+    }
+    assert plan["formal_release_admissible"] is False
 
 
 def test_per_database_release_plan_uses_each_database_closure() -> None:

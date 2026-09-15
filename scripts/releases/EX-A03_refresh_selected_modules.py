@@ -11,8 +11,10 @@ run is immutable, while the derived candidate records an explicit per-database
 refresh scope and can be sealed by ``EX-A01_seal_full6_release.py``.
 
 Only correctness modules and their declared downstream closure are allowlisted.
-``renal`` has ascertainment-aware KDIGO outputs. ``outcome`` preserves the
-owner-issued death-event time companion required by landmark analyses.
+``demographics`` covers corrected admission attributes and ICU-origin-aligned
+identity-level values without invalidating another extracted module. ``renal``
+has ascertainment-aware KDIGO outputs. ``outcome`` preserves the owner-issued
+death-event time companion required by landmark analyses.
 ``respiratory`` removes
 implicit room-air FiO2 imputation and therefore expands to ``sofa1_score`` and
 ``sofa2_score`` and the two Sepsis-SOFA labels that consume those scores. The
@@ -72,9 +74,17 @@ REPUBLICATION = _load_republisher()
 DATABASES: tuple[str, ...] = tuple(REPUBLICATION.DATABASES)
 MODULES: tuple[str, ...] = tuple(REPUBLICATION.MODULES)
 DIRECT_REFRESHABLE_MODULES = frozenset(
-    {"outcome", "renal", "respiratory", "sofa1_score", "sofa2_score"}
+    {
+        "demographics",
+        "outcome",
+        "renal",
+        "respiratory",
+        "sofa1_score",
+        "sofa2_score",
+    }
 )
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
+    "demographics": ("demographics",),
     "outcome": ("outcome",),
     "renal": ("renal",),
     "respiratory": (
@@ -212,8 +222,8 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     disallowed = set(selected) - DIRECT_REFRESHABLE_MODULES
     if disallowed:
         raise ModuleRefreshError(
-            "This audited refresh entry point currently allows only outcome, "
-            "renal, respiratory, sofa1_score and sofa2_score; "
+            "This audited refresh entry point currently allows only demographics, "
+            "outcome, renal, respiratory, sofa1_score and sofa2_score; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -2416,8 +2426,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         help=(
-            "Raw-derived module to refresh (outcome, renal, respiratory or "
-            "sofa1_score/sofa2_score); repeatable."
+            "Raw-derived module to refresh (demographics, outcome, renal, "
+            "respiratory or sofa1_score/sofa2_score); repeatable."
         ),
     )
     parser.add_argument(
