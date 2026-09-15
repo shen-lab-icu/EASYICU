@@ -324,11 +324,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 5_077.9,
             "seconds": 73.137,
         },
-        "medications": {
-            "cohort_stays": 94_458,
-            "peak_rss_mb": 6_749.9,
-            "seconds": 88.702,
-        },
         "neurological": {
             "cohort_stays": 94_458,
             "peak_rss_mb": 4_604.9,
@@ -417,6 +412,19 @@ _INVALIDATED_MEASURED_PROFILES: Mapping[
 # that respiratory/circulatory need five balanced patient batches at 8 GiB,
 # while three larger batches cross the same hard RSS limit.
 _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "miiv": {
+        # The earlier one-shot profile predates the current medication loader
+        # and native publication path. Under the strict 8-GiB cgroup, 20k was
+        # OOM-killed while a full-cohort 10k isolated/deferred-merge canary
+        # completed at a 6,132.1-MiB cgroup peak. Its 10% launch headroom makes
+        # the 6,052.1-MiB formal worker budget select 5k automatically.
+        "medications": {
+            "cohort_stays": 94_458,
+            "batch_size": 10_000,
+            "peak_rss_mb": 6_132.1,
+            "seconds": 346.567,
+        },
+    },
     "aumc": {
         # SOFA-1: the smallest rounded two-partition candidate (12k) crossed
         # the hard stop, while 8k completed the three-partition closure.  The
