@@ -149,6 +149,7 @@ def test_progressive_resume_is_explicitly_development_only(
         planner_strategy="progressive_v2",
         submission_profile_name="npj_dm_e1_canary_dev",
         submission_profile_version="20260817",
+        planner_only=True,
         development_progressive_resume_checkpoint_path=checkpoint_path,
         development_progressive_resume_checkpoint_sha256=digest,
     )
@@ -269,6 +270,7 @@ def test_planner_efficiency_budget_is_complete_and_development_only(
         planner_strategy="progressive_v2",
         submission_profile_name="npj_dm_e1_canary_dev",
         submission_profile_version="20260817",
+        planner_only=True,
         **limits,
     )
 
@@ -330,3 +332,28 @@ def test_config_cannot_be_mixed_with_legacy_options(ra, tmp_path: Path) -> None:
 
     with pytest.raises(TypeError, match="complete declarative source"):
         ra.ResearchAgentPipeline(config=config, task_kind="prediction")
+
+
+@pytest.mark.parametrize('profile_name,coordinate', [
+    ('E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17', 'planner_only'),
+    ('QUALIFICATION12_LITERATURE_DESIGN_2026_08_25', 'require_human_plan_review'),
+])
+def test_profile_pins_cannot_be_overridden_at_config_boundary(tmp_path, profile_name, coordinate):
+    from easyicu.research_agent.orchestration import profiles
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    profile = getattr(profiles, profile_name)
+    options = profile.pipeline_options()
+    config = PipelineConfig(workdir=tmp_path, **options)
+    assert getattr(config, coordinate) is True
+    options[coordinate] = False
+    with pytest.raises(ValueError, match=coordinate):
+        PipelineConfig(workdir=tmp_path, **options)
+
+
+def test_unpinned_historical_profile_keeps_caller_owned_plan_options(tmp_path):
+    from easyicu.research_agent.orchestration.profiles import NPJ_DM_2026_05
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    for value in (False, True):
+        config = PipelineConfig(workdir=tmp_path, planner_only=value, require_human_plan_review=value,
+                                **NPJ_DM_2026_05.pipeline_options())
+        assert config.planner_only is value and config.require_human_plan_review is value

@@ -18,6 +18,7 @@ def test_monitor_is_retired_but_shared_renderers_and_history_remain():
     static = Path(__file__).parents[3] / "src/easyicu/webserver/static"
     index = (static / "index.html").read_text()
     shell = (static / "js/app.js").read_text()
+    assert not (static / 'js/screens-agent.js').exists()
     assert 'src="js/screens-agent.js' not in index
     assert 'src="js/screens-agent-render.js' in index
     assert 'src="js/screens-guided-pi-run-files.js' in index

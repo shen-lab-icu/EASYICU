@@ -1,18 +1,15 @@
 /* ============================================================
-   screens-agent-render.js — fixture data + pure renderers for
-   the Project Monitor screen (legacy route id: #agent).
+   screens-agent-render.js — fixture data + pure artifact renderers shared by
+   Guided Copilot's run-file review surfaces. It was originally extracted from
+   the retired Project Monitor screen (legacy route id: #agent).
 
-   First owner-file carve-out of the screens-agent.js monolith
-   (see the file-size budget rule in CLAUDE.md / AGENTS.md).
    Everything here is PURE: demo/fixture studies, artifact
    classifiers/label maps, and the artifact table/JSON
-   renderers. The only external dependencies are the globals
-   window.t (i18n) and window.icon (icon registry) — no closure
-   state from screens-agent.js is referenced.
+   renderers. The external dependencies are the globals window.t (i18n),
+   window.icon (icon registry), and the shared escaping owner.
 
-   Exposed via window.AGENT_RENDER; screens-agent.js rebinds the
-   names at the top of its IIFE so call sites stay unchanged.
-   This file MUST load before screens-agent.js in index.html.
+   Exposed via window.AGENT_RENDER and loaded before the active Guided run-file
+   owners in index.html.
    ============================================================ */
 (function () {
   const { esc, escAttr } = window.EU_HTML;
@@ -704,8 +701,9 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     const findings = Array.isArray(p.findings) ? p.findings : [];
     const decisions = findings.filter(row => row && !plannerOwnedScientificFinding(row) && (row.requires_user_authorization || row.remediation_route === 'study_authority_change'));
-    const automatic = findings.filter(row => row && (row.remediation_route === 'agent_plan_revision' || plannerOwnedScientificFinding(row)));
-    const evidence = findings.filter(row => row && (row.remediation_route === 'external_evidence' || row.remediation_route === 'independent_review'));
+    const automatic = findings.filter(row => row && !decisions.includes(row) && (row.remediation_route === 'agent_plan_revision' || plannerOwnedScientificFinding(row)));
+    const evidence = findings.filter(row => row && !decisions.includes(row) && !automatic.includes(row) && (row.remediation_route === 'external_evidence' || row.remediation_route === 'independent_review'));
+    const remainder = findings.filter(row => !decisions.includes(row) && !automatic.includes(row) && !evidence.includes(row));
     const firstDecision = decisions[0] || null;
     const firstDecisionCopy = firstDecision ? scientificFindingCopy(firstDecision) : null;
     const laterDecisions = decisions.slice(1);
@@ -737,9 +735,10 @@
         <span class="ag-science-review-state ${approvalAllowed ? 'is-ready' : 'is-waiting'}">${esc(approvalAllowed ? t('Ready', '可批准') : t('Analysis paused', '分析已暂停'))}</span>
       </header>
       ${firstDecision ? `<section class="ag-science-review-section is-current"><div class="ag-science-review-heading"><div><span>${esc(t('Do this now', '现在只做这一步'))}</span><strong>${esc(firstDecisionCopy.title)}</strong></div><em>1</em></div><div class="ag-science-current-question"><p>${esc(scientificDecisionQuestion(firstDecision))}</p><span>${esc(t('Use “Answer decision 1” in the conversation to reply.', '在左侧对话中点击「回答第 1 项」。'))}</span></div>${laterDecisions.length ? `<div class="ag-science-later"><span>${esc(t('Later', '稍后'))}</span><strong>${esc(scientificFindingCopy(laterDecisions[0]).title)}</strong><small>${esc(t('EasyICU will ask after the first answer is saved.', '第 1 项保存后，EasyICU 再询问这一项。'))}</small></div>` : ''}</section>` : ''}
-      <details class="ag-science-review-details"><summary><span>${esc(t('EasyICU will handle', 'EasyICU 会自动处理'))}</span><strong>${esc(t(`${automatic.length + evidence.length} plan and evidence items`, `${automatic.length + evidence.length} 项计划修订与补证`))}</strong><em>${esc(t('No action needed now', '现在不需你处理'))}</em></summary><div class="ag-science-lanes">
+      <details class="ag-science-review-details"><summary><span>${esc(t('EasyICU will handle', 'EasyICU 会自动处理'))}</span><strong>${esc(t(`${automatic.length + evidence.length + remainder.length} plan, evidence and runtime items`, `${automatic.length + evidence.length + remainder.length} 项计划、证据与运行问题`))}</strong><em>${esc(t('No action needed now', '现在不需你处理'))}</em></summary><div class="ag-science-lanes">
         <article><div><strong>${esc(t('Plan revision', '计划修订'))}</strong><span>${esc(t(`${automatic.length} items`, `${automatic.length} 项`))}</span></div><ul>${findingList(automatic)}</ul></article>
         <article><div><strong>${esc(t('Evidence follow-up', '证据补充'))}</strong><span>${esc(t(`${evidence.length} items`, `${evidence.length} 项`))}</span></div><ul>${findingList(evidence)}</ul></article>
+        ${remainder.length ? `<article><div><strong>${esc(t('System / runtime items', '系统与运行问题'))}</strong><span>${esc(t(`${remainder.length} items`, `${remainder.length} 项`))}</span></div><ul>${findingList(remainder)}</ul></article>` : ''}
       </div></details>
       ${citationCards ? `<details class="ag-science-review-details"><summary><span>${esc(t('Methods references', '方法学依据'))}</span><strong>${esc(t(`${citations.length} references already used`, `已使用 ${citations.length} 篇方法学文献`))}</strong><em>${esc(t('Optional', '可选查看'))}</em></summary><div class="ag-science-citations">${citationCards}</div></details>` : ''}
       <p class="ag-science-review-audit">${esc(t('Raw scores, finding codes, and digest-bound details remain available in the JSON audit view.', '原始评分、问题代码和摘要绑定细节仍保留在 JSON 审计视图中。'))}</p>

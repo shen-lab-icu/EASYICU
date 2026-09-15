@@ -648,6 +648,8 @@
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
+    state.request += 1;
+    state.loading = false;
     if (state.projectId && project && state.projectId !== project) state.recentResources = [];
     state.resource = safe;
     state.projectId = project;
@@ -664,6 +666,10 @@
     state.activeClaimId = '';
     render();
     if (state.mode !== 'web' && state.mode !== 'document') loadResource();
+    return true;
+  }
+  function openRunEvidence(resource, projectId, button) {
+    if (open(resource, projectId)) return openEvidence(button);
   }
   function close() {
     state.request += 1;
@@ -797,5 +803,5 @@
     if (panel) panel.scrollIntoView({ block: 'nearest' });
   }
 
-  window.EasyICU.guidedPi.declare('preview', { mount, open, close, clearProject, setWorkflowContext });
+  window.EasyICU.guidedPi.declare('preview', { mount, open, openRunEvidence, close, clearProject, setWorkflowContext });
 })();

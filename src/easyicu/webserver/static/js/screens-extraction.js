@@ -200,6 +200,11 @@
   // that wipes focus, IME composition, and uncommitted input there. Module
   // state is already updated; this screen re-renders from state on revisit.
   function backgroundRepaint() {
+    const embedded = window.EU_EXTRACTION_EMBEDDED_WORKSPACE;
+    if (embedded && typeof embedded.isMounted === 'function' && embedded.isMounted()) {
+      embedded.repaint();
+      return;
+    }
     const raw = (location.hash || '#entry').slice(1).trim();
     if (raw === 'extraction' || raw === 'icd') repaint();
   }
@@ -219,7 +224,7 @@
           window.EU_PATIENT_DRILLDOWN = null;
           window.EU_PATIENT_SOURCES = null;
           window.EU_COHORT_REVIEW = null;
-          if (window.__euRender) window.__euRender();
+          backgroundRepaint();
           return registry;
         })
         .catch(err => {
@@ -438,7 +443,11 @@
       });
     } else if (!real) {
       // Demo mode intentionally uses a seeded, in-browser completion.
-      setTimeout(() => { exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true; repaint(); }, 1200);
+      const ticket = continuity.capture();
+      setTimeout(() => {
+        if (!continuity.isPending(ticket) || dataMode() !== 'demo' || exView !== 'running') return;
+        exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true; backgroundRepaint();
+      }, 1200);
     } else {
       exportErr = t(
         'Real extraction could not start. Reconnect a local source and restart the EasyICU WebApp so the job API and event stream are available.',
@@ -706,7 +715,7 @@
         ? (convResult.nothing_to_do
             ? t('All source tables were already converted — nothing to do.', '所有源表此前已转换 —— 无需重复处理。')
             : `${t('Converted', '已转换')} <b>${c.converted}</b> ${t('tables', '张表')}${c.skipped ? ` · ${c.skipped} ${t('cached', '缓存')}` : ''}${c.failed ? ` · ${c.failed} ${t('failed', '失败')}` : ''}.`)
-        : `${tot ? `[${cur}/${tot}] ` : ''}${p.file ? `<span class="mono">${p.file}</span>` : t('preparing…', '准备中…')}${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}`;
+        : `${tot ? `[${cur}/${tot}] ` : ''}${p.file ? `<span class="mono">${escHtml(p.file)}</span>` : t('preparing…', '准备中…')}${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}`;
       const partialNote = partial
         ? `<div class="note warn mt-12" data-conversion-quality="partial" style="padding:10px 12px;"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${c.failed || 0} ${t('source table(s) failed to convert', '张源表转换失败')} · ${badRows.toLocaleString()} ${t('malformed rows dropped', '行格式错误数据被丢弃')}</div><div class="d" style="font-size:11px;margin:0;">${t('This conversion does not establish complete analysis data. Repair the source and reconvert before extraction; cached outputs retain their quality warnings.', '此次转换不能证明分析数据完整。请修复源数据并重新转换后再抽取；缓存结果仍保留质量警告。')}</div></div></div>`
         : '';

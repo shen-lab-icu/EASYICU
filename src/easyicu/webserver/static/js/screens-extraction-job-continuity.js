@@ -269,6 +269,7 @@
   }
 
   const owner = {
+    capture: () => ({ generation }),
     prepare,
     attach,
     restore,

@@ -350,6 +350,7 @@
     nextActions: MODULES.require('nextActions'),
     replay: MODULES.require('replay'),
     session: () => state.session,
+    selectionRevision: () => state.sessionSelectionRevision,
     workflow: () => state.workflow,
     // The run the host's own projection treats as authoritative. A governed
     // action must name the run the offer was computed from, not the run id the
@@ -1507,14 +1508,21 @@
     }
     text = String(text || '').trim();
     if (!text) return;
+    const expectedSessionId = state.session.session_id;
+    const expectedProjectId = projectId();
+    const selectionRevision = state.sessionSelectionRevision;
+    const isCurrent = () => state.session && state.session.session_id === expectedSessionId
+      && projectId() === expectedProjectId && state.sessionSelectionRevision === selectionRevision;
     let ideaSource = null;
     try {
       ideaSource = IDEA_SOURCE
         ? await IDEA_SOURCE.prepareForMessage(text, turnIntent || '')
         : null;
     } catch (error) {
+      if (!isCurrent()) return;
       state.error = errorText(error); render(); return;
     }
+    if (!isCurrent() || state.busy || state.childJobId) return;
     state.editingMessageId = '';
     const grants = Array.isArray(grantsOverride) ? grantsOverride : turnGrants();
     const submittedAt = Date.now();
@@ -1530,10 +1538,12 @@
         ...(turnIntent ? { turn_intent: turnIntent } : {}),
         ...(ideaSource ? { idea_source: ideaSource } : {}),
       });
+      if (!isCurrent()) return;
       if (ideaSource && IDEA_SOURCE) IDEA_SOURCE.consume();
       state.pendingEntryIntent = '';
       state.jobId = payload.job_id; watchJob(payload.job_id);
     } catch (error) {
+      if (!isCurrent()) return;
       state.busy = false; finishActivity('error', null, 'failed');
       state.error = errorText(error); render();
     }
@@ -1543,6 +1553,11 @@
     const entryId = String(userEntryId || '').trim();
     text = String(text || '').trim();
     if (!entryId || !text) return;
+    const expectedSessionId = state.session.session_id;
+    const expectedProjectId = projectId();
+    const selectionRevision = state.sessionSelectionRevision;
+    const isCurrent = () => state.session && state.session.session_id === expectedSessionId
+      && projectId() === expectedProjectId && state.sessionSelectionRevision === selectionRevision;
     state.editingMessageId = '';
     state.currentTurnResources = [];
     state.regeneration = REGENERATION && typeof REGENERATION.create === 'function'
@@ -1567,9 +1582,11 @@
         ...(authority.intent ? { turn_intent: authority.intent } : {}),
         ...(regenerationIntent ? { regeneration_intent: regenerationIntent } : {}),
       });
+      if (!isCurrent()) return;
       state.jobId = payload.job_id;
       watchJob(payload.job_id);
     } catch (error) {
+      if (!isCurrent()) return;
       state.busy = false;
       state.regenerating = false;
       state.regeneration = null;

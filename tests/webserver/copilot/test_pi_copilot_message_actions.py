@@ -748,8 +748,8 @@ def test_fresh_plan_after_failed_execution_binds_source(workflow_code, run_id, e
       let submitted = null;
       let error = null;
       const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create({{
-        tr: (en, zh) => en,
-        session: () => ({{binding: {{run_id: {json.dumps(run_id)}, study_context_id: 'study'}},
+        tr: (en, zh) => en, projectId: () => 'project',
+        session: () => ({{session_id: 'session', binding: {{run_id: {json.dumps(run_id)}, study_context_id: 'study'}},
           research_provider: {{provider: 'openai'}}}}),
         workflow: () => ({{next_action_code: {json.dumps(workflow_code)}}}),
         busy: () => false, sessionIsStale: () => false,
