@@ -149,6 +149,58 @@ def test_fullflow_exit_status_matches_saved_failure_denominator(
     assert payload["n_failed"] == successes.count(False)
 
 
+@pytest.mark.parametrize(
+    "aggregate_each,return_codes,expected_failures",
+    [
+        (False, [0, 1], ["final:single-model"]),
+        (True, [0, 1, 0], ["model:mock"]),
+    ],
+)
+def test_analysis_bench_aggregation_failures_set_exit_status_and_receipt(
+    tmp_path, monkeypatch, aggregate_each, return_codes, expected_failures
+):
+    tool = load("tools/run_analysis_bench_overnight.py")
+    commands = iter(return_codes)
+    monkeypatch.setattr(tool, "_run_command", lambda **_kwargs: next(commands))
+    argv = [
+        "runner",
+        "--provider",
+        "mock",
+        "--items",
+        "analysis_sofa_multisignal_mortality",
+        "--max-retries",
+        "1",
+        "--out-root",
+        str(tmp_path),
+    ]
+    if aggregate_each:
+        argv.append("--aggregate-after-each-model")
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert tool.main() == 1
+    progress = json.loads((tmp_path / "overnight_progress.json").read_text())
+    assert progress["failed_items"] == []
+    assert progress["aggregation_failures"] == expected_failures
+
+
+def test_crossdb_resume_normalizes_legacy_full_count_shapes():
+    tool = load("scripts/r4_crossdb_sofa2_extract.py")
+    normalized = tool._normalize_existing_databases(
+        {
+            "MIMIC-III": {"icu_stays_full": 7},
+            "MIMIC-IV": {"icu_stays_full": [None, "missing table"]},
+            "eICU": {"icu_stays_full": {"n": 11}},
+        }
+    )
+
+    assert normalized["MIMIC-III"]["icu_stays_full"] == {"n": 7}
+    assert normalized["MIMIC-IV"]["icu_stays_full"] == {
+        "n": None,
+        "error": "missing table",
+    }
+    assert normalized["eICU"]["icu_stays_full"] == {"n": 11}
+
+
 @pytest.fixture
 def figure_data():
     tool = load("scripts/r5_fig5_nature.py")

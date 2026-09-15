@@ -610,8 +610,6 @@ def main() -> int:
     support.to_csv(out_dir / "crossdb_top_level_support_matrix.csv", index=False)
 
     if args.skip_smoke:
-        smoke = pd.DataFrame()
-        warnings_df = pd.DataFrame()
         qc = support.copy()
         qc["qc_status"] = np.where(
             qc["dictionary_supported"],

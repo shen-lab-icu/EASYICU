@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""Figure 5: observed BMI-group mortality across six public ICU databases.
+"""Figure 5: observed BMI-group mortality across the registered public ICU
+databases (currently six; the count in figure text is derived from DBS).
 
 Source: research_output/r5_obesity_crossdb/obesity_paradox_crossdb.csv.
 Annotations summarize these inputs; unadjusted ratios do not establish protection
@@ -96,7 +97,11 @@ def main():
     axA.set_xticks(x)
     axA.set_xticklabels(XL, rotation=30, ha="right")
     axA.set_ylabel("In-hospital mortality (%)")
-    axA.set_title("a  Absolute mortality by BMI (6 public DBs)", loc="left", fontsize=8)
+    axA.set_title(
+        f"a  Absolute mortality by BMI ({len(DBS)} public DBs)",
+        loc="left",
+        fontsize=8,
+    )
     axA.legend(loc="upper right", ncol=1, fontsize=5.6)
     axA.text(
         0.02,
@@ -127,7 +132,7 @@ def main():
         color="0.25",
     )
     fig.suptitle(
-        "Observed BMI-group mortality across six public ICU databases",
+        f"Observed BMI-group mortality across {len(DBS)} public ICU databases",
         fontsize=8.5,
         fontweight="bold",
         y=1.02,
