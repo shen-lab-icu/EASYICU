@@ -855,6 +855,25 @@ def _batch_label(
     )
 
 
+def _nested_worker_memory_failure(failures: object) -> bool:
+    if not isinstance(failures, list):
+        return False
+    for item in failures:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            exit_code = int(item.get("worker_exit_code") or 0)
+        except (TypeError, ValueError):
+            exit_code = 0
+        detail = " ".join(
+            str(item.get(field) or "")
+            for field in ("failure_kind", "exception_type", "traceback")
+        )
+        if _looks_like_memory_failure(exit_code, detail):
+            return True
+    return False
+
+
 def _worker_main(spec_path: Path) -> int:
     """Internal clean-interpreter database worker."""
 
@@ -863,6 +882,7 @@ def _worker_main(spec_path: Path) -> int:
     result_path = attempt_root / "worker_result.json"
     plan_path = attempt_root / "worker_plan.json"
     output_root = attempt_root / "export"
+    nested_worker_failures: list[dict[str, Any]] = []
     try:
         identity = _git_identity()
         _require_clean_identity(identity)
@@ -960,6 +980,11 @@ def _worker_main(spec_path: Path) -> int:
             adaptive_stream_batches=adaptive_core,
             resource_budget_mb=effective_budget_mb,
         )
+        nested_worker_failures = [
+            dict(item)
+            for item in (extraction.get("worker_failures") or [])
+            if isinstance(item, Mapping)
+        ]
         errors = {
             module: list((extraction["modules"].get(module) or {}).get("errors") or [])
             for module in MODULE_ORDER
@@ -1002,6 +1027,10 @@ def _worker_main(spec_path: Path) -> int:
             "database": spec.get("database"),
             "error": f"{type(exc).__name__}: {exc}",
             "traceback": traceback.format_exc(),
+            "worker_failures": nested_worker_failures,
+            "nested_memory_failure": _nested_worker_memory_failure(
+                nested_worker_failures
+            ),
         }
         try:
             _atomic_write_json(result_path, payload)
@@ -1235,7 +1264,13 @@ def _execute_database(
             final_error = "strict process-tree RSS/PSS evidence was not captured"
             retryable = False
         else:
-            retryable = _looks_like_memory_failure(final_exit_code, final_error)
+            retryable = (
+                _looks_like_memory_failure(final_exit_code, final_error)
+                or worker_result.get("nested_memory_failure") is True
+                or _nested_worker_memory_failure(
+                    worker_result.get("worker_failures")
+                )
+            )
         planned = worker_plan.get("planned_initial_batch_size")
         can_downbatch = (
             retryable
