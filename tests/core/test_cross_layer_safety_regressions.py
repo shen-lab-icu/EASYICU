@@ -288,6 +288,95 @@ def test_sic_extreme_source_interval_is_quarantined_before_expansion():
     assert out["dur_var"].tolist() == [2.0]
 
 
+def test_hirid_general_admissiontime_uses_declared_origin_without_icustays():
+    """HiRID demographics must align on general.admissiontime at hour zero."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(
+        config=SimpleNamespace(
+            name="hirid",
+            id_configs={
+                "icustay": SimpleNamespace(
+                    id="patientid",
+                    table="general",
+                    start="admissiontime",
+                )
+            },
+        ),
+        load_table=lambda *_args, **_kwargs: pytest.fail(
+            "the general-table origin is already present and must not reload"
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "patientid": [1, 2],
+            "admissiontime": pd.to_datetime(
+                ["2018-01-01 02:00", "2018-01-03 05:30"]
+            ),
+            "age": [65, 72],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["patientid"],
+        "admissiontime",
+    )
+
+    assert out["admissiontime"].tolist() == [0.0, 0.0]
+    assert out["age"].tolist() == [65, 72]
+
+
+def test_hirid_datetime_events_load_the_declared_general_origin():
+    """Absolute HiRID events use id_cfg instead of a nonexistent icustays."""
+
+    calls = []
+
+    def _load(table, *, columns, verbose):
+        calls.append((table, columns, verbose))
+        return SimpleNamespace(
+            data=pd.DataFrame(
+                {
+                    "patientid": [7],
+                    "admissiontime": pd.to_datetime(["2018-01-01 00:00"]),
+                }
+            )
+        )
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(
+        config=SimpleNamespace(
+            name="hirid",
+            id_configs={
+                "icustay": SimpleNamespace(
+                    id="patientid",
+                    table="general",
+                    start="admissiontime",
+                )
+            },
+        ),
+        load_table=_load,
+    )
+    frame = pd.DataFrame(
+        {
+            "patientid": [7],
+            "charttime": pd.to_datetime(["2018-01-01 06:15"]),
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame,
+        source,
+        ["patientid"],
+        "charttime",
+    )
+
+    assert calls == [("general", ["patientid", "admissiontime"], False)]
+    assert out["charttime"].tolist() == [6.25]
+    assert "admissiontime" not in out.columns
+
+
 # --------------------------------------------------------------------------
 # P0-2 — dur_var unit was guessed from the value distribution (60x inflation)
 # --------------------------------------------------------------------------

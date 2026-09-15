@@ -6072,6 +6072,108 @@ class ConceptResolver:
                     )
                     data = data.loc[~invalid_time].copy()
             return data
+
+        if db_name == 'hirid':
+            # HiRID has no MIMIC-style ``icustays`` table. Its declared ICU
+            # identity and admission clock live in ``general`` as
+            # patientid/admissiontime. Observation and medication loaders
+            # normally reach this layer with an already-relative numeric
+            # index; demographics loaded from ``general`` retain the absolute
+            # admission timestamp and therefore need an explicit zero-hour
+            # alignment against that same declared origin.
+            if data.empty or not index_column or index_column not in data.columns:
+                return data
+
+            if pd.api.types.is_timedelta64_dtype(data[index_column]):
+                data[index_column] = (
+                    data[index_column].dt.total_seconds() / 3600.0
+                )
+                _normalize_duration_to_hours(data)
+                return data
+
+            if pd.api.types.is_numeric_dtype(data[index_column]):
+                _normalize_duration_to_hours(data)
+                return data
+
+            primary_id = next(
+                (column for column in id_columns if column in data.columns),
+                None,
+            )
+            icustay_cfg = data_source.config.id_configs.get('icustay')
+            if (
+                primary_id is None
+                or icustay_cfg is None
+                or not icustay_cfg.table
+                or not icustay_cfg.start
+            ):
+                raise ConceptError(
+                    "HiRID time alignment requires a declared ICU identifier, "
+                    "origin table, and admission-time column"
+                )
+
+            origin_col = icustay_cfg.start
+            frame = data.copy()
+            if origin_col not in frame.columns:
+                try:
+                    origin_table = data_source.load_table(
+                        icustay_cfg.table,
+                        columns=[primary_id, origin_col],
+                        verbose=False,
+                    )
+                    origin_frame = (
+                        origin_table.data
+                        if hasattr(origin_table, 'data')
+                        else origin_table
+                    )
+                    origin_frame = (
+                        origin_frame[[primary_id, origin_col]]
+                        .drop_duplicates(subset=[primary_id], keep='last')
+                    )
+                    frame = frame.merge(
+                        origin_frame,
+                        on=primary_id,
+                        how='left',
+                        validate='many_to_one',
+                    )
+                except Exception as exc:
+                    raise ConceptError(
+                        "HiRID time alignment failed while loading its "
+                        f"declared origin {icustay_cfg.table}.{origin_col}: "
+                        f"{exc!r}"
+                    ) from exc
+
+            origin = pd.to_datetime(frame[origin_col], errors='coerce', utc=True)
+            if origin.notna().sum() == 0:
+                raise ConceptError(
+                    "HiRID time alignment found no usable admissiontime values"
+                )
+            origin = origin.dt.tz_localize(None)
+
+            cols_to_convert = {index_column}
+            if time_columns:
+                cols_to_convert.update(
+                    column
+                    for column in time_columns
+                    if column and column in frame.columns
+                )
+            cols_to_convert.update(
+                column
+                for column in frame.columns
+                if column not in {origin_col, primary_id}
+                and pd.api.types.is_datetime64_any_dtype(frame[column])
+            )
+            for column in cols_to_convert:
+                values = pd.to_datetime(frame[column], errors='coerce', utc=True)
+                values = values.dt.tz_localize(None)
+                minutes = np.floor(
+                    (values - origin).dt.total_seconds() / 60.0
+                )
+                frame[column] = minutes / 60.0
+
+            if index_column != origin_col:
+                frame = frame.drop(columns=[origin_col])
+            _normalize_duration_to_hours(frame)
+            return frame
         
         # Early return checks (no verbose output for performance)
         if data.empty or not index_column or index_column not in data.columns:
