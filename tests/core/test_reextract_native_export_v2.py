@@ -451,6 +451,108 @@ def test_worker_preserves_module_plans_and_enforces_assigned_budget(
     assert result["batch_strategy"]["aggregate_plan_is_summary"] is (requested_batch_size is None)
 
 
+def test_worker_recovers_nested_oom_when_native_publication_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import easyicu.api as public_api
+    import easyicu.api.extraction as extraction
+
+    attempt_root = tmp_path / "attempt"
+    attempt_root.mkdir()
+    monkeypatch.setattr(
+        launcher,
+        "_git_identity",
+        lambda: {
+            "repository_root": str(launcher.REPOSITORY_ROOT),
+            "commit": COMMIT,
+            "dirty": False,
+            "dirty_status": [],
+        },
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_configure_worker_runtime",
+        lambda _attempt, assigned: {"assigned_memory_mb": assigned},
+    )
+    monkeypatch.setattr(
+        extraction,
+        "_get_all_patient_ids",
+        lambda *_args, **_kwargs: (list(range(60_000)), "stay_id"),
+    )
+
+    def fail_during_native_publication(_database, **kwargs):
+        failure_root = Path(kwargs["output_dir"]) / ".easyicu-failures"
+        failure_root.mkdir(parents=True)
+        record = {
+            "failure_id": "parent-oom",
+            "phase": "medications",
+            "modules": ["medications"],
+            "special_modules": [],
+            "worker_exit_code": -9,
+            "failure_kind": "worker_exit_without_failure_record",
+            "exception_type": None,
+            "traceback_sha256": None,
+            "partial_outputs_sha256": "c" * 64,
+        }
+        (failure_root / "worker-failure-parent-oom.json").write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+        raise ValueError(
+            "native_export_v2 requires every requested module to finish before "
+            "publication (failures=['medications'], missing_results=[])"
+        )
+
+    monkeypatch.setattr(public_api, "extract_database", fail_during_native_publication)
+    monkeypatch.setenv("PYTHONPATH", str(launcher.SOURCE_ROOT))
+    spec_path = attempt_root / "worker_spec.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "data_path": "/data/miiv",
+                "attempt_root": str(attempt_root),
+                "easyicu_git_commit": COMMIT,
+                "assigned_memory_mb": 6 * 1024,
+                "planning_memory_mb": 8 * 1024,
+                "adaptive_core": False,
+                "requested_batch_size": 30_000,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert launcher._worker_main(spec_path) == 1
+
+    result = json.loads((attempt_root / "worker_result.json").read_text())
+    assert result["nested_memory_failure"] is True
+    assert result["worker_failures"] == [
+        {
+            "failure_id": "parent-oom",
+            "phase": "medications",
+            "modules": ["medications"],
+            "special_modules": [],
+            "worker_exit_code": -9,
+            "failure_kind": "worker_exit_without_failure_record",
+            "exception_type": None,
+            "traceback_sha256": None,
+            "partial_outputs_sha256": "c" * 64,
+            "file": ".easyicu-failures/worker-failure-parent-oom.json",
+            "sha256": _sha256(
+                attempt_root
+                / "export"
+                / ".easyicu-failures"
+                / "worker-failure-parent-oom.json"
+            ),
+            "bytes": (
+                attempt_root
+                / "export"
+                / ".easyicu-failures"
+                / "worker-failure-parent-oom.json"
+            ).stat().st_size,
+        }
+    ]
+
+
 def test_successful_database_is_atomically_promoted_and_never_overwritten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

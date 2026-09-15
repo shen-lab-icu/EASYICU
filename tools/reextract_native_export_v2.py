@@ -874,6 +874,42 @@ def _nested_worker_memory_failure(failures: object) -> bool:
     return False
 
 
+def _recover_nested_worker_failures(output_root: Path) -> list[dict[str, Any]]:
+    """Recover durable module-worker summaries when extraction raises early."""
+
+    failure_root = output_root / ".easyicu-failures"
+    if not failure_root.is_dir() or failure_root.is_symlink():
+        return []
+    recovered: list[dict[str, Any]] = []
+    for path in sorted(failure_root.glob("worker-failure-*.json")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()
+            record = json.loads(raw)
+            if not isinstance(record, Mapping):
+                continue
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        recovered.append(
+            {
+                "failure_id": record.get("failure_id"),
+                "phase": record.get("phase"),
+                "modules": record.get("modules", []),
+                "special_modules": record.get("special_modules", []),
+                "worker_exit_code": record.get("worker_exit_code"),
+                "failure_kind": record.get("failure_kind"),
+                "exception_type": record.get("exception_type"),
+                "traceback_sha256": record.get("traceback_sha256"),
+                "partial_outputs_sha256": record.get("partial_outputs_sha256"),
+                "file": path.relative_to(output_root).as_posix(),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+        )
+    return recovered
+
+
 def _worker_main(spec_path: Path) -> int:
     """Internal clean-interpreter database worker."""
 
@@ -1022,6 +1058,8 @@ def _worker_main(spec_path: Path) -> int:
         _atomic_write_json(result_path, payload)
         return 0
     except BaseException as exc:
+        if not nested_worker_failures:
+            nested_worker_failures = _recover_nested_worker_failures(output_root)
         payload = {
             "status": "failed",
             "database": spec.get("database"),
