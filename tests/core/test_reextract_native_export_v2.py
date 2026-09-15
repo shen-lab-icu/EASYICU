@@ -273,6 +273,9 @@ def test_native_package_validation_binds_19_module_time_peak_rows_and_bytes(
 ) -> None:
     export = tmp_path / "export"
     _build_native_export(export)
+    private = export / launcher.PRIVATE_DERIVATION_CONTEXT_DIRECTORY
+    private.mkdir()
+    (private / "replay-shard.parquet").write_bytes(b"PAR1private")
 
     receipt = launcher._validate_export_package(export, COMMIT, "miiv")
 
@@ -292,6 +295,13 @@ def test_native_package_validation_rejects_wrong_database_and_extra_parquet(
         launcher._validate_export_package(export, COMMIT, "eicu")
 
     (export / "extra.parquet").write_bytes(b"PAR1extra")
+    with pytest.raises(launcher.ExtractionRunError, match="Parquet set mismatch"):
+        launcher._validate_export_package(export, COMMIT, "miiv")
+
+    (export / "extra.parquet").unlink()
+    nested = export / "unexpected"
+    nested.mkdir()
+    (nested / "extra.parquet").write_bytes(b"PAR1extra")
     with pytest.raises(launcher.ExtractionRunError, match="Parquet set mismatch"):
         launcher._validate_export_package(export, COMMIT, "miiv")
 

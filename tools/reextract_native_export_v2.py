@@ -64,6 +64,7 @@ MODULE_ORDER = (
 )
 RUN_SCHEMA_VERSION = "easyicu_full6_extraction_run_v2"
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
+PRIVATE_DERIVATION_CONTEXT_DIRECTORY = ".derivation-context"
 
 TIMING_FIELDS = (
     "database",
@@ -688,6 +689,27 @@ def _validate_nonnegative_number(value: Any, *, label: str) -> float:
     return float(value)
 
 
+def _public_parquet_paths(export_root: Path) -> set[str]:
+    """Return public dataset Parquets while retaining private replay evidence.
+
+    Native exports intentionally store patient-level derivation replay shards
+    under ``.derivation-context``.  They are bound through the root manifest,
+    but they are not public module tables and must not be counted in the
+    19-file dataset contract.  Parquets in every other nested directory remain
+    visible here and therefore fail the flat-layout check below.
+    """
+
+    public: set[str] = set()
+    for path in export_root.rglob("*.parquet"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(export_root)
+        if relative.parts and relative.parts[0] == PRIVATE_DERIVATION_CONTEXT_DIRECTORY:
+            continue
+        public.add(relative.as_posix())
+    return public
+
+
 def _validate_export_package(
     export_root: Path,
     expected_commit: str,
@@ -735,11 +757,7 @@ def _validate_export_package(
     by_module = {entry.get("module"): entry for entry in entries}
     if len(by_module) != len(entries) or set(by_module) != set(MODULE_ORDER):
         raise ExtractionRunError("native manifest module set is not the 19-module contract")
-    actual_parquets = {
-        path.relative_to(export_root).as_posix()
-        for path in export_root.rglob("*.parquet")
-        if path.is_file()
-    }
+    actual_parquets = _public_parquet_paths(export_root)
     expected_parquets = {f"{module}.parquet" for module in MODULE_ORDER}
     if actual_parquets != expected_parquets:
         raise ExtractionRunError(
