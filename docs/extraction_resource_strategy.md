@@ -231,6 +231,11 @@ The formal selected-module release launcher fixes its default planning budget
 at 8,192 MiB for reproducibility even on a very large server. Use
 `EX-A03_refresh_selected_modules.py --plan-only` to inspect the complete
 database-by-module plan without cloning a candidate or opening raw data.
+The audited direct-refresh allowlist includes `demographics`, `outcome`,
+`renal`, `respiratory`, `sofa1_score`, and `sofa2_score`. A demographics
+refresh is self-contained; the score and sepsis dependency closures remain
+explicit for respiratory and SOFA refreshes. Unselected module Parquets must
+remain byte-identical to the sealed source package.
 
 The physical-layout A/B found that contiguous 25,000-stay respiratory batches
 took 234.2 seconds at 6,061.4 MiB versus 251.7 seconds at 6,252.8 MiB for the
