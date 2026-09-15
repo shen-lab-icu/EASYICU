@@ -136,6 +136,7 @@ _RESOURCE_BUDGET_AVAILABLE_FRACTION = 0.70
 _RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB = 512
 _RESOURCE_BUDGET_MAX_DUCKDB_MEMORY_MB = 4 * 1024
 _RESOURCE_BUDGET_MAX_ENGINE_THREADS = 8
+_RESOURCE_BUDGET_SINGLE_WORKER_TOTAL_GB = 12
 
 
 def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, object]:
@@ -150,7 +151,15 @@ def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, ob
     # memory as 70%.  The public resource budget is explicitly *available*
     # memory, so invert that model rather than silently shrinking the contract.
     modeled_total_gb = available_gb / _RESOURCE_BUDGET_AVAILABLE_FRACTION
-    if modeled_total_gb >= 128:
+    # A real 8-GiB cgroup run reached memory.max and OOM-killed the isolated
+    # MIMIC-IV medications worker at both 30k and 20k stays while this tier
+    # allowed two bucket/Arrow/DuckDB workers.  The module itself was the only
+    # active module process, so database-level serialization could not protect
+    # the envelope.  Keep small formal workers single-threaded at the data
+    # engine boundary; patient batching remains the independent scale lever.
+    if modeled_total_gb <= _RESOURCE_BUDGET_SINGLE_WORKER_TOTAL_GB:
+        worker_cap = 1
+    elif modeled_total_gb >= 128:
         worker_cap = 64
     elif modeled_total_gb >= 64:
         worker_cap = 32
@@ -1760,6 +1769,12 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
         # native allocator pages until the streamed writer was killed. A fresh
         # interpreter per batch makes the measured one-batch envelope real.
         ("miiv", "other_scores"),
+        # The 2026-09-15 strict 8-GiB foundation run OOM-killed medications at
+        # both 30k and 20k stays.  The module ran alone, and its 20k attempt
+        # reached memory.max after earlier streamed partitions had completed.
+        # Isolate each partition so native allocator residency cannot
+        # accumulate across the five full-cohort batches.
+        ("miiv", "medications"),
         ("eicu", "sofa2_score"),
         # Full-cohort AUMC respiratory boundary runs retained Arrow/native
         # allocator pages across successive batches: 8k, 7k and 6k all crossed
@@ -1773,7 +1788,12 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
 
 # Deferred merging was measured only for AUMC respiratory. eICU SOFA-2 keeps
 # its established append-after-each-child schedule until separately measured.
-_DEFERRED_STREAM_MERGE_TARGETS = frozenset({("aumc", "respiratory")})
+_DEFERRED_STREAM_MERGE_TARGETS = frozenset(
+    {
+        ("aumc", "respiratory"),
+        ("miiv", "medications"),
+    }
+)
 
 
 def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:

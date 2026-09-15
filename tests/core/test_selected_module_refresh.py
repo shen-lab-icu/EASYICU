@@ -86,9 +86,9 @@ def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
     assert plan["resource_execution_limits"] == {
         "resource_budget_mb": 8192.0,
         "modeled_total_memory_gb": pytest.approx(11.428571),
-        "parallel_max_workers": 2,
-        "arrow_threads": 2,
-        "duckdb_threads": 2,
+        "parallel_max_workers": 1,
+        "arrow_threads": 1,
+        "duckdb_threads": 1,
         "duckdb_memory_limit_mb": 2048,
         "resolver_cache_budget_mb": 512,
     }

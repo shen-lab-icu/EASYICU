@@ -224,15 +224,17 @@ def test_explicit_stream_batch_size_always_wins():
     )
 
 
-def test_8gib_resource_budget_owns_lower_layer_worker_limits(monkeypatch):
+def test_8gib_resource_budget_uses_one_worker_after_real_medications_oom(
+    monkeypatch,
+):
     limits = _resource_budget_execution_limits(8 * 1024)
 
     assert limits == {
         "resource_budget_mb": 8192.0,
         "modeled_total_memory_gb": pytest.approx(11.428571),
-        "parallel_max_workers": 2,
-        "arrow_threads": 2,
-        "duckdb_threads": 2,
+        "parallel_max_workers": 1,
+        "arrow_threads": 1,
+        "duckdb_threads": 1,
         "duckdb_memory_limit_mb": 2048,
         "resolver_cache_budget_mb": 512,
     }
@@ -244,11 +246,22 @@ def test_8gib_resource_budget_owns_lower_layer_worker_limits(monkeypatch):
     monkeypatch.setenv("EASYICU_DUCKDB_MEMORY_LIMIT", "4GB")
     _extract_worker_env_setup("/data/aumc", 8 * 1024)
     assert os.environ["EASYICU_RESOURCE_BUDGET_MB"] == "8192.0"
-    assert os.environ["EASYICU_PARALLEL_MAX_WORKERS"] == "2"
-    assert os.environ["EASYICU_ARROW_THREADS"] == "2"
-    assert os.environ["EASYICU_DUCKDB_THREADS"] == "2"
+    assert os.environ["EASYICU_PARALLEL_MAX_WORKERS"] == "1"
+    assert os.environ["EASYICU_ARROW_THREADS"] == "1"
+    assert os.environ["EASYICU_DUCKDB_THREADS"] == "1"
     assert os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] == "2048MB"
     assert os.environ["EASYICU_CACHE_BUDGET_MB"] == "512"
+
+
+def test_formal_8gib_cgroup_available_budget_uses_one_engine_thread():
+    """The strict run exposes roughly 6 GiB as its available-memory budget."""
+
+    limits = _resource_budget_execution_limits(6052.1)
+
+    assert limits["modeled_total_memory_gb"] == pytest.approx(8.44322)
+    assert limits["parallel_max_workers"] == 1
+    assert limits["arrow_threads"] == 1
+    assert limits["duckdb_threads"] == 1
 
 
 def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
