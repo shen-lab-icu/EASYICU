@@ -34,6 +34,9 @@
   let literatureScanning = false;
   let literatureScan = null;
   let zoteroWidget = null;
+  /* Bumped by every idea-context reset (new idea, source-type switch, record
+     load, mine start). Async handlers capture a ticket and drop stale applies. */
+  let ideaRevision = 0;
 
   function fmt(v) {
     if (v == null || v === '') return '—';
@@ -425,8 +428,10 @@
     }
     discovering = true;
     err = null;
+    const ticket = ideaRevision;
     repaint();
     discoverIdeasApi(Object.assign({}, payload, { limit: 8 })).then(data => {
+      if (ticket !== ideaRevision) return;
       discovery = data;
       sourceResolved = null;
       const suggested = data && data.status !== 'blocked_network_opt_in_required' ? data.suggested_payload : null;
@@ -434,6 +439,7 @@
         draft = Object.assign({}, draft, Object.fromEntries(Object.entries(suggested).filter(([, v]) => v != null && v !== '')));
       }
     }).catch(e => {
+      if (ticket !== ideaRevision) return;
       err = e.message || String(e);
     }).finally(() => {
       discovering = false;
@@ -477,13 +483,16 @@
     srcType = 'pdf';
     pdfIngesting = true;
     err = null;
+    const ticket = ideaRevision;
     repaint();
     const reader = new FileReader();
     reader.onload = () => {
+      if (ticket !== ideaRevision) { pdfIngesting = false; repaint(); return; }
       const text = String(reader.result || '');
       const contentBase64 = text.includes(',') ? text.split(',').pop() : text;
       window.EU_API.ingestIdeaPdf({ filename: name, content_base64: contentBase64 })
         .then(data => {
+          if (ticket !== ideaRevision) return;
           pdfInfo = data && data.pdf ? data.pdf : null;
           if (pdfInfo) {
             draft.source_file_name = pdfInfo.filename || name;
@@ -492,12 +501,12 @@
           applySuggestedPayload(data && data.suggested_payload);
           sourceResolved = data;
         })
-        .catch(e => { err = e.message || String(e); })
+        .catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); })
         .finally(() => { pdfIngesting = false; repaint(); });
     };
     reader.onerror = () => {
       pdfIngesting = false;
-      err = t('Could not read the selected PDF file.', '无法读取选中的 PDF 文件。');
+      if (ticket === ideaRevision) err = t('Could not read the selected PDF file.', '无法读取选中的 PDF 文件。');
       repaint();
     };
     reader.readAsDataURL(file);
@@ -519,9 +528,11 @@
     srcType = 'literature_folder';
     literatureScanning = true;
     err = null;
+    const ticket = ideaRevision;
     repaint();
     window.EU_API.scanIdeaLiteratureFolder({ path })
       .then(data => {
+        if (ticket !== ideaRevision) return;
         literatureScan = data;
         const folder = data && data.folder ? data.folder : {};
         if (folder.path) draft.literature_folder = folder.path;
@@ -529,7 +540,7 @@
         applySuggestedPayload(data && data.suggested_payload);
         sourceResolved = data;
       })
-      .catch(e => { err = e.message || String(e); })
+      .catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); })
       .finally(() => { literatureScanning = false; repaint(); });
   }
   function useDiscoveryCandidate(index) {
@@ -1155,7 +1166,7 @@
       id: runRecordKey(r, i) || r.run_id || r.created_at || r.title || 'history',
       runId: r.run_id || '',
       title: r.title || t('Idea run', 'Idea 记录'),
-      meta: loadingRun === r.run_id ? t('loading local run...', '正在加载本地 run...') : `${t('Local run', '本地 run')} · ${r.feasibility_tier || '—'} · ${r.journal || 'source'} · ${r.created_at || ''}`,
+      meta: loadingRun === r.run_id ? t('loading local run...', '正在加载本地 run...') : `${r.run_id ? t('Local run', '本地 run') : t('Metadata only · cannot reopen', '仅元数据 · 无法重新打开')} · ${r.feasibility_tier || '—'} · ${r.journal || 'source'} · ${r.created_at || ''}`,
       status: r.go_no_go === 'recommend' ? 'ready' : 'idle',
     }));
     if (result) {
@@ -1165,7 +1176,7 @@
         id: currentKey,
         runId: result.run_id || '',
         title: idea.idea_title || result.candidate_topic || t('Current idea run', '当前 idea run'),
-        meta: `${t('Local run', '本地 run')} · ${idea.go_no_go || 'pending'} · ${result.source_type || srcType}`,
+        meta: `${result.run_id ? t('Local run', '本地 run') : t('Metadata only · cannot reopen', '仅元数据 · 无法重新打开')} · ${idea.go_no_go || 'pending'} · ${result.source_type || srcType}`,
         status: idea.go_no_go === 'recommend' ? 'ready' : 'draft',
       };
       if (!rows.some(r => String(r.id) === String(current.id))) rows = [current].concat(rows);
@@ -1193,7 +1204,7 @@
         ${ideaListContext(rows)}
         <div class="ag-studies">
           ${rows.length ? rows.map((r, i) => `
-            <button class="studycard ${String(r.id) === String(activeId) ? 'on' : ''}" data-idea-record="${esc(r.runId || r.id)}" data-idea-record-key="${esc(r.id)}" title="${esc(r.title)}" ${loadingRun === (r.runId || r.id) ? 'aria-disabled="true"' : ''}>
+            <button class="studycard ${String(r.id) === String(activeId) ? 'on' : ''}" ${r.runId ? `data-idea-record="${esc(r.runId)}"` : ''} data-idea-record-key="${esc(r.id)}" title="${esc(r.title)}" ${!r.runId || loadingRun === r.runId ? 'aria-disabled="true"' : ''}>
               <div class="sc-top">
                 <span class="sc-dot ${dotCls[r.status] || 'idle'}"></span>
                 <span class="sc-name">${esc(r.title)}</span>
@@ -1257,14 +1268,18 @@
       const runId = btn.dataset.ideaRecord || '';
       const recordKey = btn.dataset.ideaRecordKey || runId;
       if (!runId || loadingRun) return;
+      ideaRevision += 1;
+      const ticket = ideaRevision;
       loadingRun = runId;
       selectedRunId = runId;
       selectedRecordKey = recordKey;
       err = null;
       repaint();
       loadIdeaRunApi({ run_id: runId }).then(data => {
+        if (ticket !== ideaRevision) return;
         applyRunPayload(data, recordKey);
       }).catch(error => {
+        if (ticket !== ideaRevision) return;
         err = error.message || String(error);
       }).finally(() => {
         loadingRun = null;
@@ -1272,6 +1287,7 @@
       });
     });
     root.querySelectorAll('[data-idea-src]').forEach(btn => btn.addEventListener('click', () => {
+      ideaRevision += 1;
       collectPayload(document);
       srcType = btn.dataset.ideaSrc || 'manual';
       draft.source_type = srcType;
@@ -1295,6 +1311,7 @@
       repaint();
     }));
     root.querySelectorAll('[data-idea-new]').forEach(btn => btn.addEventListener('click', () => {
+      ideaRevision += 1;
       result = null; err = null; planEdits = ''; sourceResolved = null; discovery = null; priorArt = null; planDraft = null; projectSeed = null; sampleFeasibility = null; selectedRunId = null; selectedRecordKey = null; if (zoteroWidget) zoteroWidget.reset(); draft = {}; activeStep = 'source'; window.EU_IDEA_HANDOFF = null; repaint();
     }));
     const resolveBtn = root.querySelector('[data-idea-resolve]');
@@ -1302,12 +1319,14 @@
       if (resolving || !(window.EU_API && window.EU_API.resolveIdeaSource)) return;
       const payload = collectPayload(document);
       resolving = true; err = null;
+      const ticket = ideaRevision;
       repaint();
       window.EU_API.resolveIdeaSource(payload).then(data => {
+        if (ticket !== ideaRevision) return;
         sourceResolved = data;
         const s = data.suggested_payload || {};
         draft = Object.assign({}, draft, Object.fromEntries(Object.entries(s).filter(([, v]) => v != null && v !== '')));
-      }).catch(e => { err = e.message || String(e); }).finally(() => { resolving = false; repaint(); });
+      }).catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); }).finally(() => { resolving = false; repaint(); });
     });
     const discoverBtn = root.querySelector('[data-idea-discover]');
     if (discoverBtn) discoverBtn.addEventListener('click', () => {
@@ -1341,21 +1360,25 @@
       const validationError = validatePayload(payload);
       if (validationError) { err = validationError; repaint(); return; }
       mining = true; err = null; result = null; priorArt = null; projectSeed = null; sampleFeasibility = null; window.EU_IDEA_HANDOFF = null;
+      ideaRevision += 1;
+      const ticket = ideaRevision;
       repaint();
       window.EU_API.mineIdeas(payload).then(data => {
+        if (ticket !== ideaRevision) return;
         result = data; selectedRunId = data.run_id || null; selectedRecordKey = runRecordKey(data, 'current') || selectedRunId; err = null; planEdits = ''; planDraft = null; activeStep = 'ledger'; window.EU_IDEA_LAST_RUN = data; upsertHistoryRun(data);
       }).catch(e => {
+        if (ticket !== ideaRevision) return;
         err = e.message || String(e);
       }).finally(() => { mining = false; repaint(); });
     });
     const sampleBtn = root.querySelector('[data-idea-sample-feasibility]');
     if (sampleBtn) sampleBtn.addEventListener('click', () => {
       if (sampleChecking || !result || !(window.EU_API && window.EU_API.checkIdeaSampleFeasibility)) return;
-      sampleChecking = true; err = null; repaint();
+      sampleChecking = true; err = null; const ticket = ideaRevision; repaint();
       window.EU_API.checkIdeaSampleFeasibility({
         run_id: result.run_id,
         idea_id: result.selected_idea_id,
-      }).then(data => { sampleFeasibility = data; activeStep = 'evidence'; }).catch(e => { err = e.message || String(e); }).finally(() => { sampleChecking = false; repaint(); });
+      }).then(data => { if (ticket !== ideaRevision) return; sampleFeasibility = data; activeStep = 'evidence'; }).catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); }).finally(() => { sampleChecking = false; repaint(); });
     });
     const planBox = root.querySelector('#ideaPlanEdits');
     if (planBox) planBox.addEventListener('input', () => {
@@ -1369,17 +1392,19 @@
       if (priorArting || !result || !(window.EU_API && window.EU_API.checkIdeaPriorArt)) return;
       const payload = document.querySelector('#ideaTopic') || document.querySelector('#ideaNetworkOptIn') ? collectPayload(document) : draft;
       priorArting = true; err = null;
+      const ticket = ideaRevision;
       repaint();
       window.EU_API.checkIdeaPriorArt({
         run_id: result.run_id,
         idea_id: result.selected_idea_id,
         allow_network: !!payload.allow_network,
-      }).then(data => { priorArt = data; activeStep = 'evidence'; }).catch(e => { err = e.message || String(e); }).finally(() => { priorArting = false; repaint(); });
+      }).then(data => { if (ticket !== ideaRevision) return; priorArt = data; activeStep = 'evidence'; }).catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); }).finally(() => { priorArting = false; repaint(); });
     });
     const planBtn = root.querySelector('[data-idea-plan]');
     if (planBtn) planBtn.addEventListener('click', () => {
       if (planning || !result || !(window.EU_API && window.EU_API.planIdea)) return;
       planning = true; err = null; planEdits = inputVal(document, '#ideaPlanEdits') || planEdits;
+      const ticket = ideaRevision;
       repaint();
       window.EU_API.planIdea({
         run_id: result.run_id,
@@ -1387,16 +1412,18 @@
         mode: 'plan',
         plan_edits: planEdits,
       }).then(data => {
+        if (ticket !== ideaRevision) return;
         planDraft = data;
         window.EU_IDEA_HANDOFF = null;
         projectSeed = null;
         activeStep = 'handoff';
-      }).catch(e => { err = e.message || String(e); }).finally(() => { planning = false; repaint(); });
+      }).catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); }).finally(() => { planning = false; repaint(); });
     });
     const replanBtn = root.querySelector('[data-idea-replan]');
     if (replanBtn) replanBtn.addEventListener('click', () => {
       if (planning || !result || !(window.EU_API && window.EU_API.planIdea)) return;
       planning = true; err = null; planEdits = inputVal(document, '#ideaPlanEdits') || planEdits;
+      const ticket = ideaRevision;
       repaint();
       window.EU_API.planIdea({
         run_id: result.run_id,
@@ -1404,11 +1431,12 @@
         mode: 'replan',
         plan_edits: planEdits,
       }).then(data => {
+        if (ticket !== ideaRevision) return;
         planDraft = data;
         window.EU_IDEA_HANDOFF = null;
         projectSeed = null;
         activeStep = 'handoff';
-      }).catch(e => { err = e.message || String(e); }).finally(() => { planning = false; repaint(); });
+      }).catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); }).finally(() => { planning = false; repaint(); });
     });
     const handoffBtn = root.querySelector('[data-idea-handoff]');
     if (handoffBtn) handoffBtn.addEventListener('click', () => {
@@ -1419,33 +1447,37 @@
         return;
       }
       handoffing = true; err = null; planEdits = inputVal(document, '#ideaPlanEdits');
+      const ticket = ideaRevision;
       repaint();
       window.EU_API.handoffIdea({
         run_id: result.run_id,
         idea_id: result.selected_idea_id,
         plan_edits: planEdits,
       }).then(data => {
+        if (ticket !== ideaRevision) return;
         window.EU_IDEA_HANDOFF = data;
         projectSeed = null;
         activeStep = 'handoff';
         try { localStorage.setItem('easyicu_last_idea_handoff', JSON.stringify({ run_id: data.run_id, idea_id: data.idea_id, title: data.candidate_topic })); } catch (e) {}
-      }).catch(e => { err = e.message || String(e); }).finally(() => { handoffing = false; repaint(); });
+      }).catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); }).finally(() => { handoffing = false; repaint(); });
     });
     const projectBtn = root.querySelector('[data-idea-create-project]');
     if (projectBtn) projectBtn.addEventListener('click', () => {
       if (projectCreating || !window.EU_IDEA_HANDOFF || !(window.EU_API && window.EU_API.createIdeaAgentProject)) return;
       projectCreating = true; err = null;
+      const ticket = ideaRevision;
       repaint();
       window.EU_API.createIdeaAgentProject({
         run_id: window.EU_IDEA_HANDOFF.run_id,
         idea_id: window.EU_IDEA_HANDOFF.idea_id,
         plan_edits: planEdits,
       }).then(data => {
+        if (ticket !== ideaRevision) return;
         projectSeed = data.project || null;
         window.EU_IDEA_AGENT_PROJECT = projectSeed;
         activeStep = 'handoff';
         try { localStorage.setItem('easyicu_last_idea_agent_project', JSON.stringify(projectSeed || {})); } catch (e) {}
-      }).catch(e => { err = e.message || String(e); }).finally(() => { projectCreating = false; repaint(); });
+      }).catch(e => { if (ticket !== ideaRevision) return; err = e.message || String(e); }).finally(() => { projectCreating = false; repaint(); });
     });
   }
   function requestHistory() {

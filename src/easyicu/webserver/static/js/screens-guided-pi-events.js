@@ -125,7 +125,6 @@
           }
           finishProviderSetup(); return;
         }
-        if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
         if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
         if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
         if (event.target.closest('[data-gpi-study-setup]')) { openStudySetupInConversation(); return; }
@@ -156,13 +155,6 @@
         }
         const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
         if (dataSourceAction) { authorizeDataSource(dataSourceAction); return; }
-        if (event.target.closest('[data-gpi-data-demo]')) {
-          sendText(tr(
-            'I do not have local data yet. Show only the official EasyICU demo datasets and explain their limits. Do not download or use one until I choose it. Offer only each exact demo or continuing study planning without data; do not offer a local full-database workflow.',
-            '我还没有本地数据。请只列出 EasyICU 官方 Demo 数据并说明局限；在我选择前不要下载或使用。下一步只提供每个准确 Demo 或继续无数据规划，不要提供本地完整数据库工作流。',
-          ));
-          return;
-        }
         if (MESSAGE_ACTIONS.handleClick(event)) return;
         const starterAction = STARTERS && STARTERS.actionFromEvent(event);
         if (starterAction && starterAction.kind === 'send') {
@@ -210,7 +202,6 @@
         if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
         if (event.target.closest('[data-gpi-presentation-pin]')) { togglePresentationPin(); return; }
         if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
-        if (event.target.closest('[data-gpi-cancel-setup]')) { state.showSetup = false; state.error = ''; render(); return; }
         if (event.target.closest('[data-gpi-new]')) {
           state.sessionSelectionRevision += 1;
           state.session = null;

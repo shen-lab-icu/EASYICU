@@ -223,4 +223,13 @@ assert.match(readerContext, /<span class="pill warn">stale<\/span>/, 'stale link
 assert.ok(readerContext.includes('Estimate the adjusted association.'), 'method summary must stay readable');
 assert.ok(!readerContext.includes('relative_path'), 'reader markup must not leak host paths');
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 22 }));
+const scrubbedUrls = renderer.scrubDataUrls({
+  metadata_url: 'https://example.test/metadata.json',
+  Data_URL: 'data:image/png;base64,AAAA',
+  image_data_url: 'data:image/png;base64,BBBB',
+});
+assert.equal(scrubbedUrls.metadata_url, 'https://example.test/metadata.json', 'ordinary *_url metadata must remain visible');
+assert.equal(scrubbedUrls.Data_URL, '[embedded image hidden in JSON preview]');
+assert.equal(scrubbedUrls.image_data_url, '[embedded image hidden in JSON preview]');
+
+process.stdout.write(JSON.stringify({ ok: true, cases: 23 }));

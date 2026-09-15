@@ -2525,7 +2525,11 @@ def _inspect_manuscript(
         for resource in (
             _artifact_resource(row.get("run_id"), "manuscript_draft.json"),
             *(
-                _document_resource(row.get("run_id"), artifact.get("name"))
+                _document_resource(
+                    row.get("run_id"),
+                    artifact.get("name"),
+                    sha256=artifact.get("sha256"),
+                )
                 for artifact in projected_artifacts
             ),
         )

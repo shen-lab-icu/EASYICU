@@ -360,9 +360,7 @@
       const displayedNote = firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
       const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
-        ? String(firstDecisionItem && firstDecisionItem.code || '') === 'REPEATED_STAY_METHOD_NOT_DECLARED'
-            ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-confirm-action><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
-          : firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
+        ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
@@ -716,49 +714,6 @@
             label: tr('Use every ICU stay with patient clustering', '采用每次 ICU 入住并按患者聚类'),
             effect: tr('Retains later stays; the model must address within-patient dependence.', '保留后续入住；模型必须处理患者内相关性。'),
             requirement: tr('EasyICU will materialize verified patient grouping and use patient-clustered uncertainty.', 'EasyICU 将核验患者分组，并采用按患者聚类的稳健方差。'),
-          },
-        ],
-      };
-      if (code === 'REPEATED_STAY_METHOD_NOT_DECLARED') return {
-        cardTitle: tr(
-          'Use the repeated-stay setting already saved for this study?',
-          '沿用已保存的重复入住设置？',
-        ),
-        context: tr(
-          'EasyICU already has the researcher’s choice. No technical explanation needs to be entered again.',
-          'EasyICU 已保存研究者的选择，无需重新输入技术说明。',
-        ),
-        evidenceLabel: tr('Saved study setting', '已保存的研究设置'),
-        evidenceStatus: tr(
-          'Every ICU stay · patient-clustered uncertainty',
-          '每次 ICU 入住 · 按患者聚类稳健',
-        ),
-        evidenceDetail: tr(
-          'The verified patient grouping is available to the analysis runner.',
-          '分析执行器可使用已核验的患者分组。',
-        ),
-        guidance: tr(
-          'Regenerate the candidate plan from this saved setting. Analysis will remain paused for review.',
-          '直接按该设置重新生成候选计划；分析仍会在审阅前暂停。',
-        ),
-        technicalEvidence: String((item && item.evidence) || ''),
-        technicalRemediation: String((item && item.remediation) || ''),
-        allowEdit: true,
-        options: [
-          {
-            label: tr('Regenerate using saved setting', '按已保存设置重新生成'),
-            effect: tr(
-              'Keeps every ICU stay and uses the verified patient grouping.',
-              '保留每次 ICU 入住，并使用已核验的患者分组。',
-            ),
-            requirement: tr(
-              'EasyICU will replace only the candidate plan.',
-              'EasyICU 只替换候选计划。',
-            ),
-            message: tr(
-              'Use the saved repeated-stay setting and regenerate the research plan.',
-              '使用已保存的重复入住设置，重新生成研究计划。',
-            ),
           },
         ],
       };

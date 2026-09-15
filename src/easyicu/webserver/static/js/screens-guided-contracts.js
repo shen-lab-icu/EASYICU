@@ -4,6 +4,8 @@
 (function () {
   'use strict';
 
+  const { esc } = window.EU_HTML;
+
   function bi(en, zh) { return { en, zh }; }
 
   function guidedJobEndError(message) {
@@ -64,7 +66,7 @@
       const suffix = passed ? '' : (pending
         ? ` <span style="color:var(--ink-4);">· ${t('pending review', '待审阅')}</span>`
         : ` <span style="color:var(--bad,#c0392b);font-weight:600;">· ${t('failed', '未通过')}</span>`);
-      return `<div class="gd-task ${cls}"><span class="tk">${mark}</span><span class="grow">${guidedGateCheckLabel(id)}${suffix}</span></div>`;
+      return `<div class="gd-task ${cls}"><span class="tk">${mark}</span><span class="grow">${esc(guidedGateCheckLabel(id))}${suffix}</span></div>`;
     }).join('');
   }
 
