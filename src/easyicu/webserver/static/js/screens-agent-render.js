@@ -290,7 +290,7 @@
     if (!value || typeof value !== 'object') return value;
     const out = {};
     Object.keys(value).forEach(key => {
-      if (key === 'data_url' || key === 'image_data_url') out[key] = '[embedded image hidden in JSON preview]';
+      if (/^(?:data_url|image_data_url)$/i.test(key)) out[key] = '[embedded image hidden in JSON preview]';
       else out[key] = scrubDataUrls(value[key]);
     });
     return out;
@@ -301,7 +301,10 @@
   }
   function displayAnchorAttributes(row) {
     const id = displayAnchorId(row);
-    return id ? ` id="gpi-display-${escAttr(id)}" data-gpi-display-anchor="${escAttr(id)}"` : '';
+    // Anchors are matched through the data attribute (dataset compare in the
+    // preview and run-files hosts); no consumer reads an element id, and
+    // registered display ids like "Table 1" legitimately contain spaces.
+    return id ? ` data-gpi-display-anchor="${escAttr(id)}"` : '';
   }
   function figureGallery(payload) {
     const figs = payload && Array.isArray(payload.figures) ? payload.figures : [];
@@ -1203,11 +1206,17 @@
     const tableCard = (entry, open) => {
       const table = entry.table || {};
       const headers = Array.isArray(table.headers) ? table.headers.slice(0, 12) : [];
+      const totalRows = Array.isArray(table.rows) ? table.rows.length : 0;
       const rows = Array.isArray(table.rows) ? table.rows.slice(0, 30) : [];
-      const meta = t(
-        `${rows.length} rows · ${headers.length} columns`,
-        `${rows.length} 行 · ${headers.length} 列`,
-      );
+      const meta = rows.length < totalRows
+        ? t(
+          `${rows.length} of ${totalRows} rows · ${headers.length} columns`,
+          `${totalRows} 行中显示前 ${rows.length} 行 · ${headers.length} 列`,
+        )
+        : t(
+          `${rows.length} rows · ${headers.length} columns`,
+          `${rows.length} 行 · ${headers.length} 列`,
+        );
       return artifactTable(
         resultTableTitle(table, entry.index),
         headers,

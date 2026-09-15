@@ -257,3 +257,83 @@ test('P2-6 run-file evidence opens the registered run and digest; display links 
   assert.equal(calls.filter(row => row[0] === 'evidence').length, 1);
   click('[data-gpi-display]', { dataset: { gpiDisplay: 'Table 1' } }); assert.equal(scrolled, 1);
 });
+
+test('workspace snapshot request identity survives an A-B-A path cycle', async () => {
+  const pending = [deferred(), deferred(), deferred()];
+  const requested = [];
+  const c = context({ workspaceSnapshot: null, workspaceSnapshotPath: '', renderThread() {}, renderAside() {} });
+  c.window.EU_API = {
+    loadWorkspaceSummary: path => {
+      requested.push(path);
+      return pending[requested.length - 1].promise;
+    },
+  };
+  vm.runInContext(section('screens-guided.js', '  function loadWorkspaceSnapshot(', '  /* ---- dynamic plan/frame'), c);
+
+  const firstA = c.loadWorkspaceSnapshot({ path: '/A' });
+  const requestB = c.loadWorkspaceSnapshot({ path: '/B' });
+  const secondA = c.loadWorkspaceSnapshot({ path: '/A' });
+  assert.deepEqual(requested, ['/A', '/B', '/A']);
+
+  pending[2].resolve({ marker: 'fresh-A2' });
+  assert.deepEqual(await secondA, { marker: 'fresh-A2' });
+  pending[0].resolve({ marker: 'stale-A1' });
+  assert.equal(await firstA, null);
+  pending[1].resolve({ marker: 'stale-B' });
+  assert.equal(await requestB, null);
+  assert.deepEqual(c.workspaceSnapshot, { marker: 'fresh-A2' });
+});
+
+test('a failed workspace switch cannot cache the previous path under the new path', async () => {
+  const pending = deferred();
+  const c = context({
+    workspaceSnapshot: { marker: 'cached-A' },
+    workspaceSnapshotPath: '/A',
+    renderThread() {},
+    renderAside() {},
+  });
+  let calls = 0;
+  c.window.EU_API = { loadWorkspaceSummary: () => { calls += 1; return pending.promise; } };
+  vm.runInContext(section('screens-guided.js', '  function loadWorkspaceSnapshot(', '  /* ---- dynamic plan/frame'), c);
+
+  const firstB = c.loadWorkspaceSnapshot({ path: '/B' });
+  pending.reject(Error('unavailable'));
+  assert.equal(await firstB, null);
+  assert.equal(c.workspaceSnapshot, null);
+  c.window.EU_API.loadWorkspaceSummary = () => { calls += 1; return Promise.resolve({ marker: 'fresh-B' }); };
+  assert.deepEqual(await c.loadWorkspaceSnapshot({ path: '/B' }), { marker: 'fresh-B' });
+  assert.equal(calls, 2);
+});
+
+test('guided session requests are coalesced only for the same project identity', async () => {
+  const pending = [deferred(), deferred()];
+  const requested = [];
+  const c = context({
+    gen: 1,
+    guidedSessionRequest: null,
+    guidedCopilot: { loading: false, error: null, session: null, last: null },
+    selectedGuidedDraft: { id: 'draft-A', project_dir: '/A', title: 'A' },
+    guidedBackendContext: () => ({}),
+    renderThread() {},
+  });
+  c.window.EU_API = {
+    createGuidedSession: () => Promise.resolve({ session: null }),
+    openGuidedProject: payload => {
+      requested.push(payload.project_dir);
+      return pending[requested.length - 1].promise;
+    },
+  };
+  vm.runInContext(section('screens-guided.js', '  function trackGuidedSessionRequest(', '  function threadFromSessionMessage('), c);
+
+  const first = c.ensureGuidedSession(false);
+  c.selectedGuidedDraft = { id: 'draft-B', project_dir: '/B', title: 'B' };
+  c.gen += 1;
+  const second = c.ensureGuidedSession(false);
+  assert.deepEqual(requested, ['/A', '/B']);
+
+  pending[1].resolve({ session: { id: 'session-B', project_dir: '/B', memory_scope: 'project_folder' } });
+  assert.equal((await second).id, 'session-B');
+  pending[0].resolve({ session: { id: 'session-A', project_dir: '/A', memory_scope: 'project_folder' } });
+  assert.equal(await first, null);
+  assert.equal(c.guidedCopilot.session.id, 'session-B');
+});

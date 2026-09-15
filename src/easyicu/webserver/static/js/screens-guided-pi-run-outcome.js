@@ -130,18 +130,21 @@
         button.disabled = true;
         button.textContent = tr('Preparing source snapshot…', '正在准备源数据快照…');
       }
+      const expectedProjectId = projectId();
       try {
-        const payload = await client.preparePiCopilotDataWorkbenchSnapshot(projectId());
+        const payload = await client.preparePiCopilotDataWorkbenchSnapshot(expectedProjectId);
+        if (projectId() !== expectedProjectId) return;
         const resource = payload && payload.resource;
         if (!resource) throw new Error(tr('EasyICU did not return a Data Workbench snapshot.', 'EasyICU 未返回数据工作台快照。'));
         resource.label = tr('EasyICU data visualization', 'EasyICU 数据可视化');
-        preview().open(resource, projectId(), workflowContext());
+        preview().open(resource, expectedProjectId, workflowContext());
         const context = workflowContext();
         await recordHostAction(
           'review_prepared_data',
-          `${String((context && context.currentRunId) || projectId())}:${String(resource.snapshot_sha256 || '')}`,
+          `${String((context && context.currentRunId) || expectedProjectId)}:${String(resource.snapshot_sha256 || '')}`,
         );
       } catch (error) {
+        if (projectId() !== expectedProjectId) return;
         onError(errorText(error));
       } finally {
         if (button && button.isConnected) {

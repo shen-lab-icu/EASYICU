@@ -2384,7 +2384,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Project memory bound" in guided_js
     assert "pendingGuidedGoal" in guided_js
     assert "requireGuidedProjectMemory(goal, label)" in guided_js
-    assert "if (!force) return Promise.resolve(null);" in guided_js
+    assert "const requestKind = expectedProjectDir ? 'open' : (force ? 'create' : '');" in guided_js
+    assert "if (!requestKind) return Promise.resolve(null);" in guided_js
     assert "saveGuidedSlotsNow(reason)" in guided_js
     assert "saveGuidedSlots" in api_js
     assert "scheduleGuidedSlotSave" in guided_js
@@ -2393,7 +2394,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "Required Copilot configuration is only persisted inside a local project folder"
         not in guided_js
     )
-    assert "sendGuidedMessage" in guided_js
+    assert "reflectGuidedFrontdoor" in guided_js
     assert "runGuidedAction" in guided_js
     assert "Choose a goal" in guided_js
     assert "data-guided-goal" in guided_js
@@ -2418,7 +2419,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "data-localrun" not in guided_js
     assert "data-refreshruns" not in guided_js
     assert "loadAgentRunHistory({ limit: 20 })" not in guided_js
-    assert "existing Agent run folder" in guided_js
+    assert "existing Agent run folder" not in guided_js
     assert ".gd-project-summary" in projects_css
     assert "~/easyicu/projects" in guided_js
     assert "/Users/haibo" not in guided_js

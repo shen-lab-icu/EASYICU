@@ -608,7 +608,7 @@
       ? t('EasyICU could not identify a supported ICU data layout in that folder.', 'EasyICU 未能在该文件夹中识别出支持的 ICU 数据结构。')
       : exScanError === 'scan_api_unavailable'
       ? t('The local folder scan API is unavailable. Restart the EasyICU WebApp; this screen will not guess a real data layout.', '本地文件夹扫描 API 不可用。请重启 EasyICU WebApp；此页面不会猜测真实数据结构。')
-      : t('Could not scan that folder.', '无法扫描该文件夹。');
+      : t('Could not scan that folder.', '无法扫描该文件夹。') + (exScanError ? ` <span class="mono">${escHtml(exScanError)}</span>` : '');
     return `
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
@@ -634,7 +634,7 @@
         <div class="cfg-head">
           <div class="cfg-ico" style="color:var(--ok);">${icon('check', 17, 2.6)}</div>
           <div class="grow"><div class="cfg-h">${t('Folder recognized', '已识别该文件夹')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
-          <span class="pill ok" style="height:20px;"><span class="dot"></span>${d.db}</span>
+          <span class="pill ok" style="height:20px;"><span class="dot"></span>${escHtml(d.db)}</span>
         </div>`;
     const facts = [
       [t('Database', '数据库'), d.db],
@@ -649,7 +649,7 @@
       : t('Prepared ICU data path', '已转换 ICU 数据路径');
     const cta = d.ready
       ? `<button class="btn primary" data-ex-usedata>${icon('arrow', 14)} ${d.source === 'module' ? t('Use this export', '使用这个导出') : t('Continue with prepared data', '继续使用已转换数据')}</button>`
-      : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert raw files', '转换原始文件')}${d.size ? ` · ${d.size}` : ''}${d.est ? ` · ${d.est}` : ''}</button>`;
+      : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert raw files', '转换原始文件')}${d.size ? ` · ${escHtml(d.size)}` : ''}${d.est ? ` · ${escHtml(d.est)}` : ''}</button>`;
     const note = d.ready
       ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Detected', '已识别')}: ${sourceLabel}</div><div class="d" style="font-size:11px;margin:0;">${d.source === 'module' ? t('This looks like an existing EasyICU export. Register it as a reusable local source.', '这看起来是已有 EasyICU 导出。可以注册为可复用的本地来源。') : t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
       : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('One-time conversion to Parquet. Runs on your machine; results are cached so a re-run is instant.', '一次性转换为 Parquet。在本机运行;结果会缓存,再次运行会很快。')}</div></div></div>`;
@@ -658,7 +658,7 @@
         ${okHead}
         <div class="cfg-body">
           <div class="cols-2" style="gap:10px 18px;">
-            ${facts.map(([k, v]) => `<div class="setup-row"><span class="k">${k}</span><span class="vv">${v}</span></div>`).join('')}
+            ${facts.map(([k, v]) => `<div class="setup-row"><span class="k">${k}</span><span class="vv">${escHtml(v)}</span></div>`).join('')}
           </div>
           ${note}
           <div class="row gap-8 mt-16">
@@ -775,7 +775,6 @@
       repaint();
     }
   }
-  function resumeConvert() { startConvert(); }  // re-run is idempotent: cached tables are skipped
   /* ---- server-side folder picker (net-new; the mock Browse was a no-op) ----
      A browser file input cannot enumerate the user's folders, so the local
      FastAPI process lists directories on demand via /api/fs/list. */
@@ -1156,7 +1155,18 @@
             exportResult = message.result && typeof message.result === 'object' ? message.result : {};
             window.EU_LAST_EXPORT = exportResult;
             exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
-            if (exportResult.out_dir) rememberExportPath(exportResult.out_dir).catch(() => null);
+            if (exportResult.out_dir) rememberExportPath(exportResult.out_dir).catch(() => {
+              // Extraction itself succeeded; only the reusable-source
+              // registration failed (rememberExportPath already logged the
+              // cause). Keep that visible on the done card instead of
+              // swallowing it — the files on disk are unaffected.
+              exOutputError = t(
+                'Extraction finished, but the export folder could not be registered as a reusable source. The files on disk are unaffected.',
+                '抽取已完成，但导出目录未能注册为可复用数据源。磁盘上的文件不受影响。'
+              );
+              backgroundRepaint();
+              return null;
+            });
           } else if (message.status === 'cancelled') {
             // A user-requested cancel is not a failure: keep the partial result
             // payload (files already written + out_dir) so the terminal card can
@@ -1766,12 +1776,12 @@
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
           <button class="btn" data-ex-sync-guided>${icon('agent', 14)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>
-          <button class="btn ghost" data-ex-reset>${icon('refresh', 14)} ${t('Extract again', '重新抽取')}</button>
+          <button class="btn ghost" data-ex-reset>${icon('refresh', 14)} ${t('New extraction', '新建抽取')}</button>
         </div>
       </div>
       <div class="cols-2 mt-20" style="max-width:720px;margin-left:auto;margin-right:auto;">
         ${fileList.map(f => `
-          <${canOpen ? 'button type="button"' : 'div'} class="ledger-row ex-output-file" ${canOpen ? `data-ex-open-output="${escHtml(f.file)}" title="${t('Open this file', '打开此文件')}"` : ''}><span class="ledger-ico">${icon(f.manifest || f.metadata ? 'shield' : 'file', 14)}</span><span class="ex-output-file-copy"><span class="mono ex-output-file-name">${escHtml(f.file)}</span><span class="ex-output-file-detail">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.metadata ? t('digest-bound column metadata', '摘要绑定列元数据') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || '')))))}</span></span>${canOpen ? `<span class="ex-output-open-icon">${icon('arrow', 12)}</span>` : ''}</${canOpen ? 'button' : 'div'}>`).join('')}
+          <${canOpen ? 'button type="button"' : 'div'} class="ledger-row ex-output-file" ${canOpen ? `data-ex-open-output="${escHtml(f.file)}" title="${t('Open this file', '打开此文件')}"` : ''}><span class="ledger-ico">${icon(f.manifest || f.metadata ? 'shield' : 'file', 14)}</span><span class="ex-output-file-copy"><span class="mono ex-output-file-name">${escHtml(f.file)}</span><span class="ex-output-file-detail">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.metadata ? t('digest-bound column metadata', '摘要绑定列元数据') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : escHtml(f.module || '')))))}</span></span>${canOpen ? `<span class="ex-output-open-icon">${icon('arrow', 12)}</span>` : ''}</${canOpen ? 'button' : 'div'}>`).join('')}
       </div>`;
   }
 
@@ -1903,7 +1913,6 @@
         });
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
-      const resumeBtn = root.querySelector('[data-ex-resume]'); if (resumeBtn) resumeBtn.addEventListener('click', () => { resumeConvert(); });
       root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
       const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'ready'; repaint(); });
       const sampleBtn = root.querySelector('[data-ex-sample]'); if (sampleBtn) sampleBtn.addEventListener('click', () => { if (window.setDataMode) window.setDataMode('demo'); });
@@ -1919,7 +1928,7 @@
       root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
       // custom disclosure
       const cust = root.querySelector('[data-ex-custom]');
-      if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); setTimeout(() => { const el = root.querySelector('.ex2-custom'); if (el && exCustomOpen) el.scrollIntoView ? null : null; }, 0); });
+      if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); });
       // advanced toggles
       const advc = root.querySelector('[data-ex-advc]'); if (advc) advc.addEventListener('click', () => { exAdvCohort = !exAdvCohort; repaint(); });
       const adve = root.querySelector('[data-ex-adve]'); if (adve) adve.addEventListener('click', () => { exAdvExport = !exAdvExport; repaint(); });

@@ -130,6 +130,10 @@
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)) return null;
       const validationDocument = value.kind === 'system_validation_document';
       const sha256 = String(value.sha256 || '').trim().toLowerCase();
+      // A missing digest stays allowed because the inspect_manuscript tool
+      // projection emits document references without one; previewUrl()
+      // refuses to serve such a document unpinned instead of rejecting the
+      // reference here.
       if (sha256 && !/^[a-f0-9]{64}$/.test(sha256)) return null;
       if (validationDocument
         ? !/^system_validation_report\.(html|pdf)$/.test(artifact)
@@ -292,8 +296,12 @@
       return `/assets/demo/${state.resource.artifact}?v=20260815-reviewer-demo1`;
     }
     if (isResearchDocument()) {
+      // The click-time digest pins the served bytes to the projected run
+      // ledger row; without a valid sha256 the document is never requested.
+      const documentSha256 = String(state.resource.sha256 || '').trim().toLowerCase();
+      if (!/^[a-f0-9]{64}$/.test(documentSha256)) return '';
       return api.piCopilotResearchDocumentUrl
-        ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact, state.resource.sha256)
+        ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact, documentSha256)
         : '';
     }
     const checkedSha256 = String(state.resource && state.resource.checked_sha256 || '').trim().toLowerCase();
@@ -385,7 +393,10 @@
         ? renderer.renderSource(state.resource)
         : `<div class="gpi-preview-state error">${esc(tr('Literature renderer unavailable', '文献渲染器不可用'))}</div>`;
     } else if (state.mode === 'document' && isDocument()) {
-      body = `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(previewUrl())}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
+      const url = previewUrl();
+      body = url
+        ? `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(url)}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
+        : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The registered document digest is missing, so this preview cannot be pinned to the run ledger.', '登记文档摘要缺失，预览无法钉定到运行台账。')}</span></div>`;
     } else if (state.mode === 'web' && isHtml()) {
       const url = previewUrl();
       body = url
@@ -620,7 +631,25 @@
       }
       if (ticket !== state.request) return;
       if (isLiteratureSource()) {
-        state.resource = { ...state.resource, ...(payload || {}), source_review_status: 'reviewed' };
+        // Merge only bounded enrichment fields; the response must not rewrite
+        // safeResource-validated identity (kind, url, label, media_type,
+        // authority_class) with unvalidated values.
+        const enrichment = payload && typeof payload === 'object' ? payload : {};
+        const enrichedTitle = String(enrichment.title || '').trim().slice(0, 500);
+        state.resource = {
+          ...state.resource,
+          ...(enrichedTitle ? { title: enrichedTitle } : {}),
+          year: String(enrichment.year || state.resource.year || '').slice(0, 16),
+          doi: String(enrichment.doi || state.resource.doi || '').slice(0, 240),
+          abstract_excerpt: String(enrichment.abstract_excerpt || '').slice(0, 1200),
+          publication_types: (Array.isArray(enrichment.publication_types) ? enrichment.publication_types : [])
+            .slice(0, 20).map(item => String(item || '').trim().slice(0, 160)).filter(Boolean),
+          bibliographic_notices: (Array.isArray(enrichment.bibliographic_notices) ? enrichment.bibliographic_notices : [])
+            .slice(0, 20).map(item => String(item || '').trim().slice(0, 600)).filter(Boolean),
+          article_kind: String(enrichment.article_kind || '').slice(0, 80),
+          full_text: enrichment.full_text && typeof enrichment.full_text === 'object' ? enrichment.full_text : null,
+          source_review_status: 'reviewed',
+        };
         state.payload = payload || null;
         return;
       }
@@ -650,7 +679,7 @@
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
     state.request += 1;
     state.loading = false;
-    if (state.projectId && project && state.projectId !== project) state.recentResources = [];
+    if (state.projectId !== project) state.recentResources = [];
     state.resource = safe;
     state.projectId = project;
     state.workflowContext = safeWorkflowContext(workflowContext);

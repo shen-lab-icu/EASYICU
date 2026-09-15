@@ -448,7 +448,6 @@
     activity.endedAt = endedAt;
   }
 
-
   function statusBanner() {
     if (state.loading) {
       return `<div class="gpi-inline"><span class="gpi-dot waiting"></span>${tr('Checking EasyICU Copilot…', '正在检查 EasyICU 研究助手…')}</div>`;
@@ -819,7 +818,6 @@
     render();
   }
 
-
   function render(preserveScroll) {
     if (!state.host) return;
     const previousLog = preserveScroll && state.host.querySelector('[data-gpi-log]');
@@ -972,10 +970,11 @@
         return;
       }
       const replayOwner = MODULES.require('replay');
-      state.session = replayOwner && typeof replayOwner.hydrate === 'function'
+      const hydrated = replayOwner && typeof replayOwner.hydrate === 'function'
         ? await replayOwner.hydrate(api(), payload.session, expectedProjectId)
         : payload.session;
       if (expectedProjectId !== projectId() || expectedSelectionRevision !== state.sessionSelectionRevision) return;
+      state.session = hydrated;
       state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || 'research';
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
@@ -1069,8 +1068,11 @@
       ? replayOwner.preferredSessionId(state.sessions, '', next, uiLanguage())
       : String(state.sessions.find(row => (row.agent_mode || 'research') === next && sessionMatchesUiLanguage(row))?.session_id || '');
     if (!existingSessionId && projectId()) {
+      const expectedProjectId = projectId();
+      const selectionRevision = state.sessionSelectionRevision;
       try {
         const listed = await api().loadPiCopilotSessions(100, projectId(), next);
+        if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
         const matching = Array.isArray(listed && listed.sessions) ? listed.sessions : [];
         if (matching.length) {
           const matchingIds = new Set(matching.map(row => row.session_id));
@@ -1080,6 +1082,7 @@
             : String(matching.find(sessionMatchesUiLanguage)?.session_id || '');
         }
       } catch (error) {
+        if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
         state.error = errorText(error);
         render();
         return;
@@ -1646,19 +1649,22 @@
       render();
       return;
     }
+    const expectedProjectId = projectId();
     const original = button ? button.textContent : '';
     if (button) {
       button.disabled = true;
       button.textContent = tr('Preparing preview…', '正在准备预览…');
     }
     try {
-      const payload = await api().preparePiCopilotDataPackageReview(projectId());
+      const payload = await api().preparePiCopilotDataPackageReview(expectedProjectId);
+      if (projectId() !== expectedProjectId) return;
       const resource = payload && payload.resource;
       if (!resource) throw new Error(tr('EasyICU did not return a data preview.', 'EasyICU 未返回可预览的数据包。'));
       resource.label = tr('Pre-analysis data readiness', '分析前数据准备检查');
-      preview.open(resource, projectId(), previewWorkflowContext());
+      preview.open(resource, expectedProjectId, previewWorkflowContext());
       state.error = '';
     } catch (error) {
+      if (projectId() !== expectedProjectId) return;
       state.error = errorText(error);
       render();
     } finally {
@@ -1739,19 +1745,24 @@
   }
   async function rebind() {
     if (!state.session) return;
+    const expectedSessionId = state.session.session_id;
+    const expectedProjectId = projectId();
     try {
       const payload = await api().rebindPiCopilotSession(
-        state.session.session_id,
-        { project_id: projectId() },
+        expectedSessionId,
+        { project_id: expectedProjectId },
       );
+      if (projectId() !== expectedProjectId || !state.session || state.session.session_id !== expectedSessionId) return;
       state.session = payload.session; state.error = '';
       rememberSession(state.session && state.session.session_id);
       await loadWorkflow();
       const continued = await PLAN_ACTIONS.continueSystemOwnedPlanProgression({passive: true});
       if (!continued) render();
-    } catch (error) { state.error = errorText(error); render(); }
+    } catch (error) {
+      if (projectId() !== expectedProjectId || !state.session || state.session.session_id !== expectedSessionId) return;
+      state.error = errorText(error); render();
+    }
   }
-
 
   async function archiveChildJob(jobId) {
     if (!state.session || !jobId || !api().archivePiCopilotChildJob) return null;
