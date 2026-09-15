@@ -570,6 +570,44 @@ def test_explicit_batch_override_still_applies_to_every_module():
     }
 
 
+def test_module_batch_override_wins_without_downbatching_other_modules():
+    plans = plan_module_extraction_resources(
+        "miiv",
+        ["blood_gas", "medications", "neurological"],
+        94_458,
+        requested_batch_size=10_000,
+        available_memory_mb=6_052.1,
+        module_batch_sizes={"medications": 5_000, "neurological": 5_000},
+    )
+
+    assert {module: plan.batch_size for module, plan in plans.items()} == {
+        "blood_gas": 10_000,
+        "medications": 5_000,
+        "neurological": 5_000,
+    }
+    assert all(plan.reason_code == "explicit_batch_size" for plan in plans.values())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"not_selected": 5_000},
+        {"medications": 0},
+        {"medications": True},
+    ],
+)
+def test_module_batch_overrides_fail_closed(overrides):
+    with pytest.raises(ValueError, match="module_batch_sizes"):
+        plan_module_extraction_resources(
+            "miiv",
+            ["medications"],
+            94_458,
+            requested_batch_size=10_000,
+            available_memory_mb=6_052.1,
+            module_batch_sizes=overrides,
+        )
+
+
 def test_measured_miiv_full_module_set_keeps_current_medications_batch_at_8gib():
     plan = plan_extraction_resources(
         "miiv",

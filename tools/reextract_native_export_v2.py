@@ -367,6 +367,34 @@ def _resolve_batch_overrides(values: Sequence[str]) -> dict[str, int]:
     return result
 
 
+def _resolve_module_batch_overrides(
+    values: Sequence[str],
+) -> dict[str, dict[str, int]]:
+    allowed = tuple(
+        f"{database}/{module}"
+        for database in DATABASE_ORDER
+        for module in MODULE_ORDER
+    )
+    parsed = _parse_key_value(
+        values,
+        option="--module-batch-size",
+        allowed_keys=allowed,
+    )
+    result: dict[str, dict[str, int]] = {}
+    for target, raw in parsed.items():
+        database, module = target.split("/", 1)
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ExtractionRunError(
+                f"batch size for {target} must be an integer, got {raw!r}"
+            ) from exc
+        if value <= 0:
+            raise ExtractionRunError(f"batch size for {target} must be positive")
+        result.setdefault(database, {})[module] = value
+    return result
+
+
 def _load_psutil(resource_policy: str):
     try:
         import psutil
@@ -978,6 +1006,12 @@ def _worker_main(spec_path: Path) -> int:
             raise ExtractionRunError(f"no ICU stays found for {database}")
         num_stays = len(patient_ids)
         requested_batch_size = spec.get("requested_batch_size")
+        requested_module_batch_sizes = {
+            str(module): int(value)
+            for module, value in dict(
+                spec.get("requested_module_batch_sizes") or {}
+            ).items()
+        }
         planning_memory_mb = float(
             spec.get("planning_memory_mb", spec["assigned_memory_mb"])
         )
@@ -998,6 +1032,7 @@ def _worker_main(spec_path: Path) -> int:
             for module, item in plan_module_extraction_resources(
                 database, MODULE_ORDER, num_stays, requested_batch_size,
                 available_memory_mb=effective_budget_mb,
+                module_batch_sizes=requested_module_batch_sizes,
             ).items()
         }
         plan = {
@@ -1005,6 +1040,7 @@ def _worker_main(spec_path: Path) -> int:
             "num_stays": num_stays,
             "id_column": id_column,
             "requested_batch_size": requested_batch_size,
+            "requested_module_batch_sizes": requested_module_batch_sizes,
             "planned_initial_batch_size": planned_batch_size,
             "planned_batch_count": math.ceil(num_stays / planned_batch_size),
             "adaptive_core": adaptive_core,
@@ -1033,6 +1069,7 @@ def _worker_main(spec_path: Path) -> int:
             verbose=True,
             adaptive_stream_batches=adaptive_core,
             resource_budget_mb=effective_budget_mb,
+            module_batch_sizes=requested_module_batch_sizes,
         )
         nested_worker_failures = [
             dict(item)
@@ -1068,6 +1105,10 @@ def _worker_main(spec_path: Path) -> int:
                 "stream_retry_history": retries,
                 "resource_plan": resource_plan.to_dict(),
                 "module_resource_plans": extraction.get("module_resource_plans", module_plans),
+                "module_batch_size_overrides": extraction.get(
+                    "module_batch_size_overrides",
+                    requested_module_batch_sizes,
+                ),
                 "aggregate_plan_is_summary": requested_batch_size is None,
             },
             "runtime_limits": runtime,
@@ -1170,6 +1211,7 @@ def _execute_database(
     monitoring: Mapping[str, Any],
     prior_source: Mapping[str, Any] | None,
     planning_memory_mb: float | None = None,
+    requested_module_batch_sizes: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     final_export = run_root / "exports" / database
     if final_export.exists() or final_export.is_symlink():
@@ -1206,6 +1248,9 @@ def _execute_database(
             ),
             "adaptive_core": adaptive_core and retry_index == 0,
             "requested_batch_size": next_batch_size,
+            "requested_module_batch_sizes": dict(
+                requested_module_batch_sizes or {}
+            ),
         }
         spec_path = attempt_root / "worker_spec.json"
         _atomic_write_json(spec_path, spec)
@@ -1428,6 +1473,8 @@ def _new_run_manifest(
     monitoring: Mapping[str, Any],
     memory: Mapping[str, Any],
     args: argparse.Namespace,
+    batch_overrides: Mapping[str, int] | None = None,
+    module_batch_overrides: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": RUN_SCHEMA_VERSION,
@@ -1461,6 +1508,13 @@ def _new_run_manifest(
             "portable_and_low_available_memory_serial": True,
             "memory_retry_limit": args.max_memory_retries,
             "sample_interval_seconds": args.sample_interval,
+            "database_batch_overrides": dict(batch_overrides or {}),
+            "module_batch_overrides": {
+                database: dict(overrides)
+                for database, overrides in dict(
+                    module_batch_overrides or {}
+                ).items()
+            },
         },
         "sources": {},
     }
@@ -1473,6 +1527,8 @@ def _load_resume_manifest(
     data_paths: Mapping[str, str],
     identity: Mapping[str, Any],
     resource_policy: str,
+    batch_overrides: Mapping[str, int] | None = None,
+    module_batch_overrides: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
     manifest = _read_json_object(run_root / "run_manifest.json", label="run manifest")
     if manifest.get("schema_version") != RUN_SCHEMA_VERSION:
@@ -1500,6 +1556,15 @@ def _load_resume_manifest(
         raise ExtractionRunError("resume source data paths differ from the original run")
     if manifest.get("resource_policy") != resource_policy:
         raise ExtractionRunError("resume resource policy differs from the original run")
+    scheduler = manifest.get("scheduler") or {}
+    if scheduler.get("database_batch_overrides", {}) != dict(batch_overrides or {}):
+        raise ExtractionRunError("resume database batch overrides differ from original run")
+    expected_module_overrides = {
+        database: dict(overrides)
+        for database, overrides in dict(module_batch_overrides or {}).items()
+    }
+    if scheduler.get("module_batch_overrides", {}) != expected_module_overrides:
+        raise ExtractionRunError("resume module batch overrides differ from original run")
     return manifest
 
 
@@ -1579,6 +1644,7 @@ def _run_non_eicu_segment(
     manifest: dict[str, Any],
     data_paths: Mapping[str, str],
     batch_overrides: Mapping[str, int],
+    module_batch_overrides: Mapping[str, Mapping[str, int]],
     psutil_module,
 ) -> None:
     remaining = list(segment)
@@ -1607,6 +1673,9 @@ def _run_non_eicu_segment(
                     assigned_memory_mb=assigned_memory_mb,
                     adaptive_core=worker_count == 1,
                     requested_batch_size=batch_overrides.get(database),
+                    requested_module_batch_sizes=module_batch_overrides.get(
+                        database, {}
+                    ),
                     max_memory_retries=args.max_memory_retries,
                     sample_interval_seconds=args.sample_interval,
                     psutil_module=psutil_module,
@@ -1648,6 +1717,7 @@ def _run_pending(
     manifest: dict[str, Any],
     data_paths: Mapping[str, str],
     batch_overrides: Mapping[str, int],
+    module_batch_overrides: Mapping[str, Mapping[str, int]],
     psutil_module,
 ) -> None:
     segment: list[str] = []
@@ -1663,6 +1733,7 @@ def _run_pending(
                 manifest=manifest,
                 data_paths=data_paths,
                 batch_overrides=batch_overrides,
+                module_batch_overrides=module_batch_overrides,
                 psutil_module=psutil_module,
             )
             segment = []
@@ -1678,6 +1749,9 @@ def _run_pending(
                     assigned_memory_mb=assigned_memory_mb,
                     adaptive_core=True,
                     requested_batch_size=batch_overrides.get("eicu"),
+                    requested_module_batch_sizes=module_batch_overrides.get(
+                        "eicu", {}
+                    ),
                     max_memory_retries=args.max_memory_retries,
                     sample_interval_seconds=args.sample_interval,
                     psutil_module=psutil_module,
@@ -1724,10 +1798,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     memory = _detect_effective_memory(psutil_module)
     data_paths = _resolve_data_paths(args)
     batch_overrides = _resolve_batch_overrides(args.database_batch_size)
+    module_batch_overrides = _resolve_module_batch_overrides(
+        args.module_batch_size
+    )
     unused_overrides = set(batch_overrides) - set(args.databases)
     if unused_overrides:
         raise ExtractionRunError(
             f"batch overrides name databases outside this run: {sorted(unused_overrides)}"
+        )
+    unused_module_override_databases = set(module_batch_overrides) - set(
+        args.databases
+    )
+    if unused_module_override_databases:
+        raise ExtractionRunError(
+            "module batch overrides name databases outside this run: "
+            f"{sorted(unused_module_override_databases)}"
         )
 
     run_root = Path(args.output_root).expanduser().resolve()
@@ -1741,6 +1826,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             data_paths=data_paths,
             identity=identity,
             resource_policy=args.resource_policy,
+            batch_overrides=batch_overrides,
+            module_batch_overrides=module_batch_overrides,
         )
         manifest["resource_monitoring"] = monitoring
     else:
@@ -1760,6 +1847,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             monitoring=monitoring,
             memory=memory,
             args=args,
+            batch_overrides=batch_overrides,
+            module_batch_overrides=module_batch_overrides,
         )
 
     pending = _pending_databases(
@@ -1778,6 +1867,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             manifest=manifest,
             data_paths=data_paths,
             batch_overrides=batch_overrides,
+            module_batch_overrides=module_batch_overrides,
             psutil_module=psutil_module,
         )
 
@@ -1839,6 +1929,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         metavar="DATABASE=STAYS",
         help="expert per-database override; automatic memory planning is the default",
+    )
+    parser.add_argument(
+        "--module-batch-size",
+        action="append",
+        default=[],
+        metavar="DATABASE/MODULE=STAYS",
+        help=(
+            "more-specific expert module override; may be repeated and takes "
+            "precedence over --database-batch-size"
+        ),
     )
     parser.add_argument(
         "--max-database-workers",
