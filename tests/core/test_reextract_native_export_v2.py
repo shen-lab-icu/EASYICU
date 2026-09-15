@@ -268,6 +268,65 @@ def test_resume_rejects_publication_checkout_drift(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("original_database_batches", "original_module_batches", "resume_database_batches", "resume_module_batches", "message"),
+    [
+        (
+            {"miiv": 10_000},
+            {"miiv": {"neurological": 5_000}},
+            {"miiv": 20_000},
+            {"miiv": {"neurological": 5_000}},
+            "database batch overrides",
+        ),
+        (
+            {"miiv": 10_000},
+            {"miiv": {"neurological": 5_000}},
+            {"miiv": 10_000},
+            {"miiv": {"neurological": 10_000}},
+            "module batch overrides",
+        ),
+    ],
+)
+def test_resume_rejects_batch_override_drift(
+    tmp_path: Path,
+    original_database_batches: dict[str, int],
+    original_module_batches: dict[str, dict[str, int]],
+    resume_database_batches: dict[str, int],
+    resume_module_batches: dict[str, dict[str, int]],
+    message: str,
+) -> None:
+    args = launcher._parse_args(
+        ["--output-root", str(tmp_path), "--data-root", str(tmp_path / "databases")]
+    )
+    data_paths = {database: f"/data/{database}" for database in launcher.DATABASE_ORDER}
+    identity = {
+        "repository_root": str(launcher.REPOSITORY_ROOT),
+        "commit": COMMIT,
+    }
+    manifest = launcher._new_run_manifest(
+        databases=launcher.DATABASE_ORDER,
+        data_paths=data_paths,
+        identity=identity,
+        monitoring={"release_sealable": True},
+        memory={"effective_total_mb": 8192, "effective_available_mb": 8192},
+        args=args,
+        batch_overrides=original_database_batches,
+        module_batch_overrides=original_module_batches,
+    )
+    launcher._atomic_write_json(tmp_path / "run_manifest.json", manifest)
+
+    with pytest.raises(launcher.ExtractionRunError, match=message):
+        launcher._load_resume_manifest(
+            run_root=tmp_path,
+            databases=launcher.DATABASE_ORDER,
+            data_paths=data_paths,
+            identity=identity,
+            resource_policy="strict",
+            batch_overrides=resume_database_batches,
+            module_batch_overrides=resume_module_batches,
+        )
+
+
 def test_native_package_validation_binds_19_module_time_peak_rows_and_bytes(
     tmp_path: Path,
 ) -> None:
@@ -571,6 +630,11 @@ def test_successful_database_is_atomically_promoted_and_never_overwritten(
 
     def fake_worker(**kwargs):
         spec = json.loads(Path(kwargs["spec_path"]).read_text(encoding="utf-8"))
+        assert spec["requested_batch_size"] == 10_000
+        assert spec["requested_module_batch_sizes"] == {
+            "medications": 5_000,
+            "neurological": 5_000,
+        }
         attempt = Path(spec["attempt_root"])
         export = attempt / "export"
         _build_native_export(export)
@@ -616,7 +680,11 @@ def test_successful_database_is_atomically_promoted_and_never_overwritten(
         git_commit=COMMIT,
         assigned_memory_mb=16 * 1024,
         adaptive_core=True,
-        requested_batch_size=None,
+        requested_batch_size=10_000,
+        requested_module_batch_sizes={
+            "medications": 5_000,
+            "neurological": 5_000,
+        },
         max_memory_retries=2,
         sample_interval_seconds=0.1,
         psutil_module=None,
@@ -847,6 +915,17 @@ def test_streamed_python_memory_error_is_retryable() -> None:
         1,
         "streamed module export exhausted memory: sofa1_score",
     )
+
+
+def test_module_batch_cli_parsing_is_typed_and_scoped() -> None:
+    assert launcher._resolve_module_batch_overrides(
+        ["miiv/medications=5000", "miiv/neurological=5000"]
+    ) == {"miiv": {"medications": 5_000, "neurological": 5_000}}
+
+    with pytest.raises(launcher.ExtractionRunError, match="invalid or duplicate"):
+        launcher._resolve_module_batch_overrides(["miiv/not-a-module=5000"])
+    with pytest.raises(launcher.ExtractionRunError, match="must be positive"):
+        launcher._resolve_module_batch_overrides(["miiv/medications=0"])
 
 
 def test_nested_worker_exit_minus_nine_is_a_memory_failure() -> None:

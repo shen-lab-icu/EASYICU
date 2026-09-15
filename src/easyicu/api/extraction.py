@@ -1160,18 +1160,31 @@ def plan_module_extraction_resources(
     requested_batch_size: Optional[int] = None,
     *,
     available_memory_mb: Optional[float] = None,
+    module_batch_sizes: Optional[Mapping[str, int]] = None,
 ) -> Dict[str, ExtractionResourcePlan]:
     """Return the authoritative resource decision for every module.
 
     A database-level request may contain both measured one-shot modules and
     batch-only modules.  Returning one plan per isolated execution unit keeps
     the fast modules one-shot instead of inheriting the strictest batch in the
-    request.  An explicit override intentionally remains common to all units.
+    request. A database-wide explicit override remains common to all units
+    unless a more specific module override is supplied.
     """
 
     selected_modules = tuple(dict.fromkeys(str(module) for module in modules))
     if not selected_modules:
         raise ValueError("modules must not be empty")
+    overrides = dict(module_batch_sizes or {})
+    unknown_overrides = sorted(set(overrides) - set(selected_modules))
+    if unknown_overrides:
+        raise ValueError(
+            f"module_batch_sizes names unselected modules: {unknown_overrides}"
+        )
+    for module, value in overrides.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"module_batch_sizes[{module!r}] must be a positive integer"
+            )
     available = (
         _available_memory_mb()
         if available_memory_mb is None
@@ -1182,7 +1195,7 @@ def plan_module_extraction_resources(
             database,
             [module],
             num_patients,
-            requested_batch_size,
+            overrides.get(module, requested_batch_size),
             available_memory_mb=available,
         )
         for module in selected_modules
@@ -6518,6 +6531,7 @@ def extract_database(
     verbose: bool = True,
     adaptive_stream_batches: Optional[bool] = None,
     resource_budget_mb: Optional[float] = None,
+    module_batch_sizes: Optional[Mapping[str, int]] = None,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -6553,6 +6567,9 @@ def extract_database(
         batch_size: 模块内患者分批大小。None(默认) = 优先采用所选模块的实测
             one-shot 路径；内存不足才分批。已登记批次按固定计划执行；未实测
             模块保留保守保护线。仅在需要覆盖默认策略时显式传值。
+        module_batch_sizes: 可选的逐模块批量覆盖。键必须是本次选择的模块，值为
+            正整数；它比 ``batch_size`` 更具体，未列出的模块继续使用全局值或
+            自动计划。适用于同一数据库中少数高膨胀模块的已测内存边界。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -6626,6 +6643,20 @@ def extract_database(
                 )
     if not modules:
         raise ValueError("modules must not be empty")
+    normalized_module_batch_sizes = dict(module_batch_sizes or {})
+    unknown_module_batch_sizes = sorted(
+        set(normalized_module_batch_sizes) - set(modules)
+    )
+    if unknown_module_batch_sizes:
+        raise ValueError(
+            "module_batch_sizes names unselected modules: "
+            f"{unknown_module_batch_sizes}"
+        )
+    for module, value in normalized_module_batch_sizes.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"module_batch_sizes[{module!r}] must be a positive integer"
+            )
     data_path = str(data_path)
 
     # 磁盘溢写 / 批处理中间文件的默认落点：**输出目录旁的 .easyicu_spill/**，而不是
@@ -6705,6 +6736,7 @@ def extract_database(
         num_patients,
         None if automatic_batch else batch_size,
         available_memory_mb=planning_available_mb,
+        module_batch_sizes=normalized_module_batch_sizes,
     )
     has_patient_batches = any(
         plan.mode != "one_shot" for plan in module_resource_plans.values()
@@ -6729,7 +6761,7 @@ def extract_database(
     any_streamed_module = bool(stream_output_batches) and any(
         plan.mode != "one_shot" for plan in module_resource_plans.values()
     )
-    if automatic_batch and (
+    if (automatic_batch or normalized_module_batch_sizes) and (
         any_streamed_module
         or len({plan.batch_size for plan in module_resource_plans.values()}) > 1
     ):
@@ -6764,6 +6796,12 @@ def extract_database(
             batch_description = "全部模块一次性（逐模块隔离）"
         elif automatic_batch:
             batch_description = "按模块实测策略（一次性/最少安全批次）"
+        elif normalized_module_batch_sizes:
+            overrides = ", ".join(
+                f"{module}={size}"
+                for module, size in sorted(normalized_module_batch_sizes.items())
+            )
+            batch_description = f"batch_size={batch_size}; 模块覆盖: {overrides}"
         else:
             batch_description = f"batch_size={batch_size}"
         print(f"   批策略: {batch_description}")
@@ -6786,6 +6824,7 @@ def extract_database(
             module: plan.to_dict()
             for module, plan in module_resource_plans.items()
         },
+        "module_batch_size_overrides": dict(normalized_module_batch_sizes),
         "resource_budget_mb": round(planning_available_mb, 1),
         "resource_execution_limits": resource_execution_limits,
         "modules": {},
@@ -6810,7 +6849,7 @@ def extract_database(
     )
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
-    if automatic_batch and not group_flag:
+    if (automatic_batch or normalized_module_batch_sizes) and not group_flag:
         # The legacy ungrouped shape kept both Sepsis-3 modules in one worker.
         # Their measured policies differ on eICU (SOFA-1 is 67k, SOFA-2 is
         # one-shot), so split them only for automatic isolated execution.
@@ -6827,11 +6866,16 @@ def extract_database(
         groups = isolated_groups
     for group in groups:
         group_modules_for_plan = [*group["modules"], *group["special"]]
+        group_requested_batch_size = None if automatic_batch else batch_size
+        if len(group_modules_for_plan) == 1:
+            group_requested_batch_size = normalized_module_batch_sizes.get(
+                group_modules_for_plan[0], group_requested_batch_size
+            )
         group_plan = plan_extraction_resources(
             database,
             group_modules_for_plan,
             num_patients,
-            None if automatic_batch else batch_size,
+            group_requested_batch_size,
             available_memory_mb=planning_available_mb,
         )
         group["_batch_size"] = group_plan.batch_size
