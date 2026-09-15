@@ -297,3 +297,31 @@
 | pi-preview:623 / contracts:50 | 回读 | 成立(P3) |
 
 **结论：本文档所列问题均为真问题；本轮已关闭全部活跃 P1/P2，第四节 P3 保留为后续低优先级观察项。**
+
+---
+
+## 八、修复状态(2026-09-15 收尾)
+
+**两路修复已完成**:
+
+- **提交 `7e55a1fec` `fix(audit): close active web and validation defects`**:全部 3×P1、P2-1~P2-19 主项、CSS tokens 别名簇、`screens-agent.js` 删除、3 个新回归测试(`tests/js/audit_regressions_20260915.test.js`、`tests/core/test_audit_tool_truthfulness.py`、`tests/webserver/test_audit_frontend_regressions.py`)+ 契约测试钉住。独立复验与 xdist 全量回执见 `docs/full_codebase_audit_20260915_codex_verification.md`(19,395 passed/0 failed)。
+- **后续 P3 收尾(子智能体并行,未提交工作树)**:extraction 残余(死绑定/escHtml 加固/typed 错误码兜底/注册失败诚实提示/死表达式/按钮改名)、guided 残余(**另补两个同类 XSS sink `:657`/`:3136`**、快照序号守卫、SSE try/catch、preflight fail-closed、会话去重、diffCard/ONCE.detect 诚实化、`busy=false` 补全)、agent-render 残余(截断行数 meta、scrubDataUrls 大小写、去 id 发射)、pi 族残余守卫(openSession/switchMode/rebind/openData/data-binding 三函数)、pi-preview P3(enrichment 白名单合并/sha256 强制预览/recents 清界)、ideas+zotero `ideaRevision` 票据守卫+记录卡禁用态、CSS 残余(`--paper`/`--wash` 别名、窄屏 overflow-x)、tools 残余(overnight 退出码/r5 实算计数/r4 外观)、`primary_effect.py` `ci_source` 溯源标记、`conftest.py` fixture 拷贝守卫。
+- **主线程合并修复**:`pi_copilot/tools.py:2528` `_inspect_manuscript` 转发 `sha256=artifact.get("sha256")`(使预览钉链对该入口生效);`test_webserver_static_routes.py` 两个陈旧 pin 更新(`sendGuidedMessage`→`reflectGuidedFrontdoor`;`:2421` 死链文案断言取反)。
+
+**合并验收**:`tests/webserver` 2643 全过;`tests/core`+`tests/benchmarks` 2929 过;`tests/research_agent` 13323 全过(28 skipped);`tests/js` 契约 43/43;`test_static_frontend_ownership` ratchet 过(`screens-guided-pi.js` 恰在上限 1827,零余量——后续此文件任何增长需拆分);`test_pi_copilot_static` 过。**合计本地 18,895 passed / 0 failed。**
+
+**遗留观察项(不修,已记录)**:pi `localizedAuthorizationDecisionCopy` 另有 ~200 行系统拥有 code 的不可达文案;`screens-guided-pi.js` ratchet 零余量;`--skip-smoke` 分支按契约只写 3 个 CSV(回归测试钉死);`death.fillna(0)` 语义待对封存契约回验;tests 的机器路径回放条件跳过与少量真实时序断言为可接受的既有姿态。
+
+---
+
+## 九、独立复核后的补充修复(2026-09-16)
+
+对第八节未提交工作树再次回读并构造失败时序后，发现 5 个仍可触发的实现缺口和 1 个续跑兼容风险，均已在当前未提交工作树修复：
+
+- `screens-guided.js`:会话请求只对相同 `gen`/project/draft 身份合并，旧项目响应不得覆盖新项目；workspace 快照以 Promise 身份复核，覆盖 A→B→A 竞态，并在切换路径时清除旧缓存。
+- `run_analysis_bench_overnight.py`:逐模型及最终 aggregation 返回码进入 `aggregation_failures` 回执，并共同决定非零退出码。
+- `primary_effect.py` → robustness panel/report/publication figure:`ci_source` 从提取结果贯穿消费端；Wald 重建区间在 CSV、Markdown、图中标签和 figure contract 明示。
+- `screens-agent-render.js`:`scrubDataUrls` 仅匹配完整、大小写不敏感的 `data_url`/`image_data_url` 键，不再误隐藏 `metadata_url`。
+- `r4_crossdb_sofa2_extract.py`:partial resume 先把旧版整数/二元数组归一成对象，并写入 schema version，避免一个输出内混合三种 `icu_stays_full` 结构。
+
+补充验收：JS contracts 43/43；`test_webserver_static_routes.py` 78 passed；robustness/primary-effect/replication/publication-figure/audit-tool 聚焦集 386 passed、1 skipped、2 deselected；相关 JS `node --check`、Python Ruff 与 `git diff --check` 均通过。未重跑第八节的全量 18,895 项；当前补充结果属于聚焦验证，且本轮未 commit、未 push。
