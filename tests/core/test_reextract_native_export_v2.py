@@ -20,6 +20,20 @@ launcher = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = launcher
 SPEC.loader.exec_module(launcher)
 
+SEALER_TOOL = (
+    Path(__file__).resolve().parents[2]
+    / "scripts"
+    / "releases"
+    / "EX-A01_seal_full6_release.py"
+)
+SEALER_SPEC = importlib.util.spec_from_file_location(
+    "reextract_native_export_v2_sealer_contract", SEALER_TOOL
+)
+assert SEALER_SPEC and SEALER_SPEC.loader
+sealer = importlib.util.module_from_spec(SEALER_SPEC)
+sys.modules[SEALER_SPEC.name] = sealer
+SEALER_SPEC.loader.exec_module(sealer)
+
 COMMIT = "a" * 40
 
 
@@ -156,6 +170,101 @@ def test_dirty_checkout_fails_closed() -> None:
                 "dirty": True,
                 "dirty_status": [" M src/easyicu/api/extraction.py"],
             }
+        )
+
+
+def test_new_manifest_satisfies_release_sealer_provenance_contract(
+    tmp_path: Path,
+) -> None:
+    args = launcher._parse_args(
+        [
+            "--output-root",
+            str(tmp_path),
+            "--data-root",
+            str(tmp_path / "databases"),
+        ]
+    )
+    manifest = launcher._new_run_manifest(
+        databases=launcher.DATABASE_ORDER,
+        data_paths={database: f"/data/{database}" for database in launcher.DATABASE_ORDER},
+        identity={
+            "repository_root": str(launcher.REPOSITORY_ROOT),
+            "commit": COMMIT,
+        },
+        monitoring={
+            "backend": "psutil_process_tree",
+            "process_tree_pss_supported": True,
+            "release_sealable": True,
+        },
+        memory={"effective_total_mb": 8192, "effective_available_mb": 8192},
+        args=args,
+    )
+    expected_receipts = {}
+    for index, database in enumerate(sealer.DATABASES, start=1):
+        module_metrics = {
+            module: {
+                "rows": index,
+                "parquet_bytes": index * 10,
+                "parquet_sha256": f"{index:064x}",
+                "elapsed_seconds": float(index),
+            }
+            for module in sealer.MODULES
+        }
+        expected_receipts[database] = {
+            "native_manifest_sha256": f"{index + 10:064x}",
+            "total_rows": index * len(sealer.MODULES),
+            "total_parquet_bytes": index * len(sealer.MODULES) * 10,
+            "module_metrics": module_metrics,
+        }
+        manifest["sources"][database] = dict(expected_receipts[database])
+
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    launcher._atomic_write_json(run_root / "run_manifest.json", manifest)
+
+    receipts = sealer.validate_run_provenance(
+        run_root=run_root,
+        validation={
+            "easyicu_commit": COMMIT,
+            "run_manifest_receipts": expected_receipts,
+        },
+    )
+
+    assert manifest["publication_checkout"] == {
+        "easyicu_git_commit": COMMIT,
+        "easyicu_git_dirty": False,
+        "scope": "fresh_full_extraction",
+    }
+    assert receipts["run_manifest"]["file"] == "run_manifest.json"
+
+
+def test_resume_rejects_publication_checkout_drift(tmp_path: Path) -> None:
+    args = launcher._parse_args(
+        ["--output-root", str(tmp_path), "--data-root", str(tmp_path / "databases")]
+    )
+    data_paths = {database: f"/data/{database}" for database in launcher.DATABASE_ORDER}
+    identity = {
+        "repository_root": str(launcher.REPOSITORY_ROOT),
+        "commit": COMMIT,
+    }
+    manifest = launcher._new_run_manifest(
+        databases=launcher.DATABASE_ORDER,
+        data_paths=data_paths,
+        identity=identity,
+        monitoring={"release_sealable": True},
+        memory={"effective_total_mb": 8192, "effective_available_mb": 8192},
+        args=args,
+    )
+    manifest["publication_checkout"]["easyicu_git_commit"] = "b" * 40
+    launcher._atomic_write_json(tmp_path / "run_manifest.json", manifest)
+
+    with pytest.raises(launcher.ExtractionRunError, match="publication checkout"):
+        launcher._load_resume_manifest(
+            run_root=tmp_path,
+            databases=launcher.DATABASE_ORDER,
+            data_paths=data_paths,
+            identity=identity,
+            resource_policy="strict",
         )
 
 
