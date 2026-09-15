@@ -113,8 +113,14 @@ def _isolate_runtime_capability_provider():
 
 
 @pytest.fixture(scope="session")
-def synthetic_cohort():
-    """Small synthetic cohort with a composite-score completeness signal."""
+def _synthetic_cohort_base():
+    """Session-cached base frame; never handed to a test directly.
+
+    ``synthetic_cohort`` is shared by ~30 test files.  Building it once keeps
+    the suite cheap, but the frame itself is mutable — a test that edits or
+    extends it in place would leak that state into every later test on the
+    same session.  Only the per-test copy below is public.
+    """
 
     import numpy as np
     import pandas as pd
@@ -149,3 +155,14 @@ def synthetic_cohort():
             "death": death,
         }
     )
+
+
+@pytest.fixture
+def synthetic_cohort(_synthetic_cohort_base):
+    """Small synthetic cohort with a composite-score completeness signal.
+
+    Returns a fresh ``.copy()`` of the session-cached base frame so each test
+    owns the DataFrame it receives and may mutate it without order effects.
+    """
+
+    return _synthetic_cohort_base.copy()

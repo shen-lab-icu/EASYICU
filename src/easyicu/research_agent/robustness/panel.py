@@ -94,6 +94,8 @@ class RobustnessPanelRow:
     estimand_id: str = ""
     contrast_id: str = ""
     effect_unit: str = ""
+    # Appended to preserve positional construction of the pre-existing fields.
+    ci_source: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -114,6 +116,7 @@ class RobustnessPanelRow:
             evidence_id=str(data.get("evidence_id") or "").strip(),
             converged=bool(data.get("converged")),
             notes=str(data.get("notes") or ""),
+            ci_source=str(data.get("ci_source") or "").strip(),
             independent_variant=independent,
             **{key: str(data.get(key) or "").strip() for key in (
                 "effect_scale", "estimand_id", "contrast_id", "effect_unit",
@@ -709,6 +712,7 @@ def _primary_row_from_records(
         evidence_id=str(payload.get("evidence_id") or ""),
         converged=True,
         notes=notes,
+        ci_source=str(payload.get("ci_source") or ""),
     )
 
 

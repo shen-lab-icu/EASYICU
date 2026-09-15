@@ -138,6 +138,7 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
             se=0.03,
             evidence_id="primary_row",
             converged=True,
+            ci_source="reconstructed_wald" if variant_count == 0 else "model_reported",
         )
     ]
     for idx in range(variant_count):
@@ -196,6 +197,15 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
         tmp_path / "publication_figures" / "publication_figure_source_robustness_panel.csv"
     )
     assert len(plotted_source) == variant_count + 1
+    if variant_count == 0:
+        assert plotted_source.loc[0, "ci_source"] == "reconstructed_wald"
+        svg = (
+            tmp_path
+            / "publication_figures"
+            / "easyicu_publication_figure.svg"
+        ).read_text(encoding="utf-8")
+        assert "Primary*" in svg
+        assert "* reconstructed from SE" in svg
     assert not any(
         finding.severity == "error" and "overlapping text" in finding.message
         for finding in result.findings
@@ -211,6 +221,8 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
     )
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B", "C"]
+    if variant_count == 0:
+        assert "reconstructed by EasyICU" in contract["statistics_note"]
     assert (
         tmp_path
         / "publication_figures"
