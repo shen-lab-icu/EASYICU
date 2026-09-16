@@ -68,12 +68,12 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260908-source-conversation1" in index
+    assert "css/guided-pi.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-idea-source.css?v=20260902-type-scale2" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
-    assert "css/guided-pi-preview.css?v=20260902-type-scale2" in index
+    assert "css/guided-pi-preview.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
-    assert "css/guided-pi-analysis-report.css?v=20260908-e1-reader3" in index
+    assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
@@ -85,7 +85,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
     assert "js/screens-guided-pi-starters.js?v=20260902-zero-direction1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20260901-composer-plus1" in index
-    assert "js/screens-guided-pi-header.js?v=20260908-conversation-files1" in index
+    assert "js/screens-guided-pi-header.js?v=20260916-study-workspace3" in index
+    assert "css/guided-pi-workspace.css?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
@@ -95,26 +96,26 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"
         in index
     )
-    assert "js/screens-guided-pi-analysis-report.js?v=20260908-e1-review2" in index
+    assert "js/screens-guided-pi-analysis-report.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260914-execution-retry1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-replay.js?v=20260914-execution-retry1" in index
     assert "js/screens-guided-pi-resources.js?v=20260909-report-revision1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260909-report-revision1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-activity.js?v=20260908-duration1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
-    assert "js/screens-guided-pi-events.js?v=20260909-report-revision1" in index
+    assert "js/screens-guided-pi-events.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260908-source-receipt1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260914-execution-retry1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
-    assert "js/screens-guided-pi.js?v=20260914-execution-retry1" in index
+    assert "js/screens-guided-pi.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -1049,7 +1050,7 @@ def test_guided_header_and_progress_keep_secondary_controls_available() -> None:
     events = _read("js/screens-guided-pi-events.js")
     aside_owner = _read("js/screens-guided-pi-aside.js")
 
-    assert "guidedPi.declare('header', { render });" in header
+    assert "guidedPi.declare('header', { render, renderModelControl });" in header
     assert "gpi-head-new" in header and "data-gpi-new" in header
     assert '<button class="gpi-model-binding"' in header
     assert "变更将在新会话中生效" in header
@@ -1061,7 +1062,8 @@ def test_guided_header_and_progress_keep_secondary_controls_available() -> None:
         "data-gpi-demo",
     ):
         assert selector in header
-    assert "HEADER.render({" in shell
+    assert "HEADER.render(headerOptions)" in shell
+    assert "HEADER.renderModelControl(headerOptions)" in shell
     assert "function dismissHeaderOverflow(event)" in events
     assert "function dismissHeaderOverflow(event)" not in shell
     assert 'data-gpi-input rows="2"' in shell
@@ -3562,12 +3564,13 @@ def test_guided_typography_uses_the_shared_readability_scale() -> None:
     assert ".gpi-lit-card h4" in literature and "font-size:var(--type-reading)" in literature
 
 
-def test_workflow_stage_list_is_open_by_default() -> None:
-    """The panel measured 984 of 1181 px empty with the stage list collapsed."""
+def test_workflow_stage_list_preserves_expansion_below_current_results() -> None:
+    """Current results occupy the shelf; the full stage list remains available."""
 
     owner = _read("js/screens-guided-pi-aside.js")
 
-    assert '<details class="gd-pipeline-disclosure" open><summary>' in owner
+    assert "previous && previous.open" in owner
+    assert "${expanded ? ' open' : ''}" in owner
 
 
 def test_conversation_header_does_not_print_the_same_name_twice() -> None:
@@ -3575,7 +3578,7 @@ def test_conversation_header_does_not_print_the_same_name_twice() -> None:
 
     assert (
         "if (!project || (session && session.indexOf(project) >= 0)) "
-        "return 'EASYICU COPILOT';"
+        "return 'EasyICU';"
     ) in owner
     assert "EASYICU COPILOT · ${esc(options.projectTitle)}" not in owner
     # The header squeezes the title to ellipsis on a 1280 laptop; keep the
@@ -5700,7 +5703,7 @@ def test_pi_messages_project_governed_tool_artifacts_beside_the_answer() -> None
     assert "hostJobProgressSteps" in transcript_owner
     assert "visual_qa" in transcript_owner
     assert "figure regeneration" in transcript_owner
-    assert "RESOURCE_OWNER.renderForMessage(row, 8)" in owner
+    assert "RESOURCE_OWNER.renderForMessage(messageView, 8)" in owner
     assert "data-gpi-run-outcome-data" in resource_owner
     assert "打开数据可视化" in resource_owner
     assert "result_tables.json" in resource_owner
@@ -6171,7 +6174,7 @@ def test_literature_preview_receives_current_workflow_status_from_guided_owner()
 
     assert "function previewWorkflowContext()" in guided
     assert "preview.setWorkflowContext(previewWorkflowContext())" in guided
-    assert "const descriptor = RESOURCE_OWNER.fromButton(resource)" in events
+    assert "openResource(RESOURCE_OWNER.fromButton(resource))" in events
     assert "descriptor, projectId(), previewWorkflowContext()" in events
     assert "state.workflow.active_job = (payload && payload.active_job) || { present: false }" in guided
     assert "setWorkflowContext" in preview
@@ -6387,7 +6390,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260908-writer-status1" in index
-    assert "screens-guided-pi.js?v=20260914-execution-retry1" in index
+    assert "screens-guided-pi.js?v=20260916-study-workspace3" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:
