@@ -116,6 +116,9 @@ _IDENTITIES = {
     ),
     "kdigo_stage": _KDIGO_STAGE_IDENTITY,
     "aki_stage": _KDIGO_STAGE_IDENTITY,
+    # The strict ascertainment qualifier changes stage-0 eligibility, not the
+    # clinical term used to retrieve comparable AKI studies.
+    "aki_stage_strict": _KDIGO_STAGE_IDENTITY,
     "vasopressor": LiteratureConceptIdentity(
         concept_id="vasopressor",
         canonical_phrase="vasopressor",

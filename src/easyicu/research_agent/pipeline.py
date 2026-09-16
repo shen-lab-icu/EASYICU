@@ -2812,6 +2812,9 @@ class ResearchAgentPipeline:
                     self._config.require_reportable_scientific_capability
                 ),
                 reuse_existing_review=reused_prior_plan,
+                runtime_authority=(
+                    self._scientific_runtime_authorities.current_case
+                ),
             )
             findings.append(review_gate.finding)
         write_locked_cohort_definition(

@@ -213,6 +213,26 @@ def _select_resume_candidate(
         step_attempt_state.selected_resume_capsule = recovery_capsule
         step_record["resume_validator_invalid_candidate_reused"] = True
 
+    # An explicit retry of a failed execution reuses the reviewed candidate
+    # bytes and exact input authority, but it must not replay the sealed failed
+    # runner result.  In particular, Docker exit 125 records a host/runtime
+    # startup failure; replaying that capsule after the runtime is repaired
+    # makes the product's "retry from failed step" action a no-op.  Successful
+    # execution followed by a later contract/audit failure remains replayable.
+    selected = step_attempt_state.selected_resume_capsule
+    execution = selected.capsule.execution if selected is not None else None
+    if (
+        requested_resume_from_step_id == step.step_id
+        and execution is not None
+        and (
+            execution.returncode != 0
+            or execution.timed_out
+            or not execution.outputs_safe_to_collect
+            or execution.runner_failure_code is not None
+        )
+    ):
+        step_record["explicit_failed_execution_retry"] = True
+
 
 def _recover_pending_repair(
     request: StepAuthorityResumeRequest,

@@ -505,9 +505,12 @@ def _registered_association_model_grid_facts(run_dir: Path) -> dict[str, Any]:
                 or bool(basis_receipts.get(analysis_id))
             ):
                 row_axes.add("model")
+            if row.get("exposure") != reference.get("exposure"):
+                row_axes.add("exposure_definition")
             if (
                 "timing" not in row_axes
                 and "model" not in row_axes
+                and "exposure_definition" not in row_axes
                 and (
                     row.get("readmission_restriction")
                     != reference.get("readmission_restriction")

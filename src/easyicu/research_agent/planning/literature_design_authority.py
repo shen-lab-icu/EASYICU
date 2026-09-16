@@ -248,6 +248,24 @@ def validate_selected_design_against_literature(
             f"selected design decisions cite sources without reviewed cards: {unknown!r}",
             path="plan.design_selection.selected.literature_design_decisions.citation_keys",
         )
+    supported_dimensions = {
+        card.citation_key: {item.dimension for item in card.evidence}
+        for card in design_evidence_cards
+        if card.citation_key in authorized_keys
+    }
+    unsupported = sorted(
+        (dimension, key)
+        for dimension, decision in decisions.items()
+        for key in decision.citation_keys
+        if dimension not in supported_dimensions.get(key, set())
+    )
+    if unsupported:
+        raise LiteratureDesignAuthorityError(
+            "selected_design_decision_dimension_unsupported",
+            "selected design decisions cite cards that do not contain evidence "
+            f"for the stated dimension: {unsupported!r}",
+            path="plan.design_selection.selected.literature_design_decisions.citation_keys",
+        )
 
 
 def render_literature_design_cards_for_prompt(

@@ -306,6 +306,13 @@ def _build_registry() -> StepExecutorRegistry:
             applicable=lambda c: isinstance(
                 c.current_case_scientific_runtime_authority,
                 AssociationModelGridRuntimeAuthority,
+            ) or (
+                isinstance(
+                    c.current_case_scientific_runtime_authority,
+                    LandmarkCategoricalAssociationRuntimeAuthority,
+                )
+                and c.current_case_scientific_runtime_authority.association_model_grid
+                is not None
             ),
             owns=lambda c: association_model_grid_executor_owns_step(
                 c.step,
@@ -324,7 +331,14 @@ def _build_registry() -> StepExecutorRegistry:
             progress_message="Using verified adjusted-association model-grid adapter",
             consumed_input_keys=lambda c: (
                 c.current_case_scientific_runtime_authority.cohort_product,
-                c.current_case_scientific_runtime_authority.parent_product,
+                (
+                    c.current_case_scientific_runtime_authority.parent_product
+                    if isinstance(
+                        c.current_case_scientific_runtime_authority,
+                        AssociationModelGridRuntimeAuthority,
+                    )
+                    else c.current_case_scientific_runtime_authority.primary_product
+                ),
             ),
         ),
         StepExecutor(
@@ -530,7 +544,7 @@ def _build_registry() -> StepExecutorRegistry:
         ),
         StepExecutor(
             key=PRIMARY_POPULATION_RISK,
-            applicable=lambda c: isinstance(c.current_case_scientific_runtime_authority, LandmarkSplineRuntimeAuthority),
+            applicable=lambda c: isinstance(c.current_case_scientific_runtime_authority, (LandmarkSplineRuntimeAuthority, LandmarkCategoricalAssociationRuntimeAuthority)),
             owns=lambda c: primary_population_risk_owns_step(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority),
             render=lambda c: primary_population_risk_code(c.step, authority=c.current_case_scientific_runtime_authority, runtime_projection_sha256=c.scientific_runtime_projection_sha256, plausibility_scope=c.plausibility_scope),
             analysis_kind=PRIMARY_POPULATION_RISK,

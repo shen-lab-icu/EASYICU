@@ -23,6 +23,7 @@ SensitivityAxis = Literal[
     "functional_form",
     "missing_data",
     "cohort",
+    "exposure_definition",
     "outcome_definition",
 ]
 SensitivityStrategy = Literal[
@@ -42,6 +43,7 @@ SensitivityStrategy = Literal[
     "multiple_imputation",
     "inverse_probability_weighting",
     "alternate_eligibility",
+    "alternate_exposure",
     "alternate_definition",
 ]
 
@@ -68,6 +70,7 @@ _STRATEGIES_BY_AXIS: dict[str, frozenset[str]] = {
         {"complete_case", "multiple_imputation", "inverse_probability_weighting"}
     ),
     "cohort": frozenset({"alternate_eligibility"}),
+    "exposure_definition": frozenset({"alternate_exposure"}),
     "outcome_definition": frozenset({"alternate_definition"}),
 }
 
@@ -89,7 +92,11 @@ EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
     ),
     "mixed_effects": frozenset({"mixed_effects_association", "mixed_effects_regression"}),
     "restricted_cubic_spline": frozenset(
-        {"signed_landmark_restricted_cubic_spline", "restricted_cubic_spline_sensitivity"}
+        {
+            "signed_landmark_restricted_cubic_spline",
+            "restricted_cubic_spline_sensitivity",
+            "verified_association_model_grid",
+        }
     ),
     "linear_per_unit": frozenset(
         {"signed_landmark_restricted_cubic_spline", "linear_per_unit_sensitivity"}
@@ -105,6 +112,7 @@ EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
         {"inverse_probability_weighting_sensitivity"}
     ),
     "alternate_eligibility": frozenset({"alternate_eligibility_sensitivity"}),
+    "alternate_exposure": frozenset({"verified_association_model_grid"}),
     "alternate_definition": frozenset({"alternate_outcome_definition_sensitivity"}),
 }
 
@@ -165,6 +173,10 @@ class PrespecifiedSensitivitySpec(BaseModel):
         if self.strategy not in _STRATEGIES_BY_AXIS[self.axis]:
             raise ValueError(
                 f"strategy {self.strategy!r} is not valid for axis {self.axis!r}"
+            )
+        if self.strategy == "alternate_exposure" and len(self.execution_variables) != 1:
+            raise ValueError(
+                "alternate_exposure requires one exact source concept column"
             )
         variables = tuple(str(value or "").strip() for value in self.execution_variables)
         if any(not value for value in variables) or len(variables) != len(set(variables)):

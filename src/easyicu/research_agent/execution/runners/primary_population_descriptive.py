@@ -13,9 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from ...authority.current_case_scientific_runtime import (
+    LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from ...authority.declared_levels import execution_model_requirement
+from ...contracts.association_execution import sole_primary_model_requirement
 from ...contracts.cohort_product_keys import (
     is_closed_cohort_product_key,
     sole_typed_cohort_input,
@@ -25,29 +28,92 @@ from ...contracts.runtime_outcomes import RuntimeOutcomeContract
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from .deterministic_descriptive import run_absolute_risk_context
 from .landmark_spline_fit import prepare_landmark_model_population
-from .typed_input_binding import load_typed_input
+from ..model_matrix import compile_model_terms
+from .typed_input_binding import contained_regular_file, load_typed_input
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 PRIMARY_POPULATION_RISK = "primary_population_absolute_risk_context"
 
 
+def _bound_categorical_plan(run_dir: Path) -> AnalysisPlan:
+    root = run_dir.resolve()
+    manifest_path = contained_regular_file(root / "manifest_partial.json", root)
+    if manifest_path is None:
+        raise ValueError("Primary population requires the current run manifest")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    plan_name = manifest.get("plan_path") or "analysis_plan.json"
+    if not isinstance(plan_name, str) or not plan_name.endswith(".json"):
+        raise ValueError("Primary population plan path is invalid")
+    plan_path = contained_regular_file(root / plan_name, root)
+    if plan_path is None:
+        raise ValueError("Primary population plan is not inside the run")
+    return AnalysisPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+
+
+def _categorical_model_population(
+    cohort: Any,
+    *,
+    plan: AnalysisPlan,
+    sealed: LandmarkCategoricalAssociationRuntimeAuthority,
+    primary_table: Any,
+) -> Any:
+    primary = sealed.governed_primary_step(plan)
+    requirement = sole_primary_model_requirement(primary)
+    if requirement is None:
+        raise ValueError("Categorical primary model requirement is missing")
+    requirement = execution_model_requirement(primary, requirement)
+    needed = [
+        requirement.outcome,
+        *(term.name for term in requirement.model_terms or ()),
+        *((requirement.dependence.group_source,) if requirement.dependence else ()),
+    ]
+    if any(column not in cohort.columns for column in needed):
+        raise ValueError("Categorical primary model columns are missing")
+    model = cohort.loc[:, list(dict.fromkeys(needed))]
+    if requirement.dependence and model[requirement.dependence.group_source].isna().any():
+        raise ValueError("Categorical primary grouping contains missing values")
+    design = compile_model_terms(
+        model, terms=requirement.model_terms or (), exposure=requirement.exposure_source
+    ).design
+    complete = design.notna().all(axis=1) & model[requirement.outcome].notna()
+    selected = cohort.loc[complete]
+    events = int(selected[sealed.outcome_column].sum())
+    required = {"n", "n_events", "requirement_id", "is_primary_contrast", "analysis_role"}
+    if primary_table.empty or not required.issubset(primary_table.columns):
+        raise ValueError("Categorical primary result lacks its population contract")
+    if (
+        not primary_table["requirement_id"].eq(requirement.requirement_id).all()
+        or not primary_table["analysis_role"].eq("primary").all()
+        or int(primary_table["is_primary_contrast"].sum()) != 1
+        or not primary_table["n"].eq(len(selected)).all()
+        or not primary_table["n_events"].eq(events).all()
+    ):
+        raise ValueError("Descriptive population does not match the bound primary model")
+    return selected
+
+
 def primary_population_risk_owns_step(
     step: AnalysisStep, *, plan: AnalysisPlan, authority: Any
 ) -> bool:
-    if (
-        not isinstance(authority, LandmarkSplineRuntimeAuthority)
-        or step.method != PRIMARY_POPULATION_RISK
-    ):
+    if step.method != PRIMARY_POPULATION_RISK:
         return False
-    primary = authority.governed_step(plan)
-    expected = authority.absolute_risk_population_inputs(
-        sole_typed_cohort_input(primary)
-    )
+    if isinstance(authority, LandmarkSplineRuntimeAuthority):
+        primary = authority.governed_step(plan)
+        expected = authority.absolute_risk_population_inputs(
+            sole_typed_cohort_input(primary)
+        )
+    elif isinstance(authority, LandmarkCategoricalAssociationRuntimeAuthority):
+        authority.governed_primary_step(plan)
+        expected = authority.absolute_risk_population_inputs()
+    else:
+        return False
     return (
         tuple(step.inputs) == expected
         and step.expected_outputs == ["table:absolute_risk_context"]
         and authority.plan_rule_ref in step.icu_rule_refs
-        and step.runtime_outcome_contract == primary.runtime_outcome_contract
+        and step.runtime_outcome_contract == RuntimeOutcomeContract(
+            owner_ref=authority.plan_rule_ref, outcomes=(authority.outcome_column,)
+        )
         and all(
             any(
                 c.input_key == key and c.mode == "all_rows"
@@ -107,13 +173,17 @@ def run_primary_population_risk(
     resolved_inputs: Path,
 ) -> dict[str, Any]:
     sealed = load_current_case_scientific_runtime_authority(authority)
-    if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
+    if not isinstance(sealed, (LandmarkSplineRuntimeAuthority, LandmarkCategoricalAssociationRuntimeAuthority)):
         raise ValueError("No primary population adapter exists for this runtime")
     cohort_keys = [key for key in step.inputs if is_closed_cohort_product_key(key)]
     if len(cohort_keys) != 1:
         raise ValueError("Primary population requires exactly one bound cohort")
     cohort_key = cohort_keys[0]
-    expected = sealed.absolute_risk_population_inputs(cohort_key)
+    categorical = isinstance(sealed, LandmarkCategoricalAssociationRuntimeAuthority)
+    expected = (
+        sealed.absolute_risk_population_inputs()
+        if categorical else sealed.absolute_risk_population_inputs(cohort_key)
+    )
     if (
         step.method != PRIMARY_POPULATION_RISK
         or tuple(step.inputs) != expected
@@ -137,7 +207,8 @@ def run_primary_population_risk(
         raise ValueError("Primary population requires a runtime projection digest")
     manifest = json.loads(resolved_inputs.read_text())
     loaded = {}
-    for key in (cohort_key, sealed.linear_sensitivity_product):
+    parent_key = sealed.primary_product if categorical else sealed.linear_sensitivity_product
+    for key in (cohort_key, parent_key):
         loaded[key] = load_typed_input(
             input_key=key,
             run_dir=run_dir,
@@ -149,21 +220,29 @@ def run_primary_population_risk(
             require_consumption_contract=True,
         )
     cohort = loaded[cohort_key].frame
-    linear = loaded[sealed.linear_sensitivity_product].frame
-    if len(linear) != 1 or not {"n", "events"}.issubset(linear.columns):
-        raise ValueError(
-            "Primary population diagnostic must contain exactly one n/events record"
+    parent = loaded[parent_key].frame
+    if categorical:
+        plan = _bound_categorical_plan(run_dir)
+        sealed.validate_plan(plan)
+        if not any(planned == step for planned in plan.steps):
+            raise ValueError("Primary population step differs from the bound plan")
+        selected = _categorical_model_population(
+            cohort, plan=plan, sealed=sealed, primary_table=parent
         )
-    population = prepare_landmark_model_population(cohort, sealed)
-    selected = cohort.loc[population.model_frame.index]
+    else:
+        if len(parent) != 1 or not {"n", "events"}.issubset(parent.columns):
+            raise ValueError(
+                "Primary population diagnostic must contain exactly one n/events record"
+            )
+        population = prepare_landmark_model_population(cohort, sealed)
+        selected = cohort.loc[population.model_frame.index]
+        if (
+            float(parent.iloc[0]["n"]) != len(selected)
+            or float(parent.iloc[0]["events"])
+            != int(selected[sealed.outcome_column].sum())
+        ):
+            raise ValueError("Descriptive population does not match the bound primary model")
     events = int(selected[sealed.outcome_column].sum())
-    if (
-        float(linear.iloc[0]["n"]) != len(selected)
-        or float(linear.iloc[0]["events"]) != events
-    ):
-        raise ValueError(
-            "Descriptive population does not match the bound primary model"
-        )
     receipt = {
         "schema_version": "easyicu.primary_population_descriptive/1",
         "scope": "primary_model_complete_cases",

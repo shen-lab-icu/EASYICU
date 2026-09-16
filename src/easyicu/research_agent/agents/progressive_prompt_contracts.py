@@ -11,6 +11,7 @@ from ..planning.progressive_contract import (
     ProgressiveOutlineStep,
     ProgressivePlanOutline,
 )
+from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
 
 
 # This is a review-copy consistency check, not execution authority. Only mask
@@ -59,8 +60,39 @@ def outline_shape_contract(
     *,
     analysis_types: Sequence[str],
     module_ids_by_analysis_type: Mapping[str, Sequence[str]],
+    literature_design_card_keys_by_dimension: Mapping[str, Sequence[str]] | None = None,
 ) -> str:
     """Render the exact small outline shape for schema-imperfect transports."""
+
+    design_card_keys_by_dimension = {
+        dimension: list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (
+                    literature_design_card_keys_by_dimension or {}
+                ).get(dimension, ())
+                if str(value).strip()
+            )
+        )
+        for dimension in LITERATURE_DESIGN_DIMENSIONS
+    }
+    complete_design_authority = all(
+        design_card_keys_by_dimension[dimension]
+        for dimension in LITERATURE_DESIGN_DIMENSIONS
+    )
+    literature_design_decisions = (
+        [
+            {
+                "dimension": dimension,
+                "citation_keys": [design_card_keys_by_dimension[dimension][0]],
+                "disposition": "<adopt|adapt|diverge|not_applicable>",
+                "rationale": "<12-800 question-specific characters>",
+            }
+            for dimension in LITERATURE_DESIGN_DIMENSIONS
+        ]
+        if complete_design_authority
+        else []
+    )
 
     template = {
         "schema_version": "easyicu.progressive_plan_outline/1",
@@ -80,7 +112,7 @@ def outline_shape_contract(
                     "required_variables": ["<copy a sealed variable name>"],
                     "assumptions": ["<one prespecified assumption>"],
                     "literature_citation_keys": ["<copy a sealed citation key>"],
-                    "literature_design_decisions": [],
+                    "literature_design_decisions": literature_design_decisions,
                     "novelty_positioning": "<8-600 characters>",
                     "figure_role": "<8-400 characters>",
                     "supports": "<8-500 characters>",
@@ -106,7 +138,7 @@ def outline_shape_contract(
                     "required_variables": ["<copy a sealed variable name>"],
                     "assumptions": ["<one prespecified assumption>"],
                     "literature_citation_keys": ["<copy a sealed citation key>"],
-                    "literature_design_decisions": [],
+                    "literature_design_decisions": literature_design_decisions,
                     "novelty_positioning": "<8-600 characters>",
                     "figure_role": "<8-400 characters>",
                     "supports": "<8-500 characters>",
@@ -169,6 +201,22 @@ def outline_shape_contract(
         "If a phenotyping.cluster_solution question requests clinical outcome comparisons, plan one separate secondary "
         "phenotyping.outcome_by_cluster step, directly dependent on the cluster solution. Its variable_names must include "
         "all requested outcomes and the selected clinical descriptions; inputs to fitting, profiles or figures do not substitute for that analysis."
+        + (
+            " Every candidate literature_design_decisions array must preserve "
+            "the seven exact dimension strings shown in the template, use only "
+            "these reviewed design-card citation keys: "
+            + json.dumps(
+                design_card_keys_by_dimension,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + ". Each decision may cite only keys listed for its own dimension, "
+            "and must include dimension, citation_keys, disposition, and rationale."
+            if complete_design_authority
+            else " literature_design_decisions must be the exact empty array "
+            "shown because complete dimension-specific reviewed design authority "
+            "is not available."
+        )
     )
 
 

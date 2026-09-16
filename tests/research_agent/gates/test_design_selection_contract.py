@@ -226,6 +226,44 @@ def test_outline_shape_contract_includes_required_fresh_design_selection() -> No
     assert selection["candidates"][1]["reviewable_plan"] is None
 
 
+def test_outline_shape_contract_projects_exact_literature_decision_shape() -> None:
+    rendered = _outline_shape_contract(
+        analysis_types=["association_study"],
+        module_ids_by_analysis_type={"association_study": ["adjusted_association"]},
+        literature_design_card_keys_by_dimension={
+            dimension: [
+                "population_comparator"
+                if dimension == "study_population"
+                else "direct_comparator"
+            ]
+            for dimension in LITERATURE_DESIGN_DIMENSIONS
+        },
+    )
+    raw_template = rendered.split("\nCandidate analysis_type values:", 1)[0].split(
+        ":\n", 1
+    )[1]
+    template = json.loads(raw_template)
+
+    for candidate in template["design_selection"]["candidates"]:
+        decisions = candidate["literature_design_decisions"]
+        assert [item["dimension"] for item in decisions] == list(
+            LITERATURE_DESIGN_DIMENSIONS
+        )
+        assert decisions[0]["citation_keys"] == ["population_comparator"]
+        assert all(
+            item["citation_keys"] == ["direct_comparator"]
+            for item in decisions[1:]
+        )
+        assert all(
+            set(item) == {"dimension", "citation_keys", "disposition", "rationale"}
+            for item in decisions
+        )
+
+    assert "seven exact dimension strings shown in the template" in rendered
+    assert '"direct_comparator"' in rendered
+    assert '"population_comparator"' in rendered
+
+
 def test_progressive_outline_rejects_generic_sources_before_materialization() -> None:
     payload = _selection_payload()
     payload["candidates"][0]["literature_design_decisions"] = [

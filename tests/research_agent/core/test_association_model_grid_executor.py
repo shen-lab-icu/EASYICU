@@ -603,7 +603,12 @@ def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
 
     table = pd.read_csv(out_dir / "e1_scientific_sensitivity.csv")
     assert summary["status"] == "ok"
-    assert table["analysis_id"].tolist() == list(authority.sensitivity_ids)
+    assert table["analysis_id"].tolist() == [
+        variant.analysis_id for variant in authority.variants
+    ]
+    assert summary["scientific_runtime_receipt"]["variant_ids"] == table[
+        "analysis_id"
+    ].tolist()
     assert table.loc[0, "n_stays"] == len(frame)
     assert table.loc[1, "n_stays"] < len(frame)
     assert table.loc[2, "n_stays"] < len(frame)
@@ -692,6 +697,7 @@ def test_grid_can_compare_a_prespecified_exposure_definition(
     plan = authority.bind_plan(draft)
     frame = _cohort()
     frame["sep3_sofa2_alternate"] = frame["sep3_sofa2_max"]
+    frame.loc[frame.index[:80], "sep3_sofa2_alternate"] = None
     run_dir, manifest = _parent_binding(
         tmp_path=tmp_path,
         frame=frame,
@@ -716,6 +722,12 @@ def test_grid_can_compare_a_prespecified_exposure_definition(
         "sep3_sofa2_max",
         "sep3_sofa2_alternate",
     ]
+    assert table["exposure_missing_n"].tolist() == [0, 80]
+    assert table["exposure_evaluable_n"].tolist() == [len(frame), len(frame) - 80]
+    assert (
+        table["fit_n"] + table["fit_excluded_after_exposure_n"]
+        == table["exposure_evaluable_n"]
+    ).all()
     assert summary["scientific_runtime_receipt"]["variant_exposures"] == {
         reference["analysis_id"]: "sep3_sofa2_max",
         "alternate_definition": "sep3_sofa2_alternate",

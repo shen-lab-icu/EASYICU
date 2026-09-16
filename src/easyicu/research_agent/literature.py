@@ -1829,6 +1829,10 @@ def _text_assigns_studied_exposure(exposure: str, text: str) -> bool:
         # Model validation within that population does not study the disease
         # contrast. Retain an explicit comparison immediately after the noun.
         rf"\b{escaped}\s+(?:patients?|participants?|subjects?|cohorts?|populations?)\b(?!\s+(?:versus|vs|compared\s+(?:with|to)|and\s+without))",
+        # Mentioning an exposure as an adjustment variable does not study its
+        # association with the outcome.  For example, a urine-output model may
+        # adjust for AKI while studying urine output itself.
+        rf"\b(?:adjust(?:ed|ing)?|controll(?:ed|ing)?)\s+for\b[^.;:]{{0,100}}\b{escaped}\b",
     )
     for pattern in eligibility_patterns:
         analytic_text = re.sub(pattern, " ", analytic_text)
