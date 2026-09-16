@@ -1,0 +1,103 @@
+"""Build the dependency-free EasyICU project website from shared page templates."""
+from pathlib import Path
+import json
+import hashlib
+
+ROOT = Path(__file__).resolve().parents[1]
+DIST = ROOT / 'dist'
+REPO = 'https://github.com/shen-lab-icu/EASYICU'
+CATALOG = json.loads((DIST / 'catalog-data.js').read_text().split(' = ', 1)[1].rstrip(';\n'))
+COUNTS = CATALOG['counts']
+SCRIPT_REVISION = hashlib.sha256((DIST / 'site.js').read_bytes()).hexdigest()[:12]
+NAV = [('index.html','首页'),('demos.html','研究演示'),('catalog.html','能力目录'),('guide.html','文档与 FAQ'),('about.html','关于项目')]
+
+def button(href, text, primary=False):
+    return f'<a class="button {"primary" if primary else "secondary"}" href="{href}">{text}<span aria-hidden="true">↗</span></a>'
+
+def heading(eyebrow, title, description='', cls=''):
+    return f'<div class="section-heading {cls}"><div><p class="eyebrow">{eyebrow}</p><h2>{title}</h2></div>{f"<p>{description}</p>" if description else ""}</div>'
+
+FAQ = [
+('EasyICU 适合谁使用？','面向使用 ICU 数据库开展研究的临床研究者、数据分析人员与方法开发者。可视化工作台适合数据准备和结果审阅；Python API 适合脚本化提取与复现。'),
+('这是可以直接在线分析患者数据的网站吗？','这里是项目介绍、演示和文档网站。实际数据处理与研究运行在本地安装的 EasyICU 工作台中进行；本网站不接收患者数据，也不会执行研究。'),
+('可以先体验，再申请数据库权限吗？','可以先通过本站的界面导览和示例了解流程。真实数据库分析需要先获得对应数据提供方的访问权限；演示数据与完整数据库是不同的数据源。'),
+('数据会发送给外部模型吗？','本地数据目录与研究工作区保存在你的设备上。外部模型功能需要明确启用和配置；发送给模型的内容取决于所启用的功能、配置与授权范围。请在启用前核对模型服务和数据使用要求。'),
+('六个数据库中的同名指标可以直接比较吗？','不能仅根据名称相同就直接比较。数据源之间可能存在记录习惯、单位、时间锚点和操作化定义差异。EasyICU 提供映射与处理基础，具体跨库比较仍需核对定义及数据质量。'),
+('生成的报告可以直接用于投稿吗？','研究产物供作者审阅。代码运行完成、图表生成或稿件草稿形成，都不能替代研究设计、结果、引用与科学结论的审核。本站的界面演示不构成任何研究问题的完成或发表授权。'),
+('能力目录中的方法都已经完成独立验证了吗？','目录反映当前代码中的能力登记，并标明固定实现、生成代码和结果核验范围。登记不等于对所有人群、数据库和研究问题完成独立验证；执行时还要检查本次计划及数据是否满足条件。'),
+('如何报告问题或参与开发？','使用 GitHub Issues 描述问题、预期行为和复现步骤。不要上传患者记录、模型密钥或包含敏感数据的日志。使用 Discussions 交流一般使用问题与改进建议。'),
+]
+
+def faqs(items):
+    return '<div class="faq-list">'+''.join(f'<details><summary>{q}<span aria-hidden="true">+</span></summary><div>{a}</div></details>' for q,a in items)+'</div>'
+
+def cta():
+    return '<section class="closing wrap"><div><p class="eyebrow">START WITH A QUESTION</p><h2>把下一项研究，放进工作流。</h2><p>先了解数据要求，再从本地工作台或 Python 开始。</p></div>'+button('guide.html','开始使用',True)+'</section>'
+
+def page(file, title, desc, content):
+    nav=''.join('<a href="{}" {}>{}</a>'.format(href, 'aria-current="page"' if file==href else '', name) for href,name in NAV)
+    html=f'''<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="{desc}"><meta name="theme-color" content="#0c4855"><title>{title} · EasyICU</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script defer src="catalog-data.js"></script><script defer src="site.js?v={SCRIPT_REVISION}"></script></head>
+<body data-page="{file.removesuffix('.html')}"><a class="skip" href="#main">跳到正文</a>
+<header class="header"><div class="header-inner"><a class="wordmark" href="index.html" aria-label="EasyICU 首页">Easy<span>ICU</span><i aria-hidden="true"></i></a><button class="menu-toggle" aria-label="展开导航" aria-expanded="false" aria-controls="main-nav">菜单 <span aria-hidden="true">☰</span></button><nav id="main-nav" aria-label="主导航">{nav}<a class="nav-github" href="{REPO}" target="_blank" rel="noopener">GitHub <span aria-hidden="true">↗</span></a></nav></div></header>
+<main id="main">{content}</main>
+<footer class="footer"><div class="wrap footer-grid"><div><a class="wordmark" href="index.html">Easy<span>ICU</span><i aria-hidden="true"></i></a><p>面向重症数据库研究的工具与 AI 工作台。<br>从数据准备，到分析与作者审阅。</p></div><div><strong>了解产品</strong><a href="demos.html">研究演示</a><a href="catalog.html">能力目录</a><a href="guide.html">使用文档</a></div><div><strong>项目资源</strong><a href="{REPO}" target="_blank" rel="noopener">GitHub ↗</a><a href="{REPO}/issues" target="_blank" rel="noopener">报告问题 ↗</a><a href="about.html#citation">引用项目</a></div><div><strong>开始研究</strong><a href="guide.html#data">准备数据</a><a href="guide.html#models">配置研究助手</a><a href="guide.html#faq">常见问题</a></div></div><div class="wrap footer-bottom"><span>© 2026 EasyICU · MIT 开源许可</span><span>科研工具 · 项目介绍与产品演示</span></div></footer>
+<dialog id="image-dialog" class="image-dialog" aria-labelledby="image-dialog-title"><div class="dialog-bar"><h2 id="image-dialog-title">图像预览</h2><button data-close-dialog aria-label="关闭图像预览">关闭 ×</button></div><img id="dialog-image" alt=""><p id="image-dialog-caption"></p></dialog>
+<dialog id="tour-dialog" class="tour-dialog" aria-labelledby="tour-title"><div class="dialog-bar"><div><p class="eyebrow">A WALK THROUGH EASYICU</p><h2 id="tour-title">研究工作台导览</h2></div><button data-close-dialog aria-label="关闭导览">关闭 ×</button></div><div class="tour-visual"><img id="tour-image" src="assets/workspace-current.jpg" alt=""></div><div class="tour-copy"><span id="tour-counter" class="eyebrow"></span><h3 id="tour-step-title"></h3><p id="tour-step-description"></p></div><div class="tour-controls"><button id="tour-prev" class="button secondary">← 上一步</button><button id="tour-play" class="button secondary" aria-pressed="false">自动播放</button><button id="tour-next" class="button primary">下一步 →</button></div><p class="tour-note">基于当前真实界面截图的步骤导览；不在本站执行分析。</p></dialog>
+<p class="toast" role="status" aria-live="polite"></p>
+</body></html>'''
+    (DIST/file).write_text(html)
+
+home = f'''
+<section class="hero wrap"><p class="eyebrow">AN AI WORKSPACE FOR CRITICAL CARE RESEARCH</p><h1>让重症研究，<br><em>从一个问题开始。</em></h1><p class="hero-description">连接 ICU 数据、研究设计与分析工具。<br>在同一个工作台中准备数据、推进分析，审阅图表与报告。</p><div class="hero-actions"><button class="button primary" data-open-tour><span class="play-icon" aria-hidden="true">▶</span> 看看 EasyICU 如何工作</button>{button('guide.html','开始使用')}{button('catalog.html','探索能力目录')}</div><div class="hero-meta"><span>本地研究工作台</span><span>Python API</span><span>开放源代码</span></div>
+<div class="product-window"><div class="window-bar"><span class="window-dots" aria-hidden="true">● ● ●</span><span>EasyICU · 研究工作台</span><div class="segmented" role="group" aria-label="工作台截图"><button data-hero-image="workspace" aria-pressed="true">研究对话</button><button data-hero-image="reader" aria-pressed="false">并排阅读</button></div></div><button class="image-trigger" data-lightbox="assets/workspace-current.jpg" data-image-title="EasyICU 研究工作台" data-caption="真实界面截图。研究对话、当前阶段和成果入口在同一工作台中。" aria-label="放大研究工作台截图"><img id="hero-image" src="assets/workspace-current.jpg" alt="EasyICU 的三栏研究工作台：项目列表、研究对话与当前成果" width="1470" height="745"></button><div class="window-caption"><span id="hero-caption">研究对话、当前阶段和成果入口，在同一个工作台里。</span><span>真实界面 · 点击放大</span></div></div></section>
+<section class="source-band"><div class="wrap"><p>连接公开 ICU 数据资源 <span>数据由各提供方独立授权</span></p><div class="source-names"><span>MIMIC-IV</span><span>eICU</span><span>AmsterdamUMCdb</span><span>HiRID</span><span>MIMIC-III</span><span>SICdb</span></div></div></section>
+<section class="wrap section" id="foundation">{heading('THE RESEARCH FOUNDATION','从数据底座，到研究交付。','临床概念、分析工具与研究工作台，<br>围绕同一个问题协同工作。')}<div class="stat-grid"><a href="catalog.html#sources"><strong>{COUNTS['sources']}<span>个</span></strong><h3>正式数据库映射</h3><p>统一入口，保留来源差异</p></a><a href="catalog.html#concepts"><strong>{COUNTS['concepts']}<span>项</span></strong><h3>字典临床概念</h3><p>从生命体征到派生评分</p></a><a href="catalog.html#concepts"><strong>{COUNTS['modules']}<span>类</span></strong><h3>特征模块</h3><p>按器官、治疗与结局组织</p></a><a href="catalog.html#methods"><strong>{COUNTS['methods']}<span>项</span></strong><h3>研究能力登记</h3><p>查看实现方式与核验范围</p></a></div><p class="section-note">数量来自当前代码目录；映射和能力登记不代表所有数据源或研究场景已完成独立验证。</p></section>
+<section class="soft-section" id="workflow"><div class="wrap section">{heading('ONE CONNECTED WORKFLOW','把时间用在研究问题上。','从临床概念开始，以可审阅的研究产物收尾。')}<div class="workflow-cards"><article><span class="step-number">01</span><h3>把数据准备清楚</h3><p>连接有权限的数据，定义队列和时间窗，查看变量覆盖、单位与缺失。</p><div class="token-list"><span>队列定义</span><span>临床概念</span><span>数据检查</span></div><a class="text-link" href="catalog.html#concepts">浏览概念目录 ↗</a></article><article><span class="step-number">02</span><h3>让方案带动分析</h3><p>用自然语言提出问题，审阅完整研究方案，再通过工作台推进执行。</p><div class="token-list"><span>研究设计</span><span>方案审阅</span><span>分析执行</span></div><a class="text-link" href="demos.html">查看研究演示 ↗</a></article><article><span class="step-number">03</span><h3>带着证据看结果</h3><p>并排查看对话、结果表、图件和报告草稿，追溯分析输入与运行记录。</p><div class="token-list"><span>结果图表</span><span>报告草稿</span><span>作者审阅</span></div><a class="text-link" href="demos.html">查看成果工作区 ↗</a></article></div></div></section>
+<section class="wrap section">{heading('SEE THE WORKSPACE','让当前成果，始终靠近研究问题。','通过真实产品界面展示结果如何被组织和审阅。')}<div class="feature-case"><div><span class="badge">当前产品界面</span><h3>对话与成果，<br>在同一个工作区</h3><p>研究者可以保留对话上下文，同时打开结果表、图表、文章、文献与 PDF。</p><ul class="check-list"><li>当前 run 的成果集中呈现</li><li>报告与证据摘要绑定</li><li>支持并排阅读与专注模式</li></ul>{button('demos.html','查看界面演示',True)}<p class="small-note">截图仅用于说明产品交互，不对外发布研究结果。</p></div><button class="figure-preview image-trigger" data-lightbox="assets/reader-current.jpg" data-image-title="EasyICU 成果并排阅读" data-caption="当前产品界面：研究对话与成果阅读区并排呈现。" aria-label="放大成果并排阅读截图"><img loading="lazy" src="assets/reader-current.jpg" alt="EasyICU 当前研究对话与成果并排阅读界面" width="1470" height="745"><span>真实界面 · 查看大图 ↗</span></button></div></section>
+<section class="dark-section"><div class="wrap section"><div class="section-heading"><div><p class="eyebrow">EXPLORE WHAT IS INSIDE</p><h2>不止看介绍。<br>深入看看工具里有什么。</h2></div><p>查找你关心的变量与研究方法，<br>先了解条件，再开始分析。</p></div><div class="explore-grid"><a href="catalog.html#sources"><span>DATA SOURCES</span><h3>数据库</h3><p>参考版本、来源入口和准备要求。</p><strong>查看 6 个数据源 ↗</strong></a><a href="catalog.html#concepts"><span>CLINICAL CONCEPTS</span><h3>临床概念</h3><p>按名称、模块或直接映射来源检索。</p><strong>搜索 274 项概念 ↗</strong></a><a href="catalog.html#methods"><span>RESEARCH METHODS</span><h3>研究能力</h3><p>关联、生存、预测、分型与描述分析。</p><strong>查看方法与支持范围 ↗</strong></a></div></div></section>
+<section class="wrap section faq-home">{heading('A FEW THINGS TO KNOW','开始之前，你可能想知道。')}{faqs(FAQ[1:4])}<a class="text-link faq-more" href="guide.html#faq">查看全部常见问题 ↗</a></section>{cta()}
+'''
+page('index.html','面向重症数据库研究的 AI 工作台','EasyICU 连接 ICU 数据、研究设计与分析工具。探索当前工作台、成果阅读、临床概念和使用指南。',home)
+
+demos=f'''
+<section class="page-hero wrap"><p class="eyebrow">EASYICU IN ACTION</p><h1>看见研究，<br><em>一步步成为产物。</em></h1><p>通过当前工作台与并排阅读界面，了解项目、对话和成果如何被组织。<br>界面截图用于产品演示，不对外发布其中的研究结果。</p><button class="button primary" data-open-tour><span aria-hidden="true">▶</span> 播放界面导览</button></section>
+<section class="wrap demo-stage"><div class="section-heading"><div><h2>研究与审阅，在同一处发生。</h2></div><p>点击切换界面，查看完整截图。</p></div><div class="tab-strip" role="tablist" aria-label="界面演示"><button role="tab" id="screen-workspace" aria-selected="true" aria-controls="screen-panel" data-demo="workspace">研究工作台</button><button role="tab" id="screen-reader" aria-selected="false" aria-controls="screen-panel" tabindex="-1" data-demo="reader">并排阅读</button></div><div id="screen-panel" role="tabpanel" aria-labelledby="screen-workspace"><div class="demo-image-shell"><button class="image-trigger" id="demo-lightbox" data-lightbox="assets/workspace-current.jpg" data-image-title="研究工作台" data-caption="真实界面截图：项目、研究对话与当前成果。" aria-label="放大当前界面"><img id="demo-image" src="assets/workspace-current.jpg" alt="研究工作台真实截图" width="1470" height="745"></button></div><div class="demo-description"><h3 id="demo-title">从研究对话进入当前成果</h3><p id="demo-description">项目、方案状态、研究对话和产物入口集中呈现。打开已有成果不会启动新的分析。</p><span id="demo-source">当前工作台界面 · 2026-09-16 核对</span></div></div></section>
+{cta()}
+'''
+page('demos.html','研究工作台界面演示','查看 EasyICU 的当前研究工作台、成果入口与并排阅读界面。',demos)
+
+catalog=f'''
+<section class="page-hero wrap compact"><p class="eyebrow">THE EASYICU CATALOG</p><h1>找到你的数据，<br><em>也找到研究的起点。</em></h1><p>浏览数据源、检索临床概念，了解研究方法的实现与核验范围。</p><div class="catalog-jumps"><a href="#sources">6 个数据源 ↓</a><a href="#concepts">274 项概念 ↓</a><a href="#methods">15 项能力登记 ↓</a></div></section>
+<section class="wrap catalog-section" id="sources">{heading('01 / DATA SOURCES','同一个概念，不同的数据来源。','以下版本是代码登记的参考版本。<br>实际使用仍需核对你的数据版本与权限。')}<div id="source-grid" class="source-grid"></div><p class="section-note">数据由各提供方授权，EasyICU 不分发受限数据库。适配映射与独立临床等价性验证是不同的工作。</p></section>
+<section class="soft-section" id="concepts"><div class="wrap section">{heading('02 / CLINICAL CONCEPTS','从变量名称，找到临床含义。','目录来自合并后的概念字典，<br>可按模块和直接映射来源筛选。')}<form class="catalog-controls" role="search" onsubmit="return false"><div class="search-field"><label for="concept-search">搜索概念</label><input id="concept-search" type="search" placeholder="例如：乳酸、lactate、hr、SOFA" autocomplete="off"></div><div><label for="module-filter">特征模块</label><select id="module-filter"><option value="">全部模块</option></select></div><div><label for="source-filter">直接映射来源</label><select id="source-filter"><option value="">全部来源</option></select></div></form><div class="catalog-result-bar"><p id="concept-count" role="status" aria-live="polite"></p><button id="clear-filters" class="text-button" type="button">重置筛选</button></div><div id="concept-grid" class="concept-grid"></div><div class="pagination"><button id="concept-prev" class="button secondary">← 上一页</button><span id="concept-page" aria-live="polite"></span><button id="concept-next" class="button secondary">下一页 →</button></div><p class="section-note">“直接映射”仅表示字典中登记了该来源字段；派生概念还依赖组成变量与计算条件。本目录不展示患者数据，也不把字段登记当作运行时可用性证明。</p></div></section>
+<section class="wrap section" id="methods">{heading('03 / RESEARCH CAPABILITIES','知道能做什么，也知道适用条件。','方法按当前研究能力登记展示。<br>一项登记不代表所有场景均已完成独立验证。')}<div class="filter-pills" role="group" aria-label="筛选研究能力"><button data-method-filter="" aria-pressed="true">全部</button><button data-method-filter="association" aria-pressed="false">关联分析</button><button data-method-filter="time_to_event" aria-pressed="false">生存分析</button><button data-method-filter="prediction" aria-pressed="false">预测</button><button data-method-filter="phenotyping" aria-pressed="false">分型与轨迹</button><button data-method-filter="causal_emulation" aria-pressed="false">因果与可行性</button><button data-method-filter="descriptive" aria-pressed="false">描述分析</button></div><p id="method-count" class="section-note" role="status" aria-live="polite"></p><div id="method-grid" class="method-grid"></div><div class="evidence-note"><strong>目录中的标签是什么意思？</strong><p>“固定实现”表示特定分析有预设执行路径；“生成代码”表示分析由研究助手按方案编写代码。“已登记结果核验”指特定结果有对应检查，仍不等于研究获得发表、因果解释或临床使用资格。</p></div></section>{cta()}
+'''
+page('catalog.html','数据库、临床概念与研究能力目录','检索 EasyICU 的 274 项字典概念，浏览 6 个数据源、19 个特征模块及 15 项研究能力的范围。',catalog)
+
+install='python -m pip install "easyicu[webapp] @ git+https://github.com/shen-lab-icu/EASYICU.git"\neasyicu-webapp'
+guide=f'''
+<section class="page-hero wrap compact"><p class="eyebrow">DOCUMENTATION & FAQ</p><h1>从安装，<br><em>走到第一个研究问题。</em></h1><p>先准备运行环境与数据，再在工作台里逐步推进。</p></section>
+<div class="wrap docs-layout"><aside class="docs-nav" aria-label="文档目录"><a href="#quickstart">快速开始</a><a href="#install">安装与启动</a><a href="#data">准备数据</a><a href="#research">推进研究</a><a href="#models">研究助手与模型</a><a href="#faq">常见问题</a></aside><div class="docs-content">
+<section id="quickstart"><p class="eyebrow">GET STARTED</p><h2>选择适合你的入口</h2><div class="entry-grid"><a href="#install"><span>FOR RESEARCHERS</span><h3>本地 Web 工作台</h3><p>准备数据、查看队列、审阅研究图表与报告。</p><strong>开始安装 ↓</strong></a><a href="{REPO}#path-b-python-api" target="_blank" rel="noopener"><span>FOR DEVELOPERS</span><h3>Python API</h3><p>在脚本或 Notebook 中组织提取与复现流程。</p><strong>查看 API 入门 ↗</strong></a></div><p>如果想先看看界面，可以打开<a href="demos.html">研究演示</a>，无需安装或提供患者数据。</p></section>
+<section id="install"><p class="eyebrow">01 / INSTALL</p><h2>安装并启动工作台</h2><p>从源码仓库安装需要 Python 3.10+ 与 Git。建议使用独立的 Python 虚拟环境。</p><div class="tab-strip small-tabs" role="tablist" aria-label="操作系统"><button id="os-unix" role="tab" aria-selected="true" aria-controls="install-panel" data-os="unix">macOS / Linux</button><button id="os-windows" role="tab" aria-selected="false" aria-controls="install-panel" tabindex="-1" data-os="windows">Windows</button></div><div id="install-panel" role="tabpanel" aria-labelledby="os-unix"><div class="code-block"><div><span>Terminal</span><button data-copy-target="install-code">复制命令</button></div><pre><code id="install-code">python3 -m venv .venv
+source .venv/bin/activate
+{install}</code></pre></div></div><p>打开启动命令显示的本地地址，默认是 <code>http://127.0.0.1:8765</code>。终端中的服务需要在使用期间保持运行。</p><details class="guide-detail"><summary>已有源码目录，如何启动？</summary><p>macOS 可使用 <code>start_easyicu.command</code>，Windows 使用 <code>start_easyicu.bat</code>，Linux 使用 <code>./start_easyicu.sh</code>。首次启动按项目说明安装本地依赖。</p></details><details class="guide-detail"><summary>桌面应用安装包在哪里？</summary><p>以 <a href="{REPO}/releases" target="_blank" rel="noopener">GitHub Releases</a> 中具体版本提供的安装文件与说明为准。演示数据发布包不是桌面应用安装包。</p></details><p class="small-note">仓库安装命令跟随公开主线内容。需要复现某次研究时，请固定实际使用的版本与依赖。</p></section>
+<section id="data"><p class="eyebrow">02 / PREPARE YOUR DATA</p><h2>先准备数据，再定义队列</h2><ol class="numbered-list"><li><h3>获得数据访问权限</h3><p>从对应数据库的官方渠道申请或下载。数据库授权与 EasyICU 软件许可相互独立。</p></li><li><h3>转换原始数据</h3><p>原始 CSV、CSV.GZ 或 tar.gz 先通过项目的转换流程准备。提取 API 使用准备完成的数据目录。</p></li><li><h3>检查来源与变量</h3><p>核对版本、单位、时间锚点、缺失和目标变量覆盖，再设置纳入排除条件。</p></li></ol><a class="text-link" href="catalog.html#sources">查看数据源与概念目录 ↗</a></section>
+<section id="research"><p class="eyebrow">03 / WORK THROUGH A STUDY</p><h2>把问题和交付要求说清楚</h2><blockquote>在成人 ICU 患者中，研究首 24 小时乳酸水平与院内死亡的关联，并提供队列说明、主结果图、敏感性分析与报告草稿。</blockquote><p>这是一类问题表达示例。研究助手需要结合你的数据和设计条件提出完整方案；审阅人群、暴露、结局、时间顺序与方法后，再执行分析。</p><div class="mini-steps"><div><b>提出问题</b><span>问题、来源、交付要求</span></div><div><b>审阅方案</b><span>设计、变量、分析假设</span></div><div><b>查看执行</b><span>过程、异常、产物</span></div><div><b>审阅结果</b><span>图表、正文、来源</span></div></div><p>工作台与成果阅读界面可在<a href="demos.html">研究演示页</a>查看。研究者负责科学判断与最终结论。</p></section>
+<section id="models"><p class="eyebrow">04 / RESEARCH ASSISTANT</p><h2>模型配置与数据使用</h2><p>数据准备和基础提取与研究助手的外部模型功能分开配置。启用研究助手前，按工作台中的配置流程选择可用服务并明确授权。</p><ul class="plain-list"><li>核对模型服务地址、模型名称和授权范围。</li><li>了解哪些研究文本或数据摘要会发送到外部服务。</li><li>将密钥保存在本地配置中，避免放进截图、日志或公开仓库。</li><li>研究前确认本机资源、数据条件与计划要求相匹配。</li></ul></section>
+<section id="faq"><p class="eyebrow">FREQUENTLY ASKED QUESTIONS</p><h2>常见问题</h2>{faqs(FAQ)}</section>
+</div></div>{cta()}
+'''
+page('guide.html','使用文档与常见问题','EasyICU 安装启动、数据准备、研究流程、模型配置和常见问题。',guide)
+
+citation='EasyICU [Computer software]. https://github.com/shen-lab-icu/EASYICU'
+about=f'''
+<section class="page-hero wrap compact"><p class="eyebrow">ABOUT EASYICU</p><h1>让重症数据库研究，<br><em>更容易组织与复现。</em></h1><p>EasyICU 将临床概念层、数据工具与研究工作台连接起来，<br>支持研究者从问题出发，逐步检查和完成分析。</p></section>
+<section class="wrap about-story"><div><p class="eyebrow">WHY WE BUILD</p><h2>少重复整理，<br>多花时间理解结果。</h2></div><div><p>ICU 数据库研究常常从重复工作开始：寻找变量、统一单位、对齐时间、定义队列，再把分散的代码、结果表和图件组织起来。</p><p>EasyICU 希望让这些基础工作可以复用，同时保留研究问题与方法选择的灵活性。可视化界面与 Python API 服务于不同使用习惯，研究助手将方案、执行和产物连接进同一条流程。</p><p>项目仍在持续开发和验证。我们以具体研究案例和可检查的产物呈现进展，在能力目录中说明不同方法的条件与边界。</p></div></section>
+<section class="soft-section"><div class="wrap section">{heading('BUILT ON THREE PRINCIPLES','研究过程，值得被认真对待。')}<div class="principle-grid"><article><span>01</span><h3>从临床定义出发</h3><p>保留人群、单位、时间与来源的含义，让数据库字段回到研究问题中。</p></article><article><span>02</span><h3>让过程可以检查</h3><p>将分析代码、运行记录与研究产物联系起来，支持复现与作者审阅。</p></article><article><span>03</span><h3>把判断留给研究者</h3><p>工具协助准备和执行，研究者审阅设计、解释结果，并负责最终结论。</p></article></div></div></section>
+<section class="wrap section" id="community">{heading('OPEN DEVELOPMENT','在 GitHub 上参与项目。','使用问题、方法建议与代码贡献，<br>都可以从项目仓库开始。')}<div class="community-grid"><a href="{REPO}" target="_blank" rel="noopener"><span>CODE</span><h3>探索源代码</h3><p>阅读实现、示例和项目说明。</p><strong>打开仓库 ↗</strong></a><a href="{REPO}/issues" target="_blank" rel="noopener"><span>ISSUES</span><h3>报告与跟踪问题</h3><p>提供复现步骤，讨论缺陷与需求。</p><strong>查看 Issues ↗</strong></a><a href="{REPO}/discussions" target="_blank" rel="noopener"><span>DISCUSSIONS</span><h3>交流使用经验</h3><p>讨论研究场景与工具改进。</p><strong>加入讨论 ↗</strong></a></div></section>
+<section class="wrap citation-section" id="citation"><div><p class="eyebrow">CITE THE SOFTWARE</p><h2>在研究中引用 EasyICU</h2><p>如果使用 EasyICU，请引用软件项目，并在方法中记录实际使用的版本或提交。下方是仓库引用的简写；正式作者与版本信息以仓库引用文件为准。</p><a class="text-link" href="{REPO}/blob/main/CITATION.cff" target="_blank" rel="noopener">查看仓库引用信息 ↗</a></div><div class="citation-box"><span>SOFTWARE REFERENCE</span><p id="citation-text">{citation}</p><button class="button secondary" data-copy-target="citation-text">复制引用</button></div></section>{cta()}
+'''
+page('about.html','关于项目与软件引用','了解 EasyICU 的设计方向、开源协作、反馈入口及软件引用方式。',about)
+print('Built 5 static pages')
