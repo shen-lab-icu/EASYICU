@@ -7,6 +7,8 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!website/dist/
+!website/dist/**
 downloads/
 eggs/
 .eggs/
@@ -48,6 +50,8 @@ htmlcov/
 .mypy_cache/
 .tmp/
 .playwright-cli/
+# Local website design scratch; the maintained site is built into website/dist/.
+website/initial-draft.html
 # Generated browser/test artifacts accidentally written under the importable package.
 src/easyicu/test-results/
 

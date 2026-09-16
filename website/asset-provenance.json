@@ -1,0 +1,16 @@
+[
+  {
+    "asset": "reader-current.jpg",
+    "sha256": "6ce2c47de0d9aa0db4a3ea5300ff0b2674b1658a277571294a330f33f5ea270e",
+    "ui_verified": "Compared with running Chrome workbench on 2026-09-16; current refined UI.",
+    "source_kind": "local_ui_review_capture",
+    "source_artifact": "outputs/easyicu_ui_review_20260916/10-reader-refined-chrome.png"
+  },
+  {
+    "asset": "workspace-current.jpg",
+    "sha256": "ec6eb84a80586b5639131d7219e47ca5deef572b079d8f9a7ca38cd2fb9d7ed2",
+    "ui_verified": "Compared with running Chrome workbench on 2026-09-16; current refined UI.",
+    "source_kind": "local_ui_review_capture",
+    "source_artifact": "outputs/easyicu_ui_review_20260916/07-workspace-refined-chrome.png"
+  }
+]
