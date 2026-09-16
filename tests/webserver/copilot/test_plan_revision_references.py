@@ -44,6 +44,50 @@ def test_revision_includes_only_bound_current_and_user_named_plans(monkeypatch):
     assert len(reads) == 2
 
 
+def test_revision_carries_saved_scientific_specs_to_planner(monkeypatch):
+    plan = _plan()
+    plan["design_selection"] = {"candidates": [{
+        "design_id": "landmark", "analysis_type": "association_study",
+        "observation_window": "24h to hospital discharge",
+        "assumptions": ["hospital follow-up is observed"],
+        "novelty_positioning": "Compare the definition and timing with prior work.",
+        "figure_role": "Show the primary association and interval.",
+        "reviewable_plan": ["population", "exposure", "outcome", "model", "missing", "sensitivity"],
+        "decision_reason": "This design matches the prespecified estimand.",
+    }]}
+    step = plan["steps"][0]
+    step.update({
+        "measurement_audit_spec": {"columns": ["strict_stage", "reference_stage"]},
+        "robustness_replay_spec": {"products": [{"product_id": "definition", "output": "definition_table"}]},
+        "sensitivity_spec_ids": ["definition_sensitivity"],
+        "literature_design_bindings": [{"citation_key": "prior_study", "design_elements": ["follow_up"]}],
+        "icu_rule_refs": ["strict_24h_window"],
+        "patient_rows": [{"stay_id": 1}],
+    })
+    row = {"run_id": "run_current", "project_dir": "/host/current"}
+    monkeypatch.setattr(owner, "_run_rows", lambda _: [row])
+    monkeypatch.setattr(owner.agent_runs, "read_run_artifact", lambda *_: {
+        "ok": True, "artifact": {"sha256": "a" * 64}, "payload": plan,
+    })
+    context = SimpleNamespace(user_message="Revise the saved plan.")
+    reference, = owner._plan_change_references(context, row)
+    projected = reference.plan
+    assert projected["design_selection"][0]["observation_window"] == "24h to hospital discharge"
+    assert projected["design_selection"][0]["reviewable_plan"][-1] == "sensitivity"
+    assert projected["design_selection"][0]["decision_reason"].startswith("This design")
+    for key in (
+        "measurement_audit_spec", "robustness_replay_spec", "sensitivity_spec_ids",
+        "literature_design_bindings", "icu_rule_refs",
+    ):
+        assert projected["steps"][0][key] == step[key]
+    assert "patient_rows" not in projected["steps"][0]
+    prompt = PlanChangeRequest(
+        source_run_id="run_current", user_message=context.user_message,
+        reference_plans=(reference,),
+    ).planner_context()
+    assert "reference_stage" in prompt and "definition_sensitivity" in prompt
+
+
 def test_revision_reference_variables_stay_in_zero_row_menu(tmp_path):
     import json
     import pyarrow.parquet as pq

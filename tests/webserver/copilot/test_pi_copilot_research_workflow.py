@@ -597,21 +597,31 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     assert "primary_model" in authority.contract
 
 
-@pytest.mark.parametrize("configured_operation", [True, False])
-def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
+@pytest.mark.parametrize(
+    "configured_operation, prepared_exposure",
+    [(True, "lact"), (False, "lact"), (False, "aki_stage_strict")],
+)
+def test_candidate_plan_materialization_accepts_source_bound_exposure_column(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     configured_operation: bool,
+    prepared_exposure: str,
 ) -> None:
+    is_lactate = prepared_exposure == "lact"
+    materialized_exposure = "lact_max" if is_lactate else prepared_exposure
+    proposed_exposure = "lact" if is_lactate else "aki_stage"
     study = _complete_study()
     study.update(
         {
-            "question": "Is peak lactate associated with death?",
+            "question": (
+                "Is peak lactate associated with death?" if is_lactate
+                else "Is strict 24-hour KDIGO AKI stage associated with death?"
+            ),
             "covariates": ["age"],
             "covariate_selection": "exact",
             "execution_concepts": {
-                "primary_exposure": "lact",
-                "primary_exposure_aggregation": "max",
+                "primary_exposure": prepared_exposure,
+                **({"primary_exposure_aggregation": "max"} if is_lactate else {}),
                 "outcome": "death",
                 "covariates": ["age"],
             },
@@ -619,7 +629,7 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
     )
     source_run_id = "run-derived-candidate"
     if not configured_operation:
-        study["execution_concepts"].pop("primary_exposure_aggregation")
+        study["execution_concepts"].pop("primary_exposure_aggregation", None)
     project_dir = tmp_path / "candidate-wrapper"
     inner_run = project_dir / "pipeline" / source_run_id
     inner_run.mkdir(parents=True)
@@ -627,7 +637,7 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
         "scientific_identity": {
             "question": study["question"],
             "database": "miiv",
-            "primary_exposure": "lact_max",
+            "primary_exposure": materialized_exposure,
             "target_outcome": "death",
             "user_preferences": {"covariates": ["age"]},
         }
@@ -647,15 +657,17 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
     )
     pipeline_input = project_dir / "pipeline_input"
     pipeline_input.mkdir()
-    pd.DataFrame(columns=["lact_max", "death", "los_icu", "age"]).to_parquet(
+    pd.DataFrame(columns=[materialized_exposure, "death", "los_icu", "age"]).to_parquet(
         pipeline_input / "planner_catalog.parquet",
         index=False,
     )
     (pipeline_input / "planner_catalog_receipt.json").write_text(
         json.dumps(
             {
-                "selected_concepts": ["lact", "death", "los_icu", "age"],
-                "operationalized_columns": ["lact_max"],
+                "selected_concepts": [prepared_exposure, "death", "los_icu", "age"],
+                "operationalized_columns": (
+                    [materialized_exposure] if is_lactate else []
+                ),
             }
         ),
         encoding="utf-8",
@@ -708,8 +720,8 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
         agent_pipeline_runs,
         "_metadata_only_planning_coordinates",
         lambda **_kwargs: {
-            "primary_exposure": "lact",
-            "primary_exposure_aggregation": "max",
+            "primary_exposure": proposed_exposure,
+            "primary_exposure_aggregation": "max" if is_lactate else None,
             "target_outcome": "death",
         },
     )
@@ -723,10 +735,26 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
     )
 
     assert authority is not None
-    assert authority.primary_exposure == "lact_max"
-    assert authority.primary_exposure_aggregation == "max"
+    assert authority.primary_exposure == materialized_exposure
+    assert authority.primary_exposure_aggregation == ("max" if is_lactate else None)
     assert authority.target_outcome == "death"
     assert authority.outcome_concepts == ("los_icu", "death")
+    if not is_lactate:
+        # The configured strict column is admissible only while it remains in
+        # the sealed physical source roster; the broad proposal cannot replace it.
+        receipt_path = pipeline_input / "planner_catalog_receipt.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["selected_concepts"].remove(prepared_exposure)
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            agent_pipeline_runs._load_candidate_plan_materialization_authority(
+                study=study,
+                project_root=str(tmp_path),
+                source_run_id=source_run_id,
+                database="miiv",
+                covariates=("age",),
+            )
+        assert raised.value.code == "candidate_plan_materialization_authority_invalid"
 
 
 def test_public_composite_concept_resolves_to_one_materialization_source() -> None:
@@ -8428,7 +8456,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     result = runner(Job())
 
     assert calls["acquire"]["question"] == _complete_study()["question"]
-    expected_provider_timeout = 240.0 if budget_mode != "full_reviewed" else None
+    expected_provider_timeout = 480.0 if budget_mode != "full_reviewed" else None
     expected_provider_hard_timeout = (
         480.0 if budget_mode != "full_reviewed" else None
     )
@@ -9696,6 +9724,64 @@ def test_pipeline_bridge_cannot_approve_canary_when_route_is_bypassed(
         )
 
     assert exc.value.code == "research_pipeline_planner_canary_execution_blocked"
+    assert pipeline_called is False
+
+
+def test_pipeline_bridge_rejects_paused_legacy_kdigo_plan_before_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Review legacy KDIGO plan.",
+        authority_sha256="a" * 64,
+        payload={"reason": "operator_plan_approval_required"},
+    )
+    pending = HumanReviewPending(
+        run_id="run-legacy-kdigo",
+        thread_id="run-legacy-kdigo",
+        run_dir=str(tmp_path / "run-legacy-kdigo"),
+        requests=(request,),
+    )
+    pipeline_called = False
+
+    class _Pipeline:
+        _scientific_runtime_authorities = SimpleNamespace(
+            current_case=SimpleNamespace(exposure_column="aki_stage_max")
+        )
+
+        def resume_human_review(self, *_args: Any, **_kwargs: Any) -> Any:
+            nonlocal pipeline_called
+            pipeline_called = True
+            raise AssertionError("legacy KDIGO plan must not reach execution")
+
+    _install_pending_review(
+        monkeypatch,
+        agent_pipeline_runs._PendingRun(
+            pipeline=_Pipeline(),
+            pending=pending,
+            wrapper_dir=tmp_path,
+            study={
+                "id": "study-legacy-kdigo",
+                "execution_concepts": {"primary_exposure": "aki_stage"},
+            },
+            provider={},
+            acquisition=SimpleNamespace(),
+            created_at=1.0,
+        ),
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        agent_pipeline_runs.resume_research_pipeline(
+            run_id=pending.run_id,
+            study_context_id="study-legacy-kdigo",
+            decision="approved",
+            reviewer="server reviewer",
+            note="",
+            job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
+        )
+
+    assert exc.value.code == "research_pipeline_kdigo_observability_authority_missing"
     assert pipeline_called is False
 
 

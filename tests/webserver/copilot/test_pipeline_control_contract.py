@@ -53,12 +53,12 @@ def test_web_cancellation_crosses_the_structured_retry_boundary(cancel_before_ca
 @pytest.mark.parametrize(
     ("budget_mode", "expected"),
     [
-        ("planner_canary", (240.0, 480.0)),
-        ("candidate_plan", (240.0, 480.0)),
+        ("planner_canary", (480.0, 480.0)),
+        ("candidate_plan", (480.0, 480.0)),
         ("full_reviewed", (None, None)),
     ],
 )
-def test_provider_request_timeouts_preserve_a_separate_hard_stop(
+def test_provider_request_timeouts_preserve_the_development_ceiling(
     budget_mode: str,
     expected: tuple[float | None, float | None],
 ) -> None:

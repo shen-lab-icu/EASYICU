@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Mapping
 
 from easyicu.webserver import provider_adapter
@@ -107,7 +108,9 @@ def _require_profile_dictionaries(*, budget_mode: str) -> None:
             ) from exc
 
 
-def _require_execution_runtime(*, budget_mode: str, runner_image: str) -> None:
+def _require_execution_runtime(
+    *, budget_mode: str, runner_image: str, project_root: str | None = None,
+) -> None:
     """Refuse a launch whose execution backend is already known to be down.
 
     Whether the mandated container runtime can run is a static fact a bounded
@@ -138,6 +141,7 @@ def _require_execution_runtime(*, budget_mode: str, runner_image: str) -> None:
         availability = runner_module.probe_runner_availability(
             kind,
             image=(runner_image or runner_module.DockerRunner.DEFAULT_IMAGE),
+            workdir=Path(project_root) if project_root is not None else None,
         )
         if availability.available:
             continue

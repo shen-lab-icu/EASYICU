@@ -76,7 +76,7 @@ from easyicu.webserver import (
     run_artifact_disclosure,
 )
 from easyicu.webserver import study_contexts as study_context_owner
-from easyicu.webserver.plan_change_request import PlanChangeRequest
+from easyicu.webserver.plan_change_request import PlanChangeRequest, reference_plan_content
 from easyicu.research_agent.planning.population_requirements import (
     PlanPopulationRequirements, candidate_population_requirements,
 )
@@ -147,7 +147,11 @@ from easyicu.webserver.agent_review_recovery import (
 )
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
-_DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 240.0
+# Planner canaries use the same non-streaming OpenAI-compatible transport as
+# the loopback provider adapter.  That transport has no separate hard-timeout
+# argument, so a 240-second read timeout cancelled otherwise healthy loopback
+# requests before the existing 480-second development ceiling could apply.
+_DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 480.0
 _DEVELOPMENT_PROVIDER_REQUEST_HARD_TIMEOUT_SECONDS = 480.0
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
@@ -527,6 +531,7 @@ _SAFE_RUNNER_UNAVAILABLE_REASONS = frozenset(
         "docker_executable_missing",
         "docker_image_missing",
         "docker_probe_failed",
+        "docker_workspace_unavailable",
         "host_sandbox_missing",
     }
 )
@@ -892,6 +897,7 @@ def _write_pipeline_failure_projection(
             "failure_code": code,
             "failure_type": failure_type,
             "diagnostic_available": bool(diagnostic),
+            "provider_usage": _provider_usage_projection(wrapper_dir),
             "provider": provider_public,
             "path_values_returned": False,
             "analysis_started": False,
@@ -1074,6 +1080,7 @@ def _metadata_only_planning_catalog(
 ) -> Any:
     """Use the same source-aware menu for initial planning and restoration."""
     from easyicu.research_agent.acquisition.catalog import (
+        AvailableCatalog,
         build_available_catalog,
         build_database_capability_catalog,
     )
@@ -1082,15 +1089,40 @@ def _metadata_only_planning_catalog(
 
     catalog = build_database_capability_catalog(database)
     if export_path is not None:
+        package_path = Path(export_path).expanduser()
+        manifest_path = package_path / "easyicu_export_manifest.json"
+        entry_mode = ""
+        if manifest_path.is_file() and not manifest_path.is_symlink():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                manifest = {}
+            if isinstance(manifest, Mapping):
+                entry_mode = str(manifest.get("entry_mode") or "").strip()
         try:
-            source_catalog = build_available_catalog(Path(export_path).expanduser())
+            source_catalog = build_available_catalog(package_path)
         except (FileNotFoundError, OSError, ValueError):
             source_catalog = None
+        if entry_mode == "study_local_prepared_cohort":
+            # This source is the complete prepared input, not a raw database
+            # from which the later extraction owner can obtain more concepts.
+            # Advertising the database-wide menu here creates zero-row columns
+            # that a candidate plan mistakes for physically materialized data.
+            if source_catalog is None:
+                raise ResearchPipelineRunError(
+                    "research_pipeline_prepared_source_catalog_unavailable",
+                    "The bound prepared cohort has no verifiable physical concept catalog.",
+                )
+            catalog = AvailableCatalog(
+                source=source_catalog.source,
+                concepts=list(source_catalog.concepts),
+            )
         if source_catalog is not None:
-            by_id = {item.concept_id: item for item in catalog.concepts}
-            # Exact source metadata takes precedence without reading values.
-            by_id.update((item.concept_id, item) for item in source_catalog.concepts)
-            catalog.concepts = list(by_id.values())
+            if entry_mode != "study_local_prepared_cohort":
+                by_id = {item.concept_id: item for item in catalog.concepts}
+                # Exact source metadata takes precedence without reading values.
+                by_id.update((item.concept_id, item) for item in source_catalog.concepts)
+                catalog.concepts = list(by_id.values())
     # Source metadata may refine a supported concept or add a local variable,
     # but a physical column cannot revoke an explicit negative source contract.
     # Keep unknown local concepts: absence from the canonical menu alone is not
@@ -2411,46 +2443,9 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
 
 
 def _provider_usage_projection(wrapper_dir: Path) -> Optional[Dict[str, Any]]:
-    """Project aggregate Provider accounting without exposing request content."""
+    from easyicu.webserver.research_run_usage import research_run_usage
 
-    ledger_path = wrapper_dir / ".runtime" / "provider_hard_stop_ledger.json"
-    source = _read_json(ledger_path, {})
-    tasks = source.get("tasks") if isinstance(source, Mapping) else None
-    rows = [row for row in (tasks or []) if isinstance(row, Mapping)]
-    if not rows:
-        return None
-    try:
-        ledger_sha256 = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
-    except OSError:
-        ledger_sha256 = None
-    calls = [
-        call
-        for row in rows
-        for call in list(row.get("calls") or [])
-        if isinstance(call, Mapping)
-    ]
-    statuses = {_clean_text(row.get("status"), 80) for row in rows}
-    return {
-        "status": (
-            "completed"
-            if statuses == {"completed"}
-            else sorted(statuses)[0]
-            if len(statuses) == 1
-            else "mixed"
-        ),
-        "calls": len(calls),
-        "accounted_tokens": sum(
-            max(0, int(call.get("accounted_tokens") or 0)) for call in calls
-        ),
-        "estimated_cost_usd": round(
-            sum(
-                max(0.0, float(call.get("accounted_estimated_cost_usd") or 0.0))
-                for call in calls
-            ),
-            8,
-        ),
-        "ledger_sha256": ledger_sha256,
-    }
+    return research_run_usage(wrapper_dir)
 
 
 def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]:
@@ -3236,6 +3231,7 @@ def _write_projection(
             if provider.get(key) is not None
         },
         "path_values_returned": False,
+        "provider_usage": _provider_usage_projection(wrapper_dir),
     }
     payloads: Dict[str, Dict[str, Any]] = {
         "run_context.json": run_context,
@@ -3289,7 +3285,11 @@ def _write_projection(
             review_checkpoint=_read_json_with_digest(
                 run_dir / "human_review_checkpoint.json"
             ),
-            provider_usage=_provider_usage_projection(wrapper_dir),
+            provider_usage=(
+                source_manifest["provider_usage"]
+                if (source_manifest["provider_usage"] or {}).get("accounting_complete")
+                else None
+            ),
             projection_privacy_passed=True,
         )
         system_report_payload = system_report.model_dump(mode="json")
@@ -3739,52 +3739,32 @@ def _candidate_plan_contract(
     """Render a bounded seed for the package-bound Planner pass.
 
     The candidate Plan itself cannot execute because it was produced against a
-    zero-row capability catalog.  This compact projection preserves its exact
-    analysis and step roster while allowing the next Planner pass to replace
-    catalog coordinates with owner-issued columns from the sealed package.
+    zero-row capability catalog. Preserve its reviewable scientific choices
+    while the next Planner pass binds owner-issued package columns.
     """
-
-    steps = []
-    for raw in list(plan.get("steps") or ())[:32]:
-        if not isinstance(raw, Mapping):
-            continue
-        steps.append(
-            {
-                "step_id": _clean_text(raw.get("step_id"), 160),
-                "method": _clean_text(raw.get("method"), 160),
-                "role": _clean_text(raw.get("planned_analysis_role"), 80),
-                "inputs": [
-                    _clean_text(value, 160)
-                    for value in list(raw.get("inputs") or ())[:32]
-                    if _clean_text(value, 160)
-                ],
-                "outputs": [
-                    _clean_text(value, 160)
-                    for value in list(raw.get("expected_outputs") or ())[:32]
-                    if _clean_text(value, 160)
-                ],
-                "table_one_spec": raw.get("table_one_spec"),
-            }
+    seed_json = json.dumps(
+        reference_plan_content(plan),
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    )
+    if len(seed_json.encode("utf-8")) > 64_000:
+        raise ResearchPipelineRunError(
+            "candidate_plan_seed_too_large",
+            "The complete reviewable candidate exceeds the bounded Planner seed; no scientific requirements were truncated.",
         )
-    seed = {
-        "analysis_type": _clean_text(plan.get("analysis_type"), 160),
-        "cohort": plan.get("cohort") if isinstance(plan.get("cohort"), Mapping) else {},
-        "steps": steps,
-    }
     return "\n".join(
         (
             "DIGEST-BOUND CANDIDATE PLAN DATA-BINDING CONTRACT (host-derived):",
             f"- source_plan_sha256: {review.plan_sha256}",
             f"- source_context_sha256: {review.context_sha256}",
-            "- scope: generate a package-bound version of this accepted "
+            "- scope: generate a package-bound version of this reviewable "
             "metadata-only candidate; do not execute the old zero-row plan.",
             "- preserve the research question, cohort mode, analysis type, "
-            "scientific roles, and step roster unless the sealed package proves "
+            "endpoint, scientific roles, step roster, and typed sensitivity "
+            "and literature requirements unless the sealed package proves "
             "one item non-executable; disclose any required divergence.",
             "- replace proposal names only through owner-issued materialized "
             "coordinates; do not invent variables, definitions, or patient rows.",
-            "- candidate_plan_seed_json: "
-            + json.dumps(seed, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            "- candidate_plan_seed_json: " + seed_json,
         )
     )
 
@@ -3927,6 +3907,12 @@ def _load_candidate_plan_materialization_authority(
     proposed_primary_exposure = _clean_text(
         proposed.get("primary_exposure"), 160
     )
+    # The text parser supplies a proposal, while an explicitly configured
+    # StudyContext exposure is the digest-bound scientific coordinate.  A
+    # prepared source may materialize a more specific column than the broad
+    # concept named in the question (for example an observed strict stage).
+    # The capsule, selected source roster and zero-row schema below must all
+    # agree on that configured coordinate before it can be used.
     configured_primary_exposure = (
         _clean_text(_primary_exposure(study), 160) or proposed_primary_exposure
     )
@@ -3939,7 +3925,7 @@ def _load_candidate_plan_materialization_authority(
     source_required_concepts = tuple(
         dict.fromkeys(
             (
-                proposed_primary_exposure,
+                configured_primary_exposure,
                 _clean_text(proposed.get("target_outcome"), 160),
                 *requested_outcomes,
                 *covariates,
@@ -3972,12 +3958,9 @@ def _load_candidate_plan_materialization_authority(
         _clean_text(identity.get("question"), 1_200)
         != _clean_text(study.get("question"), 1_200)
         or _clean_text(identity.get("database"), 64) != database
-        # The natural-language intent owns the source concept while the
-        # metadata-only acquisition owner may expose a distinct, typed output
-        # column (for example ``aki_stage`` -> ``aki_stage_max``).  Compare
-        # each coordinate at its own authority boundary instead of treating
-        # the derived analysis column as a different scientific exposure.
-        or configured_primary_exposure != proposed_primary_exposure
+        # Compare the sealed analysis column with the explicit StudyContext
+        # source coordinate and its declared aggregation.  The text parser's
+        # broader proposal is not an authority to rename a prepared column.
         or primary_exposure != expected_primary_exposure
         or target_outcome != proposed.get("target_outcome")
         or target_outcome not in requested_outcomes
@@ -5692,6 +5675,24 @@ def resume_research_pipeline(
             "research_pipeline_review_study_mismatch",
             "The pending review belongs to a different research project.",
         )
+    if resolved == "approved":
+        from easyicu.webserver.scientific_runtime_projection import (
+            kdigo_observability_authority_missing,
+        )
+
+        runtime_authorities = getattr(
+            entry.pipeline, "_scientific_runtime_authorities", None
+        )
+        runtime_authority = getattr(runtime_authorities, "current_case", None)
+        materialized_exposure = getattr(runtime_authority, "exposure_column", None)
+        if kdigo_observability_authority_missing(
+            _primary_exposure(entry.study), materialized_exposure
+        ):
+            raise ResearchPipelineRunError(
+                "research_pipeline_kdigo_observability_authority_missing",
+                "This KDIGO plan uses a legacy exposure that can collapse incomplete observation evidence into stage 0. Regenerate it against the strict KDIGO materialization.",
+                details={"required_binding": "aki_stage_strict"},
+            )
     if resolved == "approved" and current_study_context is not None:
         planned_digest = study_context_owner.scientific_configuration_sha256(
             entry.study

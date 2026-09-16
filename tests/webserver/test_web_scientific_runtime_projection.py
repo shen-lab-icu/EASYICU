@@ -74,7 +74,9 @@ def _universe(tmp_path):
     return path
 
 
-def test_web_routes_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
+def test_web_rejects_legacy_kdigo_landmark_without_observability_authority(
+    tmp_path,
+) -> None:
     universe = tmp_path / "kdigo_universe.parquet"
     pd.DataFrame(
         {
@@ -100,11 +102,54 @@ def test_web_routes_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
         }
     )
 
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(
+            study={"covariate_selection": "exact"},
+            sensitivity_specs=(landmark,),
+            primary_exposure="aki_stage_max",
+            primary_exposure_source="aki_stage",
+            target_outcome="death",
+            declared_covariates=("age", "sex"),
+            covariate_operationalizations={},
+            target_is_event_status=True,
+            universe_path=universe,
+            scientific_configuration_sha256="f" * 64,
+        )
+
+    assert caught.value.code == "web_kdigo_observability_authority_missing"
+
+
+def test_web_routes_strict_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
+    universe = tmp_path / "strict_kdigo_universe.parquet"
+    pd.DataFrame(
+        {
+            "aki_stage_strict": pd.Series([0, 1], dtype="int64"),
+            "death": pd.Series([0, 1], dtype="int64"),
+            "death_time_hours": [float("nan"), 72.0],
+            "hospital_followup_time_hours": [96.0, 72.0],
+            "age": [50.0, 70.0],
+            "sex": ["F", "M"],
+        }
+    ).to_parquet(universe, index=False)
+    landmark = PrespecifiedSensitivitySpec.model_validate(
+        {
+            "spec_id": "landmark_24h",
+            "axis": "timing",
+            "strategy": "landmark",
+            "landmark_hours": 24,
+            "require_alive_at_landmark": True,
+            "exclude_negative_event_times": True,
+            "event_time_variable": "death_time_hours",
+            "observation_duration_variable": "hospital_followup_time_hours",
+            "observation_duration_unit": "hours",
+        }
+    )
+
     projection = compile_web_scientific_runtime_projection(
         study={"covariate_selection": "exact"},
         sensitivity_specs=(landmark,),
-        primary_exposure="aki_stage_max",
-        primary_exposure_source="aki_stage",
+        primary_exposure="aki_stage_strict",
+        primary_exposure_source="kdigo_aki",
         target_outcome="death",
         declared_covariates=("age", "sex"),
         covariate_operationalizations={},
@@ -121,6 +166,112 @@ def test_web_routes_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
     assert authority.exposure_levels == ("0", "1", "2", "3")
     assert authority.exposure_reference_level == "0"
     assert authority.primary_contrast_level == "3"
+
+
+def _categorical_grid_case(tmp_path):
+    universe = tmp_path / "strict_kdigo_grid.parquet"
+    pd.DataFrame(
+        {
+            "aki_stage_strict": pd.Series([0, 1, 2, 3], dtype="Int64"),
+            "aki_stage_creat_strict": pd.Series([0, 1, None, 3], dtype="Int64"),
+            "aki_stage_uo_strict": pd.Series([0, None, 2, 3], dtype="Int64"),
+            "aki_stage_reference": pd.Series([0, 1, 2, None], dtype="Int64"),
+            "death": [0, 0, 1, 1],
+            "death_time_hours": [float("nan"), float("nan"), 60.0, 48.0],
+            "hospital_followup_time_hours": [96.0, 96.0, 60.0, 48.0],
+            "age": [50.0, 60.0, 70.0, 80.0],
+            "sex": ["F", "M", "F", "M"],
+            "charlson_first": [1.0, 2.0, 3.0, 4.0],
+        }
+    ).to_parquet(universe, index=False)
+    specs = [PrespecifiedSensitivitySpec.model_validate({
+        "spec_id": "landmark_24h", "axis": "timing", "strategy": "landmark",
+        "landmark_hours": 24, "require_alive_at_landmark": True,
+        "exclude_negative_event_times": True,
+        "event_time_variable": "death_time_hours",
+        "observation_duration_variable": "hospital_followup_time_hours",
+        "observation_duration_unit": "hours",
+    })]
+    for spec_id, source in (
+        ("creatinine_only", "aki_stage_creat_strict"),
+        ("urine_only", "aki_stage_uo_strict"),
+        ("reference_definition", "aki_stage_reference"),
+    ):
+        specs.append(PrespecifiedSensitivitySpec.model_validate({
+            "spec_id": spec_id, "axis": "exposure_definition",
+            "strategy": "alternate_exposure", "execution_variables": [source],
+        }))
+    for spec_id, source in (("age_form", "age"), ("charlson_form", "charlson")):
+        specs.append(PrespecifiedSensitivitySpec.model_validate({
+            "spec_id": spec_id, "axis": "functional_form",
+            "strategy": "restricted_cubic_spline", "execution_variables": [source],
+        }))
+    return {
+        "study": {"covariate_selection": "exact"},
+        "sensitivity_specs": tuple(specs),
+        "primary_exposure": "aki_stage_strict",
+        "primary_exposure_source": "kdigo_aki",
+        "target_outcome": "death",
+        "declared_covariates": ("age", "sex", "charlson"),
+        "covariate_operationalizations": {"charlson": "charlson_first"},
+        "target_is_event_status": True,
+        "universe_path": universe,
+        "scientific_configuration_sha256": "f" * 64,
+    }
+
+
+def test_web_compiles_categorical_alternate_exposures_and_covariate_forms(tmp_path):
+    projection = compile_web_scientific_runtime_projection(
+        **_categorical_grid_case(tmp_path)
+    )
+
+    assert projection is not None
+    authority = load_current_case_scientific_runtime_authority(projection.authority)
+    assert isinstance(authority, LandmarkCategoricalAssociationRuntimeAuthority)
+    assert authority.schema_version.endswith("/2")
+    grid = authority.association_model_grid
+    assert grid is not None
+    assert [variant.analysis_id for variant in grid.variants] == [
+        "reference", "creatinine_only", "urine_only", "reference_definition",
+        "age_form", "charlson_form",
+    ]
+    assert grid.sensitivity_ids == (
+        "creatinine_only", "urine_only", "reference_definition",
+        "age_form", "charlson_form",
+    )
+    assert [variant.exposure_column for variant in grid.variants[1:4]] == [
+        "aki_stage_creat_strict", "aki_stage_uo_strict", "aki_stage_reference",
+    ]
+    assert [variant.nonlinear_terms[0].source_column for variant in grid.variants[4:]] == [
+        "age", "charlson_first",
+    ]
+    assert grid.parent_product == authority.primary_product
+
+
+def test_web_categorical_grid_requires_materialized_alternate_column(tmp_path):
+    coordinates = _categorical_grid_case(tmp_path)
+    universe = coordinates["universe_path"]
+    pd.read_parquet(universe).drop(columns="aki_stage_uo_strict").to_parquet(
+        universe, index=False
+    )
+
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(**coordinates)
+
+    assert caught.value.code == "web_scientific_runtime_columns_missing"
+    assert caught.value.details["missing_columns"] == ["aki_stage_uo_strict"]
+
+
+def test_web_categorical_grid_rejects_incompatible_exposure_definition(tmp_path):
+    coordinates = _categorical_grid_case(tmp_path)
+    specs = list(coordinates["sensitivity_specs"])
+    specs[1] = specs[1].model_copy(update={"execution_variables": ("age",)})
+    coordinates["sensitivity_specs"] = tuple(specs)
+
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(**coordinates)
+
+    assert caught.value.code == "web_model_grid_exposure_definition_incompatible"
 
 
 @pytest.mark.parametrize("duration_unit", ["days", "hours"])

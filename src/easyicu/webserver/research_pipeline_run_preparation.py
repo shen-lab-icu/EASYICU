@@ -528,6 +528,7 @@ def _prepare_launch_execution(
     _require_execution_runtime(
         budget_mode=budget_mode,
         runner_image=selected_runner_image,
+        project_root=request.project_root,
     )
     if not scientific.metadata_only_planning and any(
         spec.strategy == "time_varying" for spec in scientific.sensitivity_specs

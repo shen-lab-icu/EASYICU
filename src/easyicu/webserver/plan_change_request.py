@@ -40,22 +40,32 @@ def reference_plan_content(plan: Mapping[str, Any]) -> dict[str, Any]:
     """
     projected = {key: plan[key] for key in (
         "research_question", "analysis_type", "cohort", "endpoint", "robustness_specs",
-        "subgroup_analysis_spec", "display_labels",
+        "subgroup_analysis_spec", "display_labels", "evalue_conversion_spec",
+        "know_how_decisions", "rationale", "revision",
     ) if key in plan}
     selection = plan.get("design_selection")
     if isinstance(selection, Mapping):
         projected["design_selection"] = [
             {key: candidate[key] for key in (
                 "design_id", "disposition", "estimand", "time_zero", "observation_window",
-                "primary_method", "required_variables",
+                "analysis_type", "primary_method", "required_variables", "assumptions",
+                "literature_citation_keys", "literature_design_decisions",
+                "novelty_positioning", "figure_role", "supports", "cannot_prove",
+                "reviewable_plan", "decision_reason",
             ) if key in candidate}
             for candidate in selection.get("candidates", ()) if isinstance(candidate, Mapping)
         ]
     projected["steps"] = [
         {key: step[key] for key in (
             "step_id", "planned_analysis_role", "intent", "method", "inputs", "expected_outputs",
-            "table_one_spec", "model_requirements", "cohort_definition_spec", "functional_form_spec",
-            "population_scope", "population_scope_change_reason", "scientific_action_id", "literature_citation_keys",
+            "table_one_spec", "model_requirements", "family_primary_result_requirement",
+            "cohort_definition_spec", "functional_form_spec", "descriptive_claim",
+            "trajectory_stability_spec", "exposure_outcome_distribution_spec",
+            "phenotyping_feature_columns", "phenotype_comparison_spec", "figure_panels",
+            "measurement_audit_spec", "robustness_replay_spec", "sensitivity_spec_ids",
+            "population_scope", "population_scope_change_reason", "scientific_action_id",
+            "scientific_capability", "icu_rule_refs", "literature_citation_keys",
+            "literature_design_bindings",
         ) if key in step}
         for step in plan.get("steps", ()) if isinstance(step, Mapping)
     ]
