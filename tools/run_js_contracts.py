@@ -60,6 +60,8 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_classic_exit.test.js": [],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
+    # Receives the static JavaScript directory and loads its owner graph itself.
+    "guided_pi_study_results.test.js": ["."],
     # Loads the module registry and plan-confirmation owner itself; takes no arguments.
     "guided_plan_resource_authority.test.js": [],
     "guided_pi_modules.test.js": ["screens-guided-pi-modules.js"],
@@ -137,7 +139,7 @@ def main(argv: list[str]) -> int:
             continue
         owners = [JS / owner for owner in CONTRACTS[name]]
         for owner in owners:
-            assert owner.is_file(), f"{name}: {owner.name} does not exist"
+            assert owner.exists(), f"{name}: {owner.name} does not exist"
         result = subprocess.run(
             ["node", str(TESTS / name), *[str(owner) for owner in owners]],
             capture_output=True,

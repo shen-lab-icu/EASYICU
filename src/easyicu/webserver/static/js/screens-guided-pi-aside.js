@@ -107,19 +107,33 @@
       const nextCaption = nextIsActionable
         ? tr('Next step', '下一步')
         : tr('Later stage', '后续阶段');
-      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Research progress', '研究进度')}</div><div class="asub">${host.demoMode() ? tr('Read-only view of one registered run.', '一个已登记运行的只读预览。') : tr('Question, data, plan, and results stay together in this project.', '问题、数据、计划与结果都保存在当前项目中。')}</div>`;
-      body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
+      const results = !host.demoMode() && host.resultsHtml ? host.resultsHtml() : '';
+      const pending = !host.demoMode() && host.hasPendingReview && host.hasPendingReview();
+      const reviewAction = !host.demoMode() && host.reviewActionHtml ? host.reviewActionHtml() : '';
+      // Keep the user's stage-list preference across workflow refreshes.
+      const previous = body.querySelector && body.querySelector('.gd-pipeline-disclosure');
+      const expanded = previous && previous.open;
+      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Current study', '当前研究')}</div><div class="asub">${host.demoMode() ? tr('Read-only view of one registered run.', '一个已登记运行的只读预览。') : tr('Progress, pending decisions and results.', '进度、待办与成果。')}</div>`;
+      body.innerHTML = `${results}
+      <div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
         <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
-        <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
-        <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
-        ${next ? `<div class="gd-pipeline-next"><span>${nextCaption}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
+        ${pending ? `<button type="button" class="btn sm gpi-study-pending" data-gpi-aside-pending>${tr('View pending decision', '查看待确认事项')}</button>` : !results && reviewAction ? `<div class="gpi-study-pending">${reviewAction}</div>` : ''}
+        ${next && !results ? `<div class="gd-pipeline-next"><span>${nextCaption}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
       </div>
-      <details class="gd-pipeline-disclosure" open><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${stages.length}</small></summary><div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
+      <details class="gd-pipeline-disclosure"${expanded ? ' open' : ''}><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${done}/${total}</small></summary>
+      <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
+      <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
+      <div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
         const optional = stage.required_for_completion === false;
         const status = stage.status === 'complete' ? 'done' : stage.status === 'optional' ? 'optional' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
         const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
         return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}${optional ? tr(' · Optional', ' · 可选') : ''}</div></div></div>`;
       }).join('')}</div></details>`;
+      body.onclick = event => {
+        const resource = event.target.closest('[data-gpi-resource-kind]');
+        if (resource && host.openResource) { host.openResource(resource); return; }
+        if (event.target.closest('[data-gpi-aside-pending]') && host.revealPendingReview) host.revealPendingReview();
+      };
     }
 
     return { syncProjectWorkflowAside };

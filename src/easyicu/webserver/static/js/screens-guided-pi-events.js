@@ -7,7 +7,7 @@
   function create(options) {
     const {
       state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
-      DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
+      DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, render, projectId, previewWorkflowContext,
       openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
       openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
       loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
@@ -47,6 +47,42 @@
       return '';
     }
 
+    function openResourceButton(resource) {
+      openResource(RESOURCE_OWNER.fromButton(resource));
+    }
+
+    function openResource(descriptor) {
+      const preview = window.EasyICU.guidedPi.optional('preview');
+      if (!preview || !preview.open) return;
+      if (preview.open(descriptor, projectId(), previewWorkflowContext()) !== true) return;
+      const actionCode = reviewActionCode(descriptor);
+      if (actionCode) void recordHostAction(actionCode,
+        [String((descriptor && descriptor.run_id) || projectId()), String(descriptor.artifact || 'report')].join(':'));
+    }
+
+    function referenceResource(descriptor, expectedProjectId) {
+      if (projectId() !== expectedProjectId || !state.session || state.busy || state.childJobId) return false;
+      if (!STUDY_WORKSPACE.setReference(descriptor, projectId(), state.session.session_id)) return false;
+      const input = state.host && state.host.querySelector('[data-gpi-input]');
+      if (input) state.draft = input.value;
+      const preview = window.EasyICU.guidedPi.optional('preview');
+      if (preview) preview.close();
+      render(true);
+      requestAnimationFrame(() => {
+        const composer = state.host && state.host.querySelector('[data-gpi-input]');
+        if (composer) { composer.focus(); composer.scrollIntoView({ block: 'nearest' }); }
+      });
+      return true;
+    }
+
+    function revealPendingReview() {
+      const card = state.host && state.host.querySelector('.gpi-confirmation');
+      if (!card) return;
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      card.setAttribute('tabindex', '-1');
+      card.focus({ preventScroll: true });
+    }
+
     function prepareEntryCompose(action) {
       state.draft = action.text;
       state.pendingEntryIntent = action.intent;
@@ -64,6 +100,7 @@
       if (!state.host) return;
       state.host.addEventListener('click', event => {
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
+        if (event.target.closest('[data-gpi-reference-remove]')) { STUDY_WORKSPACE.removeReference(); render(true); return; }
         if (event.target.closest('[data-gpi-refresh-status]')) { loadStatus(); return; }
         if (IDEA_SOURCE && IDEA_SOURCE.handleClick(event, {
           host: () => state.host, render, tr,
@@ -74,21 +111,7 @@
         if (event.target.closest('[data-gpi-demo]')) { openDemo(); return; }
         const resource = event.target.closest('[data-gpi-resource-kind]');
         if (resource) {
-          const descriptor = RESOURCE_OWNER.fromButton(resource);
-          const preview = window.EasyICU.guidedPi.optional('preview');
-          if (preview && preview.open) {
-            preview.open(
-              descriptor, projectId(), previewWorkflowContext(),
-            );
-            const artifact = String((descriptor && descriptor.artifact) || '');
-            const actionCode = reviewActionCode(descriptor);
-            if (actionCode) {
-              void recordHostAction(
-                actionCode,
-                [String((descriptor && descriptor.run_id) || projectId()), artifact || 'report'].join(':'),
-              );
-            }
-          }
+          openResourceButton(resource);
           return;
         }
         const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
@@ -296,7 +319,7 @@
       });
     }
 
-    return Object.freeze({ dismissHeaderOverflow, wire });
+    return Object.freeze({ dismissHeaderOverflow, wire, openResource, openResourceButton, referenceResource, revealPendingReview });
   }
 
   window.EasyICU.guidedPi.declare('events', { create });
