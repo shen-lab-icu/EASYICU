@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 
 import pytest
 
@@ -92,6 +93,61 @@ def test_a_ready_runtime_is_not_an_obstacle(monkeypatch: pytest.MonkeyPatch) -> 
         budget_mode="full_reviewed",
         runner_image="easyicu-research-agent:1.0.0",
     )
+
+
+@pytest.mark.parametrize("result_kind", ["roundtrip", "missing_output", "wrong_output", "mount_denied", "timeout"])
+def test_workspace_probe_requires_a_real_roundtrip_and_cleans_up(monkeypatch, tmp_path, result_kind):
+    commands = []
+    monkeypatch.setattr(runner_module, "resolve_docker_executable", lambda _: "docker")
+
+    def run(command, **kwargs):
+        commands.append(command)
+        assert kwargs["timeout"] <= 5
+        if command[1] == "image":
+            return SimpleNamespace(returncode=0, stdout="sha256:" + "a" * 64, stderr="")
+        if command[1] == "rm":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert "--network=none" in command and "--read-only" in command
+        assert "--pull=never" in command and "--cap-drop=ALL" in command
+        assert "--entrypoint=python" in command
+        assert "sha256:" + "a" * 64 in command
+        mount = command[command.index("--mount") + 1]
+        directory = Path(mount.split("src=", 1)[1].split(",dst=", 1)[0])
+        assert directory.parent == tmp_path.resolve()
+        assert directory != tmp_path.resolve()
+        if result_kind == "timeout":
+            raise subprocess.TimeoutExpired(command, 5)
+        if result_kind in {"roundtrip", "wrong_output"}:
+            (directory / "output").write_bytes(
+                (directory / "input").read_bytes() if result_kind == "roundtrip" else b"wrong"
+            )
+        return SimpleNamespace(returncode=125 if result_kind == "mount_denied" else 0, stdout="", stderr=_SOCKET_PATH)
+
+    monkeypatch.setattr(runner_module, "_run_with_bounded_output", run)
+    result = runner_module.probe_runner_availability("docker", image="easyicu:test", workdir=tmp_path)
+    assert result.available is (result_kind == "roundtrip")
+    if not result.available:
+        assert result.reason_code == "docker_workspace_unavailable"
+    assert _SOCKET_PATH not in repr(result)
+    assert list(tmp_path.iterdir()) == []
+    if result_kind == "timeout":
+        assert commands[-1][1:3] == ["rm", "--force"]
+        assert commands[-1][-1] in commands[1][3]
+
+
+def test_execution_preflight_passes_exact_project_root_to_probe(monkeypatch, tmp_path):
+    seen = []
+    def probe(kind, **kwargs):
+        seen.append(kwargs["workdir"])
+        return _unavailable("docker_workspace_unavailable")
+    monkeypatch.setattr(runner_module, "probe_runner_availability", probe)
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as error:
+        research_launch_runtime._require_execution_runtime(
+            budget_mode="full_reviewed", runner_image="easyicu:test", project_root=str(tmp_path),
+        )
+    assert seen == [tmp_path]
+    assert error.value.details["reason_code"] == "docker_workspace_unavailable"
+    assert "file sharing" in str(error.value)
 
 
 def test_a_planner_only_launch_never_asks_for_a_container_runtime(

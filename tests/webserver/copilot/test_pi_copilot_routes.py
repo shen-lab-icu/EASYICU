@@ -620,11 +620,15 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
         json={
             "project_id": "guided-project-1",
             "message": "Save setup and inspect aggregate validation",
-            "allowed_actions": ["configure", "run"],
+            "allowed_actions": ["configure", "run", "report_revision"],
         },
     )
     assert accepted.status_code == 200
-    assert accepted.json()["received"]["allowed_actions"] == ["configure", "run"]
+    assert accepted.json()["received"]["allowed_actions"] == [
+        "configure",
+        "run",
+        "report_revision",
+    ]
 
     continued = client.post(
         "/api/copilot/pi/sessions/pi-test/message",

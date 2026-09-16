@@ -31,6 +31,54 @@ def test_source_merge_preserves_negative_contract_and_local_metadata(source_menu
     assert source_menu.ids() == ["icu_readmission", "local_measurement", "death"]
 
 
+def test_prepared_cohort_menu_contains_only_physical_source_columns(
+    source_menu, tmp_path, monkeypatch,
+):
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_database_capability_catalog",
+        lambda _: AvailableCatalog(
+            source="canonical",
+            concepts=[CatalogConcept("death"), CatalogConcept("crea")],
+        ),
+    )
+    (tmp_path / "easyicu_export_manifest.json").write_text(
+        json.dumps({"entry_mode": "study_local_prepared_cohort"}),
+        encoding="utf-8",
+    )
+
+    catalog = owner._metadata_only_planning_catalog(
+        database="miiv", export_path=tmp_path,
+    )
+
+    assert catalog.ids() == ["local_measurement", "death"]
+    assert source_menu.ids() == ["icu_readmission", "local_measurement", "death"]
+
+
+def test_prepared_cohort_without_verifiable_catalog_fails_closed(
+    tmp_path, monkeypatch,
+):
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    (tmp_path / "easyicu_export_manifest.json").write_text(
+        json.dumps({"entry_mode": "study_local_prepared_cohort"}),
+        encoding="utf-8",
+    )
+    def invalid_catalog(_):
+        raise ValueError("invalid package")
+
+    monkeypatch.setattr(catalog_module, "build_available_catalog", invalid_catalog)
+
+    with pytest.raises(ResearchPipelineRunError) as caught:
+        owner._metadata_only_planning_catalog(
+            database="miiv", export_path=tmp_path,
+        )
+
+    assert caught.value.code == "research_pipeline_prepared_source_catalog_unavailable"
+
+
 @pytest.mark.parametrize("requirement", [
     {"required_concepts": ("icu_readmission",)},
     {"target_outcome": "icu_readmission"},
