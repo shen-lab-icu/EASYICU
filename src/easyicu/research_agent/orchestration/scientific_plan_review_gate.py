@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from ..authority.current_case_scientific_runtime import (
+    CurrentCaseScientificRuntimeAuthority,
+)
 from ..authority.evidence_store import EvidenceStore
 from ..contracts.runtime import _PlanPhaseResult
 from ..literature import LiteratureBundle
@@ -318,6 +321,7 @@ def prepare_scientific_plan_review_gate(
     evidence: EvidenceStore,
     require_reportable_capability: bool = False,
     reuse_existing_review: bool = False,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> ScientificPlanReviewGate:
     """Build, bind, and project the exact review offered to a human."""
 
@@ -327,6 +331,7 @@ def prepare_scientific_plan_review_gate(
         literature=literature,
         figure_strategy=figure_strategy,
         require_reportable_capability=require_reportable_capability,
+        runtime_authority=runtime_authority,
     )
     review, artifact_path = persist_or_validate_scientific_plan_review(
         run_dir=run_dir,

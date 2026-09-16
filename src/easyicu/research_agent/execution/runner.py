@@ -3289,6 +3289,7 @@ RUNNER_UNAVAILABLE_REASON_CODES = frozenset(
         "docker_executable_missing",
         "docker_image_missing",
         "docker_probe_failed",
+        "docker_workspace_unavailable",
         "host_sandbox_missing",
     }
 )
@@ -3310,6 +3311,10 @@ _RUNNER_UNAVAILABLE_REMEDIATION = {
     "docker_probe_failed": (
         "The Docker probe failed or returned an invalid response. Check the "
         "Docker context, permissions and runtime health; image absence was not established."
+    ),
+    "docker_workspace_unavailable": (
+        "The execution workspace is not readable and writable inside Docker. "
+        "Check Docker or Colima file sharing and workspace permissions, then retry."
     ),
     "host_sandbox_missing": (
         "macOS 'sandbox-exec' was not found, so no filesystem-isolating host "
@@ -3394,6 +3399,7 @@ def probe_runner_availability(
     image: Optional[str] = None,
     docker_executable: Optional[str] = None,
     probe_timeout_seconds: float = 5.0,
+    workdir: Optional[Path] = None,
 ) -> RunnerAvailability:
     """Answer whether ``kind`` can run generated code, without running any.
 
@@ -3455,6 +3461,12 @@ def probe_runner_availability(
         )
     image_id = str(probe.stdout or "").strip()
     if probe.returncode == 0 and image_id.startswith("sha256:"):
+        if workdir is not None:
+            return _probe_docker_workspace(
+                executable=resolved_docker, image_id=image_id,
+                image=runtime_image, workdir=workdir,
+                timeout=max(0.1, float(probe_timeout_seconds)),
+            )
         return RunnerAvailability(kind=kind, available=True, image=runtime_image)
     return RunnerAvailability(
         kind=kind,
@@ -3465,6 +3477,67 @@ def probe_runner_availability(
         ),
         probe_phase="image_inspect",
         exit_code=probe.returncode,
+    )
+
+
+def _probe_docker_workspace(
+    *, executable: str, image_id: str, image: str, workdir: Path, timeout: float,
+) -> RunnerAvailability:
+    """Round-trip a synthetic marker through the actual workspace mount.
+
+    Only the temporary probe directory is shared; patient files and existing
+    artifacts are never exposed. Inspecting an image alone cannot detect an
+    unshared Colima directory or a read-only bind mount.
+    """
+
+    name = f"easyicu-workspace-probe-{uuid.uuid4().hex}"
+    available = False
+    try:
+        root = Path(workdir).expanduser().resolve(strict=True)
+        _reject_docker_mount_field(str(root), label="workspace")
+        with tempfile.TemporaryDirectory(prefix=".easyicu-runtime-probe-", dir=root) as tmp:
+            directory = Path(tmp)
+            token = uuid.uuid4().hex
+            (directory / "input").write_text(token, encoding="ascii")
+            command = [
+                executable, "run", "--rm", f"--name={name}", "--pull=never",
+                "--network=none", "--read-only", "--cap-drop=ALL",
+                "--security-opt=no-new-privileges", "--memory=128m",
+                "--memory-swap=128m", "--cpus=1", "--pids-limit=32",
+            ]
+            if os.name == "posix":
+                command.append(f"--user={os.getuid()}:{os.getgid()}")
+            command.extend([
+                "--mount", f"type=bind,src={directory},dst=/probe",
+                "--entrypoint=python", image_id, "-I", "-S", "-c",
+                "from pathlib import Path; "
+                "Path('/probe/output').write_bytes(Path('/probe/input').read_bytes())",
+            ])
+            try:
+                result = _run_with_bounded_output(
+                    command, text=True, timeout=timeout, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                # A timed-out CLI may leave a running container. Remove only
+                # this probe's unique name, never a research container.
+                try:
+                    _run_with_bounded_output(
+                        [executable, "rm", "--force", name],
+                        text=True, timeout=timeout, check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                raise
+            output = directory / "output"
+            available = (
+                result.returncode == 0 and not output.is_symlink()
+                and output.is_file() and output.read_bytes() == token.encode("ascii")
+            )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        available = False
+    return RunnerAvailability(
+        kind="docker", available=available, image=image,
+        reason_code="" if available else "docker_workspace_unavailable",
     )
 
 

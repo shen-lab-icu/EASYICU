@@ -103,6 +103,35 @@ def test_secondary_performance_comparator_does_not_become_direct_comparator():
     assert decision.evidence_role == "related_context"
 
 
+def test_adjustment_covariate_does_not_become_studied_exposure():
+    record = CitationRecord(
+        key="urine_output_adjusted_for_aki",
+        year="2023",
+        title="Urine output for predicting in-hospital mortality in ICU patients",
+        relevance=(
+            "Study-design excerpt: We evaluated urine output as a predictor of "
+            "in-hospital mortality in ICU patients. After adjusting for "
+            "confounding factors including diuretic use and acute kidney injury, "
+            "urine output remained an independent risk factor."
+        ),
+        publication_types=["Observational Study"],
+    )
+
+    decision = screen_source_backed_direct_comparator(
+        exposure="acute kidney injury",
+        outcome="in-hospital mortality",
+        adult_required=False,
+        record=record,
+        source="pubmed",
+        query="focused query",
+    )
+
+    assert decision.population_match
+    assert decision.outcome_match
+    assert not decision.exposure_match
+    assert decision.evidence_role == "related_context"
+
+
 def test_inhospital_mortality_spelling_matches_declared_outcome():
     record = CitationRecord(
         key="inhospital_spelling",

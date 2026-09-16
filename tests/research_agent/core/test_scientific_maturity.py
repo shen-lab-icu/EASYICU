@@ -151,6 +151,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
         "analysis_rows": [
             {
                 "analysis_id": "primary",
+                "exposure": "severity",
                 "n_stays": 100,
                 "estimate": 1.5,
                 "ci_low": 1.2,
@@ -163,6 +164,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
             },
             {
                 "analysis_id": "landmark",
+                "exposure": "severity",
                 "n_stays": 90,
                 "estimate": 1.6,
                 "ci_low": 1.3,
@@ -175,6 +177,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
             },
             {
                 "analysis_id": "first_stay",
+                "exposure": "severity",
                 "n_stays": 85,
                 "estimate": 1.55,
                 "ci_low": 1.25,
@@ -187,6 +190,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
             },
             {
                 "analysis_id": "flexible",
+                "exposure": "severity",
                 "n_stays": 100,
                 "estimate": 1.48,
                 "ci_low": 1.18,
@@ -197,11 +201,24 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
                 "readmission_restriction": "all_stays",
                 "fitted_covariates": "age_spline_1;age_spline_2;score",
             },
+            {
+                "analysis_id": "alternate_definition",
+                "exposure": "severity_other",
+                "n_stays": 100,
+                "estimate": 1.5,
+                "ci_low": 1.2,
+                "ci_high": 1.8,
+                "landmark_hours": None,
+                "alive_at_landmark_required": False,
+                "negative_event_times_excluded": False,
+                "readmission_restriction": "all_stays",
+                "fitted_covariates": "age;score",
+            },
         ],
         "basis_receipts": {"flexible": [{"basis": "natural_cubic_spline"}]},
         "scientific_runtime_receipt": {
             "schema_version": "easyicu.association_model_grid_runtime_receipt/1",
-            "variant_ids": ["primary", "landmark", "first_stay", "flexible"],
+            "variant_ids": ["primary", "landmark", "first_stay", "flexible", "alternate_definition"],
             "reference_variant_id": "primary",
         },
     }
@@ -226,8 +243,8 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
 
     facts = _robustness_facts(tmp_path, None)
 
-    assert facts["declared_axes"] == ["cohort", "model", "timing"]
-    assert facts["variant_count"] == 3
+    assert facts["declared_axes"] == ["cohort", "exposure_definition", "model", "timing"]
+    assert facts["variant_count"] == 4
     assert facts["all_variants_duplicate_primary"] is False
     assert facts["registered_robustness_evidence_refs"] == [
         "evidence/statistic_grid__step_summary.json"

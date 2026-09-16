@@ -13,6 +13,7 @@ from typing import Sequence
 
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
+    LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
 )
 from ..contracts.association_execution import (
@@ -28,6 +29,7 @@ from ..schema import (
     ValidationFinding,
 )
 from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY, PrespecifiedSensitivitySpec
+from .adjustment_authority import AdjustmentSetAuthority
 
 
 _PREFERRED_METHOD_BY_STRATEGY = {
@@ -153,6 +155,15 @@ def ensure_prespecified_sensitivity_steps(
     }
     already_executed.update(_locked_complete_case_spec_ids(plan))
     already_executed.update(primary_covered)
+    if isinstance(runtime_authority, LandmarkCategoricalAssociationRuntimeAuthority):
+        grid = runtime_authority.association_model_grid
+        if grid is not None:
+            already_executed.update(grid.covered_prespecified_spec_ids(
+                specs,
+                operationalizations=dict(
+                    AdjustmentSetAuthority.from_context(context).operationalizations
+                ),
+            ))
     missing = [
         spec
         for spec in specs

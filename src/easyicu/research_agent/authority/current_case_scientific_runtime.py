@@ -130,6 +130,16 @@ class _AuthorityBase(BaseModel):
             legacy.pop("time_varying_interval_cutpoints_days", None)
             legacy.pop("time_varying_cox_product", None)
             observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
+            and body.get("authority_kind") == "landmark_categorical_association"
+            and body.get("schema_version")
+            == "easyicu.landmark_categorical_association_runtime_authority/1"
+            and body.get("association_model_grid") is None
+        ):
+            legacy = dict(body)
+            legacy.pop("association_model_grid", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
         if observed != self.execution_contract_sha256:
             raise ValueError(
                 "current-run scientific execution-contract digest mismatch"
@@ -306,6 +316,9 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             "analysis_id",
             "n_stays",
             "n_events",
+            "exposure_evaluable_n",
+            "exposure_missing_n",
+            "fit_excluded_after_exposure_n",
             "estimate",
             "ci_low",
             "ci_high",
@@ -323,9 +336,52 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
 
     @property
     def sensitivity_ids(self) -> Tuple[str, ...]:
-        return tuple(item.analysis_id for item in self.variants)
+        # The reference row is the signed primary model, not a separately
+        # prespecified sensitivity. Keep it in the output grid, but never
+        # claim a nonexistent StudyContext sensitivity id on the plan step.
+        return tuple(
+            item.analysis_id
+            for item in self.variants
+            if item.analysis_id != self.reference_variant_id
+        )
 
-    def _parent(self, plan: AnalysisPlan) -> AnalysisStep:
+    def covered_prespecified_spec_ids(
+        self,
+        specs: Tuple[Any, ...] | list[Any],
+        *,
+        operationalizations: Mapping[str, str],
+    ) -> set[str]:
+        """Match declared sensitivity coordinates to sealed grid variants."""
+
+        by_id = {variant.analysis_id: variant for variant in self.variants}
+        covered: set[str] = set()
+        for spec in specs:
+            variant = by_id.get(spec.spec_id)
+            if (
+                variant is None
+                or variant.metadata.get("source_spec_id") != spec.spec_id
+                or variant.metadata.get("axis") != spec.axis
+                or len(spec.execution_variables) != 1
+            ):
+                continue
+            source = spec.execution_variables[0]
+            if spec.strategy == "alternate_exposure":
+                if variant.exposure_column == source and not variant.nonlinear_terms:
+                    covered.add(spec.spec_id)
+            elif spec.strategy == "restricted_cubic_spline":
+                target = operationalizations.get(source, source)
+                if (
+                    variant.exposure_column is None
+                    and len(variant.nonlinear_terms) == 1
+                    and variant.nonlinear_terms[0].source_column == target
+                    and variant.nonlinear_terms[0].basis == "natural_cubic_spline"
+                ):
+                    covered.add(spec.spec_id)
+        return covered
+
+    def _parent(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> AnalysisStep:
         parents = [
             step
             for step in plan.steps
@@ -336,7 +392,11 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
                 "association model-grid requires one adjusted-association parent"
             )
         parent = parents[0]
-        verdict = association_execution_verdict(parent)
+        verdict = (
+            landmark_categorical_association_execution_verdict(parent)
+            if allow_signed_parent
+            else association_execution_verdict(parent)
+        )
         requirement = sole_primary_model_requirement(parent)
         if (
             parent.planned_analysis_role != "primary"
@@ -437,16 +497,20 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             )
         )
 
-    def required_columns(self, plan: AnalysisPlan) -> Tuple[str, ...]:
-        parent = self._parent(plan)
+    def required_columns(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> Tuple[str, ...]:
+        parent = self._parent(plan, allow_signed_parent=allow_signed_parent)
         requirement = sole_primary_model_requirement(parent)
         assert requirement is not None
         return self.required_columns_from_requirement(requirement)
 
-    def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
+    def bind_plan(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> AnalysisPlan:
         """Compile host-owned products and exact inputs into the draft plan."""
 
-        parent = self._parent(plan)
+        parent = self._parent(plan, allow_signed_parent=allow_signed_parent)
         parent_index = next(
             index for index, step in enumerate(plan.steps) if step is parent
         )
@@ -472,6 +536,11 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             if name not in set(requirement.covariates or ())
         ]
         if missing_linear_parents:
+            if allow_signed_parent:
+                raise CurrentCaseScientificAuthorityError(
+                    "signed categorical parent cannot add undeclared nonlinear covariates: "
+                    + ", ".join(missing_linear_parents)
+                )
             # A functional-form sensitivity is defined only relative to a
             # linear parent term.  The signed runtime authority already names
             # the exact source columns; compile that prerequisite once rather
@@ -507,7 +576,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             )
             candidate = plan.steps[candidate_index]
         inputs = [
-            *self.required_columns(plan),
+            *self.required_columns(plan, allow_signed_parent=allow_signed_parent),
             self.cohort_product,
             self.parent_product,
         ]
@@ -539,8 +608,10 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         ]
         return plan.model_copy(update={"steps": steps})
 
-    def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
-        parent = self._parent(plan)
+    def governed_step(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> AnalysisStep:
+        parent = self._parent(plan, allow_signed_parent=allow_signed_parent)
         step = self._candidate(plan)
         parent_index = next(
             index for index, item in enumerate(plan.steps) if item is parent
@@ -570,7 +641,11 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         if tuple(step.sensitivity_spec_ids) != self.sensitivity_ids:
             issues.append("sensitivity_spec_ids")
         required_inputs = set(
-            (*self.required_columns(plan), self.cohort_product, self.parent_product)
+            (
+                *self.required_columns(plan, allow_signed_parent=allow_signed_parent),
+                self.cohort_product,
+                self.parent_product,
+            )
         )
         if set(step.inputs) != required_inputs:
             issues.append("inputs")
@@ -593,8 +668,10 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         self._require_rule_ref(step)
         return step
 
-    def validate_plan(self, plan: AnalysisPlan) -> None:
-        self.governed_step(plan)
+    def validate_plan(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> None:
+        self.governed_step(plan, allow_signed_parent=allow_signed_parent)
 
 
 class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
@@ -607,7 +684,8 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     """
 
     schema_version: Literal[
-        "easyicu.landmark_categorical_association_runtime_authority/1"
+        "easyicu.landmark_categorical_association_runtime_authority/1",
+        "easyicu.landmark_categorical_association_runtime_authority/2",
     ]
     authority_kind: Literal["landmark_categorical_association"]
     cohort_method: Literal["signed_landmark_analysis_cohort"]
@@ -633,6 +711,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     categorical_adjustment_columns: Tuple[str, ...]
     dependence: PlannedDependenceRequirement | None = None
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
+    association_model_grid: AssociationModelGridRuntimeAuthority | None = None
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkCategoricalAssociationRuntimeAuthority":
@@ -667,6 +746,25 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         )
         if len(source_columns) != len(set(source_columns)):
             raise ValueError("landmark categorical source columns must be unique")
+        grid = self.association_model_grid
+        if self.schema_version.endswith("/1") and grid is not None:
+            raise ValueError("landmark categorical v1 cannot attach a model grid")
+        if self.schema_version.endswith("/2"):
+            if grid is None:
+                raise ValueError("landmark categorical v2 requires a model grid")
+            if (
+                grid.protocol_content_sha256 != self.protocol_content_sha256
+                or grid.cohort_product != self.cohort_product
+                or grid.parent_product != self.primary_product
+                or grid.output_product in {
+                    self.cohort_product,
+                    self.cohort_flow_product,
+                    self.primary_product,
+                }
+            ):
+                raise ValueError(
+                    "landmark categorical model grid disagrees with its signed parent"
+                )
         self._verify_digest()
         return self
 
@@ -690,6 +788,9 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
                 )
             )
         )
+
+    def absolute_risk_population_inputs(self) -> tuple[str, ...]:
+        return (self.cohort_product, *self.primary_required_columns, self.primary_product)
 
     def _draft_primary(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [
@@ -845,6 +946,22 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
                 continue
             else:
                 candidate = step
+            if (
+                candidate.method == "primary_population_absolute_risk_context"
+                and self.primary_product in candidate.inputs
+            ):
+                population_inputs = self.absolute_risk_population_inputs()
+                candidate = candidate.model_copy(update={
+                    "inputs": list(population_inputs),
+                    "input_consumption_contracts": [
+                        ArtifactConsumptionContract(input_key=key, mode="all_rows")
+                        for key in population_inputs if ":" in key
+                    ],
+                    "runtime_outcome_contract": RuntimeOutcomeContract(
+                        owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                    ),
+                    "icu_rule_refs": list(dict.fromkeys([*candidate.icu_rule_refs, self.plan_rule_ref])),
+                })
             if duplicate_outputs:
                 candidate = candidate.model_copy(
                     update={
@@ -861,7 +978,12 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
                     }
                 )
             steps.append(candidate)
-        return plan.model_copy(update={"steps": steps})
+        bound = plan.model_copy(update={"steps": steps})
+        if self.association_model_grid is not None:
+            return self.association_model_grid.bind_plan(
+                bound, allow_signed_parent=True
+            )
+        return bound
 
     def governed_cohort_step(self, plan: AnalysisPlan) -> AnalysisStep:
         candidates = [step for step in plan.steps if step.method == self.cohort_method]
@@ -949,6 +1071,29 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     def validate_plan(self, plan: AnalysisPlan) -> None:
         self.governed_cohort_step(plan)
         self.governed_primary_step(plan)
+        if self.association_model_grid is not None:
+            self.association_model_grid.validate_plan(
+                plan, allow_signed_parent=True
+            )
+        for step in plan.steps:
+            if step.method != "primary_population_absolute_risk_context":
+                continue
+            expected = self.absolute_risk_population_inputs()
+            if (
+                tuple(step.inputs) != expected
+                or step.expected_outputs != ["table:absolute_risk_context"]
+                or step.runtime_outcome_contract != RuntimeOutcomeContract(
+                    owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                )
+                or any(
+                    not any(c.input_key == key and c.mode == "all_rows" for c in step.input_consumption_contracts)
+                    for key in expected if ":" in key
+                )
+            ):
+                raise CurrentCaseScientificAuthorityError(
+                    "absolute-risk population drifted from its categorical primary owner"
+                )
+            self._require_rule_ref(step)
 
 
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):

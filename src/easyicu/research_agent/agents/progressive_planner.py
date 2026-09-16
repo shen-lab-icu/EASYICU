@@ -43,6 +43,7 @@ from ..planning.literature_bindings import (
     validate_literature_citation_bindings,
 )
 from ..planning.literature_design_authority import (
+    LITERATURE_DESIGN_DIMENSIONS,
     LiteratureDesignAuthorityError,
     LiteratureDesignEvidenceCard,
     render_literature_design_cards_for_prompt,
@@ -1422,6 +1423,20 @@ class ProgressivePlannerAgent:
             )
             for analysis_type in analysis_types
         }
+        reviewed_design_card_keys = tuple(
+            card.citation_key
+            for card in literature_design_evidence_cards
+            if card.citation_key in set(allowed_literature_citation_keys)
+        )
+        reviewed_design_card_keys_by_dimension = {
+            dimension: tuple(
+                card.citation_key
+                for card in literature_design_evidence_cards
+                if card.citation_key in set(reviewed_design_card_keys)
+                and any(item.dimension == dimension for item in card.evidence)
+            )
+            for dimension in LITERATURE_DESIGN_DIMENSIONS
+        }
         article_contracts = []
         for analysis_type in analysis_types:
             contract = build_article_analysis_contract(
@@ -1469,6 +1484,9 @@ class ProgressivePlannerAgent:
             _outline_shape_contract(
                 analysis_types=analysis_types,
                 module_ids_by_analysis_type=module_ids_by_analysis_type,
+                literature_design_card_keys_by_dimension=(
+                    reviewed_design_card_keys_by_dimension
+                ),
             ),
             "Retrieved scientific actions (only these may be selected):\n"
             + json.dumps(list(action_rows), ensure_ascii=False, separators=(",", ":")),
@@ -4297,6 +4315,18 @@ class ProgressivePlannerAgent:
                                 (analysis_type,)
                             )
                             for analysis_type in analysis_types
+                        },
+                        literature_design_card_keys_by_dimension={
+                            dimension: tuple(
+                                card.citation_key
+                                for card in design_cards
+                                if card.citation_key in set(allowed_citations)
+                                and any(
+                                    item.dimension == dimension
+                                    for item in card.evidence
+                                )
+                            )
+                            for dimension in LITERATURE_DESIGN_DIMENSIONS
                         },
                     ),
                 )

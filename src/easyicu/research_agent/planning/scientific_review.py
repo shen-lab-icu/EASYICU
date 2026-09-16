@@ -23,6 +23,10 @@ from typing import Any, Literal, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
+from ..authority.current_case_scientific_runtime import (
+    CurrentCaseScientificRuntimeAuthority,
+    LandmarkCategoricalAssociationRuntimeAuthority,
+)
 from ..concept_availability import normalize_database_name
 from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
 from ..contracts.cohort_product_keys import (
@@ -937,8 +941,36 @@ def _requested_sensitivity_axes(context: ResearchContext) -> set[str]:
     return {review_axis(spec.axis) for spec in _sensitivity_specs(context)}
 
 
+def _signed_grid_spec_ids(
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> set[str]:
+    """Credit only variants present in the validated categorical grid seal."""
+
+    if not isinstance(runtime_authority, LandmarkCategoricalAssociationRuntimeAuthority):
+        return set()
+    grid = runtime_authority.association_model_grid
+    if grid is None:
+        return set()
+    try:
+        runtime_authority.validate_plan(plan)
+    except ValueError:
+        return set()
+    operationalizations = dict(
+        AdjustmentSetAuthority.from_context(context).operationalizations
+    )
+    return grid.covered_prespecified_spec_ids(
+        _sensitivity_specs(context),
+        operationalizations=operationalizations,
+    )
+
+
 def _sensitivity_facts(
-    context: ResearchContext, plan: AnalysisPlan
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    *,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> dict[str, Any]:
     requested = _requested_sensitivity_axes(context)
     typed_specs = {spec.spec_id: spec for spec in _sensitivity_specs(context)}
@@ -1016,6 +1048,7 @@ def _sensitivity_facts(
                 spec = typed_specs.get(spec_id)
                 if (
                     spec is not None
+                    and method != "verified_association_model_grid"
                     and method in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
                     and (
                         spec.axis != "functional_form" or (
@@ -1087,6 +1120,7 @@ def _sensitivity_facts(
                             executed_spec_ids.add(spec_id)
         else:
             protocol_only.update(axes)
+    executed_spec_ids.update(_signed_grid_spec_ids(context, plan, runtime_authority))
     replay_steps = [
         step
         for step in plan.steps
@@ -1507,6 +1541,7 @@ def build_plan_scientific_review(
     literature: Optional[LiteratureBundle] = None,
     figure_strategy: Optional[ArticleFigureStrategy] = None,
     require_reportable_capability: bool = False,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> PlanScientificReview:
     """Score and adjudicate the exact proposed plan before human approval."""
 
@@ -1704,7 +1739,9 @@ def build_plan_scientific_review(
     literature_facts = _literature_facts(literature, context)
     method_facts = method_source_facts(plan, context)
     design_bindings = _literature_design_bindings(plan, literature)
-    sensitivity = _sensitivity_facts(context, plan)
+    sensitivity = _sensitivity_facts(
+        context, plan, runtime_authority=runtime_authority
+    )
     publication_readiness = build_publication_readiness_facts(
         context=context,
         plan=plan,

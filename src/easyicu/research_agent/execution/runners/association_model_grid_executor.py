@@ -23,6 +23,7 @@ from ...authority.current_case_scientific_runtime import (
     AssociationModelGridLevelFilter,
     AssociationModelGridRuntimeAuthority,
     AssociationModelGridVariant,
+    LandmarkCategoricalAssociationRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
 from ...authority.declared_levels import execution_model_requirement
@@ -49,6 +50,9 @@ _CORE_COLUMNS = (
     "landmark_hours",
     "n_stays",
     "n_events",
+    "exposure_evaluable_n",
+    "exposure_missing_n",
+    "fit_excluded_after_exposure_n",
     "estimate",
     "ci_low",
     "ci_high",
@@ -66,19 +70,34 @@ class AssociationModelGridError(RuntimeError):
 
 
 def _sealed(
-    authority: AssociationModelGridRuntimeAuthority | Mapping[str, Any] | None,
+    authority: AssociationModelGridRuntimeAuthority
+    | LandmarkCategoricalAssociationRuntimeAuthority
+    | Mapping[str, Any]
+    | None,
 ) -> AssociationModelGridRuntimeAuthority | None:
     if authority is None:
         return None
     value = load_current_case_scientific_runtime_authority(authority)
+    if isinstance(value, LandmarkCategoricalAssociationRuntimeAuthority):
+        return value.association_model_grid
     return value if isinstance(value, AssociationModelGridRuntimeAuthority) else None
+
+
+def _signed_parent(authority: Any) -> bool:
+    return isinstance(
+        load_current_case_scientific_runtime_authority(authority),
+        LandmarkCategoricalAssociationRuntimeAuthority,
+    )
 
 
 def association_model_grid_executor_owns_step(
     step: AnalysisStep,
     *,
     plan: AnalysisPlan,
-    authority: AssociationModelGridRuntimeAuthority | Mapping[str, Any] | None,
+    authority: AssociationModelGridRuntimeAuthority
+    | LandmarkCategoricalAssociationRuntimeAuthority
+    | Mapping[str, Any]
+    | None,
 ) -> bool:
     """Claim only the exact child bound by the run's signed authority."""
 
@@ -89,7 +108,9 @@ def association_model_grid_executor_owns_step(
         # Runtime replanning rebuilds Pydantic objects even when the signed
         # step is structurally unchanged.  Ownership is the fully validated
         # typed step, not one particular in-memory instance of it.
-        return sealed.governed_step(plan) == step
+        return sealed.governed_step(
+            plan, allow_signed_parent=_signed_parent(authority)
+        ) == step
     except ValueError:
         return False
 
@@ -114,7 +135,9 @@ def association_model_grid_executor_code(
     step: AnalysisStep,
     *,
     plan: AnalysisPlan,
-    authority: AssociationModelGridRuntimeAuthority | Mapping[str, Any],
+    authority: AssociationModelGridRuntimeAuthority
+    | LandmarkCategoricalAssociationRuntimeAuthority
+    | Mapping[str, Any],
     runtime_projection_sha256: str,
     plausibility_scope: FlagOnlyPlausibilityScope | None = None,
 ) -> str:
@@ -122,7 +145,7 @@ def association_model_grid_executor_code(
 
     sealed = _sealed(authority)
     if sealed is None or not association_model_grid_executor_owns_step(
-        step, plan=plan, authority=sealed
+        step, plan=plan, authority=authority
     ):
         raise ValueError("The step is not owned by the association model-grid executor")
     requirement = _parent_requirement(plan=plan, authority=sealed)
@@ -489,6 +512,8 @@ def run_association_model_grid(
         outcome = _binary_outcome(eligible, requirement.outcome)
         n_stays = int(len(eligible))
         n_events = int(outcome.eq(1.0).sum())
+        exposure_column = variant.exposure_column or requirement.exposure_source
+        exposure_evaluable_n = int(eligible[exposure_column].notna().sum())
         model_frame, exposure, covariates, terms, receipts = _variant_model(
             eligible,
             requirement=requirement,
@@ -551,6 +576,11 @@ def run_association_model_grid(
         )
         if standard_error is None or standard_error <= 0:
             raise AssociationModelGridError("variant standard error is invalid")
+        fit_n = int(summary["n_total"])
+        if fit_n > exposure_evaluable_n:
+            raise AssociationModelGridError(
+                "model-grid fit denominator exceeds evaluable exposure rows"
+            )
         row = {
             "analysis_id": variant.analysis_id,
             "is_reference": variant.analysis_id == sealed.reference_variant_id,
@@ -570,11 +600,14 @@ def run_association_model_grid(
             ),
             "n_stays": n_stays,
             "n_events": n_events,
+            "exposure_evaluable_n": exposure_evaluable_n,
+            "exposure_missing_n": n_stays - exposure_evaluable_n,
+            "fit_excluded_after_exposure_n": exposure_evaluable_n - fit_n,
             "estimate": estimate,
             "ci_low": low,
             "ci_high": high,
             "effect_measure": "odds_ratio",
-            "fit_n": int(summary["n_total"]),
+            "fit_n": fit_n,
             "fit_events": int(summary["n_events"]),
             "standard_error": standard_error,
             "converged": True,
@@ -631,7 +664,7 @@ def run_association_model_grid(
             "schema_version": "easyicu.association_model_grid_runtime_receipt/1",
             "execution_contract_sha256": sealed.execution_contract_sha256,
             "runtime_projection_sha256": runtime_projection_sha256,
-            "variant_ids": list(sealed.sensitivity_ids),
+            "variant_ids": [variant.analysis_id for variant in sealed.variants],
             "reference_variant_id": sealed.reference_variant_id,
             "adapter": "adjusted_association_executor/statsmodels",
             "exposure": requirement.exposure_source,

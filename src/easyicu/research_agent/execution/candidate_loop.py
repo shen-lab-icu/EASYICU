@@ -839,6 +839,7 @@ def _candidate_execute_transition(
         attempt.step_attempt_state.selected_resume_capsule
         if (
             custom_runner_replay_allowed
+            and not attempt.step_record.get("explicit_failed_execution_retry")
             and not attempt.step_attempt_state.capsule_execution_replay_consumed
             and attempt.step_attempt_state.selected_resume_capsule is not None
             and attempt.step_attempt_state.selected_resume_capsule.capsule.execution
@@ -848,6 +849,10 @@ def _candidate_execute_transition(
         )
         else None
     )
+    if attempt.step_record.get("explicit_failed_execution_retry"):
+        attempt.step_record["step_authority_execution_cache_miss"] = (
+            "explicit_failed_execution_retry"
+        )
     if not custom_runner_replay_allowed:
         attempt.step_record["step_authority_execution_cache_miss"] = (
             "custom_runner_authority_unbound"
