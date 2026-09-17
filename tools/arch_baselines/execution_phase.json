@@ -4,8 +4,8 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5692,
-      "sha256": "d09defb6aa44fa2743514f0eb607c6b4c252f9f4bfcc124058ccb270b15fd8ea",
+      "loc": 5695,
+      "sha256": "3a301847ab3011dfe47b9fb938c88a4c7ec943fe41b0aa83d2e48074f72b6cd3",
       "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
@@ -331,7 +331,7 @@
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1784,
+      "line_start": 1787,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -343,7 +343,7 @@
     },
     "execution/phase.py::run_execute_phase": {
       "lines": 944,
-      "line_start": 1162,
+      "line_start": 1165,
       "direct_nested_funcs": 4,
       "total_nested_funcs": 6,
       "own_bound_names": 135,
@@ -353,7 +353,7 @@
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3773,
+      "line_start": 3776,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -363,7 +363,7 @@
     },
     "execution/phase.py::_prepare_execute_phase_authority": {
       "lines": 147,
-      "line_start": 1013,
+      "line_start": 1016,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 32,
@@ -412,7 +412,13 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Extract no-follow publication promotion filesystem transactions into a measured reporting owner; retain the publication renderer below its prior LOC ceiling and record the new module baseline.",
+  "baseline_reason": "Accept three additional lines in execution/phase.py to reject agent-created symlinked publication output paths before and after staged rendering; a synthetic regression showed the old installer could move an unrelated external file.",
+  "baseline_accepted_growth": {
+    "execution/phase.py": {
+      "loc_was": 5692,
+      "loc_now": 5695
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -1116,6 +1122,15 @@
     },
     {
       "reason": "Extract no-follow publication promotion filesystem transactions into a measured reporting owner; retain the publication renderer below its prior LOC ceiling and record the new module baseline."
+    },
+    {
+      "reason": "Accept three additional lines in execution/phase.py to reject agent-created symlinked publication output paths before and after staged rendering; a synthetic regression showed the old installer could move an unrelated external file.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5692,
+          "loc_now": 5695
+        }
+      }
     }
   ]
 }

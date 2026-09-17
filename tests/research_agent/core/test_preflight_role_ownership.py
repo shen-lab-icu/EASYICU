@@ -141,6 +141,32 @@ def test_failed_staged_figure_repair_preserves_agent_exports(tmp_path: Path):
     assert not (out_dir / "partial.json").exists()
 
 
+def test_staged_figure_repair_rejects_symlinked_agent_output_directory(tmp_path: Path):
+    out_dir = tmp_path / "steps" / "05_result_figure" / "outputs"
+    out_dir.parent.mkdir(parents=True)
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    sentinel = outside_dir / "unrelated.txt"
+    sentinel.write_bytes(b"untouched")
+    out_dir.symlink_to(outside_dir, target_is_directory=True)
+
+    def _renders(**kwargs):
+        staging = Path(kwargs["out_dir"])
+        (staging / "publication_figure.png").write_bytes(b"new")
+        return "source_backed_figure_v1"
+
+    with pytest.raises(ValueError, match="symlink"):
+        _repair_publication_figure_in_staging(
+            run_dir=tmp_path,
+            current_step_id="05_result_figure",
+            out_dir=out_dir,
+            authorizer=lambda _repair_id: True,
+            renderer=_renders,
+        )
+
+    assert sentinel.read_bytes() == b"untouched"
+
+
 def test_successful_staged_figure_repair_replaces_bundle_and_rewrites_paths(
     tmp_path: Path,
 ):
