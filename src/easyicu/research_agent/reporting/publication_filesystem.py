@@ -12,7 +12,7 @@ from typing import Optional
 from ..authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 
 
-def _require_real_output_dir(out_dir: Path, run_dir: Optional[Path]) -> None:
+def require_real_output_dir(out_dir: Path, run_dir: Optional[Path]) -> None:
     """Refuse an agent-created link that redirects host promotion writes."""
 
     if out_dir.is_symlink():

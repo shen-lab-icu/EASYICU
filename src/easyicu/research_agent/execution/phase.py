@@ -501,8 +501,8 @@ from ..authority.runtime_artifacts import (
     write_run_checkpoint,
 )
 from ..scalar_utils import _expected_numeric_annotations_for_step
+from ..reporting.publication_filesystem import require_real_output_dir
 from ..reporting.publication_bundles import (
-    _require_real_output_dir,
     required_contract_roles_for_analysis_family,
     resolve_upstream_analysis_family,
 )
@@ -925,7 +925,7 @@ def _repair_publication_figure_in_staging(
     failure.
     """
 
-    _require_real_output_dir(out_dir, run_dir)
+    require_real_output_dir(out_dir, run_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix=".publication-figure-repair-", dir=out_dir.parent
@@ -957,7 +957,7 @@ def _repair_publication_figure_in_staging(
         if not authorizer(repair_id):
             return None
 
-        _require_real_output_dir(out_dir, run_dir)
+        require_real_output_dir(out_dir, run_dir)
         backup_dir = Path(
             tempfile.mkdtemp(prefix=".publication-figure-backup-", dir=out_dir.parent)
         )
