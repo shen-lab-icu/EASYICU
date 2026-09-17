@@ -237,7 +237,7 @@ def read_lines_chunked(file_path: str, chunk_size: int = 10000) -> Generator[Lis
     Yields:
         Chunks of lines
     """
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding="utf-8") as f:
         chunk = []
         for line in f:
             chunk.append(line.rstrip('\n'))
@@ -318,15 +318,15 @@ def get_config(name: str, cfg_dirs: Optional[List[str]] = None,
             return {**x, **y} if isinstance(x, dict) and isinstance(y, dict) else y
     
     results = []
-    
+
     for cfg_dir in cfg_dirs:
         file_path = os.path.join(cfg_dir, f"{name}.json")
-        
+
         if os.path.exists(file_path):
             try:
-                with open(file_path, 'r') as f:
-                    data = json.load(f, **kwargs)
-                    results.append(data)
+                # Single JSON-read helper: no duplicated open/json.load here.
+                data = read_json(file_path, **kwargs)
+                results.append(data)
             except Exception as e:
                 logger.warning(f"Could not read {file_path}: {e}")
     
@@ -358,7 +358,7 @@ def read_json(path: str, simplify_vector: bool = True,
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
     
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding="utf-8") as f:
         return json.load(f, **kwargs)
 
 def set_config(x: Any, name: str, dir: Optional[str] = None, **kwargs) -> None:
@@ -392,7 +392,7 @@ def write_json(x: Any, path: str, indent: int = 2, **kwargs) -> None:
     if dir_path:
         ensure_dirs(dir_path)
     
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding="utf-8") as f:
         json.dump(x, f, indent=indent, **kwargs)
 
 # ============================================================================

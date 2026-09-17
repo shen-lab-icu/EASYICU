@@ -418,6 +418,7 @@ def test_pickle_cache_is_explicit_and_uses_an_opaque_name(monkeypatch, tmp_path)
     data_path = tmp_path / "data"
     cache_path = tmp_path / "cache"
     data_path.mkdir()
+    monkeypatch.setenv("EASYICU_CACHE_HMAC_KEY", "test-hmac-key")
     monkeypatch.setattr(
         api,
         "load_concepts",
@@ -436,9 +437,13 @@ def test_pickle_cache_is_explicit_and_uses_an_opaque_name(monkeypatch, tmp_path)
     receipt_index = cache_path / ".easyicu_content_receipts.json"
     cache_files = [path for path in cache_path.iterdir() if path != receipt_index]
     assert receipt_index.is_file()
-    assert len(cache_files) == 1
-    assert cache_files[0].name.endswith(".trusted.pkl")
-    assert len(cache_files[0].name.removesuffix(".trusted.pkl")) == 64
+    assert len(cache_files) == 2
+    payloads = [path for path in cache_files if path.name.endswith(".trusted.pkl")]
+    sidecars = [path for path in cache_files if path.name.endswith(".trusted.pkl.hmac")]
+    assert len(payloads) == 1
+    assert len(sidecars) == 1
+    assert sidecars[0].name == payloads[0].name + ".hmac"
+    assert len(payloads[0].name.removesuffix(".trusted.pkl")) == 64
 
 
 def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
@@ -1365,10 +1370,10 @@ def test_eicu_microbiology_uses_all_stays_as_denominator(monkeypatch):
             "culturesite": ["Blood"],
         }
     )
-    monkeypatch.setattr(microbiology, "_build_datasource", lambda *args: object())
+    monkeypatch.setattr(microbiology, "build_datasource", lambda *args: object())
     monkeypatch.setattr(
         microbiology,
-        "_table_df",
+        "table_df",
         lambda ds, table: patient if table == "patient" else microlab,
     )
 
@@ -1392,7 +1397,7 @@ def test_miiv_microbiology_pushes_stay_subset_to_hospital_table(monkeypatch):
         }
     )
 
-    monkeypatch.setattr(microbiology, "_build_datasource", lambda *args: object())
+    monkeypatch.setattr(microbiology, "build_datasource", lambda *args: object())
 
     def fake_table(_ds, table, columns=None, filters=None):
         if table == "icustays":
@@ -1401,7 +1406,7 @@ def test_miiv_microbiology_pushes_stay_subset_to_hospital_table(monkeypatch):
         assert table == "microbiologyevents"
         return microbiology_events[microbiology_events["hadm_id"].isin([100])]
 
-    monkeypatch.setattr(microbiology, "_table_df", fake_table)
+    monkeypatch.setattr(microbiology, "table_df", fake_table)
 
     result = microbiology.load_microbiology("miiv", patient_ids=[10])
 

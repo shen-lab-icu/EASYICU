@@ -1,8 +1,14 @@
 """Deprecated table helpers (was: 表工具函数 - 对应 R ricu 的 tbl-utils.R).
 
-**This module is deprecated and nothing inside EasyICU imports it.** It exists
-only because its names were exported from the top-level package, so removing it
-outright would break an external caller we cannot see. It will go in 2.0.
+.. deprecated::
+    DO NOT USE IN NEW CODE (禁新用). Nothing inside EasyICU imports this
+    module. It exists only because its names were exported from the top-level
+    package, so removing it outright would break an external caller we cannot
+    see.
+
+    Removal plan: remove in EasyICU 2.0 (code kept until then; call sites warn
+    via DeprecationWarning). Migrate to :mod:`easyicu.table` /
+    :func:`easyicu.table.change_id`.
 
 Use :mod:`easyicu.table` instead. The ID-conversion functions here are the
 dangerous part, and they are *not* redirected: this module's ``upgrade_id`` and

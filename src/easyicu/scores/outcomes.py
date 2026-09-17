@@ -24,6 +24,7 @@ same ``ICUDataSource.load_table`` access path.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import numpy as np
@@ -31,9 +32,11 @@ import pandas as pd
 
 from easyicu.outcome_availability import FOLLOWUP_OUTCOME_DATABASES
 
-from .comorbidity import _lower_cols
+from .comorbidity import lower_cols
 from ..databases.profiles import normalize_database_key
 from ..io.identity import require_unique_keys
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
@@ -54,6 +57,35 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
             root = find_database_path(root, database)
         except Exception:
             root = os.path.join(root, database)
+    # Schema-first pre-check: verify the prepared-table schema and record
+    # source identity before reading any rows. Fail closed with source
+    # identity attached instead of bare-reading a wrong/mixed extract.
+    try:
+        from ..databases.detection import peek_table_columns
+        from pathlib import Path as _Path
+
+        _root = _Path(root) if root else None
+        if _root is not None and _root.is_dir():
+            _columns = peek_table_columns(_root, table)
+            LOGGER.info(
+                "outcomes source identity: database=%s table=%s root=%s columns=%d",
+                database,
+                table,
+                str(_root),
+                len(_columns),
+            )
+    except Exception as exc:
+        # peek raises DatabaseDetectionError with source identity when the
+        # schema exists but is unreadable; missing tables fall through to
+        # the FileNotFoundError below. Log and continue so the error at the
+        # read site keeps its source context.
+        LOGGER.warning(
+            "outcomes schema pre-check degraded: database=%s table=%s root=%s failure=%s",
+            database,
+            table,
+            str(root),
+            type(exc).__name__,
+        )
     candidates = [
         os.path.join(root, f"{table}.parquet"),
         *glob.glob(os.path.join(root, "*", f"{table}.parquet")),
@@ -92,14 +124,14 @@ def _parse_source_dates(values: pd.Series) -> pd.Series:
 
 def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     """MIMIC-III/IV: stay_id/icustay_id + days_from_icu_admit_to_death + los."""
-    icu = _lower_cols(_raw_table(database, data_path, "icustays"))
+    icu = lower_cols(_raw_table(database, data_path, "icustays"))
     stay_col = "stay_id" if "stay_id" in icu.columns else "icustay_id"
     icu = icu[["subject_id", "hadm_id", stay_col, "intime", "los"]].copy()
     require_unique_keys(icu, [stay_col], table="icustays")
     icu["intime"] = _parse_source_dates(icu["intime"])
     if icu["intime"].isna().any():
         raise ValueError("ICU mortality requires valid admission time origins")
-    pat = _lower_cols(_raw_table(database, data_path, "patients"))[
+    pat = lower_cols(_raw_table(database, data_path, "patients"))[
         ["subject_id", "dod"]
     ].copy()
     require_unique_keys(pat, ["subject_id"], table="patients")
@@ -170,7 +202,7 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
 
 
 def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
-    adm = _lower_cols(_raw_table(database, data_path, "admissions"))
+    adm = lower_cols(_raw_table(database, data_path, "admissions"))
     df = pd.DataFrame({"_stay": adm["admissionid"].values})
     # admittedat is the 0 reference; dateofdeath / dischargedat are ms offsets.
     dod = pd.to_numeric(adm["dateofdeath"], errors="coerce")

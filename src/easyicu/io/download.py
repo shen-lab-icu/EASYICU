@@ -23,6 +23,20 @@ from ..config import DataSourceConfig, DataSourceRegistry
 LOGGER = logging.getLogger(__name__)
 
 
+class DownloadError(OSError):
+    """Typed failure for a data-source download.
+
+    Raised instead of returning ``False`` so callers can distinguish
+    "download failed" from "nothing to do". Carries the URL and destination
+    for source-identity attribution.
+    """
+
+    def __init__(self, message: str, *, url: str = "", destination: str = "") -> None:
+        super().__init__(message)
+        self.url = url
+        self.destination = destination
+
+
 class PhysioNetDownloader:
     """Handler for downloading data from PhysioNet."""
 
@@ -44,6 +58,12 @@ class PhysioNetDownloader:
         if not self.password:
             self.password = getpass("PhysioNet password: ")
 
+    def _auth(self) -> Optional[tuple[str, str]]:
+        """Return known credentials without prompting, if available."""
+        if self.username and self.password:
+            return (self.username, self.password)
+        return None
+
     def download_file(
         self,
         url: str,
@@ -61,7 +81,11 @@ class PhysioNetDownloader:
             force: If True, re-download even if file exists
 
         Returns:
-            True if download was successful, False otherwise
+            True if download was successful.
+
+        Raises:
+            DownloadError: On network failure or hash mismatch, with the URL
+                and destination attached for attribution.
         """
         if destination.exists() and not force:
             if verify_hash:
@@ -77,7 +101,13 @@ class PhysioNetDownloader:
         destination.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            response = self.session.get(url, stream=True, timeout=30)
+            # Known authenticated sources (e.g. PhysioNet) must carry
+            # credentials on the FIRST request, not only after a 401: the
+            # initial anonymous request can trigger audit throttling or
+            # redirect away from the authenticated flow.
+            response = self.session.get(
+                url, auth=self._auth(), stream=True, timeout=30
+            )
 
             if response.status_code == 401:
                 self._ensure_credentials()
@@ -105,18 +135,29 @@ class PhysioNetDownloader:
 
             if verify_hash:
                 if not self._verify_sha256(destination, verify_hash):
-                    LOGGER.error(f"Hash verification failed for {destination.name}")
-                    destination.unlink()
-                    return False
+                    destination.unlink(missing_ok=True)
+                    raise DownloadError(
+                        f"Hash verification failed for {destination.name}",
+                        url=url,
+                        destination=str(destination),
+                    )
 
             LOGGER.info(f"Successfully downloaded {destination.name}")
             return True
 
+        except DownloadError:
+            raise
         except requests.RequestException as e:
-            LOGGER.error(f"Failed to download {url}: {e}")
             if destination.exists():
-                destination.unlink()
-            return False
+                try:
+                    destination.unlink()
+                except OSError:
+                    pass
+            raise DownloadError(
+                f"Failed to download {url}: {e}",
+                url=url,
+                destination=str(destination),
+            ) from e
 
     def _verify_sha256(self, file_path: Path, expected_hash: str) -> bool:
         """Verify SHA256 hash of downloaded file."""
@@ -149,6 +190,9 @@ def download_src(
         username: PhysioNet username
         password: PhysioNet password
         verbose: If True, print progress information
+
+    Raises:
+        DownloadError: If any table file fails to download or verify.
     """
     if verbose:
         logging.basicConfig(level=logging.INFO)
@@ -209,9 +253,14 @@ def download_src(
             if verbose:
                 LOGGER.info(f"Downloading table {table_name}: {file_path}")
 
-            success = downloader.download_file(url, dest, verify_hash=verify_hash, force=force)
-            if not success:
-                LOGGER.error(f"Failed to download {table_name}")
+            try:
+                downloader.download_file(url, dest, verify_hash=verify_hash, force=force)
+            except DownloadError as exc:
+                raise DownloadError(
+                    f"Failed to download table '{table_name}' ({file_path}): {exc}",
+                    url=url,
+                    destination=str(dest),
+                ) from exc
 
 
 def download_sources(
@@ -227,13 +276,30 @@ def download_sources(
         registry: Registry containing data source configurations
         data_dirs: Directories corresponding to each source
         **kwargs: Additional arguments passed to download_src
+
+    Raises:
+        DownloadError: If any source fails to download.
+        KeyError: If a source name is unknown.
     """
     for source_name, data_dir in zip(source_names, data_dirs):
         try:
             config = registry.get(source_name)
+        except KeyError:
+            raise
+        except Exception as exc:
+            raise DownloadError(
+                f"Failed to resolve source '{source_name}': {exc}",
+                url="",
+                destination=str(data_dir),
+            ) from exc
+        try:
             download_src(config, Path(data_dir), **kwargs)
-        except Exception as e:
-            LOGGER.error(f"Failed to download {source_name}: {e}")
+        except DownloadError as exc:
+            raise DownloadError(
+                f"Failed to download source '{source_name}': {exc}",
+                url=exc.url,
+                destination=exc.destination or str(data_dir),
+            ) from exc
 
 
 def download_demo(
@@ -251,20 +317,22 @@ def download_demo(
         force: If True, re-download existing files
         username: PhysioNet username
         password: PhysioNet password
+
+    Raises:
+        KeyError: If the demo source is unknown.
+        DownloadError: If the download fails.
     """
     from ..resources import load_data_sources
-    
+
     registry = load_data_sources()
-    try:
-        config = registry.get(source)
-    except KeyError:
-        LOGGER.error(f"Demo source '{source}' not found in registry")
-        return
+    config = registry.get(source)
+    if config is None:
+        raise KeyError(f"Demo source '{source}' not found in registry")
 
     download_src(
-        config, 
-        Path(data_dir), 
-        force=force, 
-        username=username, 
-        password=password
+        config,
+        Path(data_dir),
+        force=force,
+        username=username,
+        password=password,
     )

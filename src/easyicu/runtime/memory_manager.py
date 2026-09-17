@@ -716,7 +716,7 @@ def _popen_and_run(args: dict, temp_dir: str, batch_num: int) -> int:
             k: [int(x) for x in v]
             for k, v in _json_safe['patient_ids'].items()
         }
-    with open(args_file, 'w') as f:
+    with open(args_file, 'w', encoding="utf-8") as f:
         json.dump(_json_safe, f)
 
     # 确保子进程能 import easyicu（处理非 pip 安装的开发模式）
@@ -741,10 +741,10 @@ def _popen_and_run(args: dict, temp_dir: str, batch_num: int) -> int:
         )
         return result.returncode
     except subprocess.TimeoutExpired:
-        logger.warning(f"⚠️ Batch {batch_num} Popen 超时 (60min)")
+        logger.warning(f"Batch {batch_num} Popen 超时 (60min)")
         return -1
     except Exception as e:
-        logger.warning(f"⚠️ Batch {batch_num} Popen 失败: {e}")
+        logger.warning(f"Batch {batch_num} Popen 失败: {e}")
         return -1
     finally:
         try:
@@ -1010,8 +1010,8 @@ def subprocess_batch_load(
     
     if verbose:
         mode = "os.fork()" if _use_raw_fork else ("Popen" if _use_popen else "mp.Process")
-        print(f"🔄 子进程隔离分批: {total} patients, batch_size={batch_size}, "
-              f"{num_batches} batches [{mode}]")
+        logger.debug("🔄 子进程隔离分批: %d patients, batch_size=%d, %d batches [%s]",
+                     total, batch_size, num_batches, mode)
     
     temp_dir = tempfile.mkdtemp(prefix='easyicu_batch_')
     try:
@@ -1022,8 +1022,8 @@ def subprocess_batch_load(
             
             if verbose:
                 rss = get_rss_mb()
-                print(f"   📦 Batch {batch_num}/{num_batches}: {len(batch_ids)} patients (RSS: {rss:.0f}MB)...", 
-                      end='', flush=True)
+                logger.debug("   📦 Batch %d/%d: %d patients (RSS: %.0fMB)...",
+                             batch_num, num_batches, len(batch_ids), rss)
             
             args = {
                 'concepts': concepts,
@@ -1059,7 +1059,7 @@ def subprocess_batch_load(
                 proc.join(timeout=_timeout)
                 if proc.is_alive():
                     logger.warning(
-                        f"⚠️ Batch {batch_num} mp.Process hang past "
+                        f"Batch {batch_num} mp.Process hang past "
                         f"{_timeout:.0f}s, terminating"
                     )
                     proc.terminate()
@@ -1072,36 +1072,37 @@ def subprocess_batch_load(
                     exitcode = proc.exitcode
             
             if exitcode != 0:
-                logger.warning(f"⚠️ Batch {batch_num} 子进程退出码: {exitcode}")
+                logger.warning(f"Batch {batch_num} 子进程退出码: {exitcode}")
                 if verbose:
-                    print(f" ❌ (exit={exitcode})")
+                    logger.debug(" ❌ (exit=%s)", exitcode)
                 continue
-            
+
             output_files = [f for f in Path(temp_dir).glob(f"batch_{batch_num:04d}*.parquet")]
             if output_files:
                 if verbose:
                     file_mb = sum(os.path.getsize(f) for f in output_files) / 1024 / 1024
-                    print(f" ✅ ({file_mb:.1f}MB)")
+                    logger.debug(" ✅ (%.1fMB)", file_mb)
             else:
                 if verbose:
-                    print(" ⚠️ (no output)")
-        
+                    logger.debug(" ⚠️ (no output)")
+
         # 合并所有 batch 的结果
         produced_files = list(Path(temp_dir).glob('batch_*.parquet')) + list(Path(temp_dir).glob('batch_*.*.parquet'))
         if not produced_files:
             return pd.DataFrame()
-        
+
         if verbose:
-            print("   📋 合并批次结果...")
+            logger.debug("   📋 合并批次结果...")
 
         result = _merge_parquet_batches(temp_dir)
-        
+
         if verbose:
             if isinstance(result, pd.DataFrame):
-                print(f"   ✅ 合并完成: {len(result)} rows, RSS: {get_rss_mb():.0f}MB")
+                logger.debug("   ✅ 合并完成: %d rows, RSS: %.0fMB", len(result), get_rss_mb())
             else:
                 total_rows = sum(len(df) for df in result.values())
-                print(f"   ✅ 合并完成: {len(result)} concepts / {total_rows} rows, RSS: {get_rss_mb():.0f}MB")
+                logger.debug("   ✅ 合并完成: %d concepts / %d rows, RSS: %.0fMB",
+                             len(result), total_rows, get_rss_mb())
         
         return result
     
@@ -1148,7 +1149,8 @@ def inprocess_batch_load(
     num_batches = (total + batch_size - 1) // batch_size
     
     if verbose:
-        print(f"🔄 进程内分批: {total} patients, batch_size={batch_size}, {num_batches} batches")
+        logger.debug("🔄 进程内分批: %d patients, batch_size=%d, %d batches",
+                     total, batch_size, num_batches)
     
     buffered_batches: List[Union[pd.DataFrame, Dict[str, pd.DataFrame]]] = []
     buffered_mb = 0.0
@@ -1163,8 +1165,8 @@ def inprocess_batch_load(
         
         if verbose:
             rss = get_rss_mb()
-            print(f"   📦 Batch {batch_num}/{num_batches}: {len(batch_ids)} patients (RSS: {rss:.0f}MB)...",
-                  end='', flush=True)
+            logger.debug("   📦 Batch %d/%d: %d patients (RSS: %.0fMB)...",
+                         batch_num, num_batches, len(batch_ids), rss)
         
         # 清除上一轮的缓存
         loader.clear_cache()
@@ -1186,7 +1188,7 @@ def inprocess_batch_load(
 
         if isinstance(batch_result, pd.DataFrame) and len(batch_result) > 0:
             if verbose:
-                print(f" ✅ ({len(batch_result)} rows)", end='')
+                logger.debug(" ✅ (%d rows)", len(batch_result))
         elif isinstance(batch_result, dict):
             if verbose:
                 non_empty = 0
@@ -1194,9 +1196,9 @@ def inprocess_batch_load(
                     _df = _v.data if hasattr(_v, 'data') and isinstance(_v.data, pd.DataFrame) else _v
                     if isinstance(_df, pd.DataFrame) and len(_df) > 0:
                         non_empty += len(_df)
-                print(f" ✅ ({non_empty} rows / {len(batch_result)} concepts)", end='')
+                logger.debug(" ✅ (%d rows / %d concepts)", non_empty, len(batch_result))
         elif verbose:
-            print(" ⚪ (empty)", end='')
+            logger.debug(" ⚪ (empty)", )
 
         if spill_dir is None and _should_spill_inprocess_batches(
             memory_efficient=memory_efficient,
@@ -1206,7 +1208,7 @@ def inprocess_batch_load(
         ):
             spill_dir = tempfile.mkdtemp(prefix='easyicu_inprocess_')
             if verbose:
-                print(f" 💽 spill→disk[{spill_dir}]", end='')
+                logger.debug(" 💽 spill→disk[%s]", spill_dir)
             for buffered in buffered_batches:
                 spill_batches += 1
                 _write_batch_result_to_parquet(buffered, os.path.join(spill_dir, f'batch_{spill_batches:04d}'))
@@ -1227,7 +1229,7 @@ def inprocess_batch_load(
         # 关键：释放碎片内存
         freed = release_memory()
         if verbose:
-            print(f" [freed {freed}MB, RSS: {get_rss_mb():.0f}MB]")
+            logger.debug(" [freed %sMB, RSS: %.0fMB]", freed, get_rss_mb())
     
     if not buffered_batches and spill_dir is None:
         return pd.DataFrame()
@@ -1241,10 +1243,11 @@ def inprocess_batch_load(
         release_memory(aggressive=True)
         if verbose:
             if isinstance(final, pd.DataFrame):
-                print(f"   ✅ 完成(disk): {len(final)} rows, RSS: {get_rss_mb():.0f}MB")
+                logger.debug("   ✅ 完成(disk): %d rows, RSS: %.0fMB", len(final), get_rss_mb())
             else:
                 total_rows = sum(len(df) for df in final.values())
-                print(f"   ✅ 完成(disk): {len(final)} concepts / {total_rows} rows, RSS: {get_rss_mb():.0f}MB")
+                logger.debug("   ✅ 完成(disk): %d concepts / %d rows, RSS: %.0fMB",
+                             len(final), total_rows, get_rss_mb())
         return final
 
     final = _merge_buffered_batches(buffered_batches)
@@ -1253,10 +1256,11 @@ def inprocess_batch_load(
 
     if verbose:
         if isinstance(final, pd.DataFrame):
-            print(f"   ✅ 完成: {len(final)} rows, RSS: {get_rss_mb():.0f}MB")
+            logger.debug("   ✅ 完成: %d rows, RSS: %.0fMB", len(final), get_rss_mb())
         else:
             total_rows = sum(len(df) for df in final.values())
-            print(f"   ✅ 完成: {len(final)} concepts / {total_rows} rows, RSS: {get_rss_mb():.0f}MB")
+            logger.debug("   ✅ 完成: %d concepts / %d rows, RSS: %.0fMB",
+                         len(final), total_rows, get_rss_mb())
 
     return final
 
@@ -1279,7 +1283,8 @@ def inprocess_batch_load_streaming(
     num_batches = max(1, (total_patients + batch_size - 1) // batch_size)
 
     if verbose:
-        print(f"🔄 流式进程内分批: {total_patients} patients, batch_size={batch_size}, {num_batches} batches")
+        logger.debug("🔄 流式进程内分批: %d patients, batch_size=%d, %d batches",
+                     total_patients, batch_size, num_batches)
 
     buffered_batches: List[Union[pd.DataFrame, Dict[str, pd.DataFrame]]] = []
     buffered_mb = 0.0
@@ -1294,10 +1299,9 @@ def inprocess_batch_load_streaming(
 
         if verbose:
             rss = get_rss_mb()
-            print(
-                f"   📦 Batch {batch_num}/{num_batches}: {len(batch_ids)} patients (RSS: {rss:.0f}MB)...",
-                end='',
-                flush=True,
+            logger.debug(
+                "   📦 Batch %d/%d: %d patients (RSS: %.0fMB)...",
+                batch_num, num_batches, len(batch_ids), rss,
             )
 
         loader.clear_cache()
@@ -1318,13 +1322,13 @@ def inprocess_batch_load_streaming(
 
         if isinstance(batch_result, pd.DataFrame) and len(batch_result) > 0:
             if verbose:
-                print(f" ✅ ({len(batch_result)} rows)", end='')
+                logger.debug(" ✅ (%d rows)", len(batch_result))
         elif isinstance(batch_result, dict):
             if verbose:
                 non_empty = sum(len(df) for df in batch_result.values() if isinstance(df, pd.DataFrame) and len(df) > 0)
-                print(f" ✅ ({non_empty} rows / {len(batch_result)} concepts)", end='')
+                logger.debug(" ✅ (%d rows / %d concepts)", non_empty, len(batch_result))
         elif verbose:
-            print(" ⚪ (empty)", end='')
+            logger.debug(" ⚪ (empty)")
 
         if spill_dir is None and _should_spill_inprocess_batches(
             memory_efficient=memory_efficient,
@@ -1334,7 +1338,7 @@ def inprocess_batch_load_streaming(
         ):
             spill_dir = tempfile.mkdtemp(prefix='easyicu_streaming_')
             if verbose:
-                print(f" 💽 spill→disk[{spill_dir}]", end='')
+                logger.debug(" 💽 spill→disk[%s]", spill_dir)
             for buffered in buffered_batches:
                 spill_batches += 1
                 _write_batch_result_to_parquet(buffered, os.path.join(spill_dir, f'batch_{spill_batches:04d}'))
@@ -1354,7 +1358,7 @@ def inprocess_batch_load_streaming(
 
         freed = release_memory()
         if verbose:
-            print(f" [freed {freed}MB, RSS: {get_rss_mb():.0f}MB]")
+            logger.debug(" [freed %sMB, RSS: %.0fMB]", freed, get_rss_mb())
 
     if not buffered_batches and spill_dir is None:
         return pd.DataFrame()
@@ -1372,3 +1376,14 @@ def inprocess_batch_load_streaming(
     del buffered_batches
     release_memory(aggressive=True)
     return final
+
+
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+ceil_div = _ceil_div
+
+
+__all__ = [
+    "ceil_div",
+]

@@ -7,6 +7,7 @@ the evidence ordering.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -14,6 +15,27 @@ from typing import Optional, Sequence, Union
 import pandas as pd
 
 from .profiles import normalize_database_key
+
+LOGGER = logging.getLogger(__name__)
+
+# Degraded-schema-read counter (A-P2-13): incremented each time a prepared
+# table candidate exists but its schema cannot be read and is skipped. The
+# fallback (skip-and-continue) is kept; the count + warning keep silent rot
+# observable.
+SCHEMA_READ_DEGRADED_COUNT: int = 0
+
+
+def _note_degraded_schema(table: str, path: Path, failure: str) -> None:
+    global SCHEMA_READ_DEGRADED_COUNT
+    SCHEMA_READ_DEGRADED_COUNT += 1
+    LOGGER.warning(
+        "database detection schema read degraded: table=%s root=%s "
+        "failure=%s degraded_count=%d",
+        table,
+        str(path),
+        failure,
+        SCHEMA_READ_DEGRADED_COUNT,
+    )
 
 
 class DatabaseDetectionError(ValueError):
@@ -87,7 +109,8 @@ def peek_table_columns(path: Path, table: str) -> set[str]:
                         )
                     if shards:
                         readable += 1
-            except Exception:
+            except Exception as exc:
+                _note_degraded_schema(table, path, type(exc).__name__)
                 continue
         for suffix in (".csv", ".csv.gz"):
             for candidate in children.get(f"{table}{suffix}".casefold(), ()):
@@ -99,7 +122,8 @@ def peek_table_columns(path: Path, table: str) -> set[str]:
                             for name in pd.read_csv(candidate, nrows=0).columns
                         )
                         readable += 1
-                except Exception:
+                except Exception as exc:
+                    _note_degraded_schema(table, path, type(exc).__name__)
                     continue
     if attempted and not readable:
         raise DatabaseDetectionError(
@@ -266,6 +290,7 @@ def detect_database_identity(
 
 __all__ = [
     "DatabaseDetectionError",
+    "SCHEMA_READ_DEGRADED_COUNT",
     "detect_database_identity",
     "peek_table_columns",
 ]

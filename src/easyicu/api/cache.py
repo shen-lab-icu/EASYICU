@@ -3,14 +3,56 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import pickle
+import warnings
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 
 import pandas as pd
 
 from easyicu.content_identity import data_path_fingerprint
+
+#: Environment variable carrying the secret for ``.trusted.pkl`` HMAC signing.
+#: Kept as a module constant so the three ``use_pickle`` call sites document
+#: the same gate. ``use_pickle`` defaults to ``False`` (parquet path) and stays
+#: that way; enabling pickle without this key is refused fail-closed.
+CACHE_HMAC_ENV_VAR = "EASYICU_CACHE_HMAC_KEY"
+
+
+def _hmac_key() -> Optional[bytes]:
+    """Return the configured HMAC key, or ``None`` when unset/empty."""
+    raw = os.environ.get(CACHE_HMAC_ENV_VAR, "")
+    raw = raw.strip() if isinstance(raw, str) else ""
+    if not raw:
+        return None
+    return raw.encode("utf-8")
+
+
+def _require_hmac_key() -> bytes:
+    """Return the HMAC key or raise with an actionable opt-in message."""
+    key = _hmac_key()
+    if key is None:
+        raise RuntimeError(
+            "use_pickle=True requires a non-empty "
+            f"{CACHE_HMAC_ENV_VAR} so .trusted.pkl is HMAC-signed "
+            "(.trusted.pkl.hmac); refusing unsigned pickle cache. Set "
+            f"{CACHE_HMAC_ENV_VAR} to a secret value in a fully controlled "
+            "local environment."
+        )
+    return key
+
+
+def _hmac_path(cache_file: Path) -> Path:
+    """Return the sidecar path for a ``.trusted.pkl`` cache file."""
+    return Path(str(cache_file) + ".hmac")
+
+
+def _compute_hmac(payload: bytes, key: bytes) -> str:
+    """Return the hex HMAC-SHA256 of a cache payload."""
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 
 def get_cache_key(concepts: List[str], source: str, **kwargs) -> str:
@@ -48,9 +90,21 @@ def load_concept_cached_impl(
     n_patients: Optional[int] = None,
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
-    """Load concept data through an explicit, dataset-isolated disk cache."""
+    """Load concept data through an explicit, dataset-isolated disk cache.
+
+    ``use_pickle`` defaults to ``False`` (safe parquet path) and stays that
+    way. ``use_pickle=True`` is a trusted-local compatibility opt-in that
+    additionally requires ``EASYICU_CACHE_HMAC_KEY``: the pickle payload is
+    HMAC-SHA256 signed into a ``.trusted.pkl.hmac`` sidecar on write and
+    verified on read. Unsigned or tampered entries are deleted and recomputed.
+    """
     resolved_cache_dir = Path(cache_dir or (Path(data_path) / "cache"))
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
+    # Fail closed before touching the cache: pickle must never be enabled
+    # without an HMAC key, even when the entry would otherwise be a hit.
+    hmac_key: Optional[bytes] = None
+    if use_pickle:
+        hmac_key = _require_hmac_key()
     concept_list = [concepts] if isinstance(concepts, str) else list(concepts)
     cache_params = {
         "merge": merge,
@@ -74,8 +128,22 @@ def load_concept_cached_impl(
             print(f"📦 从缓存加载: {cache_file.name}")
         try:
             if use_pickle:
-                with cache_file.open("rb") as handle:
-                    result = pickle.load(handle)
+                assert hmac_key is not None  # guarded by _require_hmac_key above
+                raw = cache_file.read_bytes()
+                sidecar = _hmac_path(cache_file)
+                if not sidecar.is_file():
+                    raise ValueError(
+                        "missing HMAC sidecar "
+                        f"{sidecar.name}; refusing unsigned pickle cache"
+                    )
+                expected = sidecar.read_text(encoding="utf-8").strip().casefold()
+                actual = _compute_hmac(raw, hmac_key).casefold()
+                if not hmac.compare_digest(expected, actual):
+                    raise ValueError(
+                        "HMAC mismatch for "
+                        f"{cache_file.name}; possible tampered cache entry"
+                    )
+                result = pickle.loads(raw)
             else:
                 result = pd.read_parquet(cache_file)
             if verbose:
@@ -84,6 +152,23 @@ def load_concept_cached_impl(
                 print(f"✅ 成功加载 {size:,} {unit}")
             return result
         except Exception as exc:
+            if use_pickle:
+                # Fail closed on tamper/unsigned entries: remove both files so
+                # the next call cannot reuse them, then fall through to
+                # recompute. The warning (not just verbose print) is what the
+                # tamper regression test asserts on.
+                for stale in (cache_file, _hmac_path(cache_file)):
+                    try:
+                        stale.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                warnings.warn(
+                    "pickle cache HMAC verification failed "
+                    f"({type(exc).__name__}: {exc}); cache entry deleted, "
+                    "recomputing",
+                    UserWarning,
+                    stacklevel=2,
+                )
             if verbose:
                 print(f"⚠️  缓存加载失败（{type(exc).__name__}），重新提取...")
 
@@ -106,8 +191,13 @@ def load_concept_cached_impl(
         )
     try:
         if use_pickle:
+            assert hmac_key is not None  # guarded by _require_hmac_key above
             with cache_file.open("wb") as handle:
                 pickle.dump(result, handle)
+            _hmac_path(cache_file).write_text(
+                _compute_hmac(cache_file.read_bytes(), hmac_key),
+                encoding="utf-8",
+            )
         elif isinstance(result, pd.DataFrame):
             result.to_parquet(cache_file, index=False)
         if verbose:
@@ -119,6 +209,7 @@ def load_concept_cached_impl(
 
 
 __all__ = [
+    "CACHE_HMAC_ENV_VAR",
     "data_path_fingerprint",
     "get_cache_key",
     "load_concept_cached_impl",

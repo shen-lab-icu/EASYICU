@@ -8,11 +8,14 @@ This module provides centralized configuration for:
 Separates project/testing configuration from data source configuration (config.py).
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Environment Variables
@@ -60,15 +63,18 @@ else:
     # Default: parent directory of easyicu/src/easyicu
     PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-# Production data paths - use original raw data only
+# Production data paths - use original raw data only.
+# When the corresponding environment variable is absent the path stays
+# unconfigured (None) instead of pointing at a host-specific absolute path.
+# Actual use must go through get_data_path(), which raises a guidance error.
 if ENV_PROD_DATA:
     PRODUCTION_DATA_PATH = Path(ENV_PROD_DATA)
 else:
-    PRODUCTION_DATA_PATH = Path("/home/1_publicData/icu_databases/mimiciv/3.1")
+    PRODUCTION_DATA_PATH = None
 
-PRODUCTION_DATA_EICU = Path(ENV_PROD_DATA_EICU or "/home/1_publicData/icu_databases/eicu/2.0.1")
-PRODUCTION_DATA_AUMC = Path(ENV_PROD_DATA_AUMC or "/home/1_publicData/icu_databases/aumc/1.0.2")
-PRODUCTION_DATA_HIRID = Path(ENV_PROD_DATA_HIRID or "/home/1_publicData/icu_databases/hirid/1.1.1")
+PRODUCTION_DATA_EICU = Path(ENV_PROD_DATA_EICU) if ENV_PROD_DATA_EICU else None
+PRODUCTION_DATA_AUMC = Path(ENV_PROD_DATA_AUMC) if ENV_PROD_DATA_AUMC else None
+PRODUCTION_DATA_HIRID = Path(ENV_PROD_DATA_HIRID) if ENV_PROD_DATA_HIRID else None
 
 # Output directories
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -234,33 +240,56 @@ USE_CHUNKED_LOADING = os.getenv('EASYICU_USE_CHUNKED_LOADING', 'auto')  # auto, 
 # Helper Functions
 # ============================================================================
 
+_PROD_PATH_ENV_HINT = {
+    "miiv": "EASYICU_PROD_DATA",
+    "eicu": "EASYICU_PROD_DATA_EICU",
+    "aumc": "EASYICU_PROD_DATA_AUMC",
+    "hirid": "EASYICU_PROD_DATA_HIRID",
+}
+
+
+def _require_production_path(database: str, path: Optional[Path]) -> Path:
+    if path is not None:
+        return path
+    env_var = _PROD_PATH_ENV_HINT.get(database, "EASYICU_PROD_DATA")
+    raise RuntimeError(
+        f"Production data path for database '{database}' is not configured. "
+        f"Set {env_var}=/path/to/{database} (or pass an explicit data_path) "
+        "instead of relying on a host-specific default."
+    )
+
+
 def get_data_path(source: str = "production", database: str = "miiv") -> Path:
     """Get data path for specified database.
-    
+
     Args:
         source: Data source type (only 'production' is supported)
         database: Database name ('miiv', 'eicu', 'hirid', 'aumc')
-        
+
     Returns:
         Path to data directory
-        
+
+    Raises:
+        RuntimeError: If the requested production path is not configured via
+            its ``EASYICU_PROD_DATA*`` environment variable.
+
     Examples:
+        >>> import os
+        >>> os.environ["EASYICU_PROD_DATA"] = "/data/mimiciv/3.1"
         >>> get_data_path('production', 'miiv')
-        PosixPath('/home/1_publicData/icu_databases/mimiciv/3.1')
-        >>> get_data_path('production', 'eicu')
-        PosixPath('/home/1_publicData/icu_databases/eicu/2.0.1')
+        PosixPath('/data/mimiciv/3.1')
     """
     if source != "production":
         raise ValueError(f"Only 'production' data source is supported, got: {source}")
-        
+
     if database == "miiv":
-        return PRODUCTION_DATA_PATH
+        return _require_production_path(database, PRODUCTION_DATA_PATH)
     elif database == "eicu":
-        return PRODUCTION_DATA_EICU
+        return _require_production_path(database, PRODUCTION_DATA_EICU)
     elif database == "aumc":
-        return PRODUCTION_DATA_AUMC
+        return _require_production_path(database, PRODUCTION_DATA_AUMC)
     elif database == "hirid":
-        return PRODUCTION_DATA_HIRID
+        return _require_production_path(database, PRODUCTION_DATA_HIRID)
     else:
         raise ValueError(f"Unknown database: {database}")
 
@@ -359,36 +388,32 @@ def get_concepts(concept_group: str) -> List[str]:
     return concept_map[concept_group]
 
 def print_config() -> None:
-    """Print current configuration (for debugging).
-    
+    """Log current configuration (for debugging).
+
     Examples:
         >>> print_config()
-        📋 Pyricu Project Configuration
-        ================================
-        Project Root: /home/zhuhb/project/ricu_to_python/easyicu
-        Production Data (MIMIC-IV): /home/1_publicData/icu_databases/mimiciv/3.1
-        ...
+        (configuration is emitted via logging, not stdout)
     """
-    print("📋 Pyricu Project Configuration")
-    print("=" * 50)
-    print(f"Project Root: {PROJECT_ROOT}")
-    print(f"Production Data (MIMIC-IV): {PRODUCTION_DATA_PATH}")
-    print(f"Production Data (eICU): {PRODUCTION_DATA_EICU}")
-    print(f"Production Data (AUMC): {PRODUCTION_DATA_AUMC}")
-    print(f"Production Data (HiRID): {PRODUCTION_DATA_HIRID}")
-    print(f"Output Dir: {OUTPUT_DIR}")
-    print(f"Cache Dir: {CACHE_DIR}")
-    print(f"Logs Dir: {LOGS_DIR}")
-    print()
-    print(f"Default Patients (MIMIC-IV): {len(DEFAULT_PATIENTS_MIIV)} patients")
-    print(f"Default Patients (eICU): {len(DEFAULT_PATIENTS_EICU)} patients")
-    print(f"Default Source: {DEFAULT_SOURCE}")
-    print()
-    print(f"Cache Enabled: {ENABLE_CACHE}")
-    print(f"Max Workers: {MAX_WORKERS}")
-    print(f"Chunk Size: {CHUNK_SIZE}")
-    print(f"Verbose: {VERBOSE}")
-    print("=" * 50)
+    logger.info("Pyricu Project Configuration")
+    logger.info("=" * 50)
+    logger.info("Project Root: %s", PROJECT_ROOT)
+    logger.info("Production Data (MIMIC-IV): %s", PRODUCTION_DATA_PATH)
+    logger.info("Production Data (eICU): %s", PRODUCTION_DATA_EICU)
+    logger.info("Production Data (AUMC): %s", PRODUCTION_DATA_AUMC)
+    logger.info("Production Data (HiRID): %s", PRODUCTION_DATA_HIRID)
+    logger.info("Output Dir: %s", OUTPUT_DIR)
+    logger.info("Cache Dir: %s", CACHE_DIR)
+    logger.info("Logs Dir: %s", LOGS_DIR)
+    logger.info("")
+    logger.info("Default Patients (MIMIC-IV): %d patients", len(DEFAULT_PATIENTS_MIIV))
+    logger.info("Default Patients (eICU): %d patients", len(DEFAULT_PATIENTS_EICU))
+    logger.info("Default Source: %s", DEFAULT_SOURCE)
+    logger.info("")
+    logger.info("Cache Enabled: %s", ENABLE_CACHE)
+    logger.info("Max Workers: %s", MAX_WORKERS)
+    logger.info("Chunk Size: %s", CHUNK_SIZE)
+    logger.info("Verbose: %s", VERBOSE)
+    logger.info("=" * 50)
 
 # ============================================================================
 # Validation
@@ -408,17 +433,20 @@ def validate_paths(verbose: bool | None = None) -> bool:
     if verbose is None:
         verbose = VERBOSE
     
-    # Check production data paths
+    # Check production data paths (None means unconfigured via env)
     for db_name, db_path in [
         ("MIMIC-IV", PRODUCTION_DATA_PATH),
         ("eICU", PRODUCTION_DATA_EICU),
         ("AUMC", PRODUCTION_DATA_AUMC),
         ("HiRID", PRODUCTION_DATA_HIRID),
     ]:
-        if db_path.exists():
+        if db_path is not None and db_path.exists():
             valid = True
         elif verbose:
-            print(f"Info: {db_name} production data path not found: {db_path}")
+            if db_path is None:
+                logger.info("Info: %s production data path not configured (set its EASYICU_PROD_DATA* env var)", db_name)
+            else:
+                logger.info("Info: %s production data path not found: %s", db_name, db_path)
     
     return valid
 

@@ -76,7 +76,7 @@ class MemoryMonitor:
         pressure = self.check_memory_pressure()
 
         if force or pressure in ['HIGH', 'EMERGENCY']:
-            print(f"🧹 Memory cleanup ({pressure})...")
+            logger.info("Memory cleanup (%s)...", pressure)
 
             # Garbage collection
             gc.collect()
@@ -92,7 +92,7 @@ class MemoryMonitor:
 
             new_pressure = self.check_memory_pressure()
             if new_pressure != pressure:
-                print(f"✅ Memory cleanup successful: {pressure} → {new_pressure}")
+                logger.info("Memory cleanup successful: %s -> %s", pressure, new_pressure)
             else:
                 logger.warning(f"Memory cleanup limited effect: {pressure}")
 
@@ -104,8 +104,9 @@ class MemoryMonitor:
         usage = self.get_memory_usage()
         pressure = self.check_memory_pressure()
 
-        print(f"📊 [{operation}] Memory: {usage['process_mb']:.1f}MB "
-              f"({usage['system_percent']:.1f}% system) [{pressure}]")
+        logger.debug("[%s] Memory: %.1fMB (%.1f%% system) [%s]",
+                     operation, usage['process_mb'],
+                     usage['system_percent'], pressure)
 
 class MemoryEfficientTable:
     """Memory-efficient DataFrame operations."""
@@ -141,7 +142,7 @@ class MemoryEfficientTable:
             if self.monitor:
                 optimized_memory = df.memory_usage(deep=True).sum()
                 savings = (original_memory - optimized_memory) / (1024 * 1024)
-                print(f"💾 Memory optimization: {savings:.1f}MB saved")
+                logger.debug("Memory optimization: %.1fMB saved", savings)
 
             return df
 
@@ -196,8 +197,9 @@ class MemoryEfficientTable:
             chunk = df[df[chunk_column].isin(chunk_ids)].copy()
 
             if self.monitor:
-                print(f"🔄 Processing chunk {i//chunk_size + 1}/{total_chunks} "
-                      f"({len(chunk_ids)} patients, {len(chunk)} rows)")
+                logger.debug("Processing chunk %d/%d (%d patients, %d rows)",
+                             i//chunk_size + 1, total_chunks,
+                             len(chunk_ids), len(chunk))
 
             # Process chunk
             result = func(chunk)
@@ -387,10 +389,10 @@ def optimize_for_16gb():
     # Configure pandas for memory efficiency
     pd.set_option('mode.chained_assignment', 'warn')
 
-    print("Optimized for 16GB RAM:")
-    print(f"   Chunk size: {config.chunk_size}")
-    print(f"   Max workers: {config.max_workers}")
-    print(f"   Cache limit: {config.cache_limit // (1024**2)}MB")
+    logger.info("Optimized for 16GB RAM:")
+    logger.info("   Chunk size: %d", config.chunk_size)
+    logger.info("   Max workers: %d", config.max_workers)
+    logger.info("   Cache limit: %dMB", config.cache_limit // (1024**2))
 
     return config
 
