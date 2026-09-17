@@ -6,7 +6,7 @@
 - 工作树：约 27 处 modified + 5 untracked（审阅时状态，详见各 P1/P2 中脏文件条目）
 - 跟踪文件总数：`git ls-files` 2838（其中 `*.py` 2298、`*.js` 160）
 - 方法：6 路只读子智能体并行，全覆盖逐文件审阅（无抽样；仅 `docs/evidence` 二进制/机器收据与 `uv.lock` 采用“结构校验+抽查并声明策略”，见覆盖表）
-- 结论口径：P0=阻塞 bug/安全必须修；P1=重要缺陷应在本分支修；P2=重要非阻塞；P3=微小/卫生。所有修改建议均未执行，本报告只读。
+- 结论口径（审阅时快照）：P0=阻塞 bug/安全必须修；P1=重要缺陷应在本分支修；P2=重要非阻塞；P3=微小/卫生。原始审阅只读；后续修复和验证见下一节。
 
 ## Codex 最终修复与提交闭环（2026-09-17）
 
@@ -17,8 +17,9 @@ Muse Spark 的原始修改集与后续补修已经复核、修正并拆成可独
 - 扩展 CAS：安装、覆盖、删除和 enable/disable 都必须携带当前 `expected_sha256`；摘要比较与写入在同一 registry 锁内完成，并发双写只允许一个成功。因此下文早期“state 开关有意除外”的记录已被后续修复取代。
 - 重试策略：中央失败类表已接入 candidate loop；未登记类型会失败关闭，不得再将工程状态判为 complete。运行时按 `attempt_id` 去重计尝试分母，按 step 累计值计算逻辑 LLM 修复预留数，把可能包含确定性修复的代码变更次数单独列示；`retry_policy_receipt.json` 还绑定策略 SHA-256 和失败类分布，并纳入最终 manifest 证据。
 - 出站端点：回环 HTTP 连接使用已校验 IP 建连并保留原 `Host` 头；HTTPS 仍保留域名和 TLS 主机名校验约束。
-- 最终验证：Ruff 全过；变更覆盖的 Python 测试 `1797 passed, 15 skipped, 284 deselected`；研究流水线真实端到端用例 `1 passed`；JS 合同 `44/44`；`compileall` 与 `git diff --check` 通过。
-- 批次提交：`679797c84` 核心数据/运行时；`187cbf95d` 研究代理与权限闭环；`889ce3159` Web/Copilot/扩展安全；`1802174b1` 工具、构建与发布契约；官网收据与本报告作为最后一批。未 push，未合并 `main`。
+- 完整回归（2026-09-18）：在代码提交 `efe599adb510ae39c515269856636c5d214d276c` 上，`EASYICU_TEST_RUNNER_KIND=subprocess EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 python -m pytest -q -m '' -n auto --dist loadfile --ignore=tests/research_agent/execution/test_runner.py` 得到 `19561 passed, 84 skipped`（43 分 33 秒）；单独运行 `tests/research_agent/execution/test_runner.py` 得到 `51 passed`。首轮完整回归曾发现 7 个治理/基线失败，已在 `efe599adb` 修复后重跑通过。Ruff、`compileall`、JS 合同 `44/44`、`git diff --check` 均通过。此为本地完整 Python 回归，不是远端 CI 或正式实验验收。
+- 能力清单：复核 `acquisition/foundation.py` 的可达路径与测试替身边界后，保留 `experimental`，将到期复核日期顺延至 2026-11-01；`python tools/audit_capability_inventory.py` 通过。该条仍需非替身集成或有界 canary，不能因此升格为生产可达或论文权限。
+- 批次提交：`679797c84` 核心数据/运行时；`187cbf95d` 研究代理与权限闭环；`889ce3159` Web/Copilot/扩展安全；`1802174b1` 工具、构建与发布契约；`dae879d78` 官网收据与审阅报告；`efe599adb` 完整回归发现的治理问题；最终文档复核单独一批。未 push，未合并 `main`。
 
 ## 针对性复核结论（2026-09-17 第二轮，6 子智能体逐条到行级复验）
 
