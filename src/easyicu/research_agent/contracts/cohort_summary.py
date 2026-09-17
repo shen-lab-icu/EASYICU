@@ -34,4 +34,3 @@ def is_descriptive_cohort_summary_step(step: AnalysisStep) -> bool:
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
     )
-
