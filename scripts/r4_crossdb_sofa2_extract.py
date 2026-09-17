@@ -49,7 +49,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from easyicu.api import load_concepts  # noqa: E402
 
-DB_ROOT = Path("/Volumes/外置硬盘/databases")
+DB_ROOT = Path(os.environ.get("EASYICU_DB_ROOT", "/Volumes/外置硬盘/databases"))
 # label, subdir, id_table (for exact N), easyicu db key
 DBS = {
     "mimic": ("MIMIC-III", "mimiciii", "icustays.parquet", "mimic"),

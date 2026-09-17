@@ -59,7 +59,7 @@ webapp = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "psutil>=5.9",
-  "anthropic>=0.119.0",
+  "anthropic>=0.119.0,<2",
   "openai>=1.40.0",
   "starlette>=0.40",
   "pymupdf>=1.24"
@@ -70,7 +70,7 @@ llmserver = [
 ]
 agentic = [
   "httpx>=0.27",
-  "anthropic>=0.119.0",
+  "anthropic>=0.119.0,<2",
   "openai>=1.40.0",
   "pillow>=10.0",
   "pypdf>=5.0"
@@ -97,13 +97,15 @@ methods = [
 # Optional adapters are deliberately separate from ``methods``: installing one
 # does not advertise it to the Coder or promote a scientific capability.  It
 # must still pass the capability-request / immutable-image approval path.
+# The aggregate ``all`` extra installs them as a convenience only; runtime use
+# still requires the approval path above.
 scientific-adapters = [
   "pandera[pandas]>=0.28,<0.33",
   "dowhy>=0.13,<0.14",
   "scikit-survival>=0.28,<0.29; python_version >= '3.11'"
 ]
 all = [
-  "easyicu[dev,viz,webapp,llmserver,agentic,mcp,cli,methods]"
+  "easyicu[dev,viz,webapp,llmserver,agentic,mcp,cli,methods,scientific-adapters]"
 ]
 
 [project.scripts]
@@ -115,10 +117,10 @@ easyicu-research-replication = "easyicu.research_agent.replication_cli:main"
 easyicu-copilot-install = "easyicu.webserver.pi_copilot.install:main"
 
 [project.urls]
-Homepage = "https://github.com/shen-lab-icu/easyicu"
-Repository = "https://github.com/shen-lab-icu/easyicu.git"
-Issues = "https://github.com/shen-lab-icu/easyicu/issues"
-Documentation = "https://github.com/shen-lab-icu/easyicu/blob/main/README.md"
+Homepage = "https://github.com/shen-lab-icu/EASYICU"
+Repository = "https://github.com/shen-lab-icu/EASYICU.git"
+Issues = "https://github.com/shen-lab-icu/EASYICU/issues"
+Documentation = "https://github.com/shen-lab-icu/EASYICU/blob/main/README.md"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -156,6 +158,7 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
 "easyicu.research_agent" = [
   "runner_image/Dockerfile",
   "runner_image/requirements.lock",
+  "runner_image/base-image.lock",
   "runner_image/README.md",
 ]
 

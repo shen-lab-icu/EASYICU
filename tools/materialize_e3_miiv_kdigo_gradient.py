@@ -27,7 +27,7 @@ import pandas as pd
 from easyicu.research_agent.acquisition.hospital_mortality_followup import (
     derive_mimic_iv_hospital_mortality_followup,
 )
-from e3_strict_kdigo_window import (
+from tools.e3_strict_kdigo_window import (
     STRICT_KDIGO_WINDOW_SCHEMA_VERSION,
     derive_strict_kdigo_window,
     strict_kdigo_summary,
@@ -532,6 +532,10 @@ def main() -> int:
     }
     _write_json(output_dir / "manifest.json", manifest)
     if args.max_stays is None:
+        # E-P2-10: rmtree guard — parts dir must stay under output_dir and
+        # never be a symlink.
+        assert parts.resolve().is_relative_to(output_dir.resolve()), parts
+        assert not parts.is_symlink(), parts
         shutil.rmtree(parts)
     print(json.dumps(manifest, ensure_ascii=False, sort_keys=True), flush=True)
     return 0

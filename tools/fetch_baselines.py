@@ -152,13 +152,99 @@ def load_registry() -> List[BaselineEntry]:
 # Git fetch
 # ---------------------------------------------------------------------------
 
+# E-P2-9: registry-driven clones are allowlisted by host.  A registry entry
+# pointing at an unexpected host fails closed instead of cloning arbitrary
+# code into baselines/_checkouts/.
+ALLOWED_REPO_HOSTS = frozenset(
+    {
+        "github.com",
+        "gitlab.com",
+        "gitee.com",
+    }
+)
+
+
+def _repo_host(repo: str) -> str | None:
+    """Extract the hostname from https/ssh repo URLs; None if unparseable."""
+
+    text = repo.strip()
+    if text.startswith("git@"):
+        # git@github.com:org/repo.git
+        try:
+            return text.split("@", 1)[1].split(":", 1)[0].lower()
+        except IndexError:
+            return None
+    for prefix in ("https://", "http://", "ssh://", "git://"):
+        if text.startswith(prefix):
+            host = text[len(prefix):].split("/", 1)[0].split("@")[-1]
+            return host.split(":", 1)[0].lower()
+    return None
+
+
+def _assert_repo_allowed(entry: BaselineEntry) -> None:
+    host = _repo_host(entry.repo)
+    if host not in ALLOWED_REPO_HOSTS:
+        raise SystemExit(
+            f"Refusing to clone baseline {entry.name!r}: host {host!r} is not "
+            f"in ALLOWED_REPO_HOSTS ({sorted(ALLOWED_REPO_HOSTS)}). "
+            "Add the host deliberately in tools/fetch_baselines.py if this "
+            "baseline is legitimate."
+        )
+
+
+def _assert_safe_rmtree(dest: Path) -> None:
+    """E-P2-10: rmtree guard — stay inside the checkout dir, never a symlink."""
+
+    target = dest.resolve()
+    root = CHECKOUT_DIR.resolve()
+    if not target.is_relative_to(root):
+        raise SystemExit(f"Refusing to remove {dest}: outside {CHECKOUT_DIR}")
+    if dest.is_symlink() or target.is_symlink():
+        raise SystemExit(f"Refusing to remove {dest}: is a symlink")
+
+
+def _confirm_force(entry_name: str, dest: Path, *, acknowledged: bool) -> None:
+    """E-P2-9: --force re-clone needs a second confirmation.
+
+    Either pass ``--i-understand-rmtree`` alongside ``--force`` or answer
+    the interactive prompt.  Non-interactive runs without the flag abort
+    instead of deleting.
+    """
+
+    if acknowledged:
+        return
+    try:
+        answer = input(
+            f"[baselines] --force will DELETE {dest} for {entry_name!r}. "
+            "Type the entry name to confirm: "
+        ).strip()
+    except EOFError:
+        answer = ""
+    if answer != entry_name:
+        raise SystemExit(
+            f"Aborted re-fetch of {entry_name!r}: type the entry name to "
+            "confirm, or pass --i-understand-rmtree."
+        )
+
 
 def _run(cmd: List[str], *, cwd: Path) -> int:
     print(f"[baselines] $ {' '.join(cmd)}  (cwd={cwd})")
     return subprocess.call(cmd, cwd=str(cwd))
 
 
-def fetch_one(entry: BaselineEntry, *, force: bool = False) -> Path:
+def _git_clone_args(*rest: str) -> List[str]:
+    """E-P2-9: never run cloned-repo hooks in this process's context."""
+
+    return ["git", "-c", "core.hooksPath=/dev/null", "clone", *rest]
+
+
+def fetch_one(
+    entry: BaselineEntry,
+    *,
+    force: bool = False,
+    i_understand_rmtree: bool = False,
+) -> Path:
+    _assert_repo_allowed(entry)
     CHECKOUT_DIR.mkdir(parents=True, exist_ok=True)
     dest = CHECKOUT_DIR / entry.name
     if dest.exists():
@@ -166,9 +252,13 @@ def fetch_one(entry: BaselineEntry, *, force: bool = False) -> Path:
             print(f"[baselines] {entry.name} already present at {dest}. "
                   "Use --force to re-fetch.")
             return dest
+        _confirm_force(entry.name, dest, acknowledged=i_understand_rmtree)
+        _assert_safe_rmtree(dest)
         shutil.rmtree(dest)
     rc = _run(
-        ["git", "clone", "--depth", "1", "--branch", entry.ref, entry.repo, entry.name],
+        _git_clone_args(
+            "--depth", "1", "--branch", entry.ref, entry.repo, entry.name
+        ),
         cwd=CHECKOUT_DIR,
     )
     if rc != 0:
@@ -177,7 +267,7 @@ def fetch_one(entry: BaselineEntry, *, force: bool = False) -> Path:
             "retrying as full clone.",
             file=sys.stderr,
         )
-        rc = _run(["git", "clone", entry.repo, entry.name], cwd=CHECKOUT_DIR)
+        rc = _run(_git_clone_args(entry.repo, entry.name), cwd=CHECKOUT_DIR)
         if rc == 0 and entry.ref not in {"", "main", "master"}:
             _run(["git", "checkout", entry.ref], cwd=dest)
     if rc != 0:
@@ -208,6 +298,11 @@ def main() -> int:
     parser.add_argument("--axis", help="Fetch every entry tagged with this axis.")
     parser.add_argument("--all", action="store_true", help="Fetch every entry.")
     parser.add_argument("--force", action="store_true", help="Re-clone if present.")
+    parser.add_argument(
+        "--i-understand-rmtree",
+        action="store_true",
+        help="Second confirmation for --force: skip the interactive delete prompt.",
+    )
     args = parser.parse_args()
 
     entries = load_registry()
@@ -235,7 +330,7 @@ def main() -> int:
         return 2
 
     for e in selected:
-        fetch_one(e, force=args.force)
+        fetch_one(e, force=args.force, i_understand_rmtree=args.i_understand_rmtree)
     return 0
 
 

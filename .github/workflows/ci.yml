@@ -106,8 +106,9 @@ jobs:
       - name: Install EasyICU and test dependencies
         run: |
           python -m pip install --upgrade pip
+          # The openai floor (>=1.40.0) comes via the webapp extra in
+          # pyproject.toml; no separate explicit install here.
           pip install -e ".[dev,webapp]"
-          pip install "openai>=1.40.0"
 
       - name: Compile Python source and tests
         run: python -m compileall -q src tests

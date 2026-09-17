@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,7 +39,11 @@ from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (  # n
 )
 from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 
-DEFAULT_DB = Path("/Volumes/外置硬盘/databases/mimiciv")
+# E-P2-5: honor EASYICU_DB_ROOT; the historical /Volumes mount is only the
+# fallback for developers who still have it.
+DEFAULT_DB = (
+    Path(os.environ.get("EASYICU_DB_ROOT", "/Volumes/外置硬盘/databases")) / "mimiciv"
+)
 DEFAULT_CATALOG = (
     REPO_ROOT / "benchmarks" / "catalogs" / "source_item_catalog_miiv.json"
 )

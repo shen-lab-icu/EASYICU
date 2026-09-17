@@ -1,4 +1,6 @@
 cff-version: 1.2.0
+# Copyright holder aligned with LICENSE and pyproject.toml authors:
+# Haibo Zhu and EasyICU contributors.
 message: "If you use EasyICU in your research, please cite this software repository."
 title: "EasyICU"
 version: "1.0.0"
@@ -6,6 +8,7 @@ type: software
 authors:
   - family-names: "Zhu"
     given-names: "Haibo"
+  - name: "EasyICU contributors"
 repository-code: "https://github.com/shen-lab-icu/EASYICU"
 url: "https://github.com/shen-lab-icu/EASYICU"
 license: "MIT"

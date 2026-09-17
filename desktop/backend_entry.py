@@ -44,12 +44,15 @@ def _configure_environment(
 
 
 def _parser() -> argparse.ArgumentParser:
+    # The session token travels via the environment only. There is deliberately
+    # no --session-token flag: process arguments are visible to other local
+    # users via the process table, while the environment is inherited privately
+    # from the desktop shell that generated the token.
     parser = argparse.ArgumentParser(description="EasyICU Desktop backend")
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--parent-pid", required=True, type=int)
-    parser.add_argument("--session-token")
     parser.add_argument("--node-bin")
     return parser
 
@@ -88,11 +91,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if not 1024 <= args.port <= 65535:
         raise ValueError("port must be between 1024 and 65535")
+    session_token = os.environ.get("EASYICU_DESKTOP_SESSION_TOKEN", "")
+    if not str(session_token).strip():
+        raise ValueError(
+            "EASYICU_DESKTOP_SESSION_TOKEN is not set; "
+            "the desktop shell must launch the backend with a token"
+        )
     _configure_environment(
         state_dir=args.state_dir,
         runtime_dir=args.runtime_dir,
-        session_token=args.session_token
-        or os.environ.get("EASYICU_DESKTOP_SESSION_TOKEN", ""),
+        session_token=session_token,
         node_bin=args.node_bin,
     )
     import uvicorn
