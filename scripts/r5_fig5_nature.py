@@ -7,6 +7,9 @@ Annotations summarize these inputs; unadjusted ratios do not establish protectio
 or significance of differences between BMI groups.
 """
 
+import argparse
+import tempfile
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -79,9 +82,23 @@ def validate_data(df):
     )
 
 
-def main():
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--in",
+        dest="input_csv",
+        default="research_output/r5_obesity_crossdb/obesity_paradox_crossdb.csv",
+        help="input CSV from obesity_paradox_crossdb.py (use --out of that script)",
+    )
+    # No dirty-tree default: without --out, write into an ephemeral temp dir.
+    ap.add_argument("--out", default=None, help="output figure prefix (default: tempfile.mkdtemp/Figure5)")
+    return ap.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
     configure_style()
-    df = pd.read_csv("research_output/r5_obesity_crossdb/obesity_paradox_crossdb.csv")
+    df = pd.read_csv(args.input_csv)
     spread, lower_count = validate_data(df)
     x = np.arange(len(CATS))
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.4))
@@ -138,7 +155,10 @@ def main():
         y=1.02,
     )
     fig.tight_layout()
-    out = Path("research_output/r5_obesity_crossdb/Figure5")
+    if args.out:
+        out = Path(args.out)
+    else:
+        out = Path(tempfile.mkdtemp(prefix="easyicu_fig5_")) / "Figure5"
     for ext, kw in [
         (".svg", {}),
         (".pdf", {}),

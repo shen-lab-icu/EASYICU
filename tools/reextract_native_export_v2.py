@@ -605,8 +605,12 @@ def _safe_remove_attempt_payload(path: Path, attempt_root: Path) -> None:
 
     if not path.exists():
         return
+    # E-P2-10: rmtree guard — resolved path must stay under the attempt root
+    # and never be a symlink (keeps the pre-existing parent-equality check).
     if path.is_symlink() or not path.is_dir() or path.parent.resolve() != attempt_root.resolve():
         raise ExtractionRunError(f"refusing unsafe attempt cleanup: {path}")
+    assert path.resolve().is_relative_to(attempt_root.resolve()), path
+    assert not path.resolve().is_symlink(), path
     shutil.rmtree(path)
 
 

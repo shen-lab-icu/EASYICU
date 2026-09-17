@@ -22,12 +22,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
-DEFAULT_DB = Path("/Volumes/外置硬盘/databases/mimiciv")
+# E-P2-5: no hardcoded mount; honor EASYICU_DB_ROOT with the historical
+# default as fallback.  Callers without the mount get a clear SystemExit
+# from main() ("no d_labitems / d_items catalog under ..."), not a silent
+# empty catalog.
+DEFAULT_DB = Path(os.environ.get("EASYICU_DB_ROOT", "/Volumes/外置硬盘/databases")) / "mimiciv"
 DEFAULT_OUT = (
     Path(__file__).resolve().parents[1]
     / "benchmarks"

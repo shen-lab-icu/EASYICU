@@ -44,7 +44,10 @@ def test_openai_json_schema_transport_has_a_consistent_sdk_floor() -> None:
     for extra in ("webapp", "agentic"):
         assert "openai>=1.40.0" in optional[extra]
 
-    assert '"openai>=1.40.0"' in (
+    # ci.yml proves the floor through the webapp extra (no redundant explicit
+    # pin); research_agent_ci.yml installs an explicit runtime without extras
+    # so it keeps the explicit pin.
+    assert '".[dev,webapp]"' in (
         WORKFLOW_DIR / "ci.yml"
     ).read_text(encoding="utf-8")
     assert '"openai>=1.40.0"' in (

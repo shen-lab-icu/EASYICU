@@ -10,12 +10,22 @@ MIIV export with duckdb (low memory over ~98M long-format rows).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import duckdb
 import pyarrow.parquet as pq
 
-EXPORT = Path("/Volumes/外置硬盘/easyicu_fullexport_miiv_20260610")
+# E-P2-5: honor EASYICU_DB_ROOT; the historical /Volumes export is fallback.
+EXPORT = Path(
+    os.environ.get(
+        "EASYICU_FULL_EXPORT",
+        os.environ.get(
+            "EASYICU_DB_ROOT",
+            "/Volumes/外置硬盘/easyicu_fullexport_miiv_20260610",
+        ),
+    )
+)
 OUT = Path("research_output/universe_discovery/universe_discovery.parquet")
 
 # concept -> handling

@@ -22,8 +22,8 @@ when one owner and its typed consumers are identified explicitly.
 **Starting base HEAD (full SHA):**
 
 - [ ] This PR contains one independently reviewable workstream.
-- [ ] Work was performed in a dedicated linked worktree, or a sole-user clone
-      exception is explained below.
+- [ ] Work was performed in the canonical checkout (default), or a linked-worktree
+      exception was explicitly approved and is explained below.
 - [ ] No unrelated staged, unstaged, or untracked path was present at commit.
 
 ## Task-scope receipt

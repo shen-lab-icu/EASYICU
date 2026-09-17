@@ -52,6 +52,17 @@ def _venv_python() -> Path:
     return VENV_ROOT / "bin" / "python"
 
 
+def _app_version() -> str:
+    """Read the release version from the Tauri manifest so artifact names track it."""
+    config = json.loads(
+        (DESKTOP_ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8")
+    )
+    version = str(config.get("version") or "").strip()
+    if not version:
+        raise RuntimeError("tauri.conf.json does not declare a version")
+    return version
+
+
 def _prepare_python_runtime(selected_python: str) -> Path:
     BUILD_ROOT.mkdir(parents=True, exist_ok=True)
     if not _venv_python().exists():
@@ -198,7 +209,7 @@ def _build_tauri() -> None:
 
     dmg_dir = bundle_root / "dmg"
     dmg_dir.mkdir(parents=True, exist_ok=True)
-    dmg = dmg_dir / "EasyICU_1.0.0_aarch64.dmg"
+    dmg = dmg_dir / f"EasyICU_{_app_version()}_aarch64.dmg"
     dmg.unlink(missing_ok=True)
     # File Provider can restore FinderInfo on bundles inside Documents even
     # after xattr cleanup. Sign the DMG payload in the system temporary area.

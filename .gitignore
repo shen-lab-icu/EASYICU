@@ -155,6 +155,9 @@ pilot_runs/
 
 # Private audit data. Public Markdown, scripts, tests, and fixtures are tracked.
 docs/_internal/
+# Top-level docs JSON is local-only, except the tracked canary below. This
+# `docs/*.json` pattern does NOT match subdirectories, so JSON under
+# docs/evidence/, docs/reviews/, etc. stays intentionally tracked.
 docs/*.json
 !docs/dependency_upgrade_canaries.json
 docs/*.txt
