@@ -16,7 +16,9 @@
 2. **提交范围护栏拒绝仓库强制采用的 canonical checkout**。`AGENTS.md` 要求在 Dev9 唯一检出工作，但 `verify_git_task_scope.py` 默认要求 linked worktree，`CONTRIBUTING.md` 和 PR 模板仍称 primary 必拒。`98e82d1be` 改为主检出默认可过，保留 HEAD、暂存/未暂存/未跟踪文件范围及冲突检查；显式批准的 linked-worktree 任务可用 `--require-linked-worktree`。旧 `--allow-primary-worktree` 参数作为兼容别名保留。
 3. **发布图件晋升可经符号链接覆盖运行目录外文件，损坏摘要封存可被同名冲突绕过**。宿主把代理写在 `outputs/` 旁的图件用 `shutil.copy2` 搬入输出目录，并用 `Path.write_text` 更新 `step_summary.json`。合成运行目录中，预置指向外部文件的目标链接会令外部文件被覆盖。原封存逻辑仅按摘要文件名是否存在判断成功，已存在但内容冲突的封存文件会被接受。`95f7eca32` 使用现有 descriptor-anchored 文件系统原语读取、复制、原子替换和不可变封存；拒绝相关源、目标及输出目录链接，冲突时失败关闭。八项合成回归覆盖两个晋升入口、外部文件不变和原始损坏字节保留；旧实现先红，修复后通过。
 
-聚焦验证：缓存及相邻数据合同 **51 passed**，护栏 **10 passed**，发布路径回归 **8 passed**，相邻报告合同与选定流水线集成用例通过，导入边界 **7/7**；改动文件 Ruff、Black 和 `git diff --check` 通过。`6ac41fbac` 的全矩阵因新发现而取消，完整 exact-head CI 必须以本次新增提交后的最终 SHA 与 PR 检查为准，不能沿用旧 `b2f059768` 或取消的 `6ac41fbac` 收据。现存 Linux GTK/WebKit `glib 0.18.5` 告警以及发布前依赖锁审计仍单独保留；工程合并不授予研究启动或论文权限。
+架构检查随后指出第三项修复让受体积闸约束的 `reporting/publication_bundles.py` 从 3008 增至 3114 行。已把无链接复制和摘要封存事务抽至同层 `reporting/publication_filesystem.py`，保留原入口；原文件降至 2999 行，并将新 132 行模块加入体积度量。模块图基线据此记录模块数 699→700、环数仍为零，同时刷新此前 retry-policy 移动后的旧边；未靠放宽原文件阈值放行。架构体积、模块图、导入边界 **7/7** 与治理/路径/相邻合同 **72 passed** 均通过，抽取后的选定流水线集成 **4 passed**。抽取前同一防护实现的整份流水线集成 **279 passed**；抽取后完整 exact-head CI 仍须另验。
+
+其余聚焦验证：缓存及相邻数据合同 **51 passed**，护栏 **10 passed**，发布路径回归 **8 passed**；改动文件 Ruff、Black 和 `git diff --check` 通过。`6ac41fbac` 与 `17605aa88` 的全矩阵分别因新发现和架构闸失败而取消，完整 exact-head CI 必须以最终 SHA 与 PR 检查为准，不能沿用旧 `b2f059768` 或取消的收据。现存 Linux GTK/WebKit `glib 0.18.5` 告警以及发布前依赖锁审计仍单独保留；工程合并不授予研究启动或论文权限。
 
 ## Codex 最终修复与提交闭环（2026-09-17）
 

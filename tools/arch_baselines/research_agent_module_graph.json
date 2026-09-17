@@ -3385,6 +3385,10 @@
     ],
     [
       "easyicu.research_agent.execution.candidate_loop",
+      "easyicu.research_agent.contracts.retry_policy"
+    ],
+    [
+      "easyicu.research_agent.execution.candidate_loop",
       "easyicu.research_agent.contracts.runtime"
     ],
     [
@@ -7665,6 +7669,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.finalize",
+      "easyicu.research_agent.contracts.retry_policy"
+    ],
+    [
+      "easyicu.research_agent.orchestration.finalize",
       "easyicu.research_agent.contracts.runtime"
     ],
     [
@@ -10669,11 +10677,19 @@
     ],
     [
       "easyicu.research_agent.reporting.publication_bundles",
+      "easyicu.research_agent.reporting.publication_filesystem"
+    ],
+    [
+      "easyicu.research_agent.reporting.publication_bundles",
       "easyicu.research_agent.reporting.readiness"
     ],
     [
       "easyicu.research_agent.reporting.publication_bundles",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.reporting.publication_filesystem",
+      "easyicu.research_agent.authority.filesystem"
     ],
     [
       "easyicu.research_agent.reporting.readiness",
@@ -11053,7 +11069,7 @@
     ],
     [
       "easyicu.research_agent.reporting.system_validation_report",
-      "easyicu.research_agent.execution.retry_policy"
+      "easyicu.research_agent.contracts.retry_policy"
     ],
     [
       "easyicu.research_agent.reporting.system_validation_report",
@@ -11956,9 +11972,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2981,
+    "edge_count": 2985,
     "largest_scc_size": 0,
-    "module_count": 699,
+    "module_count": 700,
     "package_count": 32,
     "top_level_module_count": 35
   },
@@ -12148,6 +12164,7 @@
     "easyicu.research_agent.contracts.product_identity": "contracts/product_identity.py",
     "easyicu.research_agent.contracts.research_display": "contracts/research_display.py",
     "easyicu.research_agent.contracts.result_envelope": "contracts/result_envelope.py",
+    "easyicu.research_agent.contracts.retry_policy": "contracts/retry_policy.py",
     "easyicu.research_agent.contracts.rmst": "contracts/rmst.py",
     "easyicu.research_agent.contracts.robustness_execution": "contracts/robustness_execution.py",
     "easyicu.research_agent.contracts.runtime": "contracts/runtime.py",
@@ -12224,7 +12241,6 @@
     "easyicu.research_agent.execution.repair_reservation": "execution/repair_reservation.py",
     "easyicu.research_agent.execution.replan_review": "execution/replan_review.py",
     "easyicu.research_agent.execution.resume_revalidation": "execution/resume_revalidation.py",
-    "easyicu.research_agent.execution.retry_policy": "execution/retry_policy.py",
     "easyicu.research_agent.execution.run_coordination": "execution/run_coordination.py",
     "easyicu.research_agent.execution.runner": "execution/runner.py",
     "easyicu.research_agent.execution.runners": "execution/runners/__init__.py",
@@ -12592,6 +12608,7 @@
     "easyicu.research_agent.reporting.p_values": "reporting/p_values.py",
     "easyicu.research_agent.reporting.pdf_render": "reporting/pdf_render.py",
     "easyicu.research_agent.reporting.publication_bundles": "reporting/publication_bundles.py",
+    "easyicu.research_agent.reporting.publication_filesystem": "reporting/publication_filesystem.py",
     "easyicu.research_agent.reporting.readiness": "reporting/readiness.py",
     "easyicu.research_agent.reporting.registered_report_inputs": "reporting/registered_report_inputs.py",
     "easyicu.research_agent.reporting.reporting_checklist": "reporting/reporting_checklist.py",
