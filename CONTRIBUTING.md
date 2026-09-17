@@ -42,14 +42,12 @@ python tools/verify_git_task_scope.py \
   --allow tests/test_owned_contract.py
 ```
 
-The command fails closed when HEAD moved, the task is running in the shared
-primary worktree, no changes are staged, an unmerged path exists, or any staged,
-unstaged, or untracked path falls outside the exact allowlist. Paste the passing
-JSON receipt or at least its `scope_sha256` into the pull request.
-
-A developer working alone in a dedicated clone may pass
-`--allow-primary-worktree`, but must explain that exception in the pull request.
-This exception is not valid for a workspace shared by concurrent agents.
+The canonical checkout is accepted by default, as required by AGENTS.md. The
+command fails closed when HEAD moved, no changes are staged, an unmerged path
+exists, or any staged, unstaged, or untracked path falls outside the exact
+allowlist. For an explicitly approved linked-worktree task, pass
+`--require-linked-worktree`. Paste the passing JSON receipt or at least its
+`scope_sha256` into the pull request.
 
 ## Pull request guidance
 

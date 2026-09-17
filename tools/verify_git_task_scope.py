@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that one commit comes from an isolated, explicitly bounded task.
+"""Verify that one commit comes from an explicitly bounded task.
 
 The guard is intentionally independent of Git hooks. Run it after staging and
 before committing so its JSON receipt binds the starting HEAD, worktree kind,
@@ -39,9 +39,7 @@ def _git_bytes(repo_root: Path, *args: str) -> bytes:
         if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
             detail = os.fsdecode(exc.stderr).strip()
         suffix = f": {detail}" if detail else ""
-        raise TaskScopeInvocationError(
-            f"git {' '.join(args)} failed{suffix}"
-        ) from exc
+        raise TaskScopeInvocationError(f"git {' '.join(args)} failed{suffix}") from exc
     return result.stdout
 
 
@@ -87,7 +85,9 @@ def _parse_status(
     while index < len(entries) and entries[index]:
         entry = entries[index]
         if len(entry) < 4 or entry[2:3] != b" ":
-            raise TaskScopeInvocationError("git status returned an invalid porcelain row")
+            raise TaskScopeInvocationError(
+                "git status returned an invalid porcelain row"
+            )
         try:
             code = entry[:2].decode("ascii")
         except UnicodeDecodeError as exc:
@@ -138,7 +138,7 @@ def evaluate_task_scope(
     *,
     base_head: str,
     allowed_paths: Iterable[str],
-    require_linked_worktree: bool = True,
+    require_linked_worktree: bool = False,
 ) -> dict[str, object]:
     """Return a deterministic pass/fail receipt for the current Git task scope."""
 
@@ -230,10 +230,16 @@ def main() -> int:
         dest="allowed_paths",
         help="Exact repository-relative path owned by this task; repeat as needed.",
     )
-    parser.add_argument(
+    worktree_mode = parser.add_mutually_exclusive_group()
+    worktree_mode.add_argument(
+        "--require-linked-worktree",
+        action="store_true",
+        help="Require a linked worktree when an explicitly approved task uses one.",
+    )
+    worktree_mode.add_argument(
         "--allow-primary-worktree",
         action="store_true",
-        help="Explicit sole-user-clone exception; linked worktrees are the safe default.",
+        help=argparse.SUPPRESS,  # Backward-compatible alias; primary is now default.
     )
     args = parser.parse_args()
 
@@ -242,7 +248,7 @@ def main() -> int:
             args.repo_root,
             base_head=args.base_head,
             allowed_paths=args.allowed_paths,
-            require_linked_worktree=not args.allow_primary_worktree,
+            require_linked_worktree=args.require_linked_worktree,
         )
     except TaskScopeInvocationError as exc:
         receipt = {

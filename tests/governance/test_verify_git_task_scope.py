@@ -71,7 +71,7 @@ def test_exact_linked_worktree_scope_passes_and_binds_receipt(tmp_path: Path) ->
     assert len(receipt["scope_sha256"]) == 64
 
 
-def test_primary_worktree_fails_closed_by_default(tmp_path: Path) -> None:
+def test_primary_worktree_passes_by_default(tmp_path: Path) -> None:
     repo, base_head = _init_repo(tmp_path)
     (repo / "intended.txt").write_text("staged\n", encoding="utf-8")
     _git(repo, "add", "intended.txt")
@@ -82,8 +82,25 @@ def test_primary_worktree_fails_closed_by_default(tmp_path: Path) -> None:
         allowed_paths=("intended.txt",),
     )
 
+    assert receipt["status"] == "pass"
+    assert receipt["linked_worktree"] is False
+    assert receipt["linked_worktree_required"] is False
+
+
+def test_explicit_linked_worktree_requirement_rejects_primary(tmp_path: Path) -> None:
+    repo, base_head = _init_repo(tmp_path)
+    (repo / "intended.txt").write_text("staged\n", encoding="utf-8")
+    _git(repo, "add", "intended.txt")
+
+    receipt = scope_guard.evaluate_task_scope(
+        repo,
+        base_head=base_head,
+        allowed_paths=("intended.txt",),
+        require_linked_worktree=True,
+    )
+
     assert receipt["status"] == "fail"
-    assert "task_scope_linked_worktree_required" in receipt["reason_codes"]
+    assert receipt["reason_codes"] == ["task_scope_linked_worktree_required"]
 
 
 @pytest.mark.parametrize("change_kind", ["staged", "unstaged", "untracked"])
@@ -157,6 +174,7 @@ def test_cli_failure_is_machine_readable(tmp_path: Path) -> None:
             base_head,
             "--allow",
             "intended.txt",
+            "--require-linked-worktree",
         ],
         capture_output=True,
         text=True,
@@ -166,6 +184,32 @@ def test_cli_failure_is_machine_readable(tmp_path: Path) -> None:
     receipt = json.loads(result.stdout)
     assert receipt["status"] == "fail"
     assert receipt["reason_codes"] == ["task_scope_linked_worktree_required"]
+
+
+def test_cli_accepts_canonical_checkout_by_default(tmp_path: Path) -> None:
+    repo, base_head = _init_repo(tmp_path)
+    (repo / "intended.txt").write_text("staged\n", encoding="utf-8")
+    _git(repo, "add", "intended.txt")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--repo-root",
+            str(repo),
+            "--base-head",
+            base_head,
+            "--allow",
+            "intended.txt",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    receipt = json.loads(result.stdout)
+    assert receipt["status"] == "pass"
+    assert receipt["linked_worktree"] is False
 
 
 def test_contribution_surfaces_require_scope_receipt_and_independent_review() -> None:
