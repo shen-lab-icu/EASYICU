@@ -882,6 +882,14 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the temporal cohort owner and signed primary route."""
 
+        signed_methods = {self.cohort_method, self.primary_method}
+        if any(step.method in signed_methods for step in plan.steps):
+            # Saved plans cross this boundary again during deterministic replay
+            # and resume migration. Accept only a fully valid sealed plan; a
+            # partial or tampered signed route must still fail closed.
+            self.validate_plan(plan)
+            return plan
+
         primary = self._draft_primary(plan)
         self._validated_requirement(primary)
         cohort_input = sole_typed_cohort_input(primary)

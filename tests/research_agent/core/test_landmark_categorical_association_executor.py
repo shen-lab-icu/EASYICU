@@ -515,6 +515,39 @@ def test_disclosing_coordinates_does_not_allow_primary_contrast_drift(tmp_path):
         authority.bind_plan(plan)
 
 
+def test_signed_landmark_categorical_plan_rebind_is_idempotent(tmp_path) -> None:
+    _, _, authority = _projection(tmp_path)
+    first = authority.bind_plan(_draft_plan())
+    saved = AnalysisPlan.model_validate(first.model_dump(mode="json"))
+
+    rebound, findings = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).bind_plan(saved)
+
+    assert rebound.model_dump(mode="json") == saved.model_dump(mode="json")
+    assert findings[0].detail["reason_code"] == (
+        "landmark_categorical_association_host_compiled"
+    )
+
+
+def test_partial_signed_landmark_categorical_plan_still_fails_closed(tmp_path) -> None:
+    _, _, authority = _projection(tmp_path)
+    draft = _draft_plan()
+    partially_signed = draft.model_copy(
+        update={
+            "steps": [
+                draft.steps[0],
+                draft.steps[1].model_copy(update={"method": authority.primary_method}),
+                *draft.steps[2:],
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="signed cohort owner"):
+        authority.bind_plan(partially_signed)
+
+
 def test_signed_landmark_categorical_owner_filters_then_fits(tmp_path) -> None:
     universe, projection, authority = _projection(tmp_path)
     bound, findings = ScientificRuntimeAuthorities(
