@@ -5,8 +5,8 @@
   "files": {
     "execution/phase.py": {
       "loc": 5695,
-      "sha256": "3a301847ab3011dfe47b9fb938c88a4c7ec943fe41b0aa83d2e48074f72b6cd3",
-      "intra_package_import_edges": 101,
+      "sha256": "0bee52c6671ea739c5788c4085ca1f52abcfdbc44a82c12fe19cecef376d7d94",
+      "intra_package_import_edges": 102,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
@@ -29,13 +29,13 @@
     },
     "reporting/publication_bundles.py": {
       "loc": 2999,
-      "sha256": "6b606d51b008c74bd65b1337b7a52baa36a0777cc68eaf2c163106399bdc73b4",
+      "sha256": "843587276f549abef7f4f1c72d8b345b39a71ecc8d42840661551dac64776ae6",
       "intra_package_import_edges": 9,
       "shim_bypass_violations": []
     },
     "reporting/publication_filesystem.py": {
       "loc": 132,
-      "sha256": "2362949d3ddb95fc2b2a696f3e9d08b734b52eaca6e822347ff4b380f4d0500a",
+      "sha256": "7697675c694216c3e13b8e44a3cf79c37cf7aac5f8b2a7e24b28413b9ac258ca",
       "intra_package_import_edges": 1,
       "shim_bypass_violations": []
     },
@@ -412,13 +412,7 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Accept three additional lines in execution/phase.py to reject agent-created symlinked publication output paths before and after staged rendering; a synthetic regression showed the old installer could move an unrelated external file.",
-  "baseline_accepted_growth": {
-    "execution/phase.py": {
-      "loc_was": 5692,
-      "loc_now": 5695
-    }
-  },
+  "baseline_reason": "Replace the private cross-module publication output-path import with a public filesystem owner entrypoint; no LOC or function-complexity growth.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -1131,6 +1125,9 @@
           "loc_now": 5695
         }
       }
+    },
+    {
+      "reason": "Replace the private cross-module publication output-path import with a public filesystem owner entrypoint; no LOC or function-complexity growth."
     }
   ]
 }

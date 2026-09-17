@@ -22,7 +22,7 @@ from .publication_filesystem import (
     _atomic_write_bytes,
     _copy_publication_file,
     _read_step_summary_bytes,
-    _require_real_output_dir,
+    require_real_output_dir,
     _seal_corrupt_step_summary,
 )
 
@@ -249,7 +249,7 @@ def _promote_sibling_figure_exports(
     via :func:`_seal_corrupt_step_summary` before the rebuilt summary
     overwrites it, and the seal is recorded in the rescue block.
     """
-    _require_real_output_dir(out_dir, run_dir)
+    require_real_output_dir(out_dir, run_dir)
     parent = out_dir.parent
     source_stem = out_dir.name
     figure_suffixes = (".pdf", ".png", ".svg", ".tiff", ".tif", ".pptx")
@@ -344,7 +344,7 @@ def _promote_prior_publication_bundle(
     require_declared_sources: bool = False,
 ) -> Optional[str]:
     """Promote the strongest earlier figure bundle into a publication step."""
-    _require_real_output_dir(out_dir, run_dir)
+    require_real_output_dir(out_dir, run_dir)
     steps_dir = run_dir / "steps"
     if steps_dir.is_symlink():
         raise ValueError("publication steps directory is a symlink")
