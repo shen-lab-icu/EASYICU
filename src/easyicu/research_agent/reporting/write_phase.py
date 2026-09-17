@@ -4,10 +4,10 @@ Write phase for the EasyICU research-agent pipeline.
 This module is callable as ``run_write_phase(pipeline, ...)``. It reads
 configuration and collaborators from the pipeline instance, matching the
 ``execution/phase.py`` free-function pattern, and returns the existing
-``_WritePhaseResult`` boundary object.
+``WritePhaseResult`` boundary object.
 
-Boundary contract: consumes ``_PlanPhaseResult`` + ``_ExecutePhaseResult``
-and emits ``_WritePhaseResult``. The dataclasses live in ``contracts.py`` so
+Boundary contract: consumes ``PlanPhaseResult`` + ``ExecutePhaseResult``
+and emits ``WritePhaseResult``. The dataclasses live in ``contracts.py`` so
 all phase modules share one handoff vocabulary.
 """
 
@@ -31,9 +31,9 @@ from .descriptive_report_facts import (
 from ..review.causal_audit import run_causal_audit
 from ..contracts.runtime import (
     ValidationFinding,
-    _ExecutePhaseResult,
-    _PlanPhaseResult,
-    _WritePhaseResult,
+    ExecutePhaseResult,
+    PlanPhaseResult,
+    WritePhaseResult,
 )
 from ..authority.evidence_store import (
     EvidenceEnforcementError,
@@ -708,7 +708,7 @@ class _BindingStageResult:
 def _activate_publication_figure(
     pipeline: Any,
     *,
-    execute_result: _ExecutePhaseResult,
+    execute_result: ExecutePhaseResult,
     context: Any,
     evidence: Any,
     findings: List[ValidationFinding],
@@ -841,7 +841,7 @@ def _activate_publication_figure(
 def _activate_publication_inputs(
     pipeline: Any,
     *,
-    plan_result: _PlanPhaseResult,
+    plan_result: PlanPhaseResult,
     agent_context: Any,
     evidence: Any,
     findings: List[ValidationFinding],
@@ -1187,7 +1187,7 @@ def _render_or_resume_writer_scaffold(
     evidence: Any,
     run_dir: Path,
     per_step_records: Sequence[Dict[str, Any]],
-    execute_result: _ExecutePhaseResult,
+    execute_result: ExecutePhaseResult,
     literature: Optional[LiteratureBundle],
     agent_context: Any,
     preferred_evidence_names: Sequence[str],
@@ -1455,7 +1455,7 @@ def _draft_manuscript(
     prompt_version: str,
     role_resolver: Callable[[str], Any],
     runtime_state: Any,
-    execute_result: _ExecutePhaseResult,
+    execute_result: ExecutePhaseResult,
     run_dir: Path,
     run_id: str,
     run_language: str,
@@ -3117,7 +3117,7 @@ def _development_runtime_lineage_allowed(pipeline: Any) -> bool:
 def _write_reproducibility_artifacts(
     pipeline: Any,
     *,
-    plan_result: _PlanPhaseResult,
+    plan_result: PlanPhaseResult,
     evidence: Any,
     findings: List[ValidationFinding],
     current_verified_evidence_records: Sequence[Any],
@@ -3270,8 +3270,8 @@ def _write_reproducibility_artifacts(
 def _draft_bind_and_repair_manuscript(
     pipeline: Any, *, context: Any, agent_context: Any, evidence: Any,
     findings: List[ValidationFinding], literature: Optional[LiteratureBundle],
-    per_step_records: Sequence[Dict[str, Any]], plan_result: _PlanPhaseResult,
-    execute_result: _ExecutePhaseResult, critic: CriticAgent,
+    per_step_records: Sequence[Dict[str, Any]], plan_result: PlanPhaseResult,
+    execute_result: ExecutePhaseResult, critic: CriticAgent,
     role_resolver: Callable[[str], Any], prompt_version: str, runtime_state: Any,
     run_dir: Path, run_id: str, run_language: str,
     writer_probe_mode: bool, writer_probe_failed_steps: Sequence[str],
@@ -3345,8 +3345,8 @@ def _draft_bind_and_repair_manuscript(
 def run_write_phase(
     pipeline,
     *,
-    plan_result: _PlanPhaseResult,
-    execute_result: _ExecutePhaseResult,
+    plan_result: PlanPhaseResult,
+    execute_result: ExecutePhaseResult,
     run_dir: Path,
     run_id: str,
     stop_after_analysis: bool,
@@ -3355,7 +3355,7 @@ def run_write_phase(
     run_language: str,
     emit_progress: Callable[..., None],
     force_writer_probe: bool = False,
-) -> _WritePhaseResult:
+) -> WritePhaseResult:
     """Draft manuscript-facing outputs after analysis is complete."""
     context = plan_result.context
     agent_context = plan_result.agent_context
@@ -3389,7 +3389,7 @@ def run_write_phase(
             },
         )
 
-    def blocked_write_result(bound_path: Path, reason: str) -> _WritePhaseResult:
+    def blocked_write_result(bound_path: Path, reason: str) -> WritePhaseResult:
         critique = _blocked_manuscript_critique(reason)
         _persist_manuscript_critique(
             critique=critique,
@@ -3397,7 +3397,7 @@ def run_write_phase(
             evidence=evidence,
             producer="pipeline",
         )
-        return _WritePhaseResult(
+        return WritePhaseResult(
             literature=None,
             bound_path=bound_path,
             manuscript_critique=critique,
@@ -3590,7 +3590,7 @@ def run_write_phase(
         run_dir=run_dir,
     )
 
-    return _WritePhaseResult(
+    return WritePhaseResult(
         literature=literature,
         bound_path=bound_path,
         manuscript_packet=manuscript_packet,

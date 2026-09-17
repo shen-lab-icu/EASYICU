@@ -8,6 +8,7 @@ step gets.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -146,7 +147,120 @@ def _build_probe_summary(
     return summary, files
 
 
-def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
+def _seal_corrupt_step_summary(out_dir: Path) -> Optional[str]:
+    """Quarantine an unparseable ``step_summary.json`` before it is overwritten.
+
+    Promotion paths rebuild the summary from rescued figure exports; wiping
+    an unreadable file first would destroy the "corrupt" evidence itself.
+    The raw bytes are preserved as ``step_summary.corrupt.<sha8>.json``
+    (sha8 of the corrupt content, so identical corruption seals
+    idempotently) and the sealed filename is returned for the rescue
+    record.  Returns ``None`` when there is nothing corrupt to seal.
+    """
+
+    summary_path = out_dir / "step_summary.json"
+    if not summary_path.is_file() or summary_path.is_symlink():
+        return None
+    try:
+        raw = summary_path.read_bytes()
+    except OSError:
+        return None
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        return None
+    digest = hashlib.sha256(raw).hexdigest()[:8]
+    sealed_name = f"step_summary.corrupt.{digest}.json"
+    sealed_path = out_dir / sealed_name
+    if not sealed_path.exists():
+        try:
+            sealed_path.write_bytes(raw)
+        except OSError:
+            return None
+    return sealed_name
+
+
+#: Required figure-contract roles per upstream analysis family for the
+#: generic terminal promotion paths.  Each entry mirrors the roles the
+#: family's own deterministic renderer emits (association ->
+#: ``primary_estimand`` as in the pipeline's required-roles precedent;
+#: prediction -> ``validation``; survival -> ``survival_effect`` /
+#: ``temporal_absolute_risk`` / ``diagnostics``; phenotyping ->
+#: ``phenotype_structure`` / ``phenotype_outcome``; descriptive and
+#: absolute-risk renderers -> ``descriptive`` / ``descriptive_result``;
+#: cohort overlap/flow -> ``overview`` / ``audit``; sensitivity ->
+#: ``robustness`` / ``audit``; missingness -> ``data_quality``), plus the
+#: family's standard strategy roles where the publication skill may have
+#: written the bundle (prediction ``model_performance`` / ``calibration``,
+#: cohort ``cohort_accounting``).  Families without an entry (causal,
+#: validation, robustness, ...) have no verified contract-role vocabulary
+#: here: generic promotion for them fails closed until their renderer
+#: vocabulary is registered.
+_STEP_FAMILY_REQUIRED_CONTRACT_ROLES: Dict[str, tuple] = {
+    "association": ("primary_estimand",),
+    "dose_response": ("primary_estimand",),
+    "prediction": ("validation", "model_performance", "calibration"),
+    "prediction_model": ("validation", "model_performance", "calibration"),
+    "survival": ("survival_effect", "temporal_absolute_risk", "diagnostics"),
+    "survival_analysis": (
+        "survival_effect",
+        "temporal_absolute_risk",
+        "diagnostics",
+    ),
+    "phenotyping": ("phenotype_structure", "phenotype_outcome"),
+    "clustering": ("phenotype_structure", "phenotype_outcome"),
+    "descriptive": ("descriptive", "descriptive_result"),
+    "table_one": ("descriptive", "descriptive_result"),
+    "baseline": ("descriptive", "descriptive_result"),
+    "absolute_risk_context": ("descriptive_result", "temporal_absolute_risk"),
+    "cohort_definition": ("overview", "audit", "cohort_accounting"),
+    "cohort_definition_sensitivity": ("robustness", "audit"),
+    "sensitivity_analysis": ("robustness", "audit"),
+    "missingness": ("data_quality",),
+    "measurement": ("data_quality",),
+    "data_quality": ("data_quality",),
+}
+
+
+def required_contract_roles_for_analysis_family(
+    family: Any,
+) -> Optional[tuple]:
+    """Return the contract roles a promoted bundle must carry for a family.
+
+    Public cross-owner entrypoint for the generic terminal promotion
+    gates.  Returns ``None`` when the family has no registered contract
+    vocabulary; callers must fail closed (skip promotion) in that case
+    rather than promoting a cross-semantics bundle.
+    """
+
+    wanted = str(family or "").strip().lower()
+    if not wanted:
+        return None
+    return _STEP_FAMILY_REQUIRED_CONTRACT_ROLES.get(wanted)
+
+
+def resolve_upstream_analysis_family(
+    run_dir: Path, current_step_id: str
+) -> Optional[str]:
+    """Return the ``analysis_family`` recorded by a figure step's parent step.
+
+    Public cross-owner entrypoint for
+    :func:`_resolve_upstream_analysis_family`.  The execution phase uses it
+    to derive family-consistent required roles for terminal promotion.
+    """
+
+    return _resolve_upstream_analysis_family(run_dir, current_step_id)
+
+
+def _promote_sibling_figure_exports(
+    *,
+    out_dir: Path,
+    run_dir: Optional[Path] = None,
+    current_step_id: Optional[str] = None,
+    required_roles: Optional[Sequence[str]] = None,
+) -> Optional[str]:
     """Promote figure files written beside ``outputs/`` into ``outputs/``.
 
     Some generated scripts treat ``STEP_OUT_DIR`` as a filename stem and
@@ -154,6 +268,15 @@ def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
     ``outputs/`` directory. The execution contract only registers files inside
     ``outputs/``, so normalize that common layout before declaring the
     publication figure missing.
+
+    When the execution phase supplies step context (``run_dir`` plus
+    ``current_step_id``, or explicit ``required_roles``), a sibling figure
+    contract whose roles do not intersect the step family's required roles
+    fails closed: nothing is promoted and the summary is left untouched.
+    Direct callers that pass no context keep the historical ungated
+    behaviour.  An unparseable pre-existing ``step_summary.json`` is sealed
+    via :func:`_seal_corrupt_step_summary` before the rebuilt summary
+    overwrites it, and the seal is recorded in the rescue block.
     """
     parent = out_dir.parent
     source_stem = out_dir.name
@@ -165,6 +288,25 @@ def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
     ]
     if not figure_sources:
         return None
+
+    gate_roles: Optional[set] = None
+    if required_roles is not None:
+        gate_roles = {
+            str(role).strip().lower() for role in required_roles if str(role).strip()
+        }
+    elif run_dir is not None and current_step_id:
+        family_roles = required_contract_roles_for_analysis_family(
+            _resolve_upstream_analysis_family(run_dir, str(current_step_id))
+        )
+        if family_roles is None:
+            return None
+        gate_roles = {str(role).strip().lower() for role in family_roles}
+    if gate_roles is not None:
+        contract_source = parent / f"{source_stem}.figure_contract.json"
+        if contract_source.is_file() and not _publication_bundle_has_any_role(
+            {"contract": contract_source}, gate_roles
+        ):
+            return None
 
     out_dir.mkdir(parents=True, exist_ok=True)
     target_stem = "publication_figure"
@@ -178,6 +320,7 @@ def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
     if contract_source.is_file():
         shutil.copy2(contract_source, out_dir / f"{target_stem}.figure_contract.json")
 
+    sealed_name = _seal_corrupt_step_summary(out_dir)
     step_summary_path = out_dir / "step_summary.json"
     summary: Dict[str, Any] = {}
     if step_summary_path.exists():
@@ -188,13 +331,17 @@ def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
         except Exception:
             summary = {}
     summary.setdefault("publication_figure_rescue", {})
-    summary["publication_figure_rescue"].update(
-        {
-            "mode": "sibling_outputs_stem",
-            "source_stem": source_stem,
-            "source_dir": str(parent),
-        }
-    )
+    rescue_record: Dict[str, Any] = {
+        "mode": "sibling_outputs_stem",
+        "source_stem": source_stem,
+        "source_dir": str(parent),
+    }
+    if sealed_name is not None:
+        rescue_record["corrupt_summary_sealed_as"] = sealed_name
+        rescue_record["corrupt_summary_seal_reason"] = (
+            "unparseable_step_summary_json_overwritten_by_promotion"
+        )
+    summary["publication_figure_rescue"].update(rescue_record)
     summary["figure_files"] = sorted(exported_figure_files)
     if exported_figure_files:
         summary["figure_path"] = sorted(exported_figure_files)[0]
@@ -317,24 +464,31 @@ def _promote_prior_publication_bundle(
             shutil.copy2(source, target)
             copied_trace_files.append(str(relative_ref))
 
+    sealed_name = _seal_corrupt_step_summary(out_dir)
     step_summary_path = out_dir / "step_summary.json"
     summary: Dict[str, Any] = {}
     if step_summary_path.exists():
         try:
-            summary = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                summary = loaded
         except Exception:
             summary = {}
     summary.setdefault("publication_figure_rescue", {})
     source_outputs_dir = files[next(iter(files))].parent
     source_step_id = source_outputs_dir.parent.name
-    summary["publication_figure_rescue"].update(
-        {
-            "mode": "promotion",
-            "source_step_stem": source_stem,
-            "source_outputs_dir": str(source_outputs_dir),
-            "copied_trace_files": sorted(copied_trace_files),
-        }
-    )
+    rescue_record: Dict[str, Any] = {
+        "mode": "promotion",
+        "source_step_stem": source_stem,
+        "source_outputs_dir": str(source_outputs_dir),
+        "copied_trace_files": sorted(copied_trace_files),
+    }
+    if sealed_name is not None:
+        rescue_record["corrupt_summary_sealed_as"] = sealed_name
+        rescue_record["corrupt_summary_seal_reason"] = (
+            "unparseable_step_summary_json_overwritten_by_promotion"
+        )
+    summary["publication_figure_rescue"].update(rescue_record)
     exported_figure_files = [
         str((out_dir / f"{target_stem}{key}").name)
         for key in sorted(files)
@@ -2792,3 +2946,63 @@ def _sensitivity_plot_label(row: Mapping[str, Any]) -> str:
         return "Source-aware"
     label = str(row.get("display_label") or row.get("label") or spec_id).strip()
     return _short_figure_label(label.replace("LOS ≥", "LOS >="), limit=30)
+
+
+# --- Public cross-module aliases (thin wrappers, no logic change) ---
+# Private names kept for backward compatibility; cross-owner callers (figures/
+# execution) must use the public names below.
+
+
+def context_axis_label(metric: Any, group: Any) -> str:
+    """Public alias of :func:`_context_axis_label` (no logic change)."""
+
+    return _context_axis_label(metric, group)
+
+
+def association_descriptive_context(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+    primary_exposure: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Public alias of :func:`_association_descriptive_context`."""
+
+    return _association_descriptive_context(
+        run_dir=run_dir,
+        current_step_id=current_step_id,
+        out_dir=out_dir,
+        primary_exposure=primary_exposure,
+    )
+
+
+def truthy_figure_value(value: Any) -> bool:
+    """Public alias of :func:`_truthy_figure_value` (no logic change)."""
+
+    return _truthy_figure_value(value)
+
+
+def explicit_false_figure_value(value: Any) -> bool:
+    """Public alias of :func:`_explicit_false_figure_value`."""
+
+    return _explicit_false_figure_value(value)
+
+
+def sensitivity_plot_label(row: Mapping[str, Any]) -> str:
+    """Public alias of :func:`_sensitivity_plot_label`."""
+
+    return _sensitivity_plot_label(row)
+
+
+__all__ = [
+    "_association_descriptive_context",
+    "_context_axis_label",
+    "_explicit_false_figure_value",
+    "_sensitivity_plot_label",
+    "_truthy_figure_value",
+    "association_descriptive_context",
+    "context_axis_label",
+    "explicit_false_figure_value",
+    "sensitivity_plot_label",
+    "truthy_figure_value",
+]

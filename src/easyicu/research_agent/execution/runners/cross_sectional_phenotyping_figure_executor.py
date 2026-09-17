@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 import textwrap
 from typing import Any, Mapping
 
@@ -31,6 +30,7 @@ from .cross_sectional_phenotyping_executor import (
 )
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
+from ._shared import figure_product as _figure_product
 
 PHENOTYPING_FIGURE_INPUTS = CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS
 PHENOTYPING_FIGURE_ANALYSIS_KIND = "cross_sectional_phenotyping_figure"
@@ -49,17 +49,6 @@ _REQUIRED_COLUMNS = {
         }
     ),
 }
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", product)
-    ):
-        return None
-    return product
 
 
 def _binding_has_columns(binding: Any, key: str) -> bool:

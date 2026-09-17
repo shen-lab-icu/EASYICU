@@ -7,7 +7,7 @@
   "clinical_topics": ["acute kidney injury", "AKI", "creatinine", "urine output", "renal outcome", "onset prediction"],
   "topic_aliases": ["acute kidney injury", "acute kidney injury prediction", "AKI prediction", "AKI onset", "renal injury prediction", "急性肾损伤", "急性肾损伤预测", "急性肾损伤预警", "AKI预警"],
   "study_families": ["prediction"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "Adult ICU stays at risk for a new AKI event; pre-existing renal dysfunction and renal-replacement therapy require explicit, question-specific handling rather than automatic exclusion.",
     "time_zero": "A clinically observable landmark such as ICU admission or a rolling prediction landmark, fixed before the prediction window.",

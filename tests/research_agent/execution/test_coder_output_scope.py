@@ -1039,7 +1039,7 @@ def test_coder_repair_removes_constructed_exposure_fallback(ra):
     CoderAgent(llm).repair(
         context=context,
         step=step,
-        code="try:\n    resolved = bind(definition)\nexcept:\n    resolved = {}\n",
+        code="try:\n    resolved = bind(definition)\nexcept:\n    resolved = {}\n",  # noqa: E722 -- intentional bare-except fixture inside string sample, do not "fix"
         run_log=('DETAIL: {"reason": "authoritative_primary_exposure_fallback"}'),
     )
 

@@ -40,6 +40,7 @@ from ..research_context.temporal_semantics import (
 )
 from ..schema import AnalysisPlan, ResearchContext
 from .display_suite import panel_has_absolute_risk_context
+from .review_disclaimer import SIMULATED_REVIEW_NOT_INDEPENDENT
 from . import manuscript_surface as _manuscript_surface
 from .novelty_positioning import novelty_authority_digests
 
@@ -127,6 +128,67 @@ def _read_json(run_dir: Path, name: str) -> Mapping[str, Any]:
     except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
         return {}
     return payload if isinstance(payload, Mapping) else {}
+
+
+def _preregistration_receipt_format_valid(run_dir: Path) -> bool:
+    """Return whether ``preregistration_receipt.json`` is well-formed.
+
+    Diagnostic only: format validity NEVER grants paper authority (see
+    :func:`_has_external_preregistration`). Kept so a future
+    versioned-protocol system can reuse the schema check.
+    """
+
+    try:
+        raw = (run_dir / "preregistration_receipt.json").read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        return False
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    required = (
+        "protocol_version",
+        "statistical_plan",
+        "acceptance_contract",
+        "signed_declarations",
+    )
+    for field in required:
+        value = payload.get(field)
+        if isinstance(value, Mapping):
+            if not value:
+                return False
+        elif isinstance(value, (list, tuple)):
+            if not value:
+                return False
+        elif not str(value or "").strip():
+            return False
+    return True
+
+
+def _has_external_preregistration(run_dir: Path) -> bool:
+    """Return whether an external formal preregistration grants authority.
+
+    P0-2 fail-closed ceiling (declared here in readiness code, not in product
+    docs): the current candidate has no versioned-protocol + preregistration
+    system, so paper authority is capped at engineering-complete.  A run that
+    claims paper authority (novelty supported and/or publication bundle ready)
+    without this external receipt is blocked.  ``registered_report_inputs.py``
+    is report-only repair admission and explicitly does NOT satisfy this gate:
+    it carries no hypothesis/estimand contract hash, frozen-plan digest,
+    statistical plan, acceptance contract, or signed declarations.
+
+    Unconditionally False: a JSON file inside the run directory is a
+    self-assertion by whoever can write to that directory, so no
+    ``preregistration_receipt.json`` — however well-formed — can serve as a
+    trust boundary (four arbitrary strings passed the earlier format check).
+    Re-enable granting only when a versioned-protocol system with an
+    independent issuer and verifiable signed declarations lands; until then
+    every paper-authority claim stays blocked at engineering-complete.
+    """
+
+    return False
 
 
 def _model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
@@ -1687,8 +1749,8 @@ def build_scientific_maturity_audit(
                 severity="blocker",
                 dimension="clinical_review",
                 message=(
-                    "No reviewer receipt is available. The pipeline's simulated "
-                    "three-role checklist is not independent external review."
+                    "No reviewer receipt is available. The pipeline's "
+                    f"{SIMULATED_REVIEW_NOT_INDEPENDENT}."
                 ),
                 evidence_refs=["reviewer_report.json"],
                 remediation=(
@@ -1708,6 +1770,43 @@ def build_scientific_maturity_audit(
                 message=f"The reviewer receipt remains {recommendation}.",
                 evidence_refs=["reviewer_report.json"],
                 remediation="Resolve and regenerate the independent scientific review receipt.",
+            )
+        )
+    # P0-2 fail-closed paper-authority ceiling: novelty-supported and/or a
+    # publication-bundle-ready run claims paper authority. Without an external
+    # preregistration receipt the claim is blocked and the candidate stays at
+    # engineering-complete. This is a blocker (not advisory) by design.
+    preregistered = _has_external_preregistration(run_dir)
+    publication_claims_paper = bool(
+        publication.get("publication_figure_bundle_ready")
+        or publication.get("publication_figure_contract_ready")
+        or publication.get("publication_figure_source_data_ready")
+        or publication.get("publication_figure_visual_qa_passed")
+    )
+    if (bool(novelty.get("supported")) or publication_claims_paper) and not preregistered:
+        findings.append(
+            ScientificMaturityFinding(
+                code="FORMAL_PREREGISTRATION_NOT_ESTABLISHED",
+                severity="blocker",
+                dimension="clinical_review",
+                message=(
+                    "缺 preregistration，不授予 paper authority，上限 "
+                    "engineering-complete: the run claims paper authority "
+                    "(novelty supported and/or publication bundle ready) "
+                    "without an external preregistration receipt."
+                ),
+                evidence_refs=[
+                    "preregistration_receipt.json",
+                    "reporting/registered_report_inputs.py",
+                ],
+                remediation=(
+                    "Register a versioned protocol with preregistration "
+                    "(statistical plan + acceptance contract) and signed "
+                    "declarations bound to the frozen plan before claiming "
+                    "paper authority; registered_report_inputs.py is "
+                    "report-only repair admission, not preregistration. "
+                    "Current candidate remains engineering-complete."
+                ),
             )
         )
 
@@ -1797,6 +1896,7 @@ def build_scientific_maturity_audit(
                 )[:20],
             },
             "reviewer_recommendation": recommendation or "not_available",
+            "formal_preregistration_established": preregistered,
         },
     )
 

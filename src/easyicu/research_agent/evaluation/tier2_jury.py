@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .tier2_rubric import JuryRubric
+from ..canonical_json import extract_json_payload as _extract_json_payload_canonical
 
 REAL_JUDGE_ENV_FLAG = "EASYICU_ENABLE_REAL_JUDGES"
 
@@ -580,46 +581,16 @@ def _extract_json_payload(text: str) -> Any:
     by reasoning/preamble. Tries a direct parse first, then falls back to the
     first balanced ``{...}`` or ``[...]`` block. Reasoning/thinking models
     (e.g. nemotron-style judges) routinely emit prose before the JSON, so a
-    strict whole-string ``json.loads`` would reject otherwise-valid scores."""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.lower().startswith("json"):
-            stripped = stripped[4:].strip()
+    strict whole-string ``json.loads`` would reject otherwise-valid scores.
+
+    Thin wrapper over :func:`..canonical_json.extract_json_payload` — the
+    canonical owner of this balanced-scan semantic.  The ``ValueError`` text
+    below is preserved for this jury's callers.
+    """
     try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        pass
-    # Fall back: scan for the first balanced JSON object/array.
-    for opener, closer in (("{", "}"), ("[", "]")):
-        start = stripped.find(opener)
-        if start == -1:
-            continue
-        depth = 0
-        in_str = False
-        escape = False
-        for idx in range(start, len(stripped)):
-            ch = stripped[idx]
-            if in_str:
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_str = False
-                continue
-            if ch == '"':
-                in_str = True
-            elif ch == opener:
-                depth += 1
-            elif ch == closer:
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(stripped[start : idx + 1])
-                    except json.JSONDecodeError:
-                        break
-    raise ValueError("real judge response did not contain parseable JSON")
+        return _extract_json_payload_canonical(text)
+    except ValueError:
+        raise ValueError("real judge response did not contain parseable JSON")
 
 
 def _parse_real_judge_response(response: str) -> List[Dict[str, Any]]:

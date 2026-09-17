@@ -1954,3 +1954,43 @@ def test_exact_replay_uses_declared_coefficient_companion_without_primary_id(
     assert replay["row"].n == 2
     assert replay["row"].point_estimate == 1.5
     assert replay["contracts"][0]["model_id"] == "primary"
+
+
+def test_incomplete_primary_payloads_are_missing_not_silent() -> None:
+    """C-F12 missing matrix: incomplete primaries must fail the gate loudly.
+
+    ``None``/empty/partial payloads must never pass as a converged primary;
+    only a fully populated payload (estimate + CI + scale + denominator) may.
+    """
+    from easyicu.research_agent.robustness.primary_effect import (
+        _primary_effect_payload_is_complete,
+    )
+
+    complete = {
+        "primary_or": 1.5,
+        "primary_ci_low": 1.1,
+        "primary_ci_high": 2.0,
+        "effect_measure": "OR",
+        "sample_size": 100,
+    }
+    assert _primary_effect_payload_is_complete(complete) is True
+    assert _primary_effect_payload_is_complete(None) is False
+    assert _primary_effect_payload_is_complete({}) is False
+    assert _primary_effect_payload_is_complete({"primary_or": 1.5}) is False
+    assert (
+        _primary_effect_payload_is_complete({**complete, "primary_ci_low": None})
+        is False
+    )
+    assert (
+        _primary_effect_payload_is_complete({**complete, "effect_measure": ""})
+        is False
+    )
+    assert (
+        _primary_effect_payload_is_complete({**complete, "sample_size": 0}) is False
+    )
+    assert (
+        _primary_effect_payload_is_complete(
+            {**complete, "primary_ci_low": 3.0, "primary_ci_high": 2.0}
+        )
+        is False
+    )

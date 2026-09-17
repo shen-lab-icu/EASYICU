@@ -359,3 +359,29 @@ def _enforce_advanced_plan_contract(
         },
     )
     return revised, [finding]
+
+
+def enforce_advanced_plan_contract(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    long_trajectory_bound: bool = False,
+) -> tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Constrain advanced plan shape while leaving analysis code to the agent.
+
+    Public cross-owner entrypoint for
+    :func:`_enforce_advanced_plan_contract`. The advanced-family contract is
+    owned here; final shape checks only apply it.
+    """
+
+    return _enforce_advanced_plan_contract(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    )
+
+
+__all__ = [
+    "_enforce_advanced_plan_contract",
+    "enforce_advanced_plan_contract",
+]

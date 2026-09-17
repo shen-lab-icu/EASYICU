@@ -28,6 +28,8 @@ __all__ = [
     "completed_step_record_matches_plan",
     "legacy_host_checkpoint_may_inherit_plan_scope",
     "measurement_companion_input_closure_evidence_id",
+    "plan_scientific_scope_signature",
+    "plan_signature",
     "verified_plan_scientific_scope_count",
     "verified_plan_evidence_rank",
 ]
@@ -280,6 +282,7 @@ _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "phenotyping_feature_columns",
         "population_scope",
         "population_scope_change_reason",
+        "allow_fallback_as_primary",
     }
 )
 _ANALYSIS_STEP_PRESENTATION_ONLY_FIELDS = frozenset()
@@ -424,3 +427,24 @@ def _plan_signature(
         _plan_scientific_scope_signature(plan),
         tuple(_step_scientific_signature(step) for step in plan.steps),
     )
+
+
+def plan_scientific_scope_signature(plan: AnalysisPlan) -> Tuple[Optional[str], ...]:
+    """Fingerprint Planner-owned science that applies to every plan step.
+
+    Public cross-owner entrypoint for
+    :func:`_plan_scientific_scope_signature`. The plan-scope vocabulary is
+    owned here; the plan authority must use this name instead of the private
+    one so the ownership boundary stays greppable.
+    """
+
+    return _plan_scientific_scope_signature(plan)
+
+
+def plan_signature(plan: AnalysisPlan) -> Tuple[Any, ...]:
+    """Substantive fingerprint of a plan's step DAG and scientific requests.
+
+    Public cross-owner entrypoint for :func:`_plan_signature`.
+    """
+
+    return _plan_signature(plan)

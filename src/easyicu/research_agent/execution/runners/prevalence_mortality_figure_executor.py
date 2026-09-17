@@ -29,6 +29,7 @@ from ...figures.publication import (
 from ...schema import AnalysisStep
 from .planner_display_labels import planner_binary_level_labels
 from .figure_input_capability import TypedInputCapability
+from ._shared import method_head as _method_head
 
 __all__ = [
     "PREVALENCE_MORTALITY_FIGURE_INPUTS",
@@ -62,10 +63,6 @@ _OUTCOME_COLUMNS = (
     "ci_low_pct",
     "ci_high_pct",
 )
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
 
 
 #: Both panels are indexed by key while rendering, so neither is optional.

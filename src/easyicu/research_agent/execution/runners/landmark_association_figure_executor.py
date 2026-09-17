@@ -29,6 +29,7 @@ from ...icu_rules import classify_variable
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
+from ._shared import figure_product as _figure_product
 
 
 _REQUIRED_COLUMNS = {
@@ -77,17 +78,6 @@ _LEGACY_LANDMARK_ARTICLE_INPUTS = frozenset(
         "table:robustness_summary",
     }
 )
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", product)
-    ):
-        return None
-    return product
 
 
 def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:

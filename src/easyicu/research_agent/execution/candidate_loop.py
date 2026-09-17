@@ -21,8 +21,10 @@ from ..repairs.source import (
     deterministic_contract_repair,
 )
 from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
+from ..repairs.runner_dispatch import mark_semantic_stub_injection
 from .code_hygiene import reorder_forward_references
 from .failure_classification import classify_runtime_failure
+from .retry_policy import repair_route_for
 from .concept_audit import ConceptQuarantineState
 from .concept_repair import MAX_DETERMINISTIC_CONCEPT_REPAIRS
 from ..authority.plausibility import StepPlausibilityAuthority
@@ -1659,6 +1661,7 @@ def _candidate_contract_setup_transition(
         step_summary=state.visual_step_summary,
         completed_step_records=completed_records_snapshot,
         resolved_input_bindings=attempt.resolved_input_bindings,
+        semantic_stub_injected=attempt.step_record.get("semantic_stub_injected"),
         effect_output_is_authorized=effect_output_authorized(
             attempt.step,
             step_record=attempt.step_record,
@@ -1949,6 +1952,9 @@ def _candidate_contract_repair_transition(
             attempt.step_record["runner_repair"] = (
                 attempt.worker_progress.runner_repair_name
             )
+            mark_semantic_stub_injection(
+                attempt.step_record, attempt.worker_progress.runner_repair_name
+            )
             attempt.step_record["code_repair_attempts"] = (
                 attempt.worker_progress.repair_attempts
             )
@@ -2238,6 +2244,9 @@ def _candidate_summary_transition(
         attempt.step_record["runner_repair"] = (
             attempt.worker_progress.runner_repair_name
         )
+        mark_semantic_stub_injection(
+            attempt.step_record, attempt.worker_progress.runner_repair_name
+        )
         host._record_repair(
             repair_id=attempt.worker_progress.runner_repair_name,
             step_id=attempt.step.step_id,
@@ -2336,6 +2345,17 @@ def _candidate_failure_transition(
         runner_failure_code=state.run_result.runner_failure_code,
     )
     if runtime_failure is not None:
+        # C-F13: the central retry-policy table governs this branch, not a
+        # local copy of the rules. Unknown classes fail closed loudly instead
+        # of silently taking the fail-closed return path.
+        _route = repair_route_for(
+            str(runtime_failure.step_updates.get("runtime_failure_class") or "")
+        )
+        if _route != "fail_closed":
+            raise RuntimeError(
+                f"retry-policy route {_route!r} has no loop implementation; "
+                "failing closed instead of silently repairing"
+            )
         attempt.step_record.update(runtime_failure.step_updates)
         with host.shared_lock:
             host.findings.append(runtime_failure.finding)
@@ -2454,6 +2474,9 @@ def _candidate_failure_transition(
         attempt.worker_progress.runner_repair_name, state.code = runner_repair
         attempt.step_record["runner_repair"] = (
             attempt.worker_progress.runner_repair_name
+        )
+        mark_semantic_stub_injection(
+            attempt.step_record, attempt.worker_progress.runner_repair_name
         )
         host._record_repair(
             repair_id=attempt.worker_progress.runner_repair_name,

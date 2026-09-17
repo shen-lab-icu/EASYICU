@@ -241,9 +241,9 @@ from .orchestration.workflow import PipelineRunOutcome, PlannerDesignCanaryCompl
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
-    _ExecutePhaseResult,
-    _PlanPhaseResult,
-    _WritePhaseResult,
+    ExecutePhaseResult,
+    PlanPhaseResult,
+    WritePhaseResult,
 )
 from .execution.host_services import (
     ExecutePhaseServices,
@@ -2604,7 +2604,7 @@ class ResearchAgentPipeline:
         run_id: str,
         skill_obj: Optional[ClinicalSkill],
         study_design_brief: Any,
-    ) -> _PlanPhaseResult | PlannerDesignCanaryComplete:
+    ) -> PlanPhaseResult | PlannerDesignCanaryComplete:
         """Shape, validate, bind, and persist the generated analysis plan."""
         if isinstance(generation, _progressive_planning.ProgressiveDesignCanaryDraft):
             return _progressive_planning.finalize_progressive_design_canary(
@@ -2916,7 +2916,7 @@ class ResearchAgentPipeline:
             except Exception:
                 pass
 
-        return _PlanPhaseResult(
+        return PlanPhaseResult(
             context=context,
             agent_context=agent_context,
             context_path=context_path,
@@ -2972,7 +2972,7 @@ class ResearchAgentPipeline:
         run_environment_identity: Dict[str, Any],
         resume_from_step_id: Optional[str],
         emit_progress: Callable[..., None],
-    ) -> _PlanPhaseResult:
+    ) -> PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
         # The Planner is refused a trajectory design unless the host can see a
         # trajectory, and ResearchContext only ever shows the wide fixed-window
@@ -3173,7 +3173,7 @@ class ResearchAgentPipeline:
                     else preplan_data_failure_reason(findings)
                 ),
             )
-            return _PlanPhaseResult(
+            return PlanPhaseResult(
                 context=context,
                 agent_context=context,
                 context_path=context_path,
@@ -3607,7 +3607,7 @@ class ResearchAgentPipeline:
     def _run_execute_phase(
         self,
         *,
-        plan_result: _PlanPhaseResult,
+        plan_result: PlanPhaseResult,
         cohort_path: Path,
         trajectory_binding: Optional[StagedTrajectoryBinding],
         run_dir: Path,
@@ -3617,7 +3617,7 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
         resume_from_step_id: Optional[str] = None,
         stop_after_step_id: Optional[str] = None,
-    ) -> "_ExecutePhaseResult":
+    ) -> "ExecutePhaseResult":
         """Delegate to :mod:`execution.phase`.
 
         The execute loop body is in :mod:`execution.phase` so this
@@ -3644,8 +3644,8 @@ class ResearchAgentPipeline:
     def _run_write_phase(
         self,
         *,
-        plan_result: _PlanPhaseResult,
-        execute_result: _ExecutePhaseResult,
+        plan_result: PlanPhaseResult,
+        execute_result: ExecutePhaseResult,
         run_dir: Path,
         run_id: str,
         stop_after_analysis: bool,
@@ -3654,7 +3654,7 @@ class ResearchAgentPipeline:
         run_language: str,
         emit_progress: Callable[..., None],
         force_writer_probe: bool = False,
-    ) -> _WritePhaseResult:
+    ) -> WritePhaseResult:
         """Delegate to :mod:`reporting.write_phase`."""
         from .reporting.write_phase import run_write_phase
 
@@ -3675,9 +3675,9 @@ class ResearchAgentPipeline:
     def _finalise_success(
         self,
         *,
-        plan_result: _PlanPhaseResult,
-        execute_result: _ExecutePhaseResult,
-        write_result: _WritePhaseResult,
+        plan_result: PlanPhaseResult,
+        execute_result: ExecutePhaseResult,
+        write_result: WritePhaseResult,
         run_id: str,
         run_dir: Path,
         cohort_path: Path,
@@ -3848,7 +3848,7 @@ class ResearchAgentPipeline:
     def _persist_review_checkpoint(
         self,
         *,
-        plan_result: _PlanPhaseResult,
+        plan_result: PlanPhaseResult,
         requests: Sequence[Any],
         run_id: str,
         run_dir: Path,
@@ -5100,7 +5100,7 @@ class ResearchAgentPipeline:
                 self,
                 run_id=str(run_id),
                 progress_callback=progress_callback,
-                plan_result_factory=_PlanPhaseResult,
+                plan_result_factory=PlanPhaseResult,
                 load_resume_state=_load_resume_state,
                 rejection_only=all_rejected,
             )
@@ -6914,7 +6914,7 @@ def _pipeline_run___write_invoker(
             status="error",
             run_id=run_id,
         )
-        return _WritePhaseResult(literature=None, bound_path=bound_path)
+        return WritePhaseResult(literature=None, bound_path=bound_path)
 
 
 def _pipeline_run___finalise_invoker(

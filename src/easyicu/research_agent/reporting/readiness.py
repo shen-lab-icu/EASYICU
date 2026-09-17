@@ -103,7 +103,7 @@ from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
 from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
-from ..gates.visual import _is_cosmetic_visual_finding
+from ..gates.visual import is_cosmetic_visual_finding
 from ..planning.capability_registry import (
     assess_scientific_capability,
     get_capability_by_id,
@@ -688,7 +688,10 @@ _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
 # location the predicate left in 60284da.  Import the owner instead; the
 # historical private name is kept because ``reporting.write_phase`` and the
 # governance tests bind to it.
-_is_cosmetic_visual_error = _is_cosmetic_visual_finding
+_is_cosmetic_visual_error = is_cosmetic_visual_finding
+# Public alias for cross-owner callers; the leading-underscore name above
+# remains for historical bindings.
+is_cosmetic_visual_error = is_cosmetic_visual_finding
 
 
 def _publication_figure_bundle_ready(
@@ -1465,12 +1468,161 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
 )
 
 
-def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
+def _is_fallback_generation(record: Mapping[str, Any]) -> bool:
+    """Return True when a step record was produced in fallback generation mode."""
+
+    return str(record.get("generation_mode") or "").strip().lower() == "fallback"
+
+
+def _fallback_primary_allowed(plan: Any, step_id: str) -> bool:
+    """Return True only when the plan explicitly allows fallback as primary."""
+
+    steps = getattr(plan, "steps", None)
+    if not isinstance(steps, list):
+        return False
+    for step in steps:
+        candidate_id = getattr(step, "step_id", None)
+        if isinstance(step, Mapping):
+            candidate_id = step.get("step_id")
+        if str(candidate_id or "") != str(step_id or ""):
+            continue
+        flag = getattr(step, "allow_fallback_as_primary", None)
+        if isinstance(step, Mapping):
+            flag = step.get("allow_fallback_as_primary")
+        return bool(flag) is True
+    return False
+
+
+def _primary_records_for_readiness(
+    per_step_records: Any, plan: Any = None
+) -> list[dict[str, Any]]:
+    """Filter step records for primary estimation: downgrade fallbacks.
+
+    C-F9: ``generation_mode=fallback`` steps do not count as primary unless
+    the plan explicitly allows it via
+    ``AnalysisStep.allow_fallback_as_primary``. Downgraded steps remain
+    visible in execution records; they are only excluded from the primary
+    headline binding.
+    """
+
+    filtered: list[dict[str, Any]] = []
+    for record in per_step_records or []:
+        if not isinstance(record, dict):
+            continue
+        if _is_fallback_generation(record) and not _fallback_primary_allowed(
+            plan, str(record.get("step_id") or "")
+        ):
+            continue
+        filtered.append(record)
+    return filtered
+
+
+def _fallback_method_compatibility_errors(
+    *,
+    per_step_records: Any,
+    context: Any,
+    plan: Any = None,
+) -> list[Any]:
+    """Force fallback products through the method-compatibility gate (C-F9).
+
+    Every fallback-generation record must have passed
+    :func:`fallback_method_compatibility_findings`. When the executed code is
+    available on the record it is scanned; otherwise a missing
+    ``method_compatibility_checked`` marker fails closed. Plan-allowed
+    fallback primaries are still checked — the flag only controls primary
+    counting, never gate bypass.
+    """
+
+    from ..contracts.runtime import ValidationFinding as _ValidationFinding
+    from ..gates.method_compatibility import fallback_method_compatibility_findings
+
+    errors: list[Any] = []
+    for record in per_step_records or []:
+        if not isinstance(record, dict):
+            continue
+        if not _is_fallback_generation(record):
+            continue
+        summary = record.get("step_summary")
+        summary_map = summary if isinstance(summary, Mapping) else {}
+        checked = bool(
+            record.get("method_compatibility_checked")
+            or summary_map.get("method_compatibility_checked")
+        )
+        code = record.get("code") or record.get("executed_code") or ""
+        if not isinstance(code, str):
+            code = ""
+        violations: list[dict[str, object]] = []
+        if code and context is not None and hasattr(context, "variables"):
+            try:
+                plan_step = None
+                steps = getattr(plan, "steps", None)
+                if isinstance(steps, list):
+                    for candidate in steps:
+                        cid = (
+                            candidate.get("step_id")
+                            if isinstance(candidate, Mapping)
+                            else getattr(candidate, "step_id", None)
+                        )
+                        if str(cid or "") == str(record.get("step_id") or ""):
+                            plan_step = (
+                                candidate
+                                if not isinstance(candidate, Mapping)
+                                else None
+                            )
+                            break
+                violations = fallback_method_compatibility_findings(
+                    code=code, context=context, step=plan_step
+                )
+            except Exception:
+                violations = []
+        if violations:
+            errors.append(
+                _ValidationFinding(
+                    validator="method_compatibility",
+                    severity="error",
+                    message=(
+                        f"Fallback step {record.get('step_id')} produced "
+                        "method-incompatible code; fallback products must pass "
+                        "the method_compatibility gate."
+                    ),
+                    detail={
+                        "step_id": str(record.get("step_id") or ""),
+                        "generation_mode": "fallback",
+                        "violations": violations,
+                    },
+                )
+            )
+        elif not checked and not code:
+            errors.append(
+                _ValidationFinding(
+                    validator="method_compatibility",
+                    severity="error",
+                    message=(
+                        f"Fallback step {record.get('step_id')} has no "
+                        "method_compatibility evidence; fallback products must "
+                        "pass the method_compatibility gate."
+                    ),
+                    detail={
+                        "step_id": str(record.get("step_id") or ""),
+                        "generation_mode": "fallback",
+                    },
+                )
+            )
+    return errors
+
+
+def _deterministic_primary_estimate_bound(
+    per_step_records: Any, plan: Any = None
+) -> bool:
     """Require a complete primary effect emitted by a currently registered owner."""
 
     from ..contracts.prediction_validation import PredictionValidationReceipt
 
-    for record in per_step_records or []:
+    # C-F9: fallback steps are downgraded (not counted as primary) unless the
+    # plan explicitly allows fallback as primary on that exact step.
+    records = _primary_records_for_readiness(per_step_records, plan)
+
+    for record in records:
         if (
             not isinstance(record, dict)
             or record.get("deterministic_standard_analysis")
@@ -1480,7 +1632,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         if landmark_spline_runtime_receipt_valid(record.get("step_summary")):
             return True
 
-    for record in per_step_records or []:
+    for record in records:
         if (
             not isinstance(record, dict)
             or record.get("deterministic_standard_analysis")
@@ -1490,7 +1642,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         if phenotyping_runtime_receipt_valid(record.get("step_summary")):
             return True
 
-    for record in per_step_records or []:
+    for record in records:
         if (
             not isinstance(record, dict)
             or record.get("deterministic_standard_analysis")
@@ -1508,7 +1660,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
             continue
         return True
 
-    for record in per_step_records or []:
+    for record in records:
         if not isinstance(record, dict):
             continue
         if record.get("deterministic_standard_analysis") != (
@@ -1523,11 +1675,11 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         _extract_primary_effect_payload_from_records,
     )
 
-    payload = _extract_primary_effect_payload_from_records(per_step_records or [])
+    payload = _extract_primary_effect_payload_from_records(records)
     if not payload or payload.get("primary_or") is None:
         return False
     step_id = str(payload.get("step_id") or "")
-    for record in per_step_records or []:
+    for record in records:
         if not isinstance(record, dict):
             continue
         if str(record.get("step_id") or "") == step_id:
@@ -2071,6 +2223,11 @@ def _compute_readiness_gates(
         + source_feasibility_validation_errors
         + signed_trajectory_validation_errors
         + time_varying_validation_errors
+        + _fallback_method_compatibility_errors(
+            per_step_records=per_step_records,
+            context=context,
+            plan=plan,
+        )
     )
     selected_capability = get_capability_by_id(capability_assessment.capability_id)
     _no_det_primary_expected = bool(
@@ -2084,7 +2241,9 @@ def _compute_readiness_gates(
         has_base_errors=bool(base_analysis_errors),
         evidence_complete=bool(evidence_complete),
         numeric_verified=bool(numeric_verified),
-        primary_estimate_bound=_deterministic_primary_estimate_bound(per_step_records),
+        primary_estimate_bound=_deterministic_primary_estimate_bound(
+            per_step_records, plan
+        ),
         no_deterministic_primary_expected=_no_det_primary_expected,
     )
     analysis_errors = base_analysis_errors + (

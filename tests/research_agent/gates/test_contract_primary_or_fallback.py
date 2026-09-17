@@ -106,7 +106,9 @@ def test_primary_step_cannot_borrow_a_sibling_effect_estimate(ra):
     )
 
     errors = _errors(findings)
-    assert errors
+    assert len(errors) >= 1, "expected at least one step_contract error"
+    assert errors[0].validator == "step_contract"
+    assert errors[0].severity == "error"
     assert "primary association estimate" in errors[0].message
     assert not any("fallback_step_id" in finding.detail for finding in findings)
 
@@ -125,7 +127,9 @@ def test_missing_exposure_or_outcome_count_is_not_primary_or(ra):
     )
 
     errors = _errors(findings)
-    assert errors
+    assert len(errors) >= 1, "expected at least one step_contract error"
+    assert errors[0].validator == "step_contract"
+    assert errors[0].severity == "error"
     assert "primary association estimate" in errors[0].message
 
 
@@ -158,7 +162,9 @@ def test_table_prevalence_step_does_not_satisfy_later_primary_model(ra):
     )
 
     errors = _errors(findings)
-    assert errors
+    assert len(errors) >= 1, "expected at least one step_contract error"
+    assert errors[0].validator == "step_contract"
+    assert errors[0].severity == "error"
     assert "primary association estimate" in errors[0].message
 
 

@@ -26,23 +26,13 @@ from ...contracts.declared_product import RUNTIME_BINDABLE_TYPED_INPUT_KINDS
 from ...schema import AnalysisStep
 from .report_input_authority import verify_report_input_authorities
 from .typed_input_binding import sha256_file
+from ._shared import (
+    TYPED_KEY as _TYPED_KEY,
+    method_head as _method_head,
+    report_product as _report_product,
+)
 
 FEASIBILITY_PROTOCOL_ANALYSIS_KIND = "planner_declared_feasibility_protocol"
-
-_TYPED_KEY = re.compile(r"([a-z][a-z0-9_]*):([a-z][a-z0-9_]*)")
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _report_product(step: AnalysisStep) -> str | None:
-    if len(step.expected_outputs or ()) != 1:
-        return None
-    match = _TYPED_KEY.fullmatch(str(step.expected_outputs[0] or "").strip())
-    if match is None or match.group(1) != "report":
-        return None
-    return match.group(2)
 
 
 def feasibility_protocol_consumed_input_keys(step: AnalysisStep) -> tuple[str, ...]:

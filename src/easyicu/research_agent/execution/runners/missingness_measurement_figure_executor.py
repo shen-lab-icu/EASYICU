@@ -48,6 +48,11 @@ from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .deterministic_missingness import measurement_audit_product_filename
 from .figure_input_capability import TypedInputCapability
+from ._shared import (
+    figure_product as _figure_product,
+    is_safe_figure_product_id as _is_safe_figure_product_id,
+    method_head as _method_head,
+)
 
 __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
@@ -83,19 +88,12 @@ MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND = "missingness_measurement_figure"
 #: this renderer is competent to do: a plan naming the two audit tables exactly,
 #: under the right contracts, was declined for the spelling of its label alone.
 #:
-#: The id is still constrained, because it becomes a path segment and a
-#: filename stem: ``out_dir / figure_product`` and ``{figure_product}.png``.
-#: The length bound is set by that use -- the longest suffix this module
-#: appends is ``_source_missingness_panel_source_data.csv`` -- so a legal id
-#: cannot produce an ENAMETOOLONG failure after the run has already paid for
-#: the analysis.
-_FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
-
-
-def _is_safe_figure_product_id(value: Any) -> bool:
-    """Whether ``value`` is a legal, path-safe figure product id."""
-
-    return bool(_FIGURE_PRODUCT_ID.fullmatch(str(value or "")))
+#: Figure product-id bound is owned by ``execution.runners._shared``
+#: (FIGURE_PRODUCT_ID).
+#: The bound exists because the id becomes a path segment and filename stem
+#: (``out_dir / figure_product``, ``{figure_product}.png``); the longest
+#: suffix this module appends is ``_source_missingness_panel_source_data.csv``,
+#: so a legal id cannot produce ENAMETOOLONG after the analysis has run.
 
 
 # The columns this renderer READS from each parent, not the parent's full
@@ -199,17 +197,6 @@ def _columns_read(
     if kind == "table" and separator:
         return _AUDIT_COLUMNS
     raise ValueError(f"{input_key} is not a supported measurement-audit product")
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not _is_safe_figure_product_id(product):
-        return None
-    return product
 
 
 #: ``run_missingness_measurement_figure`` indexes both bindings and builds a

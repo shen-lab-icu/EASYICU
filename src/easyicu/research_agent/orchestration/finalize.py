@@ -7,8 +7,8 @@ It follows the same free-function pattern as ``execution/phase.py`` and
 ``reporting.write_phase``: callers pass the pipeline instance first, and the
 function reads existing collaborators from that instance.
 
-Boundary contract: consumes ``_PlanPhaseResult`` + ``_ExecutePhaseResult`` +
-``_WritePhaseResult`` and emits ``PipelineResult``. The phase-result
+Boundary contract: consumes ``PlanPhaseResult`` + ``ExecutePhaseResult`` +
+``WritePhaseResult`` and emits ``PipelineResult``. The phase-result
 dataclasses live in ``contracts.py``; this module does not own their schema.
 """
 
@@ -33,9 +33,9 @@ from ..concept_dict_audit import (
 )
 from ..contracts.runtime import (
     ValidationFinding,
-    _ExecutePhaseResult,
-    _PlanPhaseResult,
-    _WritePhaseResult,
+    ExecutePhaseResult,
+    PlanPhaseResult,
+    WritePhaseResult,
 )
 from ..contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
 from ..providers.cost import CostMeter
@@ -72,6 +72,7 @@ from ..robustness.panel import PANEL_FILENAME, load_robustness_panel
 from ..schema import AnalysisManifest, AnalysisPlan, PipelineResult, ResearchContext
 from ..learning.store import quarantine_run_lesson
 from ..reporting.side_findings import collect_side_findings, write_side_findings
+from ..execution.retry_policy import retry_accounting_receipt
 
 logger = logging.getLogger(__name__)
 
@@ -687,9 +688,9 @@ def _register_multiple_testing_outputs(
 def finalise_success(
     pipeline,
     *,
-    plan_result: _PlanPhaseResult,
-    execute_result: _ExecutePhaseResult,
-    write_result: _WritePhaseResult,
+    plan_result: PlanPhaseResult,
+    execute_result: ExecutePhaseResult,
+    write_result: WritePhaseResult,
     run_id: str,
     run_dir: Path,
     cohort_path: Path,
@@ -1240,6 +1241,27 @@ def finalise_success(
             "sha256": history_record.sha256,
             "record_count": len(step_attempt_history),
         }
+    retry_receipt = retry_accounting_receipt(step_attempt_history)
+    evidence.register_text(
+        kind="log",
+        description=(
+            "Runtime retry-policy accounting bound to the append-only step "
+            "attempt history and the central failure-class budget table."
+        ),
+        text=json.dumps(
+            retry_receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        filename="retry_policy_receipt.json",
+        evidence_id="retry_policy_receipt",
+        producer="pipeline",
+        generation_mode="system",
+        publish_aliases=False,
+        on_sha_change="new_id",
+    )
     manifest = AnalysisManifest(
         run_id=run_id,
         research_question=context.research_question,

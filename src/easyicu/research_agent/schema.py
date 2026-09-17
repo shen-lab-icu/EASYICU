@@ -247,7 +247,13 @@ class AggregationRule(str, Enum):
 
 
 class TimeWindow(BaseModel):
-    """A bounded analysis window relative to an anchor event."""
+    """A bounded analysis window relative to an anchor event.
+
+    This is the canonical cohort-level window definition.  The predicate-level
+    contract type :class:`planning.cohort_contract.TimeWindow` is intentionally
+    distinct (anchor-relative offset range bound to one predicate); see its
+    docstring before unifying call sites.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -589,6 +595,10 @@ class ConceptDescriptor(BaseModel):
         description="Known harmonisation caveats when replicating this variable across ICU databases.",
     )
     missingness: Optional[MissingnessProfile] = None
+    concept_enrichment_degraded: bool = Field(
+        default=False,
+        description="True when concept-dictionary enrichment was unavailable.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1894,6 +1904,12 @@ class AnalysisStep(BaseModel):
             "each declared product IS. Declare it only when that is genuinely "
             "the step; a sensitivity analysis introducing new science is a "
             "different step and must not claim it to reach a host runner."
+        ),
+    )
+    allow_fallback_as_primary: bool = Field(
+        default=False,
+        description=(
+            "Plan permission for a fallback step to count as primary."
         ),
     )
 

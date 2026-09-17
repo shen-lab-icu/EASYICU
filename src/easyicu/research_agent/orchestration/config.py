@@ -290,6 +290,13 @@ class PipelineConfig:
     # error.  The default remains non-interactive for CLI/benchmark callers;
     # the Guided Web Copilot enables this because its product contract is
     # plan -> user confirmation -> execution.
+    #
+    # The default stays False so unprofiled non-interactive flows keep
+    # working, but it is not caller-optional everywhere: paper-series
+    # submission profiles (those pinning this flag True, e.g. the
+    # qualification12 family) and the explicit reportable-capability /
+    # literature-design-authority contracts fail closed in __post_init__
+    # when this is False, with an error that names the flag to enable.
     require_human_plan_review: bool = False
     # Opt-in next-stage contract: reviewed comparator full text/supplements
     # must shape all seven design dimensions before Provider planning, and the
@@ -655,13 +662,35 @@ class PipelineConfig:
             frozen = _deep_freeze(value)
             if frozen is not value:
                 object.__setattr__(self, field_def.name, frozen)
+        if self.submission_profile_name:
+            from .profiles import get_submission_profile
+
+            _review_pin_profile = get_submission_profile(
+                f"{self.submission_profile_name}/{self.submission_profile_version}"
+            )
+            if (
+                _review_pin_profile.require_human_plan_review is True
+                and not self.require_human_plan_review
+            ):
+                raise ValueError(
+                    f"submission profile {_review_pin_profile.ref!r} is a "
+                    "paper-series profile that pins "
+                    "require_human_plan_review=True, so a reviewed, "
+                    "digest-bound plan must authorize Execute; set "
+                    "require_human_plan_review=True (the Guided Web Copilot "
+                    "enables it) or run non-interactive diagnostics under a "
+                    "development-only ('*_dev') profile"
+                )
         if (
             self.require_reportable_scientific_capability
             and not self.require_human_plan_review
         ):
             raise ValueError(
                 "require_reportable_scientific_capability requires "
-                "require_human_plan_review so the pre-execution gate cannot be skipped"
+                "require_human_plan_review so the pre-execution gate cannot be "
+                "skipped; set require_human_plan_review=True (the Guided Web "
+                "Copilot enables it) or leave the reportable capability off "
+                "for diagnostic runs"
             )
         if self.require_literature_design_authority:
             if not self.enable_literature:
@@ -671,7 +700,10 @@ class PipelineConfig:
             if not self.require_human_plan_review:
                 raise ValueError(
                     "require_literature_design_authority requires "
-                    "require_human_plan_review"
+                    "require_human_plan_review; set "
+                    "require_human_plan_review=True (the Guided Web Copilot "
+                    "enables it) or leave literature design authority off for "
+                    "diagnostic runs"
                 )
             if self.planner_strategy != "progressive_v2":
                 raise ValueError(

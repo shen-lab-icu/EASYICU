@@ -637,6 +637,16 @@ def _coerce_scalar(
     receipts: list[NormalizationReceipt],
     issues: list[NormalizationIssue],
 ) -> JsonScalar | object:
+    """Contract-side scalar normalization (extended thin wrapper).
+
+    Plain-Python scalar shaping is canonically owned by
+    :func:`..scalar_utils._coerce_scalar`; this wrapper keeps the extended
+    receipt/issue/path-authorization signature the envelope contract requires
+    and intentionally preserves its own pass-through semantics (e.g. empty
+    strings stay empty strings here).  Do not unify the signatures: the
+    canonical helper answers "is this a plain scalar", this one answers
+    "how does this value normalize inside a sealed envelope".
+    """
     path_was_authorized = False
     if value is None or isinstance(value, (bool, int, float, str)):
         normalized: Any = value

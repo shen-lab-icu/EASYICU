@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 REQUIRED_RUNNER_IMAGE_ASSETS = (
     "easyicu/research_agent/runner_image/Dockerfile",
     "easyicu/research_agent/runner_image/requirements.lock",
+    "easyicu/research_agent/runner_image/base-image.lock",
     "easyicu/research_agent/runner_image/README.md",
 )
 
@@ -98,6 +99,7 @@ def test_installed_wheel_exposes_runner_image_via_importlib(tmp_path, request):
         "names = sorted(p.name for p in root.iterdir());"
         "assert 'Dockerfile' in names, names;"
         "assert 'requirements.lock' in names, names;"
+        "assert 'base-image.lock' in names, names;"
         "print(','.join(names))"
     )
     check = subprocess.run([str(python), "-c", probe], capture_output=True, text=True)

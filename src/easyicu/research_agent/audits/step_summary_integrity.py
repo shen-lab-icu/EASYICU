@@ -1132,6 +1132,33 @@ class StepSummaryIntegrityValidator:
         cohort_path: Optional[Path] = None,
     ) -> List[ValidationFinding]:
         findings: List[ValidationFinding] = []
+        provenance = (
+            step_summary.get("summary_provenance")
+            if isinstance(step_summary, Mapping)
+            else None
+        )
+        if isinstance(provenance, str) and provenance.startswith("salvaged_from_"):
+            # Host-salvaged summaries stay usable, but the salvage act must
+            # remain visible: stdout-extracted or filename-promoted payloads
+            # never passed the ordinary declared-output evidence binding.
+            # Warning-only: this marker never changes a verdict by itself.
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        f"Step {step.step_id} step_summary.json was host-salvaged "
+                        f"({provenance}); its values were recovered from step "
+                        "stdout or a named artefact, not written by the step "
+                        "under its declared output contract."
+                    ),
+                    detail={
+                        "issue": "summary_salvaged_provenance",
+                        "step_id": step.step_id,
+                        "summary_provenance": provenance,
+                    },
+                )
+            )
         host_bindings = {
             str(key): value
             for key, value in resolved_input_bindings.items()

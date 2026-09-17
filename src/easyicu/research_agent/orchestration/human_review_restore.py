@@ -41,7 +41,7 @@ from ..planning.cohort_contract import cohort_concept_id_scope
 from ..planning.progressive_compiler import progressive_cohort_concept_ids
 from ..research_context.typed import parse_research_context_json
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
-from ..contracts.runtime import _WritePhaseResult
+from ..contracts.runtime import WritePhaseResult
 from ..skills import get_skill
 from .human_review_checkpoint import (
     HumanReviewCheckpointError,
@@ -291,8 +291,15 @@ def commit_human_review_decision(
     decision_payloads: Sequence[Mapping[str, Any]],
     decision_records: Sequence[Mapping[str, Any]],
     decision_sha256: str,
+    plan_sha256: Optional[str] = None,
 ) -> None:
-    """Commit staged evidence and authorize an approved plan before Execute."""
+    """Commit staged evidence and authorize an approved plan before Execute.
+
+    ``plan_sha256`` selects a digest-suffixed normalized-plan variant when
+    the approved revision carries more than one immutable lineage; without
+    it the baseline revision lineage is bound, preserving the historical
+    single-plan behaviour.
+    """
 
     payloads = [dict(item) for item in decision_payloads]
     records = [dict(item) for item in decision_records]
@@ -325,6 +332,7 @@ def commit_human_review_decision(
             revision=int(plan_revision),
             review_requests=selected.requests,
             decision_set_sha256=str(decision_sha256),
+            plan_sha256=plan_sha256,
         )
         return
     raise HumanReviewCheckpointError(
@@ -746,7 +754,7 @@ def restore_durable_human_review_pause(
                 status="error",
                 run_id=str(run_id),
             )
-            return _WritePhaseResult(literature=None, bound_path=bound_path)
+            return WritePhaseResult(literature=None, bound_path=bound_path)
 
     def finalise_invoker(restored_plan: Any, execute_result: Any, write_result: Any):
         if rejection_only:

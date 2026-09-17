@@ -4,9 +4,9 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5675,
-      "sha256": "1616539e8c1bb86b25d588ddb7c7cac312521a59422667fd6ea7eb15381df6a3",
-      "intra_package_import_edges": 100,
+      "loc": 5692,
+      "sha256": "899814a62fcd9ac2eb79be3bb745c52bf8ff2fc97a1c249588eef462ed6be5c3",
+      "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
@@ -28,15 +28,15 @@
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
-      "loc": 2794,
-      "sha256": "9b8c3f2ee19c6542483319e9695b9e2a90f720627c46b6679e0cc211f48bbde8",
+      "loc": 3008,
+      "sha256": "b51db2b4f34ea2b70ed95b174dfa8178c36fc021ea88010a018ecad84ce4afaa",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 3067,
-      "sha256": "af100f29de908622435da32b5c8e727f37f4e2f68a722f9cf24e6cf1119d9c6d",
-      "intra_package_import_edges": 40,
+      "loc": 3226,
+      "sha256": "c46b5c92aa71ddcad786bd84da4750c5a40ad238b162ac62142c729a44b50691",
+      "intra_package_import_edges": 42,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
@@ -53,7 +53,7 @@
     },
     "authority/plan_authority.py": {
       "loc": 386,
-      "sha256": "4af4ee3b1e04b1bfba46367b7974cbe17ad0f57af1aa1f3f52ad6321adac2317",
+      "sha256": "ef6956b970cb6b4e25197ec2ea447d4045ad305c83cd98b9dbf1936eaf569721",
       "intra_package_import_edges": 12,
       "shim_bypass_violations": []
     },
@@ -100,8 +100,8 @@
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 5601,
-      "sha256": "2f37a6bfd73dfb44d8349e597371f3e3cf52cdbc96bc481c90f57ac8e1b0a39d",
+      "loc": 5608,
+      "sha256": "64394e29bd953827c82daef430c72ffcfc0ece3a5b3ea914961da520da8a936a",
       "intra_package_import_edges": 36,
       "shim_bypass_violations": []
     },
@@ -160,8 +160,8 @@
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
-      "loc": 81,
-      "sha256": "b73187f0a3ffbc6667a156d79478c07cd9e357607abfadff4117db5ac5f077b5",
+      "loc": 89,
+      "sha256": "ce452d0c4bf76c8547245f65e3f8cc10a6aeeb9552f78770a555021da81319ba",
       "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
@@ -172,8 +172,8 @@
       "shim_bypass_violations": []
     },
     "planning/figure_step_contract.py": {
-      "loc": 167,
-      "sha256": "8313dbf1295ce4a0dd9fa0a0f71793db7687ddf58e542782292641a3909c0dab",
+      "loc": 221,
+      "sha256": "5619dffc4e7870088d7dc3e752acca4fd28f4951b9176fadbf33be3a2fc80c72",
       "intra_package_import_edges": 3,
       "shim_bypass_violations": []
     },
@@ -244,14 +244,14 @@
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3115,
-      "sha256": "a1e58810ac0246ceeaf44a3b87017fc8fd36fd89bb70f0c16ec9e5db3aebdef9",
+      "loc": 3139,
+      "sha256": "4b54e5d969961579294cb2774c95f98ef819fb6be321b111f55df8d8e3803d0d",
       "intra_package_import_edges": 22,
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
-      "loc": 2245,
-      "sha256": "a5945d71acff3cb8b91790179f75e414394f5aaaafaca518d2192f0207ec6e28",
+      "loc": 2264,
+      "sha256": "1ecd3a5b0c4f63ecf2274197dbf3b049c8cc46121f13327ae313f42f9464b3ee",
       "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
@@ -325,7 +325,7 @@
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1780,
+      "line_start": 1784,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -337,7 +337,7 @@
     },
     "execution/phase.py::run_execute_phase": {
       "lines": 944,
-      "line_start": 1158,
+      "line_start": 1162,
       "direct_nested_funcs": 4,
       "total_nested_funcs": 6,
       "own_bound_names": 135,
@@ -347,7 +347,7 @@
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3756,
+      "line_start": 3773,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -357,7 +357,7 @@
     },
     "execution/phase.py::_prepare_execute_phase_authority": {
       "lines": 147,
-      "line_start": 1009,
+      "line_start": 1013,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 32,
@@ -406,23 +406,39 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Review 2026-09-17: accept reviewed growth accumulated after the 2026-09-14 baseline. execution/runner.py +73 and figures/skill.py +13 and pipeline.py +3 come from the committed execution-retry/preflight and publication-figure work; agents/progressive_planner.py +177 comes from the separate-analysis product-owner binding and functional-form partition fixes (each owner checked against its materialization contract). The ratchet is moved deliberately, with accepted_growth recorded below.",
+  "baseline_reason": "P0/P1/P2 fix program 2026-09-17: public wrappers, salvage provenance, role gates, fallback filtering, retry-policy contract",
   "baseline_accepted_growth": {
-    "pipeline.py": {
-      "loc_was": 7138,
-      "loc_now": 7141
+    "execution/phase.py": {
+      "loc_was": 5675,
+      "loc_now": 5692
     },
-    "figures/skill.py": {
-      "loc_was": 3772,
-      "loc_now": 3785
+    "reporting/publication_bundles.py": {
+      "loc_was": 2794,
+      "loc_now": 3008
     },
-    "execution/runner.py": {
-      "loc_was": 3520,
-      "loc_now": 3593
+    "reporting/readiness.py": {
+      "loc_was": 3067,
+      "loc_now": 3226
     },
-    "agents/progressive_planner.py": {
-      "loc_was": 4690,
-      "loc_now": 4867
+    "repairs/source.py": {
+      "loc_was": 5601,
+      "loc_now": 5608
+    },
+    "plan_utils.py": {
+      "loc_was": 81,
+      "loc_now": 89
+    },
+    "planning/figure_step_contract.py": {
+      "loc_was": 167,
+      "loc_now": 221
+    },
+    "schema.py": {
+      "loc_was": 3115,
+      "loc_now": 3139
+    },
+    "contracts/declared_product.py": {
+      "loc_was": 2245,
+      "loc_now": 2264
     }
   },
   "baseline_history": [
@@ -1086,6 +1102,43 @@
         "agents/progressive_planner.py": {
           "loc_was": 4690,
           "loc_now": 4867
+        }
+      }
+    },
+    {
+      "reason": "P0/P1/P2 fix program 2026-09-17: public wrappers, salvage provenance, role gates, fallback filtering, retry-policy contract",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5675,
+          "loc_now": 5692
+        },
+        "reporting/publication_bundles.py": {
+          "loc_was": 2794,
+          "loc_now": 3008
+        },
+        "reporting/readiness.py": {
+          "loc_was": 3067,
+          "loc_now": 3226
+        },
+        "repairs/source.py": {
+          "loc_was": 5601,
+          "loc_now": 5608
+        },
+        "plan_utils.py": {
+          "loc_was": 81,
+          "loc_now": 89
+        },
+        "planning/figure_step_contract.py": {
+          "loc_was": 167,
+          "loc_now": 221
+        },
+        "schema.py": {
+          "loc_was": 3115,
+          "loc_now": 3139
+        },
+        "contracts/declared_product.py": {
+          "loc_was": 2245,
+          "loc_now": 2264
         }
       }
     }

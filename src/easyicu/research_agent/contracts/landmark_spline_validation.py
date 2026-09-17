@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class LandmarkSplineFunctionalFormReceipt(BaseModel):
@@ -228,7 +231,11 @@ def landmark_spline_runtime_receipt_valid(summary: Any) -> bool:
         LandmarkSplineRuntimeReceipt.model_validate(
             summary.get("scientific_runtime_receipt")
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "landmark_spline_runtime_receipt_valid closed: error_type=%s",
+            type(exc).__name__,
+        )
         return False
     return True
 

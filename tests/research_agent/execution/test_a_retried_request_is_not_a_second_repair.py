@@ -61,6 +61,7 @@ what the guard beside it exists to prevent.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 import pytest
@@ -77,7 +78,11 @@ from easyicu.research_agent.orchestration.config import (
     step_provider_call_entitlement,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = pathlib.Path(
+    os.environ.get(
+        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+    )
+)
 
 
 def _budget(limit: int = 9) -> StepProviderCallBudget:
@@ -232,6 +237,7 @@ def test_the_run_wide_stop_loss_is_still_charged_for_every_attempt(monkeypatch):
     assert budget.used == 1
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_receipts_show_the_overcharge():
     """Re-measures the corpus rather than restating it."""
 

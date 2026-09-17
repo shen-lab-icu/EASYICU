@@ -364,3 +364,40 @@ def test_system_validation_receipt_binds_exact_json_and_html_bytes() -> None:
     assert receipt["publication_authorized"] is False
     assert receipt["html"]["sha256"] == hashlib.sha256(html_bytes).hexdigest()
     assert receipt["pdf"] is None
+
+
+def test_unknown_failure_class_becomes_contract_drift_finding() -> None:
+    """Retry policy allowlist is enforced at validation time, not discarded."""
+    projections = _projections()
+    projections["source_run_manifest.json"]["per_step_records"] = [
+        {"step_id": "01_x", "runtime_failure_class": "execution_timeout"},
+        {"step_id": "02_y", "runtime_failure_class": "some_future_class"},
+    ]
+    report = build_system_validation_report(
+        run_id="run_validation",
+        projections=projections,
+        run_status={"gates": {"execution_complete": True}},
+        review_checkpoint=_approved_checkpoint(),
+        provider_usage=None,
+        projection_privacy_passed=True,
+    )
+    codes = [finding.code for finding in report.scientific_findings]
+    assert "retry_policy_contract_drift" in codes
+    assert report.status == "engineering_validation_incomplete"
+
+
+def test_tabled_failure_classes_emit_no_drift_finding() -> None:
+    projections = _projections()
+    projections["source_run_manifest.json"]["per_step_records"] = [
+        {"step_id": "01_x", "runtime_failure_class": "execution_timeout"},
+    ]
+    report = build_system_validation_report(
+        run_id="run_validation",
+        projections=projections,
+        run_status={"gates": {"execution_complete": True}},
+        review_checkpoint=_approved_checkpoint(),
+        provider_usage=None,
+        projection_privacy_passed=True,
+    )
+    codes = [finding.code for finding in report.scientific_findings]
+    assert "retry_policy_contract_drift" not in codes

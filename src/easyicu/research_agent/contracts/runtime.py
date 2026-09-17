@@ -124,4 +124,14 @@ __all__ = [
     "_PlanPhaseResult",
     "_ExecutePhaseResult",
     "_WritePhaseResult",
+    "PlanPhaseResult",
+    "ExecutePhaseResult",
+    "WritePhaseResult",
 ]
+
+# Public cross-owner aliases (B-P2-3). The underscore names predate the
+# contracts-owner split and are kept for backward compatibility; cross-package
+# callers must use the public names below.
+PlanPhaseResult = _PlanPhaseResult
+ExecutePhaseResult = _ExecutePhaseResult
+WritePhaseResult = _WritePhaseResult

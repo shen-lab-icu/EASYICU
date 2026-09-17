@@ -7,7 +7,7 @@
   "clinical_topics": ["ICU mortality", "risk prediction", "prognostic model", "calibration", "external validation"],
   "topic_aliases": ["mortality prediction", "mortality risk prediction", "mortality risk model", "prognostic mortality model", "hospital mortality prediction", "死亡预测", "死亡风险预测", "死亡风险模型"],
   "study_families": ["prediction"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "A clinically defined ICU target population with patient-level independence between development and validation data.",
     "time_zero": "The intended prediction time, commonly ICU admission or a prespecified later landmark.",

@@ -59,6 +59,10 @@ class AvailableCatalog:
 
     source: str
     concepts: List[CatalogConcept] = field(default_factory=list)
+    # True when the concept-dictionary enrichment failed and descriptions /
+    # categories are missing (not merely empty). Downstream must not mistake
+    # an unenriched catalog for a fully described one.
+    enrichment_degraded: bool = False
 
     def ids(self) -> List[str]:
         return [c.concept_id for c in self.concepts]
@@ -114,6 +118,9 @@ class CoverageReport:
     available: List[str]  # requested concepts that resolved
     missing: List[str]  # requested concepts absent from the provided data
     advice: List[str] = field(default_factory=list)
+    # Mirrors the catalog's enrichment status so ConceptSelection.coverage
+    # exposes a missing-enrichment marker instead of a silent empty dict.
+    enrichment_degraded: bool = False
 
     @property
     def sufficient(self) -> bool:
@@ -138,6 +145,7 @@ class CoverageReport:
             "available": list(self.available),
             "missing": list(self.missing),
             "advice": list(self.advice),
+            "enrichment_degraded": bool(self.enrichment_degraded),
         }
 
 
@@ -146,22 +154,32 @@ class CoverageReport:
 # ---------------------------------------------------------------------------
 
 
-def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
-    """Return ``concept_id -> {description, category}`` from the concept dict.
+def _concept_dict_meta_with_status() -> tuple[Dict[str, Dict[str, str]], bool]:
+    """Return ``(meta, enrichment_degraded)`` via the public loader API.
 
-    Best-effort: the concept-dict schema varies, so we defensively pull a few
-    likely fields and fall back to empty strings. Never raises — a missing or
-    malformed dictionary just yields no enrichment.
+    Uses the public :func:`easyicu.concept.loader.load_concept_dict_cached`
+    alias (P1). ``enrichment_degraded`` is True only when the loader itself
+    failed or returned a non-mapping — never for a merely sparse dictionary.
+    Callers must surface the flag instead of silently consuming an empty dict.
     """
     try:
-        from easyicu.concept.loader import _load_concept_dict_cached
+        from easyicu.concept.loader import load_concept_dict_cached
 
-        raw = _load_concept_dict_cached()
+        raw = load_concept_dict_cached()
     except Exception:
-        raw = {}
-    meta: Dict[str, Dict[str, str]] = {}
+        return {}, True
     if not isinstance(raw, Mapping):
-        raw = {}
+        return {}, True
+    # Reuse the parsing below without re-invoking the loader: temporarily
+    # inline by delegating to _parse_concept_dict_meta.
+    return _parse_concept_dict_meta(raw), False
+
+
+def _parse_concept_dict_meta(
+    raw: Mapping[str, object],
+) -> Dict[str, Dict[str, str]]:
+    """Parse raw concept-dict payload into ``concept_id -> meta`` rows."""
+    meta: Dict[str, Dict[str, str]] = {}
     from easyicu.concept.export_metadata import concept_declares_event_status
     from easyicu.concept.schema import ConceptDefinition
 
@@ -205,6 +223,22 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
     return meta
 
 
+def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
+    """Return ``concept_id -> {description, category}`` from the concept dict.
+
+    Best-effort: the concept-dict schema varies, so we defensively pull a few
+    likely fields and fall back to empty strings. Never raises — a missing or
+    malformed dictionary just yields no enrichment.
+
+    Compatibility shim: new code should use
+    :func:`_concept_dict_meta_with_status` to observe the
+    ``enrichment_degraded`` flag. This wrapper preserves the historical
+    ``dict``-only return for existing callers/tests.
+    """
+    meta, _degraded = _concept_dict_meta_with_status()
+    return meta
+
+
 def _methodology_tag(concept_id: str, category: str) -> str:
     """Compact advisory methodology tag for a concept (best-effort).
 
@@ -233,7 +267,15 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
     # A typed package already sealed its prompt-facing semantics.  Re-reading
     # the mutable packaged dictionary here would create a second authority and
     # allow descriptions/categories to drift after export.
-    meta = {} if typed_index else _concept_dict_meta()
+    if typed_index:
+        meta: Dict[str, Dict[str, str]] = {}
+        enrichment_degraded = False
+    else:
+        # Mockable enrichment payload (historical tests patch
+        # _concept_dict_meta); degraded status always reflects the real
+        # public loader so a silent empty dict is never consumed as clean.
+        meta = _concept_dict_meta()
+        _, enrichment_degraded = _concept_dict_meta_with_status()
     if typed_index:
         primary_by_source: Dict[str, List[tuple[str, Mapping[str, object]]]] = {}
         for column, info in index.items():
@@ -302,7 +344,11 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
                 ),
             )
         )
-    return AvailableCatalog(source=str(export_dir), concepts=concepts)
+    return AvailableCatalog(
+        source=str(export_dir),
+        concepts=concepts,
+        enrichment_degraded=enrichment_degraded,
+    )
 
 
 def build_database_capability_catalog(database: str) -> AvailableCatalog:
@@ -326,6 +372,7 @@ def build_database_capability_catalog(database: str) -> AvailableCatalog:
     normalized_database = normalize_database_name(database)
     dictionary_catalog = load_concept_catalog()
     meta = _concept_dict_meta()
+    _, enrichment_degraded = _concept_dict_meta_with_status()
     concepts: List[CatalogConcept] = []
     for concept_id in dictionary_catalog.available_concepts:
         availability = explain_concept_availability(
@@ -370,6 +417,7 @@ def build_database_capability_catalog(database: str) -> AvailableCatalog:
     return AvailableCatalog(
         source=f"easyicu-database-capability:{normalized_database}",
         concepts=concepts,
+        enrichment_degraded=enrichment_degraded,
     )
 
 
@@ -431,10 +479,18 @@ def assess_coverage(
                 f"`{concept}` is not in the provided data{module_hint}. "
                 f"Re-extract it with EasyICU before this analysis can use it."
             )
+    enrichment_degraded = bool(getattr(catalog, "enrichment_degraded", False))
+    if enrichment_degraded:
+        advice.append(
+            "Concept-dictionary enrichment is unavailable; descriptions and "
+            "categories are missing (not merely empty). Re-check the concept "
+            "dictionary before trusting prompt-facing metadata."
+        )
     return CoverageReport(
         requested=list(dict.fromkeys(requested_concepts)),
         resolved=resolved,
         available=available,
         missing=missing,
         advice=advice,
+        enrichment_degraded=enrichment_degraded,
     )

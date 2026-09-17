@@ -31,6 +31,7 @@ from ..repairs.coordination import (
     StepRepairBudget,
     resume_deterministic_repair_candidate,
 )
+from ..repairs.runner_dispatch import mark_semantic_stub_injection
 from ..repairs.reasons import RepairPromptAuthority
 from ..schema import AnalysisStep, ResearchContext
 from .concept_audit import ConceptQuarantineState
@@ -309,6 +310,7 @@ class StepCandidateRecovery:
         self.use_resumed_code(resumed_code)
         request.worker_progress.preexecution_runner_repair_name = repair_name
         request.step_record["runner_repair"] = repair_name
+        mark_semantic_stub_injection(request.step_record, repair_name)
         request.step_record["resume_deterministic_repair"] = repair_name
         request.record_repair(
             repair_id=repair_name,

@@ -279,7 +279,11 @@ def test_ten_source_run_bound_literature_schema_keeps_retry_headroom():
     )
     schema = json.loads(request.schema_json)
 
-    assert request.payload_bytes < 30_000
+    # Ratchet (reviewed 2026-09-17): 30_000 -> 30_100 to pay for the deliberate
+    # planner-settable ``AnalysisStep.allow_fallback_as_primary`` permission
+    # flag (C-F9: fallback-as-primary requires explicit plan permission).
+    # Any further growth must be justified here, not absorbed silently.
+    assert request.payload_bytes < 30_100
     assert "CandidateLiteratureDesignDecision" not in request.schema_json
     assert len(schema["$defs"]["LiteratureDesignBinding"]["anyOf"]) == 6
 

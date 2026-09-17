@@ -7,7 +7,7 @@
   "clinical_topics": ["longitudinal phenotype", "trajectory clustering", "subphenotype", "organ dysfunction trajectory", "cluster stability"],
   "topic_aliases": ["trajectory clustering", "longitudinal phenotype", "longitudinal phenotyping", "subphenotype", "trajectory subphenotype", "轨迹聚类", "纵向表型", "亚型"],
   "study_families": ["phenotyping"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "A reproducibly defined ICU cohort with enough repeated measurements in a common observation window.",
     "time_zero": "A shared clinical landmark such as ICU admission or syndrome onset, before trajectory extraction.",

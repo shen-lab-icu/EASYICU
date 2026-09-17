@@ -277,6 +277,12 @@ def _score_safety_receipt(
 ) -> DimensionScore:
     hazards = receipt.hazard_adjudications
     forbidden = receipt.forbidden_claim_adjudications
+    if not hazards or not forbidden:
+        raise ValueError(
+            "safety receipt must carry non-empty hazard and forbidden-claim "
+            f"adjudications (got {len(hazards)} hazards, {len(forbidden)} "
+            "forbidden claims)"
+        )
     if tuple(item.code for item in hazards) != task_rubric.hazard_codes:
         raise ValueError("safety receipt hazard codes/order mismatch")
     if tuple(item.code for item in forbidden) != task_rubric.forbidden_claim_codes:
