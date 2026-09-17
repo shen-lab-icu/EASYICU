@@ -50,9 +50,14 @@ def _hmac_path(cache_file: Path) -> Path:
     return Path(str(cache_file) + ".hmac")
 
 
-def _compute_hmac(payload: bytes, key: bytes) -> str:
-    """Return the hex HMAC-SHA256 of a cache payload."""
-    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+def _compute_hmac(payload: bytes, key: bytes, cache_name: str) -> str:
+    """Bind the serialized payload to its cache request, not just its bytes."""
+    signer = hmac.new(key, digestmod=hashlib.sha256)
+    signer.update(b"easyicu.trusted-pickle/2\0")
+    signer.update(cache_name.encode("utf-8"))
+    signer.update(b"\0")
+    signer.update(payload)
+    return signer.hexdigest()
 
 
 def get_cache_key(concepts: List[str], source: str, **kwargs) -> str:
@@ -137,7 +142,7 @@ def load_concept_cached_impl(
                         f"{sidecar.name}; refusing unsigned pickle cache"
                     )
                 expected = sidecar.read_text(encoding="utf-8").strip().casefold()
-                actual = _compute_hmac(raw, hmac_key).casefold()
+                actual = _compute_hmac(raw, hmac_key, cache_file.name).casefold()
                 if not hmac.compare_digest(expected, actual):
                     raise ValueError(
                         "HMAC mismatch for "
@@ -192,10 +197,12 @@ def load_concept_cached_impl(
     try:
         if use_pickle:
             assert hmac_key is not None  # guarded by _require_hmac_key above
-            with cache_file.open("wb") as handle:
-                pickle.dump(result, handle)
+            # Sign the bytes produced by this process. Re-reading the shared
+            # path before signing could authenticate a concurrent replacement.
+            raw = pickle.dumps(result)
+            cache_file.write_bytes(raw)
             _hmac_path(cache_file).write_text(
-                _compute_hmac(cache_file.read_bytes(), hmac_key),
+                _compute_hmac(raw, hmac_key, cache_file.name),
                 encoding="utf-8",
             )
         elif isinstance(result, pd.DataFrame):
