@@ -1,10 +1,15 @@
 {
-  "checked_at": "2026-09-16T11:33:22.633105+00:00",
+  "checked_at": "2026-09-17T14:32:39+00:00",
   "level": "focused static-site verification",
   "checkout": ".",
-  "head": "085f20d5360b57e6c792bd4b9a3eea78f746981b",
+  "head": "1802174b13faeccd41f336f8bedbf5cdfb603e33",
   "branch": "codex/dev9-web-acceptance-20260906",
-  "scope": "Uncommitted website/ addition; existing app/runtime edits belong to other tasks and were preserved.",
+  "scope": "Final website batch after the reviewed repair commits: static generation and syntax/local-anchor checks were re-run; dist/ bytes remain unchanged (all 10 SHA-256 match the 2026-09-16 record), so the browser flows below are carried over, not re-run.",
+  "rebind": {
+    "prior_head": "fe6ac51f3253b99672685878b6904f867f4971db",
+    "dist_sha_unchanged": true,
+    "link_check": "re-ran 2026-09-17: 10/10 public URLs HTTP 200, guide.html#data anchor present; see link-check.json binding header"
+  },
   "preview": "http://127.0.0.1:54591/",
   "publication": "Local only; no upload or deployment; team details omitted per user.",
   "static": {
