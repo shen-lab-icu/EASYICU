@@ -155,6 +155,15 @@ class ReviewerReport:
             "counts": counts,
             "aggregated_recommendation": self.aggregated_recommendation(),
             "per_role": {c.reviewer: c.recommendation() for c in self.critiques},
+            # This loop is a deterministic checklist phrased as three reviewer
+            # roles; it is not independent external peer review.  Record that
+            # explicitly so downstream gates cannot read the report as an
+            # external scientific review receipt.
+            "review_mode": "simulated_deterministic",
+            "claim_boundary": (
+                "Simulated three-role checklist. Not independent external "
+                "review and not publication authority."
+            ),
         }
 
     def to_json(self) -> Dict[str, Any]:

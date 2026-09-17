@@ -84,6 +84,7 @@ const host = {
 };
 global.document = { getElementById(id) { return id === 'gdContextAside' ? aside : id === 'gdStudyAside' ? study : null; } };
 global.EU_API = { piCopilotResearchDocumentUrl: (project, run, artifact, digest) => `/preview/${project}/${run}/${artifact}?sha=${digest}` };
+require(path.join(jsRoot, 'product-labels.js'));
 require(path.join(jsRoot, 'screens-guided-pi-preview.js'));
 const preview = modules.require('preview');
 preview.mount(host);

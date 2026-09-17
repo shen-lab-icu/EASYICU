@@ -1,23 +1,9 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/research_agent/agents/planner.py",
-      "src/easyicu/research_agent/planning/analysis_types.py",
-      "src/easyicu/research_agent/planning/figure_strategy.py",
-      "src/easyicu/research_agent/research_context/outbound.py",
-      "src/easyicu/research_agent/schema.py"
+      "src/easyicu/data/concept-dict.json"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 61107,
-        "was": 61262
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 56467,
-        "was": 56622
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -489,9 +475,16 @@
           "was": 56622
         }
       }
+    },
+    {
+      "reason": "Review 2026-09-17: crea ceiling 15->25 widens the bound concept dictionary; new 20260917 E1 submission profiles re-lock to it. Review 2026-09-17 uncommitted working-tree fixes (SICdb death clock, novelty/publication chain, Copilot turn authority, usage bindings, frontend ownership splits) are separate source changes not covered by this resource measurement.",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Refresh after reviewed planner, typed-analysis, figure-strategy, context-projection, schema, and concept-dictionary changes; maximum planner prompt envelopes decreased.",
+  "baseline_reason": "Review 2026-09-17: crea ceiling 15->25 widens the bound concept dictionary; new 20260917 E1 submission profiles re-lock to it. Review 2026-09-17 uncommitted working-tree fixes (SICdb death clock, novelty/publication chain, Copilot turn authority, usage bindings, frontend ownership splits) are separate source changes not covered by this resource measurement.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -501,7 +494,7 @@
   "schema_version": "easyicu.research_agent_resource_baseline/2",
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
-    "src/easyicu/data/concept-dict.json": "389e2988a6d601974cf7dd5b303929964ec8c9d66a82c63821646e956cc1ceec",
+    "src/easyicu/data/concept-dict.json": "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba",
     "src/easyicu/data/sofa2-dict.json": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
     "src/easyicu/research_agent/agents/core.py": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
     "src/easyicu/research_agent/agents/planner.py": "8658b2b6024a796d28e7dc23d4a46f2542b3322e2b3412c0c5230addc1bcff1d",

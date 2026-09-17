@@ -307,6 +307,18 @@ def _novelty_facts(
         and str(dimensions[name].get("comparator") or "").strip()
         and str(dimensions[name].get("difference") or "").strip()
     }
+    # Mirror the typed packet's own review contract: an accepted disposition is
+    # not enough when a dimension still carries study-authority text or no
+    # reviewer identity.  Without this the maturity audit counted a packet the
+    # owner model would reject as "supported".
+    independently_reviewed_dimensions = {
+        name
+        for name in required
+        if isinstance(dimensions.get(name), Mapping)
+        and str(dimensions[name].get("source_status") or "").strip().casefold()
+        == "independent_reviewed"
+    }
+    reviewer_owner = str(audit.get("reviewer_owner") or "").strip()
     digest_fields = ("context_sha256", "plan_sha256", "literature_sha256")
     digest_mismatches = [
         field
@@ -321,6 +333,8 @@ def _novelty_facts(
         and comparator_keys
         and set(comparator_keys) <= set(comparison_source_keys)
         and complete_dimensions == required
+        and independently_reviewed_dimensions == required
+        and reviewer_owner
         and str(audit.get("review_disposition") or "").strip().casefold()
         in {"independent_pre_review_pass", "human_review_pass"}
     )
@@ -332,6 +346,13 @@ def _novelty_facts(
         "comparison_source_keys": comparator_keys,
         "complete_dimensions": sorted(complete_dimensions),
         "required_dimensions": sorted(required),
+        "independently_reviewed_dimensions": sorted(
+            independently_reviewed_dimensions
+        ),
+        "unreviewed_dimensions": sorted(
+            required - independently_reviewed_dimensions
+        ),
+        "reviewer_owner": reviewer_owner,
         "review_disposition": str(audit.get("review_disposition") or "not_available"),
         "digest_bound": digest_bound,
         "digest_mismatches": digest_mismatches,
@@ -1665,11 +1686,16 @@ def build_scientific_maturity_audit(
                 code="INDEPENDENT_SCIENTIFIC_REVIEW_NOT_AVAILABLE",
                 severity="blocker",
                 dimension="clinical_review",
-                message="No owner-issued independent scientific review receipt is available.",
+                message=(
+                    "No reviewer receipt is available. The pipeline's simulated "
+                    "three-role checklist is not independent external review."
+                ),
                 evidence_refs=["reviewer_report.json"],
                 remediation=(
-                    "Generate the clinical/methodological reviewer receipt and keep "
-                    "human sign-off separate from the Agent's own review."
+                    "Run the clinical/methodological reviewer loop and keep "
+                    "human sign-off separate from the Agent's own review; paper "
+                    "authority additionally requires the externally completed "
+                    "novelty packet."
                 ),
             )
         )

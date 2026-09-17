@@ -81,14 +81,28 @@ _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS = (
     "one-time extraction authorization",
 )
 
+# A plan noun followed by advice *about* editing it is not a request to spend a
+# Planner turn: "对计划的样本量调整给出建议" and "对年龄的调整方式做敏感性分析"
+# both contain a revision verb as a noun. These tails keep the explicit-edit
+# patterns from treating that advisory framing as authorization.
+_ADVISORY_PLAN_TAIL = (
+    r"(?![\s\S]{0,8}(?:"
+    r"(?:给出|提供|提出|写|出)[\s\S]{0,4}(?:建议|意见|看法|评估|评价|解释|说明|分析)"
+    r"|(?:方式|方法)[\s\S]{0,6}(?:建议|意见|评估|评价|讨论|分析)"
+    r"|(?:做|进行)[\s\S]{0,6}(?:敏感性|亚组|分层|稳健性|探索性)[\s\S]{0,4}(?:分析|评估)"
+    r"))"
+)
+
 _PROVIDER_REPLAN_PATTERNS = (
     r"(?:重新)?生成(?:(?:新的?|全新的?|干净的?|当前|这份|整份|完整|候选|修订|的)|\s)*(?:research agent\s*)?(?:研究|分析)(?:计划|方案)",
     r"(?:重新)?生成(?:完整)?修订(?:计划|方案)",
+    r"(?:重新)?生成[^。.!！?？;；]{0,12}?(?:计划|方案)(?!的(?:建议|意见|看法|评估|评价|解释|说明|问题))",
     r"(?:请|现在|授权)?(?:重新规划|重做(?:研究|分析)(?:计划|方案))",
     r"(?:一次性\s*)?provider_run\s*授权",
     r"(?:authorize|please|now)?[\s_-]*(?:regenerate|replan|generate)[\s_-]+(?:a[\s_-]+)?(?:the[\s_-]+)?(?:new[\s_-]+)?(?:research[\s_-]+agent[\s_-]+)?analysis[\s_-]+plan",
     r"(?:修订|修正|修改|调整|完善)(?:(?:当前|这份|整份|完整|候选|研究|分析|的)|\s)*(?:计划|方案)",
-    r"(?:请|现在)(?:对|将)[^。.!！?？;；]{0,48}(?:计划|方案)[^。.!！?？;；]{0,20}(?:修订|修正|修改|调整|完善)",
+    r"(?:请|现在)(?:对|将)[^。.!！?？;；]{0,48}(?:计划|方案)[^。.!！?？;；]{0,20}(?:修订|修正|修改|调整|完善)"
+    + _ADVISORY_PLAN_TAIL,
     r"\b(?:revise|amend|update|modify)\s+(?:(?:a|the|current|complete|candidate|research|analysis)\s+)*plan\b",
 )
 

@@ -2,7 +2,7 @@
   "finalized": false,
   "finalized_note": "2026-09-15 待重新提取与质控：Dev9 在已发布 v5 之后以 6fd512344 引入共享住院死亡结局绑定，并以 639718e9f 补充 legacy service 的 EYE 外科映射；当前 concept-dict 因此不再等于 v5 运行所绑定的字典。v5 及其 HiRID AKI 修复保留为不可变历史发布，不能用当前字典摘要重新标记旧输出。新的 full6 发布须从当前字典重新生成受影响输出并完成既有封存门禁。",
   "locked_for_extraction_run": "pending_dev9_foundation_refresh_6fd512344_639718e9f_20260915",
-  "concept_dict_sha256": "389e2988a6d601974cf7dd5b303929964ec8c9d66a82c63821646e956cc1ceec",
+  "concept_dict_sha256": "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba",
   "sofa2_dict_sha256": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
   "total_concepts": 256,
   "new_this_round": [],

@@ -1,10 +1,11 @@
 [
   {
     "asset": "reader-current.jpg",
-    "sha256": "6ce2c47de0d9aa0db4a3ea5300ff0b2674b1658a277571294a330f33f5ea270e",
+    "sha256": "10a03ff30d3eac21fbf7d46a06a92ecd6a30c3c6816f80d5246c83eda21715fa",
     "ui_verified": "Compared with running Chrome workbench on 2026-09-16; current refined UI.",
     "source_kind": "local_ui_review_capture",
-    "source_artifact": "outputs/easyicu_ui_review_20260916/10-reader-refined-chrome.png"
+    "source_artifact": "outputs/easyicu_ui_review_20260916/10-reader-refined-chrome.png",
+    "redaction": "2026-09-17: pixelated the three aggregate result values (source/eligible stays, overall outcome risk) from an analysis_only development run so the site carries no unpublished result values; UI layout otherwise unchanged."
   },
   {
     "asset": "workspace-current.jpg",

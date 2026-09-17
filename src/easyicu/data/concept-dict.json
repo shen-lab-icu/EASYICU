@@ -2745,7 +2745,8 @@
  "crea": {
   "unit": "mg/dL",
   "min": 0,
-  "max": 15,
+  "max": 25,
+  "_comment": "2026-09-17: raised from the ricu-inherited 15 to the clinically reviewed ceiling (unmerged review tag archive/concept-clinical-bounds-ee33539 widened crea to 25). Cross-DB export measurement shows real peaks in (15,25] in eICU/SIC stays while unit-error tails (>25, up to ~129) stay excluded. The cap is silent before KDIGO aggregation, so leaving it at 15 systematically understages severe AKI in the clipped databases.",
   "description": "creatinine",
   "omopid": 4013964,
   "category": "chemistry",

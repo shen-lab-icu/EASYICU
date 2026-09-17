@@ -9,7 +9,11 @@ from easyicu.research_agent.literature import (
     LiteratureScreeningDecision,
     LiteratureSearchProvenance,
 )
+from easyicu.research_agent.planning.novelty_contract import (
+    NOVELTY_REVIEW_DIMENSIONS,
+)
 from easyicu.research_agent.reporting.scientific_maturity import (
+    _novelty_facts,
     _primary_figure_facts,
     _robustness_facts,
     _manuscript_section_prose_metrics,
@@ -799,6 +803,63 @@ def test_design_analogue_satisfies_non_exposure_comparison_source_gate(
     assert audit.facts["design_analogue_keys"] == ["analogue_2025"]
     assert audit.facts["comparison_source_keys"] == ["analogue_2025"]
 
+    # Pin the publication boundary end to end: a packet with an accepted
+    # disposition and matching digests still cannot close the novelty gate
+    # until every dimension carries independent-review provenance and a
+    # reviewer identity.
+    from easyicu.research_agent.reporting.novelty_positioning import (
+        novelty_authority_digests,
+    )
+
+    digests = novelty_authority_digests(
+        context=context, plan=plan, literature=literature
+    )
+
+    def _packet(source_status: str, reviewer_owner: str) -> dict:
+        return {
+            "status": "supported",
+            "direct_comparator_keys": [],
+            "design_analogue_keys": ["analogue_2025"],
+            "comparison_dimensions": {
+                name: {
+                    "study": "sealed cohort",
+                    "comparator": "published analogue",
+                    "difference": "different design route",
+                    "source_status": source_status,
+                }
+                for name in NOVELTY_REVIEW_DIMENSIONS
+            },
+            "review_disposition": "human_review_pass",
+            "reviewer_owner": reviewer_owner,
+            **digests,
+        }
+
+    (tmp_path / "novelty_positioning_audit.json").write_text(
+        json.dumps(_packet("study_authority_only", "external reviewer")),
+        encoding="utf-8",
+    )
+    audit = build_scientific_maturity_audit(
+        context=context, plan=plan, run_dir=tmp_path
+    )
+    assert "NOVELTY_POSITIONING_NOT_ESTABLISHED" in {
+        finding.code for finding in audit.findings
+    }
+    assert audit.facts["novelty"]["unreviewed_dimensions"] == sorted(
+        NOVELTY_REVIEW_DIMENSIONS
+    )
+
+    (tmp_path / "novelty_positioning_audit.json").write_text(
+        json.dumps(_packet("independent_reviewed", "external reviewer")),
+        encoding="utf-8",
+    )
+    audit = build_scientific_maturity_audit(
+        context=context, plan=plan, run_dir=tmp_path
+    )
+    assert "NOVELTY_POSITIONING_NOT_ESTABLISHED" not in {
+        finding.code for finding in audit.findings
+    }
+    assert audit.facts["novelty"]["supported"] is True
+
 
 _TARGET_BEARING_SECTION_KEYS = (
     "abstract",
@@ -902,3 +963,87 @@ def test_prose_metrics_do_not_credit_evidence_markup_as_content() -> None:
     assert (
         _manuscript_section_prose_metrics(with_links)["discussion"]["words"] == 120
     )
+
+
+def _supported_novelty_packet(**overrides) -> dict:
+    dimensions = {
+        name: {
+            "study": "sealed cohort",
+            "comparator": "prior cohort",
+            "difference": "different time zero",
+            "source_status": "independent_reviewed",
+        }
+        for name in NOVELTY_REVIEW_DIMENSIONS
+    }
+    packet = {
+        "status": "supported",
+        "direct_comparator_keys": ["direct_2018"],
+        "design_analogue_keys": [],
+        "comparison_dimensions": dimensions,
+        "review_disposition": "human_review_pass",
+        "reviewer_owner": "external reviewer",
+        "context_sha256": "a" * 64,
+        "plan_sha256": "b" * 64,
+        "literature_sha256": "c" * 64,
+    }
+    packet.update(overrides)
+    return packet
+
+
+def _write_novelty_packet(tmp_path, payload: dict) -> None:
+    (tmp_path / "novelty_positioning_audit.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+
+def test_novelty_supported_requires_independent_dimension_review(tmp_path) -> None:
+    digests = {
+        "context_sha256": "a" * 64,
+        "plan_sha256": "b" * 64,
+        "literature_sha256": "c" * 64,
+    }
+
+    _write_novelty_packet(tmp_path, _supported_novelty_packet())
+    facts = _novelty_facts(
+        tmp_path,
+        comparison_source_keys=["direct_2018"],
+        expected_authority_digests=digests,
+    )
+    assert facts["supported"] is True
+    assert facts["reviewer_owner"] == "external reviewer"
+    assert facts["unreviewed_dimensions"] == []
+
+    dimensions = {
+        name: {
+            "study": "sealed cohort",
+            "comparator": "prior cohort",
+            "difference": "different time zero",
+            "source_status": "study_authority_only",
+        }
+        for name in NOVELTY_REVIEW_DIMENSIONS
+    }
+    _write_novelty_packet(
+        tmp_path, _supported_novelty_packet(comparison_dimensions=dimensions)
+    )
+    facts = _novelty_facts(
+        tmp_path,
+        comparison_source_keys=["direct_2018"],
+        expected_authority_digests=digests,
+    )
+    assert facts["supported"] is False
+    assert facts["unreviewed_dimensions"] == sorted(NOVELTY_REVIEW_DIMENSIONS)
+
+    dimensions["population_and_setting"]["source_status"] = "independent_reviewed"
+    _write_novelty_packet(
+        tmp_path,
+        _supported_novelty_packet(
+            comparison_dimensions=dimensions, reviewer_owner=""
+        ),
+    )
+    facts = _novelty_facts(
+        tmp_path,
+        comparison_source_keys=["direct_2018"],
+        expected_authority_digests=digests,
+    )
+    assert facts["supported"] is False
+    assert facts["reviewer_owner"] == ""

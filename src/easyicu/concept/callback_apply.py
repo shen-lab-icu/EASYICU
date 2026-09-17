@@ -1132,8 +1132,49 @@ def _apply_callback(
         death_values = pd.Series(index=df.index, dtype=object)
         death_values[died] = True  # survivors/unknown -> NA (ricu convention)
         df[concept_name] = death_values
-        if offset_secs is not None:
-            df['charttime'] = (offset_secs / 3600.0).where(died)
+        if offset_secs is not None and bool(died.any()):
+            # Official SICdb semantics: OffsetOfDeath counts seconds from the
+            # primary admission, so the ICU clock requires subtracting
+            # cases.ICUOffset — the same origin the event tables use.  Without
+            # it the death time is shifted by the pre-ICU hospital stay.
+            icu_offset = None
+            for c in ['ICUOffset', 'icuoffset']:
+                if c in df.columns:
+                    icu_offset = pd.to_numeric(df[c], errors='coerce')
+                    break
+            if icu_offset is None and data_source is not None:
+                id_col = next(
+                    (c for c in ('CaseID', 'caseid') if c in df.columns), None
+                )
+                if id_col is not None:
+                    try:
+                        cases = data_source.load_table(
+                            "cases", columns=[id_col, "ICUOffset"], verbose=False
+                        )
+                        cases_df = cases.data if hasattr(cases, "data") else cases
+                        origins = cases_df[[id_col, "ICUOffset"]].drop_duplicates(
+                            subset=[id_col], keep="last"
+                        )
+                        icu_offset = pd.to_numeric(
+                            df[id_col].map(
+                                origins.set_index(id_col)["ICUOffset"]
+                            ),
+                            errors="coerce",
+                        )
+                    except Exception:
+                        icu_offset = None
+            if icu_offset is None or icu_offset.notna().sum() == 0:
+                raise ValueError(
+                    "sic_death requires cases.ICUOffset to express the death "
+                    "time on the ICU clock"
+                )
+            missing_origin = died & icu_offset.isna()
+            if bool(missing_origin.any()):
+                raise ValueError(
+                    "sic_death found in-hospital death(s) without a usable "
+                    "cases.ICUOffset"
+                )
+            df['charttime'] = ((offset_secs - icu_offset) / 3600.0).where(died)
         return df
 
     # 🔧 HiRID death callback — matches R ricu hirid_death (callback-itm.R:197)

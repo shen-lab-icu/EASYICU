@@ -1406,17 +1406,39 @@ def _ensure_unsigned_novelty_positioning_packet(
             novelty_packet.model_dump_json(indent=2),
             encoding="utf-8",
         )
-    if evidence.get("novelty_positioning_audit") is None:
+    # Register the bytes that are actually on disk.  The unsigned packet is
+    # registered first; when an independent reviewer later completes the same
+    # file, the registered record would otherwise keep pointing at the blank
+    # version.  ``new_id`` preserves both records instead of overwriting one,
+    # and the digest scan keeps repeated write phases from versioning the same
+    # content again.
+    current_digest = hashlib.sha256(novelty_path.read_bytes()).hexdigest()
+    registered_digests: set[str] = set()
+    try:
+        registered_digests = {
+            str(getattr(record, "sha256", ""))
+            for record in evidence.current_verified_records(None)
+            if str(getattr(record, "evidence_id", "")).startswith(
+                "novelty_positioning_audit"
+            )
+        }
+    except (AttributeError, TypeError):
+        registered = evidence.get("novelty_positioning_audit")
+        if registered is not None:
+            registered_digests = {str(getattr(registered, "sha256", ""))}
+    if current_digest not in registered_digests:
         evidence.register_file(
             kind="log",
             description=(
-                "Unsigned source-bound novelty comparison packet for independent "
-                "clinical and methods appraisal."
+                "Source-bound novelty comparison packet for independent "
+                "clinical and methods appraisal (unsigned until a reviewer "
+                "completes every dimension)."
             ),
             source_path=novelty_path,
             evidence_id="novelty_positioning_audit",
             producer="pipeline",
             generation_mode="system",
+            on_sha_change="new_id",
         )
 
 

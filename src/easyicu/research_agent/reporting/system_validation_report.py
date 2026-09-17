@@ -497,16 +497,36 @@ def build_system_validation_report(
                 binding_scope="run_private_receipt",
             )
         )
+    # ``usage.ledger_sha256`` is the canonical digest over the accounting
+    # bindings (one ``{stage, ledger_digest}`` per ledger), not the bytes of
+    # any single file.  Label it as the accounting digest, and bind each stage
+    # under the ledger's own verified self-digest so a reader can match the
+    # receipt against the real file.
     if usage is not None and re.fullmatch(
         r"[a-f0-9]{64}", str(usage.ledger_sha256 or "")
     ):
         source_bindings.append(
             ValidationSourceBinding(
-                artifact="provider_hard_stop_ledger.json",
+                artifact="provider_usage_accounting",
                 sha256=str(usage.ledger_sha256),
                 binding_scope="run_private_receipt",
             )
         )
+    if isinstance(provider_usage, Mapping):
+        for attempt in provider_usage.get("attempts") or ():
+            if not isinstance(attempt, Mapping):
+                continue
+            stage = _text(attempt.get("stage"), 80)
+            ledger_digest = _text(attempt.get("ledger_digest"), 64).lower()
+            if not stage or not re.fullmatch(r"[a-f0-9]{64}", ledger_digest):
+                continue
+            source_bindings.append(
+                ValidationSourceBinding(
+                    artifact=f"provider_hard_stop_ledger.json[{stage}]",
+                    sha256=ledger_digest,
+                    binding_scope="run_private_receipt",
+                )
+            )
 
     engineering_complete = bool(
         planned_steps

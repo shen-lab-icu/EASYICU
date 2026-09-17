@@ -562,3 +562,12 @@ def test_pipeline_reviewer_can_be_disabled(ra, synthetic_cohort, tmp_path):
     )
     run_dir = Path(result.manifest_path).parent
     assert not (run_dir / "reviewer_report.md").exists()
+
+
+def test_reviewer_report_declares_simulated_mode_and_claim_boundary() -> None:
+    from easyicu.research_agent.reporting.reviewer import ReviewerReport
+
+    summary = ReviewerReport().summary()
+
+    assert summary["review_mode"] == "simulated_deterministic"
+    assert "Not independent external review" in summary["claim_boundary"]

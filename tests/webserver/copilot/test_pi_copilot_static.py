@@ -98,7 +98,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-analysis-report.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260916-study-workspace3" in index
+    assert "js/screens-guided-pi-preview.js?v=20260917-product-label1" in index
     assert "js/screens-guided-pi-replay.js?v=20260914-execution-retry1" in index
     assert "js/screens-guided-pi-resources.js?v=20260909-report-revision1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260916-study-workspace3" in index
@@ -115,7 +115,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260914-execution-retry1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
-    assert "js/screens-guided-pi.js?v=20260916-study-workspace3" in index
+    assert "js/screens-guided-pi-error-text.js?v=20260917-error-text1" in index
+    assert "js/screens-guided-pi.js?v=20260917-error-text1" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -1865,7 +1866,9 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     assert "try { await prepareProject(); }" in load_status
     assert "catch (error) { state.error = errorText(error); }" in load_status
     assert "pi_project_study_context_missing" in project_owner
-    assert "当前项目保存的研究配置已不存在" in owner
+    assert "MODULES.require('errorText')" in owner
+    error_text_owner = _read("js/screens-guided-pi-error-text.js")
+    assert "当前项目保存的研究配置已不存在" in error_text_owner
     assert "关联的研究配置已经失效" in panel
     assert "EasyICU 不会静默创建或绑定另一份配置" in panel
     assert "data-newstudy" in panel
@@ -1998,11 +2001,13 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "'/api/jobs/agent-run-review'" in api
     assert "stage.status === 'review_required'" in aside_owner
     assert "data-gpi-project-workflow-aside" in aside_owner
-    assert "pi_model_provider_unavailable" in pi_owner
-    assert "pi_shell_token_budget_exhausted" in pi_owner
+    error_text_owner = _read("js/screens-guided-pi-error-text.js")
+    assert "MODULES.require('errorText')" in pi_owner
+    assert "pi_model_provider_unavailable" in error_text_owner
+    assert "pi_shell_token_budget_exhausted" in error_text_owner
     assert "Research Agent 规划任务已提交" in childjob_owner
     assert "EasyICU 完整科研分析已提交" not in pi_owner
-    assert "同一研究项目中新建后续对话" in pi_owner
+    assert "同一研究项目中新建后续对话" in error_text_owner
     assert "external_llm_opt_in: true" in plan_actions_owner
     assert pi_owner.count("project_id: projectId()") >= 4
     assert "loadPiCopilotSessions(100, expectedProjectId)" in pi_owner
@@ -2035,7 +2040,9 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "google-generative-ai" in provider_owner
     assert "data-ag-" not in provider_owner
     assert "static_preview_no_backend" in pi_owner
-    assert "http://127.0.0.1:8765/#guided" in pi_owner
+    assert "http://127.0.0.1:8765/#guided" in _read(
+        "js/screens-guided-pi-error-text.js"
+    )
     assert "gpi-model-options" in provider_owner
     assert 'type="password"' in provider_owner
     assert 'name="enable_ai"' not in provider_owner
@@ -5345,7 +5352,8 @@ def test_provider_failure_after_successful_tool_preserves_the_tool_receipt() -> 
 
     assert completed.stdout.strip() == "tool-completed-final-explanation-failed"
     shell = _read("js/screens-guided-pi.js")
-    assert "EasyICU 工具操作已完成" in shell
+    assert "MODULES.require('errorText')" in shell
+    assert "EasyICU 工具操作已完成" in _read("js/screens-guided-pi-error-text.js")
     assert "activityHasCompletedAction(activeActivity())" in shell
     assert (
         "timeline.slice().reverse().find(row => ['assistant', 'activity'].includes(row.role))"
@@ -6390,7 +6398,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260908-writer-status1" in index
-    assert "screens-guided-pi.js?v=20260916-study-workspace3" in index
+    assert "screens-guided-pi.js?v=20260917-error-text1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:
