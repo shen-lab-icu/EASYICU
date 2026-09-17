@@ -3753,6 +3753,175 @@ def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
     ]
 
 
+def test_functional_form_step_cannot_own_separate_analysis_product() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom.update(
+        step_id="06_age_functional_form",
+        variable_names=["age_years"],
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            required_custom_products=("table:secondary_icu_los_association",),
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_separate_analysis_owner_missing"
+    )
+    assert caught.value.details["findings"][0]["candidate_step_ids"] == []
+
+
+def test_separate_analysis_product_rejects_duplicate_custom_owners() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["objective"] = (
+        "Run the prespecified table:secondary_icu_los_association analysis."
+    )
+    duplicate = dict(custom)
+    duplicate.update(
+        step_id="06_duplicate_secondary",
+        objective="Duplicate the table:secondary_icu_los_association analysis.",
+    )
+    payload["steps"].append(duplicate)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            required_custom_products=("table:secondary_icu_los_association",),
+        )
+
+    finding = caught.value.details["findings"][0]
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_separate_analysis_owner_missing"
+    )
+    assert finding["duplicate_product_owners"] == {
+        "table:secondary_icu_los_association": [
+            "06_sensitivity",
+            "06_duplicate_secondary",
+        ]
+    }
+    assert finding["candidate_step_ids"] == [
+        "06_sensitivity",
+        "06_duplicate_secondary",
+    ]
+
+
+def test_separate_analysis_product_binds_to_the_step_that_names_it() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["objective"] = (
+        "Run the prespecified table:secondary_icu_los_association analysis."
+    )
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+        ),
+        allowed_literature_citation_keys=(),
+        required_custom_products=("table:secondary_icu_los_association",),
+    )
+
+
+def test_host_mandated_custom_step_does_not_break_product_owner_binding() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["objective"] = (
+        "Run the prespecified table:secondary_icu_los_association analysis."
+    )
+    ordered = {
+        "step_id": "07_ordered_trend",
+        "planned_analysis_role": "secondary",
+        "module_id": "custom_analysis",
+        "objective": "Estimate the ordered multi-outcome trend on the primary model.",
+        "depends_on": ["05_primary"],
+        "variable_names": ["exposure_flag", "outcome_flag", "los_days"],
+        "literature_citation_keys": [],
+        "scientific_action_id": "association.ordinal_trend",
+    }
+    payload["steps"].append(ordered)
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+            "los_days",
+        ),
+        allowed_literature_citation_keys=(),
+        available_ordered_trend=("exposure_flag", "outcome_flag", "los_days"),
+        required_custom_products=("table:secondary_icu_los_association",),
+    )
+
+
+def test_functional_form_step_for_a_non_required_covariate_is_allowed() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom.update(
+        step_id="06_age_functional_form",
+        variable_names=["age_years"],
+    )
+    extra = dict(custom)
+    extra.update(
+        step_id="07_charlson_functional_form",
+        objective="Check the prespecified charlson_score functional form.",
+        variable_names=["charlson_score"],
+    )
+    payload["steps"].append(extra)
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+            "charlson_score",
+        ),
+        allowed_literature_citation_keys=(),
+        continuous_domain_variables=("age_years", "charlson_score"),
+        required_functional_form_targets=("age_years",),
+    )
+
+
 def test_outline_binds_optional_ordered_trend_only_when_selected() -> None:
     payload = _outline_payload()
     variables = (
@@ -3957,6 +4126,29 @@ def test_outline_cannot_substitute_unrelated_closed_domains_for_primary_pair() -
     assert caught.value.details["step_id"] == distribution["step_id"]
 
 
+def test_outline_uses_selected_distribution_variables_for_unresolved_anchor() -> None:
+    outline = ProgressivePlanOutline.model_validate(_outline_payload())
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        outline,
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+        ),
+        allowed_literature_citation_keys=(),
+        closed_domain_variables=(
+            "exposure_flag",
+            "outcome_flag",
+            "sex_code",
+        ),
+        primary_exposure="unresolved_exposure_alias",
+        target_outcome="outcome_flag",
+    )
+
+
 def test_outline_rejects_secondary_custom_result_off_primary_lineage() -> None:
     payload = _outline_payload()
     custom = next(
@@ -4079,6 +4271,7 @@ def test_outline_requires_functional_form_sensitivity_for_exact_continuous_covar
             allowed_literature_citation_keys=(),
             continuous_domain_variables=("age_years",),
             required_exact_covariates=("age_years",),
+            required_functional_form_targets=("age_years",),
         )
 
     assert caught.value.reason_code == (
@@ -4109,6 +4302,83 @@ def test_outline_requires_functional_form_sensitivity_for_exact_continuous_covar
         allowed_literature_citation_keys=(),
         continuous_domain_variables=("age_years",),
         required_exact_covariates=("age_years",),
+        required_functional_form_targets=("age_years",),
+    )
+
+
+def test_outline_requires_one_functional_form_owner_per_continuous_target() -> None:
+    payload = _outline_payload()
+    selected = next(
+        candidate
+        for candidate in payload["design_selection"]["candidates"]
+        if candidate["disposition"] == "selected"
+    )
+    selected["required_variables"].extend(["age_years", "charlson_score"])
+    combined = {
+        "step_id": "08_functional_form_check",
+        "planned_analysis_role": "sensitivity",
+        "module_id": "custom_analysis",
+        "objective": "Check both continuous covariate functional forms.",
+        "depends_on": ["05_primary"],
+        "variable_names": ["age_years", "charlson_score"],
+        "literature_citation_keys": [],
+        "scientific_action_id": None,
+    }
+    payload["steps"].append(combined)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+                "charlson_score",
+            ),
+            allowed_literature_citation_keys=(),
+            continuous_domain_variables=("age_years", "charlson_score"),
+            required_functional_form_targets=("age_years", "charlson_score"),
+        )
+
+    finding = caught.value.details["findings"][0]
+    assert caught.value.reason_code == (
+        "progressive_outline_functional_form_sensitivity_missing"
+    )
+    assert finding["invalid_target_partitions"] == [
+        {
+            "step_id": "08_functional_form_check",
+            "functional_form_targets": ["age_years", "charlson_score"],
+        }
+    ]
+
+    payload["steps"].pop()
+    for step_id, target in (
+        ("08_age_functional_form", "age_years"),
+        ("09_charlson_functional_form", "charlson_score"),
+    ):
+        item = dict(combined)
+        item.update(
+            step_id=step_id,
+            objective=f"Check the prespecified {target} functional form.",
+            variable_names=[target],
+        )
+        payload["steps"].append(item)
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+            "charlson_score",
+        ),
+        allowed_literature_citation_keys=(),
+        continuous_domain_variables=("age_years", "charlson_score"),
+        required_functional_form_targets=("age_years", "charlson_score"),
     )
 
 
@@ -4130,8 +4400,34 @@ def test_outline_prompt_requires_functional_form_step_before_plan_review() -> No
     prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
 
     assert "Host-resolved functional-form obligation" in prompt
-    assert "step_id contains 'functional_form'" in prompt
+    assert "step_id must contain 'functional_form'" in prompt
+    assert "one downstream custom_analysis sensitivity step per applicable" in prompt
+    assert "exactly one target" in prompt
     assert '["age_years"]' in prompt
+
+
+def test_outline_prompt_resolves_functional_form_targets_case_insensitively() -> None:
+    base = _context()
+    context = base.model_copy(
+        update={
+            "variables": [
+                *base.variables,
+                ConceptDescriptor(
+                    name="charlson",
+                    role=VariableRole.COMPOSITE_SCORE,
+                    dtype="float64",
+                ),
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age_years", "Charlson"],
+                covariate_selection="planner_selectable",
+            ),
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
+
+    assert '["age_years","charlson"]' in prompt
 
 
 def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
