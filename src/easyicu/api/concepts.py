@@ -372,9 +372,9 @@ def _build_fast_scan_expr(loader: "BaseICULoader", table_name: str) -> Optional[
         return path.replace("'", "''").replace("\\", "/")
 
     if source.is_dir():
-        # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource._enumerate_bucket_parquet_files
+        # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource.enumerate_bucket_parquet_files
         try:
-            from ..datasource import _enumerate_bucket_parquet_files as _enum
+            from ..datasource import enumerate_bucket_parquet_files as _enum
         except Exception:
             _enum = None
         if _enum is not None:
@@ -416,6 +416,11 @@ def _query_patient_ids_fast(
     sample_strategy: str = "sorted",
 ) -> Optional[List]:
     """Fetch distinct patient IDs via DuckDB, avoiding full-table pandas loads."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(id_col)):
+        raise ValueError(
+            f"Refusing to ORDER BY non-identifier column {id_col!r} "
+            f"for table {table_name!r}"
+        )
     scan_expr = _build_fast_scan_expr(loader, table_name)
     if not scan_expr:
         return None
@@ -453,6 +458,11 @@ def _count_patient_ids_fast(
     loader: "BaseICULoader", table_name: str, id_col: str
 ) -> Optional[int]:
     """Count distinct patient IDs via DuckDB without loading the ID table into pandas."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(id_col)):
+        raise ValueError(
+            f"Refusing to query non-identifier column {id_col!r} "
+            f"for table {table_name!r}"
+        )
     scan_expr = _build_fast_scan_expr(loader, table_name)
     if not scan_expr:
         return None

@@ -2456,7 +2456,7 @@ def _run_module_extraction(
                 _n = 0
             from easyicu.runtime.memory_manager import (
                 MAX_EXTRACT_CHUNKS as _MAX_CH,
-                _ceil_div as _cdiv,
+                ceil_div as _cdiv,
             )
 
             fallback_bs = max(10000, _cdiv(_n, _MAX_CH)) if _n else 10000

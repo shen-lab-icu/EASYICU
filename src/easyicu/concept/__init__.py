@@ -24,7 +24,7 @@ import pandas as pd
 from ..config import DataSourceConfig
 from ..datasource import (
     DuckDBQueryInterrupted, FilterOp, FilterSpec, ICUDataSource,
-    _duckdb_path, _enumerate_bucket_parquet_files,
+    _duckdb_path, enumerate_bucket_parquet_files,
 )
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
@@ -482,8 +482,13 @@ class ConceptResolver:
         # trip, so its only serializer is pickle — and pickle.load executes the
         # payload before anything gets to inspect it. ``easyicu.api``'s cache
         # already states the rule for that: pickle is a trusted-local
-        # compatibility opt-in, never the default, because a cache directory
-        # can be shared, synced or written by another process.
+        # compatibility opt-in (``use_pickle`` defaults to ``False``), never
+        # the default, because a cache directory can be shared, synced or
+        # written by another process. ``easyicu.api`` additionally HMAC-signs
+        # its ``.trusted.pkl`` entries (``EASYICU_CACHE_HMAC_KEY`` +
+        # ``.trusted.pkl.hmac`` sidecar, verified on read); this resolver-level
+        # cache has no HMAC sidecar yet, so ``use_pickle=True`` here still
+        # means a fully controlled local directory only.
         #
         # This cache read the same rule and then ignored it: it gated on
         # ``cache_dir`` alone. Setting a cache directory is not consent to
@@ -2590,7 +2595,7 @@ class ConceptResolver:
                                             _idtbl_target_path = Path(_idtbl_bucket_dir) if not isinstance(_idtbl_bucket_dir, Path) else _idtbl_bucket_dir
                                         else:
                                             _idtbl_target_path = Path(_idtbl_flat_dir) if not isinstance(_idtbl_flat_dir, Path) else _idtbl_flat_dir
-                                        _idtbl_files = _enumerate_bucket_parquet_files(_idtbl_target_path)
+                                        _idtbl_files = enumerate_bucket_parquet_files(_idtbl_target_path)
                                         if _idtbl_files:
                                             _idtbl_files_sql = "[" + ", ".join(f"'{f}'" for f in _idtbl_files) + "]"
                                             _idtbl_read_expr = f"read_parquet({_idtbl_files_sql}, hive_partitioning=true, union_by_name=true)"
@@ -9319,6 +9324,7 @@ class ConceptResolver:
 from .loader import (  # noqa: F401
     _get_concept_bounds,
     _load_concept_dict_cached,
+    load_concept_dict_cached,
 )
 
 
@@ -9327,7 +9333,7 @@ from .loader import (  # noqa: F401
 # 2026-05-17, Phase 2). Re-exported so existing callers — notably
 # ``easyicu.base`` — keep working unchanged.
 # --------------------------------------------------------------------------
-from .callback_apply import _apply_callback  # noqa: F401
+from .callback_apply import _apply_callback, apply_callback  # noqa: F401
 
 
 # --------------------------------------------------------------------------

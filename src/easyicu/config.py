@@ -713,8 +713,22 @@ def _auto_load_config():
         saved_config = load_config(merge=True)
         if saved_config:
             pass  # Config already merged
-    except Exception:
-        pass  # Silently ignore errors during auto-load
+    except Exception as exc:
+        try:
+            config_path = get_config_file("easyicu")
+        except Exception:
+            config_path = "unknown"
+        strict = os.getenv("EASYICU_STRICT_CONFIG", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if strict:
+            raise
+        logger.warning(
+            "Ignoring corrupt user config at %s: %s: %s",
+            config_path,
+            type(exc).__name__,
+            exc,
+        )
 
 # Auto-load on import
 _auto_load_config()

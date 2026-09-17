@@ -23,6 +23,7 @@ from typing import Optional
 __all__ = [
     "ConceptError",
     "ConceptExtractionUnavailable",
+    "ConceptTableReadError",
 ]
 
 
@@ -55,6 +56,39 @@ class ConceptExtractionUnavailable(ConceptError):
             f"determined at stage {self.stage!r}: {self.detail}. Refusing to "
             "return an empty result, which downstream code cannot tell apart "
             "from a genuine absence of events."
+        )
+        if cause is not None:
+            self.__cause__ = cause
+
+
+class ConceptTableReadError(ConceptError):
+    """A source table could be neither read nor proven absent.
+
+    Raised when a concept callback needs a mapping/auxiliary table (e.g.
+    ``icustays``/``admissions``/``patients``) and the read fails with an error
+    other than table absence (``FileNotFoundError``/``KeyError``). Carries the
+    source identity (database + table + stage) so the failure cannot be
+    mistaken for "no mapping needed".
+    """
+
+    def __init__(
+        self,
+        *,
+        database: str,
+        table: str,
+        stage: str,
+        detail: str,
+        cause: Optional[BaseException] = None,
+    ) -> None:
+        self.database = str(database)
+        self.table = str(table)
+        self.stage = str(stage)
+        self.detail = str(detail)
+        super().__init__(
+            f"table {self.table!r} on {self.database!r} could not be read "
+            f"at stage {self.stage!r}: {self.detail}. Refusing to fall back "
+            "to None, which downstream code cannot tell apart from a "
+            "genuinely absent table."
         )
         if cause is not None:
             self.__cause__ = cause

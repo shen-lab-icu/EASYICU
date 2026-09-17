@@ -8,6 +8,7 @@ callbacks.py file.
 from __future__ import annotations
 
 from typing import Optional
+import numpy as np
 import pandas as pd
 
 
@@ -100,7 +101,9 @@ def blood_cell_ratio(value: pd.Series, total_wbc: Optional[pd.Series] = None) ->
         total_wbc: Total white blood cell count (for conversion)
         
     Returns:
-        Converted values (percentage form)
+        Converted values (percentage form). Positions with missing,
+        non-positive, or non-finite ``total_wbc`` return NaN instead of
+        dividing (no ``inf``); the >100 column heuristic decides the unit.
     """
     val_num = pd.to_numeric(value, errors="coerce")
     
@@ -111,7 +114,15 @@ def blood_cell_ratio(value: pd.Series, total_wbc: Optional[pd.Series] = None) ->
     if max_val > 100 and total_wbc is not None:
         # Assume absolute counts, convert to percentage
         wbc_num = pd.to_numeric(total_wbc, errors="coerce")
-        return (val_num / wbc_num) * 100
+        wbc_float = pd.to_numeric(wbc_num, errors="coerce").astype(float)
+        # Guard: non-positive / missing / non-finite WBC cannot divide;
+        # return NA (NaN, the file's existing NA expression) there.
+        invalid = (
+            wbc_float.isna() | (wbc_float <= 0) | (~np.isfinite(wbc_float))
+        )
+        result = (val_num / wbc_num) * 100
+        result = result.mask(invalid, np.nan)
+        return result
     
     # Already in percentage form
     return val_num

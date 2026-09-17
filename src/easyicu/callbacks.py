@@ -3387,3 +3387,14 @@ def driving_pressure(
     result = result[output_cols]
     
     return result
+
+
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+urine_rate_window_avg_multi = _urine_rate_window_avg_multi
+
+
+__all__ = [
+    "urine_rate_window_avg_multi",
+]

@@ -25,6 +25,7 @@ from __future__ import annotations
 import functools
 import json
 import math
+import warnings
 from pathlib import Path
 from typing import Any, Optional
 
@@ -76,6 +77,14 @@ def load_dictionary(src_name: Optional[str] = None, include_sofa2: bool = False)
     Returns:
         ConceptDictionary 实例
     """
+    if src_name is not None:
+        warnings.warn(
+            "load_dictionary(src_name=...) is deprecated: the argument is "
+            "accepted for backward compatibility but ignored; call "
+            "load_dictionary() without src_name instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     # Lazy import to avoid a circular dependency on easyicu.resources at
     # module load time (resources -> concept_loader -> resources ...).
     from ..resources import load_dictionary as _load_dictionary
@@ -84,8 +93,17 @@ def load_dictionary(src_name: Optional[str] = None, include_sofa2: bool = False)
     return _load_dictionary(include_sofa2=include_sofa2)
 
 
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+def load_concept_dict_cached() -> dict[str, Any]:
+    """Public alias of :func:`_load_concept_dict_cached` (no logic change)."""
+    return _load_concept_dict_cached()
+
+
 __all__ = [
     "_load_concept_dict_cached",
     "_get_concept_bounds",
     "load_dictionary",
+    "load_concept_dict_cached",
 ]

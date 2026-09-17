@@ -152,3 +152,27 @@ def test_summary_reports_unknown_denominator_explicitly() -> None:
     assert summary["strict_stage_counts"] == {"missing": 1, "0": 1}
     assert summary["public_reference_stage_counts"] == {"0": 2}
     assert summary["strict_missing_not_recoded_to_zero"] is True
+
+
+def test_materialize_e3_gradient_uses_package_import_contract() -> None:
+    """Import contract: the materializer must use the package import path."""
+
+    from pathlib import Path
+
+    text = (
+        Path(__file__).resolve().parents[2]
+        / "tools"
+        / "materialize_e3_miiv_kdigo_gradient.py"
+    ).read_text(encoding="utf-8")
+    assert "from tools.e3_strict_kdigo_window import" in text
+
+
+def test_materialize_e3_gradient_imports_as_package() -> None:
+    """Package import of the materializer succeeds (no top-level import)."""
+
+    import tools.materialize_e3_miiv_kdigo_gradient as materializer
+
+    assert (
+        materializer.SCHEMA_VERSION
+        == "easyicu.e3_kdigo_gradient_materialization/1"
+    )

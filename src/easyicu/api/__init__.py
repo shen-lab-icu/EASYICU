@@ -217,8 +217,13 @@ def load_concept_cached(
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """Load ICU concept data with a safe Parquet cache by default.
 
-    ``use_pickle=True`` is a trusted-local compatibility opt-in and must not be
-    used with cache files supplied by another user or process boundary.
+    ``use_pickle`` defaults to ``False`` (safe parquet path) and stays that
+    way. ``use_pickle=True`` is a trusted-local compatibility opt-in and must
+    not be used with cache files supplied by another user or process boundary.
+    It additionally requires a non-empty ``EASYICU_CACHE_HMAC_KEY``: the
+    ``.trusted.pkl`` payload is HMAC-signed into a ``.trusted.pkl.hmac``
+    sidecar on write and verified on read (unsigned/tampered entries are
+    deleted and recomputed).
     """
     return _load_concept_cached_impl(
         concepts,

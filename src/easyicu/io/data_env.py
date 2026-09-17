@@ -103,10 +103,13 @@ class SrcEnv:
                 f"at path: {table_path}"
             )
         
-        # Load based on file format
+        # Load based on file format (.fst is a legacy R format; unsupported)
         if table_path.suffix == '.fst':
-            from .fst_reader import read_fst
-            df = read_fst(str(table_path))
+            raise ValueError(
+                f"Unsupported legacy table format '.fst' for table '{table_name}' "
+                f"for source '{self.name}' at path: {table_path}. "
+                "Convert the source to .parquet/.csv first."
+            )
         elif table_path.suffix == '.csv':
             df = pd.read_csv(table_path)
         elif table_path.suffix == '.parquet':

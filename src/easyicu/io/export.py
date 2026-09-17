@@ -6,8 +6,11 @@ including PhysioNet Sepsis Challenge PSV format.
 
 from pathlib import Path
 from typing import Optional, Union
+import logging
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 def write_psv(
     data: pd.DataFrame,
@@ -70,7 +73,7 @@ def write_psv(
         filename = output_dir / f"p{patient_id}.psv"
         output_data.to_csv(filename, sep='|', index=False, na_rep='NaN')
     
-    print(f"Wrote {data[id_col].nunique()} PSV files to {output_dir}")
+    logger.info(f"Wrote {data[id_col].nunique()} PSV files to {output_dir}")
 
 def read_psv(
     input_dir: Union[str, Path],
@@ -153,7 +156,7 @@ def export_wide_format(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     
     data.to_csv(output_file, sep=sep, index=False, na_rep='NA')
-    print(f"Exported to {output_file}")
+    logger.info(f"Exported to {output_file}")
 
 def export_long_format(
     data: pd.DataFrame,
@@ -194,7 +197,7 @@ def export_long_format(
     long_data = long_data.dropna(subset=['value'])
     
     long_data.to_csv(output_file, sep=sep, index=False, na_rep='NA')
-    print(f"Exported to {output_file} (long format)")
+    logger.info(f"Exported to {output_file} (long format)")
 
 def export_summary(
     data: pd.DataFrame,
@@ -222,7 +225,7 @@ def export_summary(
     summary = data[numeric_cols].describe()
     
     summary.to_csv(output_file)
-    print(f"Exported summary to {output_file}")
+    logger.info(f"Exported summary to {output_file}")
 
 def export_cohort_info(
     data: pd.DataFrame,
@@ -265,7 +268,7 @@ def export_cohort_info(
     # Convert to DataFrame and save
     info_df = pd.DataFrame([info])
     info_df.to_csv(output_file, index=False)
-    print(f"Exported cohort info to {output_file}")
+    logger.info(f"Exported cohort info to {output_file}")
 
 # ============================================================================
 # Additional export formats
@@ -296,7 +299,7 @@ def export_parquet(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     
     data.to_parquet(output_file, compression=compression)
-    print(f"Exported to {output_file} (Parquet format)")
+    logger.info(f"Exported to {output_file} (Parquet format)")
 
 def export_feather(
     data: pd.DataFrame,
@@ -322,7 +325,7 @@ def export_feather(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     
     data.to_feather(output_file, compression=compression)
-    print(f"Exported to {output_file} (Feather format)")
+    logger.info(f"Exported to {output_file} (Feather format)")
 
 def export_json(
     data: pd.DataFrame,
@@ -345,7 +348,7 @@ def export_json(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     
     data.to_json(output_file, orient=orient, indent=indent, date_format='iso')
-    print(f"Exported to {output_file} (JSON format)")
+    logger.info(f"Exported to {output_file} (JSON format)")
 
 def export_data(
     data: pd.DataFrame,
@@ -388,7 +391,7 @@ def export_data(
     if format == 'csv':
         sep = kwargs.get('sep', ',')
         data.to_csv(output_file, sep=sep, index=False, na_rep='NA')
-        print(f"Exported to {output_file} (CSV format)")
+        logger.info(f"Exported to {output_file} (CSV format)")
     
     elif format == 'psv':
         id_col = kwargs.get('id_col')
@@ -468,6 +471,6 @@ def data_quality_report(
     report_df = pd.DataFrame(quality_metrics)
     report_df.to_csv(output_file, index=False)
     
-    print(f"Data quality report saved to {output_file}")
+    logger.info(f"Data quality report saved to {output_file}")
     
     return report_df

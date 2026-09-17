@@ -36,7 +36,7 @@ import pandas as pd
 import numpy as np
 import logging
 
-from easyicu.io.ts_utils import _infer_numeric_time_unit
+from easyicu.io.ts_utils import infer_numeric_time_unit
 from easyicu.urine_weight_linkage import (
     ConflictingKeyedWeightError,
     resolve_keyed_unique_weights,
@@ -560,7 +560,7 @@ def _detect_time_unit(time_series: pd.Series, time_col: str | None = None) -> st
         raise ValueError(
             "numeric KDIGO time axis is ambiguous; pass time_unit explicitly"
         )
-    inferred = _infer_numeric_time_unit(time_series, index_hint)
+    inferred = infer_numeric_time_unit(time_series, index_hint)
     if inferred == 's':
         return 'seconds'
     if inferred == 'h':
@@ -713,7 +713,7 @@ def _calculate_uo_rates_simple(
         # here would divide a rate by charting gaps and create false oliguria.
         # KDIGO staging requires the complete 6/12/24-hour duration, so its
         # thresholds are stricter than the descriptive UO concepts.
-        from easyicu.callbacks import _urine_rate_window_avg_multi
+        from easyicu.callbacks import urine_rate_window_avg_multi
 
         rate_urine = urine.copy()
         rate_weight = keyed_weight.copy() if keyed_weight is not None else weight.copy()
@@ -722,7 +722,7 @@ def _calculate_uo_rates_simple(
         if weight_col != "weight" and weight_col in rate_weight.columns:
             rate_weight = rate_weight.rename(columns={weight_col: "weight"})
 
-        windowed = _urine_rate_window_avg_multi(
+        windowed = urine_rate_window_avg_multi(
             rate_urine,
             rate_weight,
             windows=[(6, 6), (12, 12), (24, 24)],
@@ -1990,3 +1990,22 @@ def summarize_aki(aki_df: pd.DataFrame, id_col: Optional[str] = None) -> Dict[st
         'stage_distribution_measurements': stage_dist,
         'max_stage_distribution_patients': max_stage_dist,
     }
+
+
+# --- Public cross-package aliases (thin wrappers, no logic change) ---
+# Private names are kept for backward compatibility; cross-package callers
+# must use the public names below.
+detect_id_col = _detect_id_col
+detect_time_col = _detect_time_col
+detect_value_col = _detect_value_col
+resolve_time_unit = _resolve_time_unit
+strict_numeric_component = _strict_numeric_component
+
+
+__all__ = [
+    "detect_id_col",
+    "detect_time_col",
+    "detect_value_col",
+    "resolve_time_unit",
+    "strict_numeric_component",
+]

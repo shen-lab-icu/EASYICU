@@ -3166,3 +3166,14 @@ def aggregate_data(
         by = [by]
     
     return df.groupby(by, as_index=False).agg({value_col: agg_func})
+
+
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+infer_numeric_time_unit = _infer_numeric_time_unit
+
+
+__all__ = [
+    "infer_numeric_time_unit",
+]

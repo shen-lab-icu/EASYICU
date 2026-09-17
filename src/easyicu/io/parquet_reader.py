@@ -180,7 +180,7 @@ def read_parquet_parallel(
                 dfs[index] = outcome
 
             if verbose and i % 10 == 0:
-                print(f"   进度: {i}/{len(file_paths)}")
+                logger.debug("   进度: %d/%d", i, len(file_paths))
 
     if failures:
         raise RuntimeError(

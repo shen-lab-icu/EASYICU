@@ -16,12 +16,11 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-from typing import Any, Iterable
+from typing import Any, Iterable, TYPE_CHECKING
 import zipfile
 
-from easyicu.webserver import demo_source_storage
-from easyicu.webserver.demo_source_contracts import DemoSourcePaths, DemoSourceSpec
-from easyicu.webserver.patient_drilldown.coverage import build_feature_coverage
+if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime webserver import
+    from easyicu.webserver.demo_source_contracts import DemoSourcePaths, DemoSourceSpec
 
 
 PACK_SCHEMA = "easyicu.official_demo_release_pack/1"
@@ -59,6 +58,14 @@ def build_release_pack(
 ) -> DemoReleaseReceipt:
     """Build one verified official ZIP copy and one prepared EasyICU pack."""
 
+    # NOTE(ownership): core -> webserver is a reverse dependency. Deferred to
+    # function scope so `import easyicu` never pulls webserver; long-term this
+    # capability should converge to the io/table owner. No large refactor here.
+    from easyicu.webserver import demo_source_storage as _demo_storage
+    from easyicu.webserver.patient_drilldown.coverage import (
+        build_feature_coverage as _build_coverage,
+    )
+
     _validate_ready_source(source, paths)
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +79,7 @@ def build_release_pack(
         )
 
     description = _release_export_description(paths.export)
-    coverage = build_feature_coverage(paths.export, description)
+    coverage = _build_coverage(paths.export, description)
     pack_name = f"easyicu-{source.id}-prepared-v1.zip"
     pack_output = output_dir / pack_name
     with tempfile.TemporaryDirectory(
@@ -88,7 +95,7 @@ def build_release_pack(
             source,
             archive_sha256=archive_sha256,
             coverage=coverage,
-            prepared_marker=demo_source_storage.read_marker(
+            prepared_marker=_demo_storage.read_marker(
                 paths.prepared_marker, source
             ),
         )
@@ -119,9 +126,12 @@ def build_release_pack(
 
 
 def _validate_ready_source(source: DemoSourceSpec, paths: DemoSourcePaths) -> None:
-    if not demo_source_storage.archive_ready(paths, source):
+    # NOTE(ownership): deferred core -> webserver import, see build_release_pack.
+    from easyicu.webserver import demo_source_storage as _demo_storage
+
+    if not _demo_storage.archive_ready(paths, source):
         raise DemoReleasePackError("The exact official archive is not ready")
-    if not demo_source_storage.export_ready(paths, source):
+    if not _demo_storage.export_ready(paths, source):
         raise DemoReleasePackError("The prepared all-module export is not ready")
     if paths.archive.is_symlink() or paths.export.is_symlink():
         raise DemoReleasePackError("Release inputs must not be symbolic links")
@@ -134,6 +144,7 @@ def _validate_ready_source(source: DemoSourceSpec, paths: DemoSourcePaths) -> No
 
 
 def _release_export_description(export_root: Path) -> dict[str, Any]:
+    # NOTE(ownership): deferred core -> webserver import, see build_release_pack.
     from easyicu.webserver import dataio
 
     description = dataio.describe_export_source(str(export_root))

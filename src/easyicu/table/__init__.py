@@ -1621,38 +1621,71 @@ def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
         >>> df = load_table('mimic_demo', 'patients')
         >>> df = load_table('miiv', 'labevents', path='/data/mimic-iv/3.1')
     """
-    from .attach import data
-    
+    from easyicu.io.attach import data
+
+    resolved_from: str
+    resolved_base_path: str | None = None
     # 首先尝试从全局附加的数据源获取
     if data.is_attached(src):
         data_source = data.get_source(src)
+        resolved_from = "attached_source"
+        try:
+            resolved_base_path = str(getattr(data_source, "base_path", None))
+        except Exception:
+            resolved_base_path = None
     else:
         # 如果没有附加，尝试从配置创建
-        from .config import load_src_cfg
+        from easyicu.io.data_tools import load_src_cfg
         from pathlib import Path
         import os
         config = load_src_cfg(src)
-        from .datasource import ICUDataSource
-        
+        from easyicu.datasource import ICUDataSource
+
         # 提取 path 参数（如果提供）
         base_path = kwargs.pop('path', None)
-        
+
         # 如果没有提供 path，尝试从环境变量获取
-        if base_path is None:
+        if base_path is not None:
+            resolved_from = "explicit_path_kwarg"
+        else:
             env_var = f"EASYICU_{src.upper()}_PATH"
             base_path = os.environ.get(env_var)
-            if base_path is None:
+            if base_path is not None:
+                resolved_from = f"env:{env_var}"
+            else:
                 # 尝试通用环境变量
                 base_path = os.environ.get("EASYICU_DATA_PATH")
-        
+                resolved_from = (
+                    "env:EASYICU_DATA_PATH" if base_path is not None else "unresolved"
+                )
+
+        resolved_base_path = str(base_path) if base_path else None
         # 创建数据源
         data_source = ICUDataSource(
             config,
             base_path=Path(base_path) if base_path else None
         )
-    
+
     icu_table = data_source.load_table(table_name, **kwargs)
-    return icu_table.data
+    result = icu_table.data
+    # A-P2-14: env/attach resolution must be traceable on the returned frame,
+    # not just in a local variable. Record it in pandas attrs (lineage).
+    try:
+        lineage = dict(result.attrs.get("easyicu_lineage", {}))
+    except Exception:
+        lineage = {}
+    lineage.update(
+        {
+            "data_source": src,
+            "table_name": table_name,
+            "resolved_from": resolved_from,
+            "resolved_base_path": resolved_base_path,
+        }
+    )
+    result.attrs["easyicu_lineage"] = lineage
+    result.attrs["easyicu_data_source"] = src
+    result.attrs["easyicu_table_name"] = table_name
+    return result
 
 def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
     """
@@ -1669,7 +1702,7 @@ def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
     Examples:
         >>> df = load_id_tbl('mimic_demo', 'icustay')
     """
-    from .config import load_src_cfg
+    from easyicu.io.data_tools import load_src_cfg
     
     # Load source configuration
     cfg = load_src_cfg(src)

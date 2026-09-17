@@ -908,7 +908,7 @@ class ConceptLoader:
         # 🔧 FIX: 对于有callback的概念，调用callback处理数据
         # callback会处理列选择、值转换、时间扩展等逻辑
         if has_callback:
-            from .concept import _apply_callback
+            from .concept import apply_callback
             
             # 获取patient weight（如果callback需要）
             if source.callback in ('hirid_rate_kg', 'aumc_rate_kg', 'sic_rate_kg') and 'weight' not in df.columns:
@@ -930,7 +930,7 @@ class ConceptLoader:
                 df = self._convert_time_column_to_hours(df, time_col, id_col)
             
             # 调用callback
-            df = _apply_callback(
+            df = apply_callback(
                 frame=df,
                 source=source,
                 concept_name=concept_name,

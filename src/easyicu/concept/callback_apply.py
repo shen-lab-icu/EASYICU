@@ -67,7 +67,7 @@ from .expr_parser import (
     _split_arguments,
     _strip_quotes,
 )
-from ..datasource import _duckdb_path, _enumerate_bucket_parquet_files
+from ..datasource import _duckdb_path, enumerate_bucket_parquet_files
 
 if TYPE_CHECKING:
     from ..datasource import ICUDataSource
@@ -95,7 +95,7 @@ def hirid_observation_read_exprs(
     """
     for directory_name in ("observations_bucket", "observations"):
         directory = base_path / directory_name
-        files = _enumerate_bucket_parquet_files(directory)
+        files = enumerate_bucket_parquet_files(directory)
         if not files:
             continue
         files_sql = (
@@ -2601,7 +2601,7 @@ def _apply_callback(
                                 conn = duckdb.connect()
                                 conn.execute("SET memory_limit = '2GB'")
                                 # 显式文件列表，过滤 AppleDouble
-                                _wh_files = _enumerate_bucket_parquet_files(bucket_dir)
+                                _wh_files = enumerate_bucket_parquet_files(bucket_dir)
                                 if _wh_files:
                                     _wh_files_sql = "[" + ", ".join(f"'{f}'" for f in _wh_files) + "]"
                                     _wh_read_expr = f"read_parquet({_wh_files_sql}, hive_partitioning=true, union_by_name=true)"
@@ -3704,4 +3704,15 @@ def _apply_callback(
         f"Callback '{callback}' is not yet supported."
     )
 
-__all__ = ["_apply_callback", "_normalize_eicu_tidal_volume_frame"]
+
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+apply_callback = _apply_callback
+
+
+__all__ = [
+    "_apply_callback",
+    "_normalize_eicu_tidal_volume_frame",
+    "apply_callback",
+]

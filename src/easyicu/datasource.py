@@ -6,6 +6,7 @@ import enum
 from dataclasses import dataclass, field
 from pathlib import Path
 import logging
+import re
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 from threading import RLock
 
@@ -181,8 +182,18 @@ def _enumerate_bucket_parquet_files(directory) -> List[str]:
                             files.append(_duckdb_path(base / rel))
                 files.sort()
                 return files
-        except Exception:
-            pass  # manifest unreadable → live scan below
+        except Exception as exc:
+            # Fallback kept: unreadable/stale manifest → live scan below.
+            # Count the degradation so silent manifest rot is observable.
+            global _BUCKET_MANIFEST_DEGRADED_COUNT
+            _BUCKET_MANIFEST_DEGRADED_COUNT += 1
+            logger.warning(
+                "bucket manifest degraded, falling back to live scan: dir=%s "
+                "failure=%s degraded_count=%d",
+                str(base),
+                type(exc).__name__,
+                _BUCKET_MANIFEST_DEGRADED_COUNT,
+            )
 
     # bucket layout first (cheap glob)
     bucket_dirs = [d for d in base.glob('bucket_id=*') if d.is_dir()]
@@ -384,6 +395,12 @@ def _close_duckdb_connections():
 # 🚀 大表预过滤：只加载概念字典声明过的 itemids/variableids。
 # 原始表很大，过滤后性能提升明显。白名单必须跟随 concept-dict.json /
 # sofa2-dict.json 自动变化，避免字典新增 id 后被底层大表预过滤丢掉。
+#
+# Degraded-fallback counter (A-P2-13): incremented each time the bucket
+# manifest fast path is unreadable/stale and enumeration falls back to a live
+# scan. Kept as a plain module counter + LOGGER.warning at the fallback site
+# so manifest rot stays observable without changing the fallback behaviour.
+_BUCKET_MANIFEST_DEGRADED_COUNT: int = 0
 AUMC_NUMERICITEMS_EXTRA_ITEMIDS: set[int] = set()
 MIIV_CHARTEVENTS_EXTRA_ITEMIDS: set[int] = set()
 MIIV_LABEVENTS_EXTRA_ITEMIDS: set[int] = set()
@@ -2605,8 +2622,17 @@ class ICUDataSource:
                     sort_keys.append(table_cfg.defaults.index_var)
                 
                 if sort_keys:
-                    order_by_clause = f" ORDER BY {', '.join(sort_keys)}"
+                    for _key in sort_keys:
+                        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(_key)):
+                            raise ValueError(
+                                f"Refusing to ORDER BY non-identifier column {_key!r} "
+                                f"for table {table_name!r}"
+                            )
+                    _quoted = [f'"{str(_key).replace(chr(34), chr(34)*2)}"' for _key in sort_keys]
+                    order_by_clause = f" ORDER BY {', '.join(_quoted)}"
                     logger.debug(f"🚀 宽表预排序: {table_name} ORDER BY {sort_keys}")
+            except ValueError:
+                raise
             except Exception as e:
                 logger.debug(f"无法获取表配置进行预排序: {e}")
         
@@ -4603,3 +4629,14 @@ def load_wide_table_aggregated(
             df[c] = df[c].astype(np.float32)
     logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df
+
+
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+enumerate_bucket_parquet_files = _enumerate_bucket_parquet_files
+
+
+__all__ = [
+    "enumerate_bucket_parquet_files",
+]

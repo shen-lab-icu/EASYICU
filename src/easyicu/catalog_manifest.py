@@ -6,8 +6,21 @@ import json
 from pathlib import Path
 
 from .clinical_contracts import load_clinical_contracts
-from .research_agent.planning.capability_registry import CAPABILITY_REGISTRY
 from .resources import load_data_sources, load_dictionary
+
+
+def _load_capabilities() -> tuple[object, ...]:
+    # NOTE(ownership): Scientific capabilities are owned by
+    # research_agent.planning.capability_registry. Core only consumes a
+    # read-only snapshot for counting/display. Delayed import keeps `import
+    # easyicu` free of the research_agent subtree.
+    try:
+        from .research_agent.planning.capability_registry import (
+            CAPABILITY_REGISTRY,
+        )
+    except ImportError:
+        return ()
+    return tuple(CAPABILITY_REGISTRY)
 
 
 def catalog_manifest() -> dict[str, object]:
@@ -15,7 +28,10 @@ def catalog_manifest() -> dict[str, object]:
     base = json.loads((data_root / "concept-dict.json").read_text(encoding="utf-8"))
     sofa2 = json.loads((data_root / "sofa2-dict.json").read_text(encoding="utf-8"))
     merged = load_dictionary(include_sofa2=True)
-    capabilities = tuple(CAPABILITY_REGISTRY)
+    capabilities = _load_capabilities()
+    # Explicit degradation marker: empty means research_agent unavailable,
+    # not "zero capabilities". Callers must not mistake () for a real count.
+    capabilities_unavailable = not capabilities
     public_databases = tuple(
         source.name
         for source in load_data_sources()
@@ -31,6 +47,7 @@ def catalog_manifest() -> dict[str, object]:
         "reportable_capabilities": sum(
             item.scientific_validation == "reportable" for item in capabilities
         ),
+        "scientific_capabilities_unavailable": capabilities_unavailable,
     }
 
 

@@ -69,12 +69,20 @@ class ConceptSource:
         table = payload.pop("table", None)
         sub_var = payload.pop("sub_var", None)
         if isinstance(sub_var, bool):
-            sub_var = None
+            raise TypeError(
+                "Concept source field 'sub_var' must be str or None, got bool "
+                f"({sub_var!r}); check the concept dictionary for a YAML "
+                "'sub_var: true/false' typo"
+            )
         ids = payload.pop("ids", None)
 
         if ids is not None:
             if isinstance(ids, bool):
-                ids_list = None
+                raise TypeError(
+                    "Concept source field 'ids' must be scalar or iterable, got bool "
+                    f"({ids!r}); check the concept dictionary for an 'ids: yes/no' "
+                    "YAML typo"
+                )
             elif isinstance(ids, (str, int, float)):
                 ids_list = [ids]
             elif isinstance(ids, Iterable):
@@ -86,16 +94,32 @@ class ConceptSource:
 
         value_var = payload.pop("value_var", payload.pop("val_var", None))
         if isinstance(value_var, bool):
-            value_var = None
+            raise TypeError(
+                "Concept source field 'value_var' must be str or None, got bool "
+                f"({value_var!r}); check the concept dictionary for a YAML "
+                "'value_var: true/false' typo"
+            )
         unit_var = payload.pop("unit_var", payload.pop("unit", None))
         if isinstance(unit_var, bool):
-            unit_var = None
+            raise TypeError(
+                "Concept source field 'unit_var' must be str or None, got bool "
+                f"({unit_var!r}); check the concept dictionary for a YAML "
+                "'unit_var: true/false' typo"
+            )
         index_var = payload.pop("index_var", payload.pop("time_var", None))
         if isinstance(index_var, bool):
-            index_var = None
+            raise TypeError(
+                "Concept source field 'index_var' must be str or None, got bool "
+                f"({index_var!r}); check the concept dictionary for a YAML "
+                "'index_var: true/false' typo"
+            )
         dur_var = payload.pop("dur_var", None)
         if isinstance(dur_var, bool):
-            dur_var = None
+            raise TypeError(
+                "Concept source field 'dur_var' must be str or None, got bool "
+                f"({dur_var!r}); check the concept dictionary for a YAML "
+                "'dur_var: true/false' typo"
+            )
 
         regex = payload.pop("regex", None)
         class_name = payload.pop("class", payload.pop("class_name", None))
