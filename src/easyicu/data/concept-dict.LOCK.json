@@ -14,6 +14,10 @@
     {
       "git_commit": "639718e9f4584799bf162d5bb8d0c1aac52f8208",
       "change": "Map legacy EYE service values to the surgical category."
+    },
+    {
+      "git_commit": "170b58189347c06574efde268e7d36b946febfb6",
+      "change": "Raise crea ceiling 15->25 mg/dL: the ricu-inherited cap silently dropped real severe-AKI peaks before KDIGO aggregation (cross-DB measurement: genuine (15,25] peaks in eICU/SICdb stays; unit-error tails above 25 stay excluded)."
     }
   ],
   "previous_published_lock": {
