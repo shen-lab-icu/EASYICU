@@ -1,3 +1,4 @@
+/* Owner: Data Extraction embedded preview adapter. */
 /* Copilot right-preview adapter for the native Data Extraction owner. */
 (function () {
   const { esc } = window.EU_HTML;

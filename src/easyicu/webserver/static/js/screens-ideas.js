@@ -1,3 +1,4 @@
+/* Owner: Idea Mining route. */
 /* Screen: Idea Mining — first-class discovery workflow.
    Local-first Stage67: user-supplied metadata/excerpt -> idea ledger ->
    dictionary/export feasibility assessment -> Agent handoff plan. */

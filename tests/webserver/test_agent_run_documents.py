@@ -121,6 +121,7 @@ def test_system_validation_pdf_registration_binds_receipt_and_ledger(tmp_path) -
             "scientific_claim_ceiling": "descriptive_only",
             "generated_numbers": False,
             "primary_table": None,
+            "primary_table_status": "missing",
             "figures": [],
         },
         "provider_usage": None,

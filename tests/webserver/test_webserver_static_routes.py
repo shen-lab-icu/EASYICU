@@ -520,12 +520,29 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-feature-row" in guided_css
     assert ".gdi-plan" in guided_css
     assert ".gd-concept-answer" in guided_css
-    assert "let guidedPipelineOpen = false;" in guided_js
-    assert "function renderStudyPipelineSummary" in guided_js
-    assert "function renderStudyItemList" in guided_js
-    assert "data-gd-pipeline-toggle" in guided_js
-    assert "data-gd-pipeline-list" in guided_js
-    assert "id=\"gdPipelineList\" ${guidedPipelineOpen ? '' : 'hidden'}" in guided_js
+    # The study-pipeline summary has its own owner (D-P2-6); the shell only
+    # delegates — a copy left behind in the shell is the failure mode the
+    # split exists to prevent.
+    pipeline_js = _static_js("screens-guided-pipeline.js")
+    assert "window.EU_GUIDED_PIPELINE = {" in pipeline_js
+    assert "function normalizedStudyRows" in pipeline_js
+    assert "function renderStudyPipelineSummary" in pipeline_js
+    assert "function renderStudyItemList" in pipeline_js
+    assert "data-gd-pipeline-toggle" in pipeline_js
+    assert "data-gd-pipeline-list" in pipeline_js
+    assert "id=\"gdPipelineList\" ${pipelineOpen ? '' : 'hidden'}" in pipeline_js
+    assert "let guidedPipelineOpen = false;" not in guided_js
+    assert "function normalizedStudyRows" not in guided_js
+    assert "function renderStudyPipelineSummary" not in guided_js
+    assert "function renderStudyItemList" not in guided_js
+    assert "const PIPELINE = window.EU_GUIDED_PIPELINE;" in guided_js
+    assert "PIPELINE.init({" in guided_js
+    assert "PIPELINE.resetState()" in guided_js
+    assert "PIPELINE.renderStudyPipelineSummary()" in guided_js
+    assert "PIPELINE.renderStudyItemList()" in guided_js
+    assert "PIPELINE.handleClick(e.target)" in guided_js
+    assert "console.warn" not in guided_js
+    assert "console.error" not in guided_js
     assert ".gd-pipeline-summary" in guided_css
     assert ".gd-pipeline-toggle" in guided_css
     assert ".gd-pipeline-list[hidden]" in guided_css
@@ -562,6 +579,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "js/screens-guided-review.js?v=20260831-owner1" in index_html
     review_pos = index_html.find("screens-guided-review.js")
     assert review_pos != -1 and review_pos < guided_pos
+    # Study-pipeline summary owner file (screens-guided-pipeline.js, D-P2-6):
+    # the namespace owner must load before the shell that inits it.
+    assert "js/screens-guided-pipeline.js?v=20260917-pipeline-owner1" in index_html
+    pipeline_pos = index_html.find("screens-guided-pipeline.js")
+    assert pipeline_pos != -1 and pipeline_pos < guided_pos
     assert "window.EU_GUIDED_EXTRACT = {" in extract_js
     # study-design vocabulary is owned by the stepper module, not the shell
     assert "Primary outcome / endpoint" in extract_js

@@ -1,3 +1,4 @@
+/* Owner: Project Monitor artifact render widget. */
 /* ============================================================
    screens-agent-render.js — fixture data + pure artifact renderers shared by
    Guided Copilot's run-file review surfaces. It was originally extracted from

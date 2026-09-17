@@ -129,14 +129,16 @@
   function uiLanguage() { return window.EU_LANG === 'zh' ? 'zh' : 'en'; }
   function sessionLanguage(session) { return session && session.language === 'zh' ? 'zh' : 'en'; }
   function sessionMatchesUiLanguage(session) { return sessionLanguage(session) === uiLanguage(); }
-  function displaySessionTitle(value) { return window.EU_PRODUCT_LABELS.copilotTitle(value); }
+  function displaySessionTitle(value) { return window.EU_PRODUCT_LABELS?.copilotTitle?.(value) ?? String(value ?? '').slice(0, 200); }
   function sessionTraceLabel(row) {
     const sessionId = String(row && row.session_id || '').trim();
     const shortId = sessionId ? sessionId.slice(-8) : '';
     const updated = String(row && row.updated_at || '').trim();
     return [updated, shortId ? `${tr('Session', '会话')} ${shortId}` : ''].filter(Boolean).join(' · ');
   }
-  function displayProjectTitle(value, fallback) { return window.EU_PRODUCT_LABELS.projectTitle(value, fallback); }
+  // D-P2-1: defensive label projection — a bundle without product-labels.js
+  // must still render bounded raw text instead of throwing.
+  function displayProjectTitle(value, fallback) { return window.EU_PRODUCT_LABELS?.projectTitle?.(value, fallback) ?? String(value ?? fallback ?? '').slice(0, 200); }
   function agentMode() {
     return (state.session && state.session.agent_mode) || state.agentMode || 'research';
   }

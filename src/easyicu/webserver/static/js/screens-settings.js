@@ -1,3 +1,4 @@
+/* Owner: Settings route. */
 /* Screen: Settings — local paths, data mode, privacy, model, language, about.
    Utility page reached from the sidebar gear. Bound controls persist through
    /api/settings; path pickers list local folders through the FastAPI process. */

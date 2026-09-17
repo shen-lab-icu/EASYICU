@@ -84,31 +84,44 @@ _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS = (
 # A plan noun followed by advice *about* editing it is not a request to spend a
 # Planner turn: "对计划的样本量调整给出建议" and "对年龄的调整方式做敏感性分析"
 # both contain a revision verb as a noun. These tails keep the explicit-edit
-# patterns from treating that advisory framing as authorization.
+# patterns from treating that advisory framing as authorization.  D-P1-2: the
+# tail must guard every Chinese generation/revision pattern (not just the
+# 对/将 pattern) and cover bare 给/提 plus 的/请 framing ("生成计划的建议",
+# "重新生成计划请给建议") as well as English advice/suggestion/recommendation.
 _ADVISORY_PLAN_TAIL = (
-    r"(?![\s\S]{0,8}(?:"
-    r"(?:给出|提供|提出|写|出)[\s\S]{0,4}(?:建议|意见|看法|评估|评价|解释|说明|分析)"
+    r"(?![\s\S]{0,24}(?:"
+    r"(?:给出|提供|提出|给|提|写|出)[\s\S]{0,4}(?:建议|意见|看法|评估|评价|解释|说明|分析|问题)"
     r"|(?:方式|方法)[\s\S]{0,6}(?:建议|意见|评估|评价|讨论|分析)"
     r"|(?:做|进行)[\s\S]{0,6}(?:敏感性|亚组|分层|稳健性|探索性)[\s\S]{0,4}(?:分析|评估)"
+    r"|(?:的|请|就)[\s\S]{0,4}(?:建议|意见|看法|评估|评价|解释|说明|分析|问题)"
+    r"|\b(?:advice|suggestion|suggestions|recommendation|recommendations)\b"
     r"))"
 )
 
 _PROVIDER_REPLAN_PATTERNS = (
-    r"(?:重新)?生成(?:(?:新的?|全新的?|干净的?|当前|这份|整份|完整|候选|修订|的)|\s)*(?:research agent\s*)?(?:研究|分析)(?:计划|方案)",
-    r"(?:重新)?生成(?:完整)?修订(?:计划|方案)",
-    r"(?:重新)?生成[^。.!！?？;；]{0,12}?(?:计划|方案)(?!的(?:建议|意见|看法|评估|评价|解释|说明|问题))",
-    r"(?:请|现在|授权)?(?:重新规划|重做(?:研究|分析)(?:计划|方案))",
+    r"(?:重新)?生成(?:(?:新的?|全新的?|干净的?|当前|这份|整份|完整|候选|修订|的)|\s)*(?:research agent\s*)?(?:研究|分析)(?:计划|方案)"
+    + _ADVISORY_PLAN_TAIL,
+    r"(?:重新)?生成(?:完整)?修订(?:计划|方案)" + _ADVISORY_PLAN_TAIL,
+    r"(?:重新)?生成[^。.!！?？;；]{0,12}?(?:计划|方案)(?!的(?:建议|意见|看法|评估|评价|解释|说明|问题))"
+    + _ADVISORY_PLAN_TAIL,
+    r"(?:请|现在|授权)?(?:重新规划|重做(?:研究|分析)(?:计划|方案))"
+    + _ADVISORY_PLAN_TAIL,
     r"(?:一次性\s*)?provider_run\s*授权",
-    r"(?:authorize|please|now)?[\s_-]*(?:regenerate|replan|generate)[\s_-]+(?:a[\s_-]+)?(?:the[\s_-]+)?(?:new[\s_-]+)?(?:research[\s_-]+agent[\s_-]+)?analysis[\s_-]+plan",
-    r"(?:修订|修正|修改|调整|完善)(?:(?:当前|这份|整份|完整|候选|研究|分析|的)|\s)*(?:计划|方案)",
+    r"(?:authorize|please|now)?[\s_-]*(?:regenerate|replan|generate)[\s_-]+(?:a[\s_-]+)?(?:the[\s_-]+)?(?:new[\s_-]+)?(?:research[\s_-]+agent[\s_-]+)?analysis[\s_-]+plan"
+    + _ADVISORY_PLAN_TAIL,
+    r"(?:修订|修正|修改|调整|完善)(?:(?:当前|这份|整份|完整|候选|研究|分析|的)|\s)*(?:计划|方案)"
+    + _ADVISORY_PLAN_TAIL,
     r"(?:请|现在)(?:对|将)[^。.!！?？;；]{0,48}(?:计划|方案)[^。.!！?？;；]{0,20}(?:修订|修正|修改|调整|完善)"
     + _ADVISORY_PLAN_TAIL,
-    r"\b(?:revise|amend|update|modify)\s+(?:(?:a|the|current|complete|candidate|research|analysis)\s+)*plan\b",
+    r"\b(?:revise|amend|update|modify)\s+(?:(?:a|the|current|complete|candidate|research|analysis)\s+)*plan\b"
+    + _ADVISORY_PLAN_TAIL,
 )
 
 # A planning verb in a denial or a question about editing is not a request to
 # spend a Planner turn. Keep these checks local to the planning action so a
 # request to revise a plan may still forbid changes to its question or source.
+# D-P1-2: English advisory framing ("advice/suggestion/recommendation about
+# the plan") is also not authorization, in either order.
 _NON_ACTION_PLAN_PATTERNS = (
     r"(?:不要|不必|无需|暂不|先别|禁止|如何|怎样|怎么|是否|能否)[^。.!！?？;；]{0,24}(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)",
     r"(?:讨论|探讨|解释|说明|介绍)(?:一下)?\s*(?:如何|怎样|怎么)?\s*(?:重新)?(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)",
@@ -116,7 +129,11 @@ _NON_ACTION_PLAN_PATTERNS = (
     r"(?:不要|不必|无需|暂不|先别|禁止|如何|怎样|怎么|是否|能否)[^。.!！?？;；]{0,16}重新规划",
     r"(?:不要|不必|无需|暂不|先别|禁止|如何|怎样|怎么|是否|能否)[^。.!！?？;；]{0,48}(?:计划|方案)[^。.!！?？;；]{0,20}(?:修订|修正|修改|调整|完善)",
     r"(?:计划|方案)[^。.!！?？;；]{0,16}(?:不要|不必|无需|暂不|先别|禁止)[^。.!！?？;；]{0,16}(?:修订|修正|修改|调整|完善)",
+    r"(?:给出|提供|提出|给)[^。.!！?？;；]{0,12}(?:建议|意见|看法|分析)[^。.!！?？;；]{0,24}(?:计划|方案)",
     r"\b(?:do not|don't|never|how|whether|should i)[^.!?;]{0,60}\b(?:regenerate|replan|generate|revise|amend|update|modify)\b[^.!?;]{0,60}\bplan\b",
+    r"\b(?:advice|suggestion|suggestions|recommendation|recommendations)\b[^.!?;]{0,60}\b(?:regenerate|replan|generate|revise|amend|update|modify)\b[^.!?;]{0,60}\bplan\b",
+    r"\b(?:regenerate|replan|generate|revise|amend|update|modify)\b[^.!?;]{0,60}\bplan\b[^.!?;]{0,60}\b(?:advice|suggestion|suggestions|recommendation|recommendations)\b",
+    r"\b(?:give|provides?|providing|offer|offers|offering)\b[^.!?;]{0,20}\b(?:advice|suggestion|suggestions|recommendation|recommendations)\b[^.!?;]{0,60}\bplan\b",
 )
 
 

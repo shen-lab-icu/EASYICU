@@ -1,3 +1,4 @@
+/* Owner: Guided Pi report artifact loader widget. */
 /* Digest-pinned artifact-set loader for synthetic Guided Copilot reports. */
 (function () {
   'use strict';

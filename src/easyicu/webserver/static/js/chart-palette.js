@@ -1,3 +1,4 @@
+/* Owner: categorical chart palette (shared SERIES/DASHES). */
 /* ============================================================
    chart-palette.js — the categorical chart palette owner.
    Owns the series colours, the per-index stroke patterns, and

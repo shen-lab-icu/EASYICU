@@ -27,12 +27,11 @@ APP_DIR = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app
 
 
 def _wait_for(predicate, *, timeout: float = 2.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        time.sleep(0.005)
-    raise AssertionError("condition was not met before timeout")
+    """E-P2-6: delegate to the shared tests/support polling helper."""
+
+    from tests.support.wait import wait_until
+
+    wait_until(predicate, timeout=timeout)
 
 
 def _tool_request(
@@ -146,6 +145,7 @@ def test_private_runtime_integrity_is_verified_once_per_gateway_lifetime(
     assert checks == [app_dir.resolve(), app_dir.resolve()]
 
 
+@pytest.mark.requires_node
 def test_upstream_multi_tool_batch_serializes_authority_mutations() -> None:
     node = shutil.which("node")
     if not node or not (APP_DIR / "node_modules").is_dir():
@@ -229,6 +229,7 @@ if (outcomes.filter((item) => item === "pi_session_authority_stale").length !== 
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+@pytest.mark.requires_node
 def test_initial_question_update_uses_host_finalization_without_second_provider_call() -> None:
     node = shutil.which("node")
     if not node or not (APP_DIR / "node_modules").is_dir():

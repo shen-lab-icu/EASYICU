@@ -1,3 +1,4 @@
+/* Owner: Guided Pi DOM event wiring widget. */
 /* Copilot-owned delegated DOM event wiring.
    The parent screen passes explicit state, owners, and actions; this module
    contains no scientific policy and does not own API transport. */
@@ -265,7 +266,13 @@
         if (!form) return;
         const presets = {
           cliproxyapi: { provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', model: 'gpt-5.6-luna' },
-          'custom-openai': { provider: 'custom-openai', base_url: 'https://example.com/v1', api_transport: 'openai-completions', model: '' },
+          // D-P2-4: the custom gateway ships an EMPTY address on purpose. The
+          // example domain is placeholder text only (see the input's
+          // placeholder) and must never be a submittable value: submitting it
+          // would carry the pasted API key to a stand-in host during
+          // verification. configureProvider additionally refuses empty and
+          // example.* addresses, and the backend rejects example.* outright.
+          'custom-openai': { provider: 'custom-openai', base_url: '', api_transport: 'openai-completions', model: '' },
           openai: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', model: 'gpt-5.6-luna' },
           openrouter: { provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions', model: '' },
           deepseek: { provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions', model: 'deepseek-chat' },

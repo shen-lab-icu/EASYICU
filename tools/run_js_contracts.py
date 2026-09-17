@@ -60,8 +60,21 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_classic_exit.test.js": [],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
-    # Receives the static JavaScript directory and loads its owner graph itself.
-    "guided_pi_study_results.test.js": ["."],
+    # Explicit owner list (E-P2-11): no "." directory marker — every file the
+    # harness loads is named here, including product-labels.js, so a rename
+    # or deletion fails fast in main()'s existence check instead of silently
+    # changing what the harness resolves from the directory.
+    "guided_pi_study_results.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-guided-pi-resources.js",
+        "screens-guided-pi-study-workspace.js",
+        "screens-guided-pi-run-outcome.js",
+        "product-labels.js",
+        "screens-guided-pi-preview.js",
+        "screens-guided-pi-events.js",
+        "screens-guided-pi-aside.js",
+        "screens-guided-pi-header.js",
+    ],
     # Loads the module registry and plan-confirmation owner itself; takes no arguments.
     "guided_plan_resource_authority.test.js": [],
     "guided_pi_modules.test.js": ["screens-guided-pi-modules.js"],

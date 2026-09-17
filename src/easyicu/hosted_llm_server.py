@@ -44,7 +44,62 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from easyicu.webserver.host_security import AllowedHostsMiddleware
+try:
+    # Preferred: shared webserver host policy. Deferred-optional so that
+    # importing this relay module never hard-requires the webserver subtree.
+    from easyicu.webserver.host_security import AllowedHostsMiddleware
+except ImportError:  # pragma: no cover - fallback when webserver unavailable
+    from urllib.parse import urlsplit as _urlsplit
+
+    from starlette.responses import PlainTextResponse as _PlainTextResponse
+
+    def _normalize_host_fallback(value: str) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = _urlsplit("//" + raw)
+            if parsed.username is not None or parsed.password is not None:
+                return None
+            _ = parsed.port
+        except ValueError:
+            return None
+        return parsed.hostname.rstrip(".").lower() if parsed.hostname else None
+
+    def _host_allowed_fallback(host: str, allowed_hosts: tuple[str, ...]) -> bool:
+        normalized = _normalize_host_fallback(host)
+        if normalized is None:
+            return False
+        for pattern in allowed_hosts:
+            if pattern == "*":
+                return True
+            if pattern.startswith("*."):
+                suffix = _normalize_host_fallback(pattern[2:])
+                if suffix and normalized.endswith("." + suffix):
+                    return True
+                continue
+            if normalized == _normalize_host_fallback(pattern):
+                return True
+        return False
+
+    class AllowedHostsMiddleware:  # type: ignore[no-redef]
+        """Local minimal host-header guard (fallback if webserver missing)."""
+
+        def __init__(self, app, allowed_hosts=None) -> None:
+            self.app = app
+            self.allowed_hosts = tuple(allowed_hosts or ())
+
+        async def __call__(self, scope, receive, send):  # type: ignore[no-untyped-def]
+            if scope["type"] in {"http", "websocket"}:
+                headers = dict(scope.get("headers") or [])
+                host = headers.get(b"host", b"").decode("latin-1")
+                if not _host_allowed_fallback(host, self.allowed_hosts):
+                    response = _PlainTextResponse(
+                        "Invalid host header", status_code=400
+                    )
+                    await response(scope, receive, send)
+                    return
+            await self.app(scope, receive, send)
 
 OPENROUTER_BASE_URL = os.getenv(
     "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"

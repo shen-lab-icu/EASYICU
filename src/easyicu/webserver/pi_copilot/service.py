@@ -105,6 +105,14 @@ ALLOWED_TURN_ACTIONS = frozenset(
         "mcp_read",
     }
 )
+# Privileged one-use actions can never be pre-granted by the browser alone.
+# They are granted only when the backend infers the same action from the
+# current user text (see turn_authority.infer_explicit_turn_actions).  The
+# browser's `allowed_actions` (notably the `full` access mode, which ships
+# every capability with each message) is ignored for these three.
+PRIVILEGED_ONE_SHOT_TURN_ACTIONS = frozenset(
+    {"provider_run", "extract", "report_revision"}
+)
 HOST_ACTION_JOB_KINDS = {
     "auto_generate_plan": frozenset({"agent-run"}),
     "generate_plan": frozenset({"agent-run"}),
@@ -2072,7 +2080,16 @@ class PiCopilotService:
             self._save_record(record)
         requested_actions = frozenset(
             str(item).strip() for item in allowed_actions if str(item).strip()
-        ) | infer_explicit_turn_actions(provider_text)
+        )
+        inferred_actions = infer_explicit_turn_actions(provider_text)
+        # D-P1-1: privileged one-use actions require backend text inference.
+        # Ordinary actions keep union compatibility; privileged actions are
+        # granted only from the backend inference so a tampered `full`-mode
+        # client cannot pre-authorize a full run with chit-chat text.
+        requested_actions = (
+            (requested_actions | inferred_actions)
+            - PRIVILEGED_ONE_SHOT_TURN_ACTIONS
+        ) | (inferred_actions & PRIVILEGED_ONE_SHOT_TURN_ACTIONS)
         unknown_actions = sorted(requested_actions - ALLOWED_TURN_ACTIONS)
         if unknown_actions:
             raise PiCopilotError(
@@ -4194,6 +4211,7 @@ def reset_pi_copilot_service_for_tests() -> None:
 
 __all__ = [
     "ALLOWED_TURN_ACTIONS",
+    "PRIVILEGED_ONE_SHOT_TURN_ACTIONS",
     "PiCopilotService",
     "get_pi_copilot_service",
     "shutdown_pi_copilot_service",

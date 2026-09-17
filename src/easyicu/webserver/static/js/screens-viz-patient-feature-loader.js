@@ -1,3 +1,4 @@
+/* Owner: Patient Review feature loader widget. */
 /* Patient Review single-feature lazy-load owner. */
 (function () {
   'use strict';

@@ -1,3 +1,4 @@
+/* Owner: Guided Pi study-workspace widget. */
 /* Presentation state for a study: retained conversation and an explicit,
    version-bound artifact reference in the composer. No execution authority. */
 (function () {

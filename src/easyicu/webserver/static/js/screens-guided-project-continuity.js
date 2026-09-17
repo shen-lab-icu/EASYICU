@@ -1,3 +1,4 @@
+/* Owner: Guided project continuity widget. */
 /* Guided project continuity owner.
    Persists only one opaque local project id so a browser refresh can reopen
    the user's current project through the normal server-owned project list. */

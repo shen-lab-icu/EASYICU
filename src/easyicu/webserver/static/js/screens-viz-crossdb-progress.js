@@ -1,3 +1,4 @@
+/* Owner: Cross-DB progress widget. */
 /* Cross-DB job progress + cooperative-cancel presentation owner. */
 (function () {
   'use strict';

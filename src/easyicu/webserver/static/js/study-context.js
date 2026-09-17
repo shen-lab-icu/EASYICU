@@ -1,3 +1,4 @@
+/* Owner: StudyContext store widget. */
 /* Cross-module StudyContext owner.
    Keeps an immediate browser cache for navigation continuity, then mirrors the
    same context to the local FastAPI store. Route modules only register a source

@@ -1,3 +1,4 @@
+/* Owner: Guided Pi conversation header widget. */
 /* Guided Copilot conversation header owner. Keeps the primary session controls
    visible and groups infrequent actions without changing their permissions. */
 (function () {
@@ -17,7 +18,9 @@
 
   function renderModelControl(options) {
     const { tr, esc, icon } = options;
-    return `<button class="gpi-model-binding" type="button" data-gpi-config title="${esc(tr('Change model connection; changes apply to a new conversation', '更改模型连接；变更将在新会话中生效'))}" aria-label="${esc(tr('Change model connection', '更改模型连接'))}"><span>${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</button>`;
+    // D-P3-3: truncated model label keeps its full text in title (button title
+    // stays the help copy; the inner span carries the connection label).
+    return `<button class="gpi-model-binding" type="button" data-gpi-config title="${esc(tr('Change model connection; changes apply to a new conversation', '更改模型连接；变更将在新会话中生效'))}" aria-label="${esc(tr('Change model connection', '更改模型连接'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</button>`;
   }
 
   function render(options) {

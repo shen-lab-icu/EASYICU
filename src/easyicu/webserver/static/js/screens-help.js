@@ -1,3 +1,4 @@
+/* Owner: Help/Get Started route. */
 /* Screens: Get Started (tutorial) + AI Assistant.
    Get Started orients new users to the workflow; Assistant is the
    evidence-bound sidebar AI. Assistant messages give workflow guidance and

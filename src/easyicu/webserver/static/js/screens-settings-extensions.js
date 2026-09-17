@@ -15,6 +15,10 @@
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
   function api() { return window.EU_API || {}; }
   function registry() { return window.EU_EXTENSIONS || null; }
+  // D-P2-7: every extension mutation carries the activation revision this
+  // panel read, so an overwrite/removal cannot land on state the user never
+  // reviewed. The backend rejects a missing value (422) or a stale one (409).
+  function confirmRevision() { const data = registry(); return (data && data.activation_sha256) || ''; }
   function shortSha(value) { return String(value || '').slice(0, 12); }
   function errorText(error) {
     return String((error && error.message) || error || tr('Extension request failed.', '扩展请求失败。'));
@@ -130,7 +134,7 @@
       const kind = button.getAttribute('data-ext-remove');
       const name = button.getAttribute('data-ext-name');
       if (!window.confirm(tr(`Remove ${name}? Existing frozen sessions and runs keep their recorded version.`, `移除 ${name}？已有固化会话和运行仍保留原版本。`))) return;
-      api().removeExtension({ kind, name }).then(() => notice(tr('Extension removed from future activation.', '扩展已从后续激活中移除。')))
+      api().removeExtension({ kind, name, expected_sha256: confirmRevision() }).then(() => notice(tr('Extension removed from future activation.', '扩展已从后续激活中移除。')))
         .catch(error => { state.error = errorText(error); }).finally(rerender);
     }));
     const file = root.querySelector('[data-ext-skill-file]');
@@ -147,7 +151,7 @@
       const stages = Array.from(root.querySelectorAll('[data-ext-skill-stage]:checked')).map(input => input.value);
       const enabled = !!((root.querySelector('[data-ext-manager="skills"] [data-ext-install-enabled]') || {}).checked);
       state.busy = 'skill-install'; state.error = '';
-      api().installExtensionSkill({ skill_md: state.skillDraft, stages, enabled })
+      api().installExtensionSkill({ skill_md: state.skillDraft, stages, enabled, expected_sha256: confirmRevision() })
         .then(() => { state.skillDraft = ''; notice(tr('Skill installed. It will enter newly created sessions and runs.', 'Skill 已安装，将进入之后新建的会话和运行。')); })
         .catch(error => { state.error = errorText(error); })
         .finally(() => { state.busy = ''; rerender(); });
@@ -165,7 +169,7 @@
       const draft = captureMcpDraft(root);
       const enabled = !!((root.querySelector('[data-ext-manager="mcp"] [data-ext-install-enabled]') || {}).checked);
       state.busy = 'mcp-install'; state.error = '';
-      api().installExtensionMcp({ name: draft.name, url: draft.url, allowed_tools: parseTools(draft.tools), enabled })
+      api().installExtensionMcp({ name: draft.name, url: draft.url, allowed_tools: parseTools(draft.tools), enabled, expected_sha256: confirmRevision() })
         .then(() => { state.mcpDraft = { name: '', url: '', tools: '' }; state.mcpTest = null; notice(tr('MCP server installed with its explicit tool allowlist.', 'MCP 服务已按显式工具白名单安装。')); })
         .catch(error => { state.error = errorText(error); })
         .finally(() => { state.busy = ''; rerender(); });

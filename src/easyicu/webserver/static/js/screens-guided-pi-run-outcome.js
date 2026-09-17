@@ -1,3 +1,4 @@
+/* Owner: Guided Pi run-outcome card widget. */
 /* Guided Copilot durable completed-run card owner.
    A validated analysis remains visible after refresh even when publication
    review stays closed. It renders only host-projected artifact references. */

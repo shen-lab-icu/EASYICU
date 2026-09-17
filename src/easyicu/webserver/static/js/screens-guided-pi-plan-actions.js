@@ -1,3 +1,4 @@
+/* Owner: Guided Pi plan-action widget. */
 /* Governed Plan action owner for Guided Copilot.
    Owns authority calculation and the complete user-action lifecycle from one
    explicit click/edit through review, retry, fresh planning, and terminal job

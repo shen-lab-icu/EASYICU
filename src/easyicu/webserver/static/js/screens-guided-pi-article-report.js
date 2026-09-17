@@ -1,3 +1,4 @@
+/* Owner: Guided Pi article-report widget. */
 /* Guided Copilot article-report owner.
    Adds the verified presentation gallery to the existing evidence-bound
    manuscript reader without changing claim or evidence bindings. */

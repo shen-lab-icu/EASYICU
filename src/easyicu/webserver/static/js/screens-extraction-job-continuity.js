@@ -1,3 +1,4 @@
+/* Owner: Data Extraction job continuity widget. */
 /* Data Extraction long-job continuity owner.
    Persists only bounded reconnect metadata; job progress/results always come
    back from the local FastAPI job snapshot or SSE stream. */

@@ -1,3 +1,4 @@
+/* Owner: ICD cohort criteria widget. */
 /* ICD cohort criteria owned by Data Extraction.
    This widget records include/exclude rules only. Cohort sizes and code
    frequencies must come from the exact selected source during extraction;

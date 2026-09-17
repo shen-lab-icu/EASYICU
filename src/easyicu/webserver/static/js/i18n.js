@@ -1,3 +1,4 @@
+/* Owner: bilingual EN/中文 helper widget. */
 /* Lightweight bilingual helper (EN / 中文).
    t('English', '中文') → returns the active language string.
    setLang('en'|'zh') persists + re-renders the whole shell. */

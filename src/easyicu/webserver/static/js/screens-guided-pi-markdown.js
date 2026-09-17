@@ -1,3 +1,4 @@
+/* Owner: Guided Pi markdown render widget. */
 /* Guided Pi assistant-message renderer owner.
    Keep this deliberately small: it supports only the trusted display subset
    needed by Copilot replies and never turns arbitrary HTML into DOM. */

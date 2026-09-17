@@ -1,3 +1,4 @@
+/* Owner: Guided Pi next-step widget. */
 /* Guided Copilot next-step owner.
    Converts one bounded, natural-language final block into host buttons. The
    host makes a demo-selection action explicit before sending it. Only the

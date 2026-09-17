@@ -1,3 +1,4 @@
+/* Owner: Guided Pi literature evidence widget. */
 /* Guided Pi literature evidence renderer owner.
    Retrieval remains owned by Idea Mining / Research Agent. This module renders
    only host-projected metadata and never infers citations from prose. */

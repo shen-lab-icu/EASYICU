@@ -142,6 +142,39 @@ def test_ambiguous_unrelated_or_negated_text_stays_fail_closed(
 @pytest.mark.parametrize(
     "message",
     [
+        "生成计划的建议",
+        "重新生成计划请给建议",
+        "请提供生成研究计划的分析",
+        "请提出重新生成分析计划的意见",
+        "Please give advice about regenerating the analysis plan.",
+        "Please provide a suggestion about the analysis plan revision.",
+        "Please offer recommendations about generating the analysis plan.",
+    ],
+)
+def test_advisory_plan_framing_does_not_grant_provider_run(
+    message: str,
+) -> None:
+    # D-P1-2: advisory tails guard every Chinese generation/revision pattern;
+    # English advice/suggestion/recommendation about the plan is not authority.
+    assert infer_explicit_turn_actions(message) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "请重新生成研究计划",
+        "请重新生成研究计划，先供我审阅。",
+    ],
+)
+def test_explicit_regenerate_research_plan_grants_provider_run(
+    message: str,
+) -> None:
+    assert infer_explicit_turn_actions(message) == frozenset({"provider_run"})
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
         "使用 EasyICU 已准备好的完整 **MIMIC-IV v3.1**。",
         "确认使用 EasyICU 已准备好的完整 **MIMIC-IV v3.1**。",
         "Use the validated MIMIC-IV source already prepared by EasyICU.",

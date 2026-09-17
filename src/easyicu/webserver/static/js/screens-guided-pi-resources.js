@@ -1,3 +1,4 @@
+/* Owner: Guided Pi resource transport widget. */
 /* Guided Pi conversation-resource transport owner.
    Keeps resource identity and DOM projection out of the already-large screen
    shell. It carries coordinates only; governed payloads load in the preview. */

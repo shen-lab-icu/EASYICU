@@ -792,3 +792,77 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     assert captured["request_hard_timeout"] is None
     assert result["provider"]["model"] == "test-local-model"
     assert "test-private-provider-key" not in json.dumps(result)
+
+
+def test_chitchat_with_client_provider_run_requires_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-P1-1: a tampered client cannot pre-grant a privileged one-shot action.
+
+    The browser's ``full`` access mode ships ``provider_run`` with every
+    message; backend text inference is the necessary condition.  Chit-chat
+    carrying ``provider_run`` must fail closed with
+    ``pi_action_authorization_required``.
+    """
+
+    from easyicu.webserver.pi_copilot import tools as tool_module
+    from easyicu.webserver.pi_copilot.contracts import (
+        AuthorityBinding,
+        PiSessionRecord,
+        ToolExecutionContext,
+    )
+
+    monkeypatch.setattr(
+        tool_module, "_bound_context", lambda _binding: _complete_study()
+    )
+
+    def _must_not_submit(
+        request: Any, *, authorize: Any = None, **kwargs: Any,
+    ) -> Any:
+        if callable(authorize):
+            authorize()
+        raise AssertionError("chit-chat must not reach provider submission")
+
+    monkeypatch.setattr(
+        research_run_submission, "submit_research_run", _must_not_submit
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-chitchat-provider-run",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id="study-workflow",
+                study_revision=4,
+            ),
+        ),
+        user_message="今天天气不错，随便聊聊吧，你最近怎么样？",
+        allowed_actions={"provider_run"},
+    )
+    result = tool_module.execute_tool(
+        "easyicu_run", {"run_type": "full"}, context
+    )
+    assert result["code"] == "pi_action_authorization_required"
+
+
+def test_service_strips_client_privileged_actions_without_backend_inference() -> None:
+    """D-P1-1 service layer: privileged actions come only from inference."""
+
+    # Lightweight unit check of the documented rule without booting a gateway:
+    # ordinary actions keep union compatibility, privileged require inference.
+    from easyicu.webserver.pi_copilot.service import (
+        PRIVILEGED_ONE_SHOT_TURN_ACTIONS,
+    )
+    from easyicu.webserver.pi_copilot.turn_authority import (
+        infer_explicit_turn_actions,
+    )
+
+    chitchat = "今天天气不错，随便聊聊吧，你最近怎么样？"
+    assert infer_explicit_turn_actions(chitchat) == frozenset()
+    client = frozenset({"provider_run", "run", "idea"})
+    inferred = infer_explicit_turn_actions(chitchat)
+    requested = ((client | inferred) - PRIVILEGED_ONE_SHOT_TURN_ACTIONS) | (
+        inferred & PRIVILEGED_ONE_SHOT_TURN_ACTIONS
+    )
+    assert "provider_run" not in requested
+    assert "run" in requested
+    assert "idea" in requested

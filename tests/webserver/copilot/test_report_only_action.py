@@ -10,6 +10,7 @@ from tests.webserver.copilot.pi_copilot_static_fixtures import (
 )
 
 
+@pytest.mark.requires_node
 @pytest.mark.parametrize("report_only", [True, False])
 def test_explicit_click_sends_report_only_scope_without_plan_or_approval(report_only):
     node = shutil.which("node")
@@ -42,6 +43,7 @@ def test_explicit_click_sends_report_only_scope_without_plan_or_approval(report_
     assert "decision" not in calls[0] and "budget_mode" not in calls[0]
 
 
+@pytest.mark.requires_node
 @pytest.mark.parametrize("reason,code,expected", [
     ("restore", "WRITER_ONLY_REGISTERED_INPUT_CHANGED", [True, False]),
     ("report_only", "WRITER_ONLY_REGISTERED_INPUT_CHANGED", [True]),
@@ -84,6 +86,7 @@ def test_general_restore_has_one_governed_fallback_but_explicit_report_scope_doe
         assert "不重跑分析" not in output["messages"][0]["text"]
 
 
+@pytest.mark.requires_node
 def test_duration_rounding_carries_into_minutes():
     node = shutil.which("node")
     if not node:
@@ -101,6 +104,7 @@ def test_duration_rounding_carries_into_minutes():
     assert "7 分" in result.stdout and "60 秒" not in result.stdout
 
 
+@pytest.mark.requires_node
 def test_real_outcome_click_preserves_restore_vs_explicit_report_only_scope():
     node = shutil.which("node")
     if not node:
