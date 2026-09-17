@@ -300,7 +300,7 @@ def test_c_f11_supersedes_without_restoring_artifact() -> None:
 
 
 def test_c_f13_retry_policy_contract_and_reference() -> None:
-    from easyicu.research_agent.execution.retry_policy import (
+    from easyicu.research_agent.contracts.retry_policy import (
         FAILURE_CLASS_RETRY_BUDGET,
         RETRY_DENOMINATOR_DEFINITION,
         budget_for_failure_class,
@@ -315,7 +315,7 @@ def test_c_f13_retry_policy_contract_and_reference() -> None:
     assert budget_for_failure_class("execution_timeout").max_llm_repairs == 0
     assert retry_denominator(5) == 5
     receipt = retry_policy_receipt()
-    assert receipt["schema_version"] == "easyicu.retry_policy/1"
+    assert receipt["schema_version"] == "easyicu.retry_policy/2"
     accounting = retry_accounting_receipt(
         [
             {
@@ -327,6 +327,13 @@ def test_c_f13_retry_policy_contract_and_reference() -> None:
                 "attempt_id": "run:s1:1",
                 "step_id": "s1",
                 "code_repair_attempts": 2,
+                "step_llm_repair_attempts": 1,
+            },
+            {
+                "attempt_id": "run:s1:2",
+                "step_id": "s1",
+                "code_repair_attempts": 1,
+                "step_llm_repair_attempts": 2,
             },
             {
                 "attempt_id": "run:s2:1",
@@ -336,9 +343,9 @@ def test_c_f13_retry_policy_contract_and_reference() -> None:
             },
         ]
     )
-    assert accounting["attempt_denominator"] == 2
-    assert accounting["llm_code_repair_attempts"] == 2
-    assert accounting["attempts_with_llm_code_repair"] == 1
+    assert accounting["attempt_denominator"] == 3
+    assert accounting["logical_llm_repair_attempts"] == 2
+    assert accounting["code_mutation_attempts"] == 3
     assert accounting["fail_closed_attempts"] == 1
     assert accounting["failure_class_counts"] == {"execution_timeout": 1}
 
@@ -362,7 +369,7 @@ def test_c_f13_retry_table_governs_routing_and_reports() -> None:
     """
     import pytest
 
-    from easyicu.research_agent.execution.retry_policy import repair_route_for
+    from easyicu.research_agent.contracts.retry_policy import repair_route_for
 
     assert repair_route_for("execution_timeout") == "fail_closed"
     assert repair_route_for("plan_data_contract") == "fail_closed"

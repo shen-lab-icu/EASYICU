@@ -21,7 +21,7 @@ from easyicu.research_agent.orchestration.human_review_checkpoint import (
 
 # C-F13: the central retry-policy contract polices observed records (unknown
 # failure classes become error findings); normal runs are unchanged.
-from ..execution.retry_policy import (
+from ..contracts.retry_policy import (
     budget_for_failure_class as _budget_for_failure_class,
 )
 
@@ -669,11 +669,11 @@ def build_system_validation_report(
                     "retry budget may be assumed for it."
                 ),
                 remediation=(
-                    "Register the class in execution/retry_policy.py with an "
+                    "Register the class in contracts/retry_policy.py with an "
                     "explicit budget row, or fix the classifier to emit a "
                     "tabled class."
                 ),
-                evidence_refs=["execution/retry_policy.py"],
+                evidence_refs=["contracts/retry_policy.py"],
             )
         )
 

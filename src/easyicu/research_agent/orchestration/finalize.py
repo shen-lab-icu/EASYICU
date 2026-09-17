@@ -72,7 +72,7 @@ from ..robustness.panel import PANEL_FILENAME, load_robustness_panel
 from ..schema import AnalysisManifest, AnalysisPlan, PipelineResult, ResearchContext
 from ..learning.store import quarantine_run_lesson
 from ..reporting.side_findings import collect_side_findings, write_side_findings
-from ..execution.retry_policy import retry_accounting_receipt
+from ..contracts.retry_policy import retry_accounting_receipt
 
 logger = logging.getLogger(__name__)
 

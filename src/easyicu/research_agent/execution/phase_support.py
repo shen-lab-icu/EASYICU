@@ -45,7 +45,6 @@ from ..cohort.schema import (
 )
 from ..contracts.declared_product import typed_product
 from ..contracts.runtime import ValidationFinding
-from .retry_policy import retry_accounting_receipt
 
 if TYPE_CHECKING:
     from ..orchestration.resume import QuarantinedConceptDraft
@@ -1068,7 +1067,6 @@ def _step_flush_partial_manifest(
         "findings": [f.model_dump(mode="json") for f in findings],
         "per_step_records": per_step_records,
         "step_attempt_history": step_attempt_history,
-        "retry_policy": retry_accounting_receipt(step_attempt_history),
         "llm_signature": llm_signature,
         "used_mock_llm": plan_result.used_mock_llm,
         "prompt_pack_version": prompt_version,

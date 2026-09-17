@@ -206,7 +206,6 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
     )
     assert partial["runtime_state"]["analysis_family"]
-    assert partial["retry_policy"]["attempt_denominator"] >= 1
     retry_record = next(
         record
         for record in manifest["evidence"]
