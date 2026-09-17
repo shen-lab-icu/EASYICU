@@ -29,9 +29,10 @@ when one owner and its typed consumers are identified explicitly.
 ## Task-scope receipt
 
 Run `tools/verify_git_task_scope.py` immediately before committing and paste
-its receipt. The guard fails closed when HEAD moved, when the task ran in the
-shared primary worktree, or when any staged, unstaged, or untracked path falls
-outside the declared allowlist.
+its receipt. The canonical checkout is accepted by default. The guard fails
+closed when HEAD moved or any staged, unstaged, or untracked path falls outside
+the declared allowlist. Use `--require-linked-worktree` only for an approved
+linked-worktree task.
 
 ```text
 scope_sha256:
