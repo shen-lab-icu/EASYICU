@@ -1,3 +1,4 @@
+/* Owner: demo concept catalog widget. */
 /* EasyICU — real concept catalog, transcribed from
    src/easyicu/concept_catalog.py (CONCEPT_DICTIONARY,
    CONCEPT_GROUPS_INTERNAL, CONCEPT_GROUP_NAMES, CONCEPT_DB_COVERAGE).

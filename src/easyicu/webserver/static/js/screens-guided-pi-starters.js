@@ -1,3 +1,4 @@
+/* Owner: Guided Pi session starter widget. */
 /* Guided Copilot new-session starter owner.
    Complete intents send one ordinary user message. Starters that require
    details only prefill and focus the composer; neither path grants data use. */

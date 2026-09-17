@@ -1,8 +1,15 @@
 /* Current-result identity, historical isolation, and non-destructive reader layout. */
 'use strict';
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
-const jsRoot = path.resolve(process.argv[2]);
+// E-P2-11: argv[2:] are the explicit owner files from tools/run_js_contracts.py
+// (no "." directory marker).  Resolve the js/ root from the first file's
+// directory so a directory argument keeps working during migration.
+const _first = path.resolve(process.argv[2]);
+const jsRoot = fs.existsSync(_first) && fs.statSync(_first).isDirectory()
+  ? _first
+  : path.dirname(_first);
 global.window = global;
 global.EU_HTML = { esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;') };
 require(path.join(jsRoot, 'screens-guided-pi-modules.js'));

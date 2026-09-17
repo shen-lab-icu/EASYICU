@@ -1,3 +1,4 @@
+/* Owner: Guided typed study-intent widget. */
 /* EasyICU — Guided Copilot: typed study-intent owner.
 
    Owns ONE thing: turning the user's own sentence into a typed study-contract

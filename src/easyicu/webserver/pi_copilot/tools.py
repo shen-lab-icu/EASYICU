@@ -182,9 +182,41 @@ def _extension_result(
     ).model_dump(mode="json")
 
 
+_PRIVILEGED_ONE_SHOT_ACTIONS = frozenset(
+    {"provider_run", "extract", "report_revision"}
+)
+
+
+def _privileged_action_inferred(context: ToolExecutionContext, action: str) -> bool:
+    """Return whether backend text inference authorizes a privileged action.
+
+    D-P1-1 defense in depth: the service already strips client-pre-granted
+    privileged actions, but tools re-check the host-held user text so a
+    directly constructed grant cannot bypass the turn-authority inference.
+    An empty user message is legacy test-only construction without text
+    authority; it keeps the grant check alone so existing unit fixtures that
+    never set user text continue to exercise their owner logic.
+    """
+
+    if action not in _PRIVILEGED_ONE_SHOT_ACTIONS:
+        return True
+    user_text = str(getattr(context, "user_message", "") or "").strip()
+    if not user_text:
+        return True
+    return action in infer_explicit_turn_actions(user_text)
+
+
 def _consume_action(
     context: ToolExecutionContext, action: str
 ) -> Optional[Dict[str, Any]]:
+    if not _privileged_action_inferred(context, action):
+        return _result(
+            context,
+            status="blocked",
+            code="pi_action_authorization_required",
+            summary=f"This action requires a one-use {action} grant for the current message.",
+            owner="easyicu.webserver.pi_copilot",
+        )
     outcome = context.grant.consume_once(action)
     if outcome == "granted":
         return None
@@ -3801,7 +3833,11 @@ def _run(
     # explicitly granted: clicking "full analysis" must not silently become a
     # preflight and then ask for a second permission.  With no provider grant,
     # the conservative default remains the deterministic local preflight.
-    provider_run_granted = "provider_run" in context.allowed_actions
+    # D-P1-1: a client-supplied provider_run without backend text inference
+    # is not a grant (chit-chat must stay preflight/fail-closed).
+    provider_run_granted = "provider_run" in context.allowed_actions and (
+        _privileged_action_inferred(context, "provider_run")
+    )
     local_run_granted = "run" in context.allowed_actions
     literature_search_authorized = context.grant.was_provided("literature")
     run_type = requested_run_type or ("full" if provider_run_granted else "preflight")
@@ -3897,6 +3933,18 @@ def _run(
 
         def authorize() -> None:
             action = "report_revision" if report_source_run_id else "provider_run"
+            # D-P1-1: backend text inference is a necessary condition even
+            # when the service already filtered the grant list.
+            if not _privileged_action_inferred(context, action):
+                raise research_run_submission.ResearchRunSubmissionError(
+                    {
+                        "error": "pi_action_authorization_required",
+                        "message": (
+                            f"This action requires a one-use {action} grant for the current message."
+                        ),
+                        "owner": "easyicu.webserver.pi_copilot",
+                    }
+                )
             outcome = context.grant.consume_once(action)
             if outcome == "granted":
                 return

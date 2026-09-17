@@ -1,3 +1,4 @@
+/* Owner: Guided Pi analysis-report widget. */
 /* Guided Copilot full analysis-report owner.
    It composes governed projections only; it does not rerun models or raise
    the run's analysis-only scientific authority. */

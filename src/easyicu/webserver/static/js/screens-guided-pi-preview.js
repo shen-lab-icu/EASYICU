@@ -1,6 +1,10 @@
+/* Owner: Guided Pi governed preview widget. */
 /* Guided Pi governed-resource preview owner.
    It swaps the study-progress aside for one clicked project file, webpage, or
-   path-free Research Agent artifact reference. */
+   path-free Research Agent artifact reference.
+   D-P3-6: sha256 pins here use /^[a-f0-9]{64}$/ — keep in sync with the
+   backend Sha256Text in src/easyicu/webserver/routes/pi_copilot.py (same
+   pattern, no shared constant across languages; change both together). */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -305,6 +309,8 @@
     if (isResearchDocument()) {
       // The click-time digest pins the served bytes to the projected run
       // ledger row; without a valid sha256 the document is never requested.
+      // D-P3-6: /^[a-f0-9]{64}$/ mirrors backend Sha256Text
+      // (src/easyicu/webserver/routes/pi_copilot.py); keep both in sync.
       const documentSha256 = String(state.resource.sha256 || '').trim().toLowerCase();
       if (!/^[a-f0-9]{64}$/.test(documentSha256)) return '';
       return api.piCopilotResearchDocumentUrl
@@ -358,8 +364,10 @@
     state.studyResources = (Array.isArray(resources) ? resources : []).map(safeResource).filter(Boolean);
     state.openStudyResource = typeof opener === 'function' ? opener : null;
     const studyTitle = String(context.title || '').trim();
+    // D-P2-1: defensive label projection — a bundle without product-labels.js
+    // must still render bounded raw text instead of throwing.
     state.studyTitle = studyTitle
-      ? window.EU_PRODUCT_LABELS.projectTitle(studyTitle, '').slice(0, 200)
+      ? (window.EU_PRODUCT_LABELS?.projectTitle?.(studyTitle, '') ?? String(studyTitle)).slice(0, 200)
       : '';
     state.referenceResource = typeof context.reference === 'function' ? context.reference : null;
     // Workflow polling can update the shelf without replacing the open report.
@@ -444,7 +452,7 @@
       const url = documentUrl && /\.pdf$/i.test(state.resource.artifact || '')
         ? documentUrl + '#view=FitH&navpanes=0' : documentUrl;
       body = url
-        ? `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(url)}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
+        ? `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
         : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The registered document digest is missing, so this preview cannot be pinned to the run ledger.', '登记文档摘要缺失，预览无法钉定到运行台账。')}</span></div>`;
     } else if (state.mode === 'web' && isHtml()) {
       const url = previewUrl();

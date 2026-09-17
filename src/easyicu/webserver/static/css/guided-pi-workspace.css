@@ -32,7 +32,8 @@
 .gpi-compose textarea{font-size:15px;min-height:46px}
 .gpi-actions{gap:8px}
 .gpi-action-trailing{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0}
-.gpi-model-binding{max-width:180px;border-color:transparent;background:transparent;font-family:var(--font);font-size:12px;padding:5px}
+.gpi-model-binding{max-width:180px;border-color:transparent;background:transparent;font-family:var(--font);font-size:12px;padding:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gpi-model-binding span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gpi-actions .btn{border-radius:6px;padding:7px 12px;min-height:32px;white-space:nowrap}
 .gpi-compose-card .gpi-access-menu>summary{padding-inline:5px;font-size:12px;font-weight:500}
 .gd-main:has(#gdPiShell:not([hidden]) .gpi-panel) .gd-project-summary{border:0;padding:8px 4px;background:transparent}

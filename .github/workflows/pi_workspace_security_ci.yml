@@ -57,6 +57,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Same policy as the runner-image gate: a burst of pushes must not leave
+  # several full runs racing; feature branches cancel the run they supersede
+  # while main keeps every run so the merge record stays complete.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   scoped-security-gate:
     name: Pi workspace scoped security gate

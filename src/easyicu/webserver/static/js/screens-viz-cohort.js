@@ -1,3 +1,4 @@
+/* Owner: Cohort Statistics route. */
 /* Cohort Statistics domain owner: state, effects, rendering orchestration, and route events. */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});

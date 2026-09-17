@@ -6616,10 +6616,66 @@ def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox()
     assert "scientific evidence" in preview
     assert 'sandbox="allow-scripts"' in preview
     assert 'referrerpolicy="no-referrer"' in preview
+    # D-P1-4: document and web iframes must both carry the sandbox (web branch
+    # already had it; document branch was missing it).
+    assert preview.count('sandbox="allow-scripts"') >= 2
+    assert "gpi-preview-document-frame" in preview
+    document_iframes = re.findall(
+        r"<iframe[^>]*gpi-preview-document-frame[^>]*>", preview
+    )
+    assert document_iframes, "document preview iframe must exist"
+    assert all(
+        'sandbox="allow-scripts"' in row for row in document_iframes
+    ), "document preview iframe must carry sandbox"
+    web_iframes = [
+        row
+        for row in re.findall(r"<iframe[^>]*>", preview)
+        if "gpi-preview-document-frame" not in row
+        and "gpi-preview-frame" in row
+    ]
+    assert web_iframes, "web preview iframe must exist"
+    assert all(
+        'sandbox="allow-scripts"' in row for row in web_iframes
+    ), "web preview iframe must carry sandbox"
     assert "EasyICU run artifact · Analysis-only" in preview
     assert "EasyICU run artifact · Reportable" not in preview
     assert "Human sign-off required" in preview
     assert "state.governance" in preview
+
+
+def test_codex_login_validates_auth_url_before_navigation() -> None:
+    # D-P1-3: auth_url must pass literature.safeUrl semantics (https +
+    # hostname + no userinfo) plus the auth.openai.com allowlist before any
+    # popup/location navigation; failures report via errorText and close.
+    control = _read("js/screens-guided-pi-provider-control.js")
+    assert "safeAuthUrl" in control
+    assert "literature" in control and "safeUrl" in control
+    assert "https:" in control
+    assert "parsed.username" in control or "username" in control
+    assert "parsed.port" in control or ".port" in control
+    assert "auth.openai.com" in control
+    assert "codex_auth_url_invalid" in control
+    assert "popup.close()" in control
+    assert "popup.location.href = safeUrl" in control or (
+        "popup.location.href" in control and "safeUrl" in control
+    )
+    # Raw backend URL must never navigate directly.
+    assert "popup.location.href = authUrl" not in control
+    assert "window.open(authUrl" not in control
+
+
+def test_error_text_option_escapes_value_and_label() -> None:
+    # D-P1-5: shared option() must escape untrusted value/label via the
+    # html-escape owner; `selected` is only a === gate emitting a literal.
+    owner = _read("js/screens-guided-pi-error-text.js")
+    assert "window.EU_HTML" in owner
+    assert "esc(value)" in owner
+    assert "esc(label)" in owner
+    assert "value === selected" in owner
+    assert "' selected'" in owner or '" selected"' in owner or "selected" in owner
+    # Ban raw interpolation of untrusted option fields.
+    assert '<option value="${value}"' not in owner
+    assert ">${label}</option>" not in owner
 
 
 def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
@@ -6784,3 +6840,113 @@ def test_nonconvergent_plan_revision_still_blocks_approval_and_automatic_restart
     assert "hideEdit: true" in confirmation
     assert "nonApprovable: true" in confirmation
     assert "actionCode === 'agent_plan_revision_nonconvergent'" not in actions
+
+
+def test_product_label_calls_are_defensive_and_share_one_default() -> None:
+    """D-P2-1: no bare EU_PRODUCT_LABELS call; one shared row fallback."""
+
+    index = _read("index.html")
+    assert "js/product-labels.js?v=20260917-product-label-defensive1" in index
+
+    consumers = [
+        "js/screens-guided-projects.js",
+        "js/screens-agent-study-context.js",
+        "js/screens-guided.js",
+        "js/screens-guided-pi-preview.js",
+        "js/screens-guided-pi.js",
+        "js/screens-guided-pi-run-files.js",
+    ]
+    for name in consumers:
+        source = _read(name)
+        assert "EU_PRODUCT_LABELS" in source
+        bare = [
+            line
+            for line in source.splitlines()
+            if "EU_PRODUCT_LABELS.projectTitle(" in line
+            or "EU_PRODUCT_LABELS.copilotTitle(" in line
+        ]
+        assert bare == [], f"{name} calls the label owner without ?. defense: {bare}"
+        assert "?.projectTitle?." in source or "?.copilotTitle?." in source
+        assert "slice(0, 200)" in source
+
+    projects = _read("js/screens-guided-projects.js")
+    assert "GUIDED_ROW_FALLBACK" in projects
+    assert "t('Guided project', '研究项目')" not in projects
+    assert projects.count("t(...GUIDED_ROW_FALLBACK)") == 3
+
+
+def test_error_text_return_value_must_pass_through_esc() -> None:
+    """D-P2-2: errorText() is raw copy; innerHTML insertions must esc() it."""
+
+    owner = _read("js/screens-guided-pi-error-text.js")
+    assert "返回值须经esc后插入innerHTML" in owner or "MUST pass the result through" in owner
+
+    offenders = []
+    for path in sorted((STATIC / "js").glob("*.js")):
+        if path.name == "screens-guided-pi-error-text.js":
+            continue
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if "innerHTML" in line and "errorText" in line and "esc" not in line:
+                offenders.append(f"{path.name}:{lineno}")
+    assert offenders == [], (
+        "errorText() without esc() flows into innerHTML: " + ", ".join(offenders)
+    )
+
+
+def test_tweaks_edit_mode_uses_exact_origin_both_ways() -> None:
+    """D-P2-3: postMessage targets location.origin; listener checks both."""
+
+    tweaks = _read("js/tweaks.js")
+    assert "postMessage({ type: '__edit_mode_set_keys'" in tweaks
+    assert ", '*'" not in tweaks
+    assert "window.location.origin" in tweaks
+    assert "e.source !== window.parent" in tweaks
+    assert "e.origin !== window.location.origin" in tweaks
+
+
+def test_provider_preset_matches_hostnames_exactly_or_by_suffix() -> None:
+    """D-P2-5: no substring preset matching; unparseable URLs are custom."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-error-text.js")
+    assert ".includes('api.openai.com')" not in owner
+    assert "hostnameMatches(host" in owner
+    assert "new URL(" in owner
+    script = r"""
+global.window = { EU_HTML: { esc: (v) => String(v) }, EasyICU: { guidedPi: {} } };
+global.window.EasyICU.guidedPi.declare = (n, api) => { globalThis.declared = api; };
+require(process.argv[1]);
+const { providerPreset } = globalThis.declared.create({ tr: (en) => en, staticPreview: () => false });
+const cases = [
+  [{ base_url: 'https://api.openai.com/v1' }, {}, 'openai'],
+  [{ base_url: 'https://api.openai.com.evil.example/v1' }, {}, 'custom-openai'],
+  [{ base_url: 'https://evil.example/?x=api.openai.com' }, {}, 'custom-openai'],
+  [{ base_url: 'https://sub.openrouter.ai/api/v1' }, {}, 'openrouter'],
+  [{ base_url: 'https://openrouter.ai.evil.example/' }, {}, 'custom-openai'],
+  [{ base_url: 'https://api.deepseek.com/v1' }, {}, 'deepseek'],
+  [{ base_url: 'http://127.0.0.1:8317/v1' }, {}, 'cliproxyapi'],
+  [{ base_url: 'http://localhost:8317/v1' }, {}, 'cliproxyapi'],
+  [{ base_url: 'https://127.0.0.1.evil.example:8317/' }, {}, 'custom-openai'],
+  [{ base_url: 'http://127.0.0.1:9999/v1' }, {}, 'custom-openai'],
+  [{ base_url: 'not a url' }, {}, 'custom-openai'],
+  [{ base_url: '' }, {}, 'custom-openai'],
+  [{}, { api_transport: 'anthropic-messages' }, 'anthropic'],
+  [{}, { api_transport: 'google-generative-ai' }, 'google'],
+];
+process.stdout.write(JSON.stringify(cases.map(([c, r]) => providerPreset(c, r))));
+"""
+    completed = subprocess.run(
+        [node, "-e", script, str(STATIC / "js" / "screens-guided-pi-error-text.js")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(completed.stdout) == [
+        "openai", "custom-openai", "custom-openai", "openrouter", "custom-openai",
+        "deepseek", "cliproxyapi", "cliproxyapi", "custom-openai", "custom-openai",
+        "custom-openai", "custom-openai", "anthropic", "google",
+    ]

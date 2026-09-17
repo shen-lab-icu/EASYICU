@@ -87,6 +87,10 @@ ResearchDocumentNameText = Annotated[
         ),
     ),
 ]
+# D-P3-6: sha256 wire format shared with the frontend preview owner
+# (src/easyicu/webserver/static/js/screens-guided-pi-preview.js uses
+# /^[a-f0-9]{64}$/ in safeResource/previewUrl). No shared constant across
+# languages — change both patterns together, logic unchanged.
 Sha256Text = Annotated[
     str,
     StringConstraints(

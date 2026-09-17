@@ -1,3 +1,4 @@
+/* Owner: Guided Idea provider setup widget. */
 /* Guided Copilot idea-mining provider readiness/config panel.
    Owner file for API-provider setup UI used by screens-guided.js. */
 (function () {

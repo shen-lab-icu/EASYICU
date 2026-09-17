@@ -372,3 +372,102 @@ def test_rejected_service_address_never_reaches_verifier(tmp_path: Path) -> None
     assert caught.value.code == "pi_provider_base_url_rejected"
     assert calls == []
     assert not store.config_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("base_url", "reason"),
+    [
+        ("https://example.com/v1", "example_placeholder_not_allowed"),
+        ("https://api.example.com/v1", "example_placeholder_not_allowed"),
+        ("https://EXAMPLE.ORG/models", "example_placeholder_not_allowed"),
+        ("https://deep.example.net:8443/v1", "example_placeholder_not_allowed"),
+        ("https://user:secret@example.edu/v1", "credentials_in_url"),
+        ("https://example.com./v1", "example_placeholder_not_allowed"),
+    ],
+)
+def test_example_placeholder_service_address_is_rejected_before_verify(
+    tmp_path: Path, base_url: str, reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-P2-4: the custom-openai preset placeholder must never take a key.
+
+    DNS is pinned to public addresses so the test is independent of
+    VPN/proxy rewriting; structural violations (credentials-in-URL) keep
+    their specific reason ahead of the placeholder refusal.
+    """
+
+    import socket
+
+    _PINNED = {
+        "example.com": "93.184.216.34",
+        "api.example.com": "93.184.216.34",
+        "example.org": "93.184.216.34",
+        "deep.example.net": "93.184.216.34",
+        "example.edu": "93.184.216.34",
+        "example.com.": "93.184.216.34",
+    }
+
+    def _getaddrinfo(host, port, *args, **kwargs):
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                (_PINNED[str(host).lower()], port or 443),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _getaddrinfo)
+
+    from easyicu.webserver.provider_url_security import (
+        ProviderUrlSecurityError,
+        validate_credential_endpoint,
+    )
+
+    with pytest.raises(ProviderUrlSecurityError) as url_caught:
+        validate_credential_endpoint(base_url)
+    assert url_caught.value.reason == reason
+
+    store = PiProviderConfigStore(
+        config_path=tmp_path / "pi-provider.env",
+        receipt_path=tmp_path / "receipt.json",
+    )
+    calls: list[str] = []
+    with pytest.raises(PiCopilotError) as caught:
+        store.verify_and_save(
+            provider="custom-openai",
+            api_key="must-not-be-probed",
+            base_url=base_url,
+            model="some-model",
+            api_transport="openai-completions",
+            verifier=lambda _method, url, *_: (calls.append(url), (200, {}))[1],
+        )
+
+    assert caught.value.code == "pi_provider_base_url_rejected"
+    assert caught.value.details["reason"] == reason
+    assert calls == []
+    assert not store.config_path.exists()
+    assert not store.receipt_path.exists()
+
+
+def test_custom_openai_preset_ships_no_submittable_address() -> None:
+    """D-P2-4: the preset value is empty; example.* lives in placeholder only."""
+
+    events = (
+        Path(__file__).resolve().parents[3]
+        / "src/easyicu/webserver/static/js/screens-guided-pi-events.js"
+    ).read_text(encoding="utf-8")
+    assert "'custom-openai': { provider: 'custom-openai', base_url: '', " in events
+    assert "https://example.com/v1" not in events
+
+    control = (
+        Path(__file__).resolve().parents[3]
+        / "src/easyicu/webserver/static/js/screens-guided-pi-provider-control.js"
+    ).read_text(encoding="utf-8")
+    assert "isExampleHostname(presetHostname(baseUrl))" in control
+
+    provider = (
+        Path(__file__).resolve().parents[3]
+        / "src/easyicu/webserver/static/js/screens-guided-pi-provider.js"
+    ).read_text(encoding="utf-8")
+    assert 'placeholder="https://llm-gateway.example/v1"' in provider

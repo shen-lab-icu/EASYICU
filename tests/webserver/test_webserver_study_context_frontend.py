@@ -243,6 +243,7 @@ def test_agent_blocked_gate_planning_copy_and_tabs_are_truthful() -> None:
     assert "if (!updated) return null" in owner
 
 
+@pytest.mark.requires_node
 def test_agent_and_guided_run_tokens_reject_interleaved_callbacks() -> None:
     node = _node_binary()
     if not node:
@@ -264,6 +265,7 @@ def test_agent_and_guided_run_tokens_reject_interleaved_callbacks() -> None:
     assert payload["patches"] == 4
 
 
+@pytest.mark.requires_node
 def test_study_context_source_boundary_and_history_activation_in_javascript(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -315,6 +317,7 @@ def test_study_context_source_boundary_and_history_activation_in_javascript(
         }.intersection(saved["cohort"])
 
 
+@pytest.mark.requires_node
 def test_patient_scope_truth_renderer_in_javascript() -> None:
     node = _node_binary()
     if not node:

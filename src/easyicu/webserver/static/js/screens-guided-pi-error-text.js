@@ -3,9 +3,19 @@
    The transport and the session runner report failures as machine codes; the
    shell used to carry their bilingual text, which kept screens-guided-pi.js
    over its size budget. Only the presentation lives here: the codes stay the
-   contract with the gateway and the runner. */
+   contract with the gateway and the runner.
+
+   D-P2-2 escaping contract: `errorText()` returns RAW user-facing copy — the
+   final `return String(error.message || error.code || error)` fallback carries
+   untrusted transport text verbatim. 返回值须经esc后插入innerHTML: callers
+   MUST pass the result through `esc()` (window.EU_HTML) before inserting it
+   into innerHTML. Only `option()` in this file escapes internally. A static
+   test scans every `innerHTML ... errorText` interpolation and fails the
+   build when `esc` is not on the same expression. */
 (function () {
   'use strict';
+
+  const { esc } = window.EU_HTML;
 
   function create({ tr, staticPreview }) {
     function errorText(error) {
@@ -37,29 +47,62 @@
       if (error.code === 'codex_auth_model_unavailable') {
         return tr('That model is no longer available for this Codex account. Refresh the account model list.', '该 Codex 账户已无法使用这个模型，请刷新账户模型列表。');
       }
+      if (error.code === 'codex_auth_url_invalid') {
+        return tr('The sign-in link was blocked because it is not a valid OpenAI authorization address.', '登录链接不是有效的 OpenAI 授权地址，已被拦截。');
+      }
       if (error.code === 'research_pipeline_execution_runtime_unavailable') {
         return tr('The container runtime that executes analysis code is not running. Start it (Docker Desktop, or "colima start") and run again.', '执行分析代码的容器运行环境未启动。请先启动它（Docker Desktop，或 "colima start"），然后重新运行。');
       }
+      // D-P3-5: keep the URL as plain text (no <a>) — errorText() returns RAW
+      // copy esc'd by callers per D-P2-2, so embedded HTML would be escaped and
+      // never clickable. Copy the address into the browser manually. Terminology
+      // (receipt/StudyContext) intentionally unchanged.
       if (staticPreview() && String(error.message || '').includes('Failed to fetch')) {
         return tr('This is a static preview without the EasyICU backend. Start EasyICU and open http://127.0.0.1:8765/#guided.', '这是不带 EasyICU 后端的静态预览。请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided。');
       }
       return String(error.message || error.code || error);
     }
 
+    // D-P2-5: hostname-exact-or-suffix preset matching. The previous raw-URL
+    // substring check classified any URL containing a first-party marker —
+    // including a lookalike registrable domain or a query string — as
+    // first-party. Parse the URL and compare the hostname exactly
+    // (or as a true subdomain); anything unparseable is custom-openai.
+    function presetHostname(base) {
+      try {
+        const host = new URL(String(base || '')).hostname.toLowerCase().replace(/\.+$/, '');
+        return host || '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function hostnameMatches(host, root) {
+      return !!host && (host === root || host.endsWith('.' + root));
+    }
+
     function providerPreset(config, runtime) {
       const transport = config.api_transport || runtime.api_transport || 'openai-completions';
-      const base = String(config.base_url || '').toLowerCase();
       if (transport === 'anthropic-messages') return 'anthropic';
       if (transport === 'google-generative-ai') return 'google';
-      if (base.includes('api.openai.com')) return 'openai';
-      if (base.includes('openrouter.ai')) return 'openrouter';
-      if (base.includes('api.deepseek.com')) return 'deepseek';
-      if (base.includes('127.0.0.1:8317') || base.includes('localhost:8317')) return 'cliproxyapi';
+      const raw = String(config.base_url || '');
+      const host = presetHostname(raw);
+      if (!host) return 'custom-openai';
+      let port = '';
+      try { port = new URL(raw).port || ''; } catch (_) { port = ''; }
+      if (hostnameMatches(host, 'api.openai.com')) return 'openai';
+      if (hostnameMatches(host, 'openrouter.ai')) return 'openrouter';
+      if (hostnameMatches(host, 'api.deepseek.com')) return 'deepseek';
+      // The local proxy is loopback-only: exact host plus its pinned port, so
+      // `https://127.0.0.1.evil.example:8317/` cannot borrow the preset.
+      if ((host === '127.0.0.1' || host === 'localhost') && port === '8317') return 'cliproxyapi';
       return 'custom-openai';
     }
 
     function option(value, selected, label) {
-      return `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`;
+      // D-P1-5: value/label are untrusted (server model lists); escape both.
+      // `selected` is only a strict-equality gate that emits a literal.
+      return `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
     }
 
     function modelErrorText(code, completedAction) {

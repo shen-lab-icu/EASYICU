@@ -1,3 +1,4 @@
+/* Owner: Guided Copilot shell route. */
 /* Screen: Guided Copilot — conversational front door (v2).
    A branching, forgiving conversation that drives the whole EasyICU workflow.
    Highlights over v1:
@@ -16,8 +17,12 @@
   const IDEA = window.EU_GUIDED_IDEA;
   const EXTRACT = window.EU_GUIDED_EXTRACT;
   const REVIEW = window.EU_GUIDED_REVIEW;
+  const PIPELINE = window.EU_GUIDED_PIPELINE;
   const STARTUP = window.EU_GUIDED_STARTUP;
-  const projectTitle = (value, fallback) => window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
+  // D-P2-1: defensive label projection — a bundle without product-labels.js
+  // must still render bounded raw text instead of throwing.
+  const projectTitle = (value, fallback) => window.EU_PRODUCT_LABELS?.projectTitle?.(value, fallback)
+    ?? String(value ?? fallback ?? '').slice(0, 200);
   const {
     BRANCH, CLARIFY, DEPTH, DEPTH_ORDER, STEP_INDEX, STUDY,
     compactHash, compactPath, fmtFixed, fmtInt, fmtNum, fmtP, fmtPct, fmtRunTime,
@@ -79,8 +84,10 @@
   let guidedDraftParentDir = '~/easyicu/projects';
   let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   let guidedKnownProjectsOpen = false;
-  let guidedPipelineOpen = false;
   let guidedSlotSaveTimer = null;
+  // D-P2-6: background slot-save failures are user-visible (once per reset)
+  // instead of console-only, so a broken session memory does not fail silent.
+  let guidedSlotSaveWarned = false;
   let guidedMounted = false;
   let guidedInitialRender = false;
   let guidedComposerDraft = '';
@@ -191,6 +198,22 @@
     renderAside,
     scheduleGuidedSlotSave,
   });
+  /* The study-pipeline summary (aside steps overview + item list) lives in
+     screens-guided-pipeline.js. Mutable shell state arrives as accessors —
+     studyStatus/studyVal/thread are reassigned on reset, so the owner must
+     read them live instead of capturing the objects. */
+  PIPELINE.init({
+    t,
+    icon,
+    esc,
+    studyTable: () => STUDY,
+    goalIdx,
+    studyStatus: () => studyStatus,
+    studyVal: () => studyVal,
+    studyDepth: () => DEPTH[depth],
+    depthName: () => depth,
+    thread: () => thread,
+  });
   function reset() {
     disconnectGuidedRunUi();
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
@@ -209,7 +232,8 @@
     guidedDraftParentDir = '~/easyicu/projects';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     guidedKnownProjectsOpen = false;
-    guidedPipelineOpen = false;
+    PIPELINE.resetState();
+    guidedSlotSaveWarned = false;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     userQuestion = ''; acceptedFrame = false; studyContract = null;
     studyStatus = {}; studyVal = {};
@@ -1479,7 +1503,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function openGuidedAgentHandoff() {
     if (window.EU_GUIDED_STUDY_CONTEXT && window.EU_GUIDED_STUDY_CONTEXT.handoff) {
       const sync = window.EU_GUIDED_STUDY_CONTEXT.handoff('agent');
-      sync.persisted.catch(error => console.warn('[EasyICU] Guided StudyContext handoff stayed local:', error));
+      // D-P2-6: no console.* — a handoff that stays local is user-visible in
+      // the thread instead of failing silent in the devtools console.
+      sync.persisted.catch(() => {
+        pushBot(
+          'The study setup handoff stayed local, so nothing was sent yet. Your saved project memory is unchanged.',
+          '研究配置交接保留在本地，尚未发送任何内容；已保存的项目记忆没有变化。',
+        );
+        renderThread();
+      });
     }
     if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.set) {
       window.EU_GUIDED_HANDOFF.set({
@@ -1789,68 +1821,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderAside() {
     const host = document.getElementById('gdAsideBody');
     if (!host || piProjectShellActive()) return; // Copilot owns this panel while mounted
-    host.innerHTML = renderStudyPipelineSummary() + renderStudyItemList() + renderOutputs(host);
+    host.innerHTML = PIPELINE.renderStudyPipelineSummary() + PIPELINE.renderStudyItemList() + renderOutputs(host);
   }
-  function normalizedStudyRows() {
-    const gi = goalIdx();
-    return STUDY.map(([id, label, ico, labelZh], idx) => {
-      let stt = studyStatus[id] || 'pending';
-      // steps past the chosen finish line are optional — dim them unless already reached
-      if (idx > gi && (stt === 'pending')) stt = 'beyond';
-      let v = studyVal[id]; if (typeof v === 'function') v = v();
-      return { id, label, ico, labelZh, idx, stt, v };
-    });
-  }
-  function renderStudyPipelineSummary() {
-    const rows = normalizedStudyRows();
-    let activeIdx = rows.findIndex(r => r.stt === 'active');
-    if (activeIdx < 0) activeIdx = rows.findIndex(r => r.stt !== 'done' && r.stt !== 'beyond');
-    if (activeIdx < 0) activeIdx = 0;
-    const active = rows[activeIdx] || rows[0];
-    const next = rows.slice(activeIdx + 1).find(r => r.stt !== 'beyond');
-    const done = rows.filter(r => r.stt === 'done').length;
-    const total = Math.max(1, Math.min(goalIdx() + 1, STUDY.length));
-    const pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
-    const currentValue = active && active.v ? `<div class="gd-pipeline-value">${esc(active.v)}</div>` : '';
-    const nextLine = next
-      ? `<span>${t('Next', '下一步')}</span><strong>${t(next.label, next.labelZh || next.label)}</strong>`
-      : `<span>${t('Next', '下一步')}</span><strong>${t('Ready for sign-off', '等待核验')}</strong>`;
-    return `
-      <div class="gd-pipeline-summary" data-gd-pipeline-summary>
-        <div class="gd-pipeline-summary-head">
-          <div>
-            <div class="eyebrow">${t('Step overview', '步骤总览')}</div>
-            <strong>${t(active.label, active.labelZh || active.label)}</strong>
-            ${currentValue}
-          </div>
-          <button class="gd-pipeline-toggle" type="button" data-gd-pipeline-toggle aria-controls="gdPipelineList" aria-expanded="${guidedPipelineOpen ? 'true' : 'false'}">
-            ${guidedPipelineOpen ? t('Hide steps', '收起步骤') : t('Show all steps', '展开步骤')}
-          </button>
-        </div>
-        <div class="gd-pipeline-bar" aria-label="${t('Guided Copilot progress', '研究引导进度')}"><span style="width:${pct}%;"></span></div>
-        <div class="gd-pipeline-meta">
-          <span><strong>${done}/${total}</strong> ${t('required steps done', '个必需步骤完成')}</span>
-          <span>${t('Goal', '目标')} · ${DEPTH[depth].label}</span>
-        </div>
-        <div class="gd-pipeline-next">${nextLine}</div>
-      </div>`;
-  }
-  function renderStudyItemList() {
-    const gi = goalIdx();
-    return `<div class="gd-pipeline-list ${guidedPipelineOpen ? 'open' : 'collapsed'}" id="gdPipelineList" ${guidedPipelineOpen ? '' : 'hidden'} data-gd-pipeline-list>` + normalizedStudyRows().map(({ id, label, ico, labelZh, idx, stt, v }) => {
-      const dot = stt === 'done' ? icon('check', 11, 3) : stt === 'locked' ? icon('lock', 10) : icon(ico, 12);
-      const badge = stt === 'active' ? '<span class="si-state"><span class="spin sm" style="width:11px;height:11px;"></span></span>'
-        : stt === 'locked' ? `<span class="si-state pill warn" style="height:18px;"><span class="dot"></span></span>`
-        : stt === 'beyond' ? `<span class="si-state si-opt">${t('optional', '可选')}</span>` : '';
-      const clickable = thread.some(t => t.card && t.step === id);
-      const row = `<div class="study-item ${stt}${clickable ? ' nav' : ''}" ${clickable ? `data-study="${id}" role="button" tabindex="0"` : ''}><span class="si-dot">${dot}</span><div class="si-txt"><div class="si-t">${t(label, labelZh || label)}</div>${v ? `<div class="si-v">${esc(v)}</div>` : ''}</div>${badge}</div>`;
-      // draw the finish line right after the goal step (only when stopping short of the full study)
-      const fin = (idx === gi && depth !== 'full')
-        ? `<div class="study-finishline"><span class="fl-flag">${icon('check', 10, 3)}</span><span class="fl-t">${t('Finish line', '终点线')} · ${DEPTH[depth].label}</span></div>`
-        : '';
-      return row + fin;
-    }).join('') + '</div>';
-  }
+  /* The study-pipeline summary rendering (normalizedStudyRows,
+     renderStudyPipelineSummary, renderStudyItemList) and its collapsed state
+     moved to screens-guided-pipeline.js (window.EU_GUIDED_PIPELINE); renderAside
+     above delegates there. */
 
   /* ============== composer intent parsing ============== */
   function parseIntent(text) {
@@ -2188,8 +2164,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (result && result.session) guidedCopilot.session = result.session;
         return result;
       });
-    }).catch(err => {
-      console.warn('[EasyICU] Guided slot save failed:', err);
+    }).catch(() => {
+      // D-P2-6: no console.* — surface the first background save failure in
+      // the thread (once per reset so a down backend cannot spam it), then
+      // keep retrying on later changes.
+      if (!guidedSlotSaveWarned) {
+        guidedSlotSaveWarned = true;
+        pushBot(
+          'Could not save the guided setup just now; your visible entries are unchanged. It will retry on the next change.',
+          '刚才未能保存引导配置；界面上的填写内容没有丢失，下次改动时会重试。',
+        );
+        renderThread();
+      }
       return null;
     });
   }
@@ -3775,9 +3761,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           }
           return;
         }
-        const pipelineToggle = e.target.closest('[data-gd-pipeline-toggle]');
-        if (pipelineToggle) {
-          guidedPipelineOpen = !guidedPipelineOpen;
+        if (PIPELINE.handleClick(e.target)) {
           renderAside();
           return;
         }

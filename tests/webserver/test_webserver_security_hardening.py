@@ -641,11 +641,14 @@ def test_same_second_guided_and_copilot_sessions_get_unique_ids(
 
 
 def test_job_manager_retains_only_bounded_completed_jobs() -> None:
+    from tests.support.wait import wait_until
+
     manager = JobManager(max_completed=2)
     jobs = [manager.submit("quick", lambda _job, i=i: {"value": i}) for i in range(5)]
-    deadline = time.time() + 2
-    while any(job.status == "running" for job in jobs) and time.time() < deadline:
-        time.sleep(0.01)
+    wait_until(
+        lambda: all(job.status != "running" for job in jobs),
+        message="jobs did not finish before timeout",
+    )
 
     retained = [job for job in jobs if manager.get(job.id) is not None]
     assert all(job.status == "done" for job in jobs)
@@ -654,6 +657,8 @@ def test_job_manager_retains_only_bounded_completed_jobs() -> None:
 
 
 def test_job_manager_preserves_a_stable_typed_failure_code() -> None:
+    from tests.support.wait import wait_until
+
     manager = JobManager(max_completed=2)
 
     class TypedFailure(RuntimeError):
@@ -663,9 +668,10 @@ def test_job_manager_preserves_a_stable_typed_failure_code() -> None:
         raise TypedFailure("The provider timed out before analysis.")
 
     job = manager.submit("typed-failure", fail)
-    deadline = time.time() + 2
-    while job.status == "running" and time.time() < deadline:
-        time.sleep(0.01)
+    wait_until(
+        lambda: job.status != "running",
+        message="typed-failure job did not finish before timeout",
+    )
 
     assert job.status == "failed"
     assert job.error == (
@@ -691,9 +697,12 @@ def test_job_manager_applies_running_job_backpressure() -> None:
     assert exc_info.value.max_running == 1
     assert exc_info.value.running == 1
     release.set()
-    deadline = time.time() + 2
-    while first.status == "running" and time.time() < deadline:
-        time.sleep(0.01)
+    from tests.support.wait import wait_until
+
+    wait_until(
+        lambda: first.status != "running",
+        message="blocking job did not finish before timeout",
+    )
     assert first.status == "done"
 
 
@@ -723,9 +732,12 @@ def test_job_endpoint_returns_429_when_local_capacity_is_full(
         json={"path": "/tmp/easyicu-test", "database": "miiv"},
     )
     release.set()
-    deadline = time.time() + 2
-    while first.status == "running" and time.time() < deadline:
-        time.sleep(0.01)
+    from tests.support.wait import wait_until as _wait_until_429
+
+    _wait_until_429(
+        lambda: first.status != "running",
+        message="blocking job did not finish before timeout",
+    )
 
     assert response.status_code == 429
     assert response.json()["detail"] == {
@@ -825,6 +837,56 @@ def test_job_cancel_callback_failure_does_not_block_other_callbacks() -> None:
 
     assert job.request_cancel("user_requested") is True
     assert called == ["healthy"]
+
+
+def test_trust_proxy_flag_documents_its_authenticating_proxy_requirement() -> None:
+    """D-P2-7: TRUST_PROXY=1 is only safe behind an authenticating proxy."""
+
+    from easyicu.webserver import host_security
+    from easyicu.webserver.routes import extensions as extension_routes
+
+    assert "EASYICU_WEB_TRUST_PROXY=1" in (host_security.trusts_proxy.__doc__ or "")
+    assert "authenticating" in (host_security.trusts_proxy.__doc__ or "")
+    assert "EASYICU_WEB_TRUST_PROXY=1" in (extension_routes.__doc__ or "")
+    assert "expected_sha256" in (extension_routes.__doc__ or "")
+
+
+def test_extension_mutation_routes_require_a_revision_confirmation() -> None:
+    """D-P2-7 + CAS: install/overwrite/remove/state close over expected_sha256.
+
+    The revision is compared-and-swapped inside the registry lock
+    (``_require_activation_unlocked``), not checked-then-acted at the route
+    layer, so concurrent mutations on one stale digest cannot both land.
+    """
+
+    import inspect
+
+    from easyicu.webserver.routes import extensions as extension_routes
+
+    for model in (
+        extension_routes.SkillInstallRequest,
+        extension_routes.McpInstallRequest,
+        extension_routes.ExtensionRemoveRequest,
+        extension_routes.ExtensionStateRequest,
+    ):
+        field = model.model_fields["expected_sha256"]
+        assert field.is_required()
+    routes_source = inspect.getsource(extension_routes)
+    assert "expected_activation_sha256" in routes_source
+    assert "_require_current_revision" not in routes_source
+
+    import easyicu.extensions.registry as registry_mod
+
+    registry_source = inspect.getsource(registry_mod)
+    assert "_require_activation_unlocked" in registry_source
+    for route in extension_routes.router.routes:
+        if getattr(route, "path", "") in {
+            "/api/extensions/skills/install",
+            "/api/extensions/mcp/install",
+            "/api/extensions/remove",
+            "/api/extensions/state",
+        }:
+            assert route.methods == {"POST"}
 
 
 def test_source_registry_serializes_updates_and_writes_atomically(

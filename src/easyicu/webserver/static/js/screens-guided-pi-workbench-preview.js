@@ -1,3 +1,4 @@
+/* Owner: Guided Pi workbench-preview widget. */
 /* Guided Pi data-workbench preview owner.
    Renders one digest-bound, result-blind data-package review. It never owns
    StudyContext state and never applies cohort/filter changes. */

@@ -1,3 +1,4 @@
+/* Owner: Guided Pi result-summary widget. */
 /* Registered result-table summary adapter for Guided Copilot reports.
    It selects already-produced aggregate values and never derives a new
    scientific estimate or raises the run's claim authority. */

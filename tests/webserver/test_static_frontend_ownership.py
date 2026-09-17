@@ -51,8 +51,10 @@ STATIC = ROOT / "src" / "easyicu" / "webserver" / "static"
 # A split should lower these numbers and add the new sibling owner files.
 OVER_BUDGET_JS = {
     # 6000 before the Idea Mining sub-flow moved to screens-guided-idea.js,
-    # 4961 before its session-slot serialisation followed it.
-    "screens-guided.js": 4906,
+    # 4961 before its session-slot serialisation followed it,
+    # 4906 before the study-pipeline summary moved to
+    # screens-guided-pipeline.js (2026-09-17).
+    "screens-guided.js": 4177,
     # Project setup/run initiation moved to Guided Copilot; this route is now
     # a project monitor only.
     "screens-extraction.js": 2060,
@@ -140,10 +142,16 @@ def test_copilot_product_labels_have_one_shared_owner() -> None:
             title_consumers.append(path)
 
     assert title_consumers, "project/session title consumers should be discoverable"
+    # D-P2-1: both the direct and the defensive (`?.`) projections count —
+    # a bundle without the label owner must render bounded raw text, not throw.
+    def _projects_title(source: str) -> bool:
+        return (
+            "EU_PRODUCT_LABELS.projectTitle" in source
+            or "EU_PRODUCT_LABELS?.projectTitle?." in source
+        )
+
     offenders = [
-        path.name
-        for path in title_consumers
-        if "EU_PRODUCT_LABELS.projectTitle" not in path.read_text(encoding="utf-8")
+        path.name for path in title_consumers if not _projects_title(path.read_text(encoding="utf-8"))
     ]
     assert offenders == [], f"project title consumers bypass the shared owner: {offenders}"
     owner_pos = index.index("js/product-labels.js?")
@@ -394,20 +402,19 @@ def test_every_js_contract_test_has_a_recorded_invocation() -> None:
         f"stale={sorted(set(CONTRACTS) - harnesses)}"
     )
 
-    # `"."` is the registry's explicit "the whole js/ directory" marker: the
-    # harness resolves argv[2] as a directory and loads its owner graph itself.
-    # Every other entry must name a file that still exists.
+    # E-P2-11: every entry must name files that still exist — the old "."
+    # whole-directory marker is gone, so the study-results harness lists its
+    # nine owners explicitly (including product-labels.js).
     missing = [
         f"{name} -> {owner}"
         for name, owners in CONTRACTS.items()
         for owner in owners
-        if not (
-            (STATIC / "js").is_dir()
-            if owner == "."
-            else (STATIC / "js" / owner).is_file()
-        )
+        if not (STATIC / "js" / owner).is_file()
     ]
     assert missing == [], f"recorded owner files that no longer exist: {missing}"
+    assert "." not in {
+        owner for owners in CONTRACTS.values() for owner in owners
+    }, '"." directory marker must not return; list owner files explicitly'
 
 
 def test_strict_mode_directives_stay_in_the_prologue() -> None:
@@ -665,6 +672,80 @@ def test_cohort_statistics_owner_contains_state_effects_render_and_route() -> No
     assert [index.index(script) for script in script_order] == sorted(
         index.index(script) for script in script_order
     )
+
+
+def test_guided_pipeline_owner_contains_summary_effects_and_collapse_state() -> None:
+    """D-P2-6: the pipeline split is only real if the boundary is one-way.
+
+    screens-guided.js held the aside step-overview rendering and its collapsed
+    flag inside the shell closure. The pipeline owner now receives the live
+    shell readers through `init()` and owns its own collapsed state. If a bare
+    shell name reappears here, the file is back to depending on a closure it
+    no longer lives in — and it would only fail at runtime, on the branch that
+    renders the aside.
+    """
+
+    shell = (STATIC / "js" / "screens-guided.js").read_text(encoding="utf-8")
+    owner = (STATIC / "js" / "screens-guided-pipeline.js").read_text(
+        encoding="utf-8"
+    )
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "const PIPELINE = window.EU_GUIDED_PIPELINE;" in shell
+    assert "PIPELINE.init({" in shell
+    assert "PIPELINE.resetState()" in shell
+    assert "PIPELINE.handleClick(e.target)" in shell
+    assert "PIPELINE.renderStudyPipelineSummary()" in shell
+    assert "PIPELINE.renderStudyItemList()" in shell
+
+    assert "window.EU_GUIDED_PIPELINE = {" in owner
+    assert "let pipelineOpen = false;" in owner
+    for marker in (
+        "function normalizedStudyRows()",
+        "function renderStudyPipelineSummary()",
+        "function renderStudyItemList()",
+        "data-gd-pipeline-toggle",
+        "data-gd-pipeline-list",
+    ):
+        assert marker in owner, marker
+        assert marker not in shell, marker
+    assert "let guidedPipelineOpen" not in shell
+
+    # The collapsed state has one owner: the shell must not declare it again.
+    assert not re.search(r"^  let .*\bpipelineOpen\b", shell, re.M)
+    # The owner reads shell state only through its init() host object: a bare
+    # call anywhere in the file means it depends on the shell closure it no
+    # longer lives in (`host.<name>(...)` is the allowed shape).
+    offenders = [
+        name
+        for name in (
+            "renderAside",
+            "renderThread",
+            "renderChips",
+            "scheduleGuidedSlotSave",
+            "pushBot",
+            "goalIdx",
+            "studyStatus",
+            "studyVal",
+        )
+        if re.search(rf"(?<![.\w]){name}\s*\(", owner)
+    ]
+    assert offenders == [], (
+        f"these call the guided closure directly instead of host.<name>: {offenders}"
+    )
+
+    # The namespace owner must load before the shell that inits it.
+    scripts = re.findall(r'<script src="js/([^"?]+)', index)
+    assert "screens-guided-pipeline.js" in scripts
+    assert scripts.index("screens-guided-pipeline.js") < scripts.index(
+        "screens-guided.js"
+    )
+
+    # D-P2-6: background failures are user-visible, never console-only. Strip
+    # comments first so a comment explaining the rule cannot trip the scan.
+    code = re.sub(r"/\*.*?\*/", "", shell, flags=re.S)
+    code = re.sub(r"(?m)^\s*//.*$", "", code)
+    assert not re.search(r"\bconsole\.(warn|error|info|log|debug)\s*\(", code)
 
 
 def test_owner_js_files_do_not_grow_past_their_ratchet() -> None:

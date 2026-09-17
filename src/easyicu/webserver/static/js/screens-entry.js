@@ -1,3 +1,4 @@
+/* Owner: Entry/home route. */
 /* Entry/home route owner. Data Extraction is loaded next but no longer owns
    this route's study launcher, resume banner, or first-run demo nudge. */
 (function () {

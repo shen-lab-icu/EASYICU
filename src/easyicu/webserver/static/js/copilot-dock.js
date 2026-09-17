@@ -1,3 +1,4 @@
+/* Owner: Copilot dock entry widget. */
 /* EasyICU Copilot shell entry.
    There is one user-visible conversation: the Pi AgentSession mounted at
    #guided. The historical page-guide dock intentionally is not constructed,

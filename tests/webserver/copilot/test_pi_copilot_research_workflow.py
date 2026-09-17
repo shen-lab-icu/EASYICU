@@ -1,4 +1,13 @@
-"""Focused owner and fail-closed tests for the Copilot research workflow."""
+"""Focused owner and fail-closed tests for the Copilot research workflow.
+
+Stub naming convention (E-P2-13): the launches here stub the container
+probe via ``_assume_execution_runtime_ready`` so scope/resume authority
+tests do not depend on the host daemon.  NEW stubbed tests must carry
+``stubbed`` in the test name (e.g. ``test_foo_with_stubbed_runtime``);
+the ~195 pre-existing stubbed tests keep their historical names frozen so
+this patch stays reviewable.  Exactly one probe test below runs WITHOUT
+any stub (``requires_docker``) so the real gate stays exercised.
+"""
 
 from __future__ import annotations
 
@@ -9250,3 +9259,26 @@ def test_pi_verified_provider_environment_is_full_pipeline_only(
     assert direct_fallback.value.detail == {
         "error": "research_pipeline_pi_verified_credentials_required"
     }
+
+
+# ---------------------------------------------------------------------------
+# E-P2-13: the one un-stubbed probe (requires_docker).  Every other launch
+# test above uses _assume_execution_runtime_ready; this one deliberately does
+# NOT, so the real container gate stays exercised where a daemon exists and
+# skips (counted) where it does not.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.requires_docker
+def test_probe_runner_availability_consults_the_real_runtime_without_stub() -> None:
+    """Un-stubbed integration probe: the real gate answers for docker."""
+
+    from easyicu.research_agent.execution import runner as runner_module
+
+    availability = runner_module.probe_runner_availability("docker")
+    assert availability.kind == "docker"
+    # The real gate ran (not the _assume_execution_runtime_ready stub): it
+    # returns the typed contract with a strict bool and a non-empty image,
+    # whatever the host reports (available with a daemon+image, or a typed
+    # reason_code such as docker_image_missing without one).
+    assert availability.available in (True, False)
+    assert isinstance(availability.image, str) and availability.image

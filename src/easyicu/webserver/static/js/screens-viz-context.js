@@ -1,3 +1,4 @@
+/* Owner: Visualization shared context widget. */
 /* Shared visualization context contract.
    The large route owner injects its private state once; Copilot and
    StudyContext consume only this dependency-neutral public surface. */

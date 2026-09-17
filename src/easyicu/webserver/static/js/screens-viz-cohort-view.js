@@ -1,3 +1,4 @@
+/* Owner: Cohort Statistics view widget. */
 /* Cohort Statistics rendering owner. State and effects stay in screens-viz-cohort.js. */
 (function () {
   let state;

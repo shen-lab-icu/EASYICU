@@ -1,3 +1,4 @@
+/* Owner: Guided export review widget. */
 /* Guided Copilot active-export review owner.
    Owns review state, patient/cohort loading, KM presentation, and data-gr DOM
    transitions. The guided shell supplies conversation and rail callbacks but

@@ -1,3 +1,4 @@
+/* Owner: Patient Review table widget. */
 /* Patient Review table owner: one-module lazy pages with stale-response guards. */
 (function () {
   'use strict';

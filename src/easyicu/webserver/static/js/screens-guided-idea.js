@@ -1,3 +1,4 @@
+/* Owner: Guided Idea Mining sub-flow. */
 /* ============================================================
    screens-guided-idea.js — Guided Idea Mining sub-flow owner.
    Owns the idea state (source clue, resolver result, ledger,

@@ -452,6 +452,10 @@ def _status_for_managed(managed: _ManagedRuntime) -> dict[str, Any]:
 
 
 def _validated_openai_url(value: object, *, device_code: bool) -> str:
+    # D-P1-3: assert the returned domain (https + host allowlist, no userinfo).
+    # The allowlist is exactly auth.openai.com; a suffix match would admit
+    # attacker-controlled subdomains, so keep the exact comparison and also
+    # reject explicit ports, userinfo, and fragments.
     text = str(value or "").strip()
     parsed = urlsplit(text)
     if (
@@ -459,6 +463,7 @@ def _validated_openai_url(value: object, *, device_code: bool) -> str:
         or (parsed.hostname or "").lower() != "auth.openai.com"
         or parsed.username is not None
         or parsed.password is not None
+        or parsed.port is not None
         or (device_code and parsed.path.rstrip("/") != "/codex/device")
         or (not device_code and not parsed.path.startswith("/"))
         or parsed.fragment

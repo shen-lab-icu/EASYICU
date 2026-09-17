@@ -1,3 +1,4 @@
+/* Owner: API transport bridge (mock catalog -> live /api/*). */
 /* EasyICU real-data bridge.
    Replaces the mock catalog from data-catalog.js with live data served by the
    FastAPI backend (/api/catalog). Loaded after data-catalog.js, so window.EU_CATALOG

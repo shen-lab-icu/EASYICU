@@ -1,3 +1,4 @@
+/* Owner: Patient Review chart widget. */
 /* ============================================================
    screens-viz-patient-charts.js — interactive chart widget owner
    for Patient Review. ECharts is vendored locally and optional:

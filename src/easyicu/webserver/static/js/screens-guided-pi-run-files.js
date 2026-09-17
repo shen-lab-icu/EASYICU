@@ -1,3 +1,4 @@
+/* Owner: Guided Pi run-files widget. */
 /* Copilot's in-message run files owner. Browsing never changes the
    active study or starts a model turn; all reads/downloads/reviews use the
    existing host contracts and the selected run's exact directory. */
@@ -6,7 +7,10 @@
   const modules = window.EasyICU.guidedPi;
   const tr = (en, zh) => window.EU_LANG === 'zh' ? zh : en;
   const esc = value => window.EU_HTML.esc(value == null ? '' : value);
-  const projectTitle = window.EU_PRODUCT_LABELS.projectTitle;
+  // D-P2-1: defensive label projection — a bundle without product-labels.js
+  // must still render bounded raw text instead of throwing.
+  const projectTitle = (value, fallback) => window.EU_PRODUCT_LABELS?.projectTitle?.(value, fallback)
+    ?? String(value ?? fallback ?? '').slice(0, 200);
   const rows = value => Array.isArray(value) ? value : [];
   const confirmations = [
     ['evidence_reviewed', 'I reviewed the evidence artifacts', '我已审阅证据产物'],

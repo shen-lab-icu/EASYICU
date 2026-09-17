@@ -12,6 +12,7 @@ import anyio
 from easyicu.outbound_url_security import (
     OutboundUrlSecurityError,
     validate_outbound_http_endpoint,
+    validated_http_endpoint_with_pin,
 )
 
 from .contracts import ExtensionRegistryError, McpServerActivation
@@ -135,9 +136,15 @@ def _bounded_payload(value: Any) -> Any:
     return projected
 
 
-def _validated_url(url: str) -> str:
+def _validated_url(url: str, *, pinned_ip: str | None = None) -> str:
+    """Validate an MCP endpoint, optionally pinning the validated IP.
+
+    ``pinned_ip`` is per-call only and safe to pass through threads; each
+    thread validates its own connection (see
+    :mod:`easyicu.outbound_url_security` for the TOCTOU limitation).
+    """
     try:
-        return validate_outbound_http_endpoint(url)
+        return validate_outbound_http_endpoint(url, pinned_ip=pinned_ip)
     except OutboundUrlSecurityError as exc:
         raise McpClientError(
             "extension_mcp_url_rejected",
@@ -146,7 +153,75 @@ def _validated_url(url: str) -> str:
         ) from exc
 
 
-async def _open_and_list(url: str, timeout_seconds: float) -> Dict[str, Any]:
+class _PinnedHostTransport:
+    """httpx transport that connects to a validated IP with the real Host.
+
+    Closes the DNS-rebinding window for loopback-HTTP endpoints: the request
+    URL already carries the validated literal IP (no re-resolution happens),
+    and this transport forces the original ``Host`` header so virtual-hosted
+    servers still route correctly. No shared state; one instance per call.
+    """
+
+    def __init__(self, host_header: str) -> None:
+        import httpx
+
+        self._transport = httpx.AsyncHTTPTransport()
+        self._host_header = host_header
+
+    async def handle_async_request(self, request):  # type: ignore[no-untyped-def]
+        import httpx
+
+        headers = httpx.Headers(request.headers)
+        headers["host"] = self._host_header
+        pinned = httpx.Request(
+            request.method,
+            request.url,
+            headers=headers,
+            stream=request.stream,
+            extensions=request.extensions,
+        )
+        return await self._transport.handle_async_request(pinned)
+
+    async def __aenter__(self):  # type: ignore[no-untyped-def]
+        await self._transport.__aenter__()
+        return self
+
+    async def __aexit__(self, *args):  # type: ignore[no-untyped-def]
+        await self._transport.__aexit__(*args)
+
+    async def aclose(self) -> None:
+        await self._transport.aclose()
+
+
+def _validated_endpoint(url: str, *, pinned_ip: str | None = None) -> tuple[str, Any | None]:
+    """Validate an MCP endpoint and return ``(connect_url, transport)``.
+
+    For loopback-HTTP DNS names the connect URL carries the validated literal
+    IP and ``transport`` forces the original Host header, so no DNS
+    re-resolution happens between validation and connect. All other URLs
+    return ``(url, None)`` (literal IPs need no pinning; https keeps its
+    hostname for TLS SNI/certificate verification — see
+    :func:`validated_http_endpoint_with_pin`).
+    """
+
+    try:
+        connect_url, host_header = validated_http_endpoint_with_pin(
+            url, pinned_ip=pinned_ip
+        )
+    except OutboundUrlSecurityError as exc:
+        raise McpClientError(
+            "extension_mcp_url_rejected",
+            "The MCP endpoint violates the outbound network policy.",
+            details={"reason": exc.reason},
+        ) from exc
+    if host_header is None:
+        return connect_url, None
+    return connect_url, _PinnedHostTransport(host_header)
+
+
+async def _open_and_list(
+    url: str, timeout_seconds: float, *, pinned_ip: str | None = None
+) -> Dict[str, Any]:
     try:
         import httpx
         from mcp import ClientSession
@@ -156,10 +231,11 @@ async def _open_and_list(url: str, timeout_seconds: float) -> Dict[str, Any]:
             "extension_mcp_runtime_unavailable",
             "Install EasyICU with the mcp extra before using MCP servers.",
         ) from exc
-    endpoint = _validated_url(url)
+    endpoint, transport = _validated_endpoint(url, pinned_ip=pinned_ip)
     try:
         with anyio.fail_after(timeout_seconds):
             async with httpx.AsyncClient(
+                transport=transport,
                 follow_redirects=False,
                 timeout=httpx.Timeout(timeout_seconds),
             ) as client:
@@ -232,10 +308,11 @@ async def _open_and_call(
             "extension_mcp_arguments_too_large",
             "MCP tool arguments exceed the bounded JSON limit.",
         )
-    endpoint = _validated_url(server.url)
+    endpoint, transport = _validated_endpoint(server.url)
     try:
         with anyio.fail_after(timeout_seconds):
             async with httpx.AsyncClient(
+                transport=transport,
                 follow_redirects=False,
                 timeout=httpx.Timeout(timeout_seconds),
             ) as client:

@@ -390,9 +390,9 @@ def build_concept_lineage(concept_id: str) -> Dict[str, Any] | None:
     This is dictionary provenance, not an observed-data claim. Missing fields
     remain null so the UI never invents a source column or transformation.
     """
-    from easyicu.concept.loader import _load_concept_dict_cached
+    from easyicu.concept.loader import load_concept_dict_cached
 
-    raw = _load_concept_dict_cached().get(concept_id)
+    raw = load_concept_dict_cached().get(concept_id)
     if not isinstance(raw, dict):
         return None
     data_sources_path = Path(__file__).resolve().parents[1] / "data" / "data-sources.json"

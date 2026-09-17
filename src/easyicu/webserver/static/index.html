@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- D-P3-1: ?v= 是手工版本串（非内容哈希）：改owner文件必同步bump ?v=，否则浏览器缓存不会失效。 -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>EasyICU — ICU Research Workspace</title>
@@ -79,7 +80,7 @@
 <!-- FIRST on purpose: every screen module destructures `esc` from this owner
      at the top of its IIFE, so it must be defined before any of them run. -->
 <script src="js/html-escape.js?v=20260816-escape-owner"></script>
-<script src="js/product-labels.js?v=20260823-product-label-owner1"></script>
+<script src="js/product-labels.js?v=20260917-product-label-defensive1"></script>
 <script src="js/chart-palette.js?v=20260816-palette-owner"></script>
 <script src="js/composer-keyboard.js?v=20260823-ime-owner1"></script>
 <script src="js/i18n.js?v=20260728-demo-mode1"></script>
@@ -146,6 +147,7 @@
 <script src="js/screens-guided-idea-plan.js?v=20260901-dialogue-plan-preview1"></script>
 <script src="js/screens-guided-extract.js?v=20260831-effect-owner1"></script>
 <script src="js/screens-guided-review.js?v=20260831-owner1"></script>
+<script src="js/screens-guided-pipeline.js?v=20260917-pipeline-owner1"></script>
 <script src="js/screens-guided-intent.js?v=20260803-typed-study-intent"></script>
 <script src="js/screens-guided-pi-modules.js?v=20260902-module-contract1"></script>
 <script src="js/screens-guided-pi-run-files.js?v=20260915-product-label1"></script>

@@ -1,3 +1,4 @@
+/* Owner: Guided Pi project binding widget. */
 /* Copilot project preparation owner.
    Resolves the persisted project/study binding before the conversation owner
    loads sessions. Scientific workflow state remains server-owned. */

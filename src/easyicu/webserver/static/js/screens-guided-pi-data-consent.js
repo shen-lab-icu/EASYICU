@@ -1,3 +1,4 @@
+/* Owner: Guided Pi data-consent gate widget. */
 /* Conversation-level data-source confirmation for Guided Copilot.
    StudyContext remains the scientific owner; this module only renders and
    decodes the per-session consent gate. */

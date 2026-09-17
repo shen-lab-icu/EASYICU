@@ -1,3 +1,4 @@
+/* Owner: App shell route controller. */
 /* App shell controller */
 (function () {
   const app = document.getElementById('app');
