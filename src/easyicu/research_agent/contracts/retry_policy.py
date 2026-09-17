@@ -83,7 +83,7 @@ def repair_route_for(failure_class: str) -> str:
     if row is None:
         raise ValueError(
             f"unknown runtime failure class: {failure_class!r}; register it in "
-            "execution/retry_policy.py before routing retries for it"
+            "contracts/retry_policy.py before routing retries for it"
         )
     return row.route
 
@@ -91,11 +91,12 @@ def repair_route_for(failure_class: str) -> str:
 #: Denominator definition for retry/repair accounting. Every step attempt
 #: keeps its slot in the denominator, including fail-closed attempts that
 #: never spent an LLM repair (they still consumed wall-clock / isolation /
-#: deterministic-estimability outcomes). The numerator is LLM code-repair
-#: attempts actually spent.
+#: deterministic-estimability outcomes). The numerator is host-reserved
+#: logical LLM repair attempts, counted once per step across resume attempts;
+#: it is not the number of provider transport calls or code mutations.
 RETRY_DENOMINATOR_DEFINITION: str = (
     "all step attempts including fail-closed attempts without LLM repair; "
-    "numerator counts LLM code-repair attempts actually spent"
+    "numerator counts host-reserved logical LLM repair attempts once per step"
 )
 
 
@@ -121,7 +122,7 @@ def retry_policy_receipt() -> dict[str, object]:
     """Return a stable receipt for the failure_class x budget table."""
 
     return {
-        "schema_version": "easyicu.retry_policy/1",
+        "schema_version": "easyicu.retry_policy/2",
         "denominator": RETRY_DENOMINATOR_DEFINITION,
         "budgets": [item.to_dict() for item in FAILURE_CLASS_RETRY_BUDGET],
     }
@@ -133,12 +134,16 @@ def retry_accounting_receipt(
     """Bind the retry policy to the attempts and repairs observed at runtime.
 
     ``step_attempt_history`` contains multiple checkpoint snapshots for a
-    single attempt, so accounting is keyed by ``attempt_id`` and retains the
-    largest cumulative repair counter observed for that attempt. Records from
-    older manifests without an attempt id remain distinct denominator rows.
+    single attempt, so denominator rows are keyed by ``attempt_id``. The
+    authoritative ``step_llm_repair_attempts`` counter is cumulative across
+    attempts for one step; its per-step maximum is the logical LLM numerator.
+    ``code_repair_attempts`` also includes deterministic mutations and is
+    retained separately as a diagnostic count. Records from older manifests
+    without an attempt id remain distinct denominator rows.
     """
 
     attempts: dict[str, dict[str, object]] = {}
+    step_llm_repairs: dict[str, int] = {}
     for index, record in enumerate(attempt_records):
         raw_attempt_id = record.get("attempt_id")
         attempt_id = (
@@ -146,14 +151,22 @@ def retry_accounting_receipt(
             if isinstance(raw_attempt_id, str) and raw_attempt_id.strip()
             else f"legacy_record:{index + 1}"
         )
-        raw_repairs = record.get("code_repair_attempts", 0)
-        if isinstance(raw_repairs, bool) or not isinstance(raw_repairs, int):
+        counters: dict[str, int] = {}
+        for field_name in ("code_repair_attempts", "step_llm_repair_attempts"):
+            raw_count = record.get(field_name, 0)
+            if isinstance(raw_count, bool) or not isinstance(raw_count, int):
+                raise ValueError(
+                    f"invalid {field_name} for {attempt_id!r}: {raw_count!r}"
+                )
+            if raw_count < 0:
+                raise ValueError(
+                    f"negative {field_name} for {attempt_id!r}: {raw_count}"
+                )
+            counters[field_name] = raw_count
+        step_id = str(record.get("step_id") or "").strip()
+        if counters["step_llm_repair_attempts"] and not step_id:
             raise ValueError(
-                f"invalid code_repair_attempts for {attempt_id!r}: {raw_repairs!r}"
-            )
-        if raw_repairs < 0:
-            raise ValueError(
-                f"negative code_repair_attempts for {attempt_id!r}: {raw_repairs}"
+                f"step_id is required for logical LLM repair accounting: {attempt_id!r}"
             )
 
         raw_failure_class = record.get("runtime_failure_class") or record.get(
@@ -172,13 +185,27 @@ def retry_accounting_receipt(
             attempt_id,
             {
                 "attempt_id": attempt_id,
-                "step_id": str(record.get("step_id") or ""),
-                "code_repair_attempts": 0,
+                "step_id": step_id,
+                "code_mutation_attempts": 0,
+                "cumulative_logical_llm_repair_attempts": 0,
                 "runtime_failure_class": "",
             },
         )
-        row["code_repair_attempts"] = max(
-            int(row["code_repair_attempts"]), raw_repairs
+        if step_id and row["step_id"] not in {"", step_id}:
+            raise ValueError(f"inconsistent step ids for {attempt_id!r}")
+        if step_id:
+            row["step_id"] = step_id
+            step_llm_repairs[step_id] = max(
+                step_llm_repairs.get(step_id, 0),
+                counters["step_llm_repair_attempts"],
+            )
+        row["code_mutation_attempts"] = max(
+            int(row["code_mutation_attempts"]),
+            counters["code_repair_attempts"],
+        )
+        row["cumulative_logical_llm_repair_attempts"] = max(
+            int(row["cumulative_logical_llm_repair_attempts"]),
+            counters["step_llm_repair_attempts"],
         )
         prior_failure_class = str(row["runtime_failure_class"] or "")
         if failure_class and prior_failure_class not in {"", failure_class}:
@@ -205,15 +232,14 @@ def retry_accounting_receipt(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    repair_count = sum(int(row["code_repair_attempts"]) for row in attempt_rows)
     return {
-        "schema_version": "easyicu.retry_accounting/1",
+        "schema_version": "easyicu.retry_accounting/2",
         "policy_sha256": hashlib.sha256(canonical_policy).hexdigest(),
         "denominator_definition": RETRY_DENOMINATOR_DEFINITION,
         "attempt_denominator": retry_denominator(len(attempt_rows)),
-        "llm_code_repair_attempts": repair_count,
-        "attempts_with_llm_code_repair": sum(
-            int(row["code_repair_attempts"] > 0) for row in attempt_rows
+        "logical_llm_repair_attempts": sum(step_llm_repairs.values()),
+        "code_mutation_attempts": sum(
+            int(row["code_mutation_attempts"]) for row in attempt_rows
         ),
         "fail_closed_attempts": sum(failure_class_counts.values()),
         "failure_class_counts": dict(sorted(failure_class_counts.items())),

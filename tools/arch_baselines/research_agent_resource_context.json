@@ -1,7 +1,6 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/cohort_contract.py",
       "src/easyicu/research_agent/schema.py"
     ],
     "summary_changes": {}
@@ -491,9 +490,16 @@
         "src/easyicu/research_agent/schema.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Bind corrected know-how card aliases and review-packet digests from the 2026-09-17 audit closure.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "P0/P1/P2 fix program 2026-09-17: re-measured after reviewed fixes (replaces not-covered disclaimer)",
+  "baseline_reason": "Bind corrected know-how card aliases and review-packet digests from the 2026-09-17 audit closure.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -527,7 +533,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "4b54e5d969961579294cb2774c95f98ef819fb6be321b111f55df8d8e3803d0d",
+    "src/easyicu/research_agent/schema.py": "38a068da38b77a498ad90a38d2dec1d1e71e512f8f72a1ee51069041e4917b8b",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {

@@ -15,7 +15,7 @@ Muse Spark 的原始修改集与后续补修已经复核、修正并拆成可独
 - 预注册权限：本地 JSON 收据不再授予外部预注册权限；伪造收据的回归用例已锁定。
 - 测试完整性：批量误改的断言已恢复为语义等价检查，修复集未再通过降低断言强度来获得绿灯。
 - 扩展 CAS：安装、覆盖、删除和 enable/disable 都必须携带当前 `expected_sha256`；摘要比较与写入在同一 registry 锁内完成，并发双写只允许一个成功。因此下文早期“state 开关有意除外”的记录已被后续修复取代。
-- 重试策略：中央失败类表已接入 candidate loop；未登记类型会失败关闭，不得再将工程状态判为 complete。运行时按 `attempt_id` 去重计数，产生绑定策略 SHA-256、尝试分母、实际修复数和失败类分布的 `retry_policy_receipt.json`，并纳入最终 manifest 证据。
+- 重试策略：中央失败类表已接入 candidate loop；未登记类型会失败关闭，不得再将工程状态判为 complete。运行时按 `attempt_id` 去重计尝试分母，按 step 累计值计算逻辑 LLM 修复预留数，把可能包含确定性修复的代码变更次数单独列示；`retry_policy_receipt.json` 还绑定策略 SHA-256 和失败类分布，并纳入最终 manifest 证据。
 - 出站端点：回环 HTTP 连接使用已校验 IP 建连并保留原 `Host` 头；HTTPS 仍保留域名和 TLS 主机名校验约束。
 - 最终验证：Ruff 全过；变更覆盖的 Python 测试 `1797 passed, 15 skipped, 284 deselected`；研究流水线真实端到端用例 `1 passed`；JS 合同 `44/44`；`compileall` 与 `git diff --check` 通过。
 - 批次提交：`679797c84` 核心数据/运行时；`187cbf95d` 研究代理与权限闭环；`889ce3159` Web/Copilot/扩展安全；`1802174b1` 工具、构建与发布契约；官网收据与本报告作为最后一批。未 push，未合并 `main`。

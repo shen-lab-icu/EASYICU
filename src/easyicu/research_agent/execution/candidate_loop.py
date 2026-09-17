@@ -24,7 +24,7 @@ from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
 from ..repairs.runner_dispatch import mark_semantic_stub_injection
 from .code_hygiene import reorder_forward_references
 from .failure_classification import classify_runtime_failure
-from .retry_policy import repair_route_for
+from ..contracts.retry_policy import repair_route_for
 from .concept_audit import ConceptQuarantineState
 from .concept_repair import MAX_DETERMINISTIC_CONCEPT_REPAIRS
 from ..authority.plausibility import StepPlausibilityAuthority
