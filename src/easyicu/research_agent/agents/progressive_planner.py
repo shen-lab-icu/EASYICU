@@ -725,6 +725,48 @@ def _continuous_planning_variable_names(
     return tuple(names)
 
 
+def _continuous_adjustment_targets(
+    context: ResearchContext,
+) -> tuple[str, ...]:
+    """Resolve declared covariates to their continuous metadata column names.
+
+    A user-facing covariate label can differ from the retrieved column only by
+    case (for example ``Charlson`` versus ``charlson``).  Functional-form
+    obligations must bind the actual metadata name so outline validation cannot
+    silently drop that covariate before any patient rows are read.
+
+    Resolution is deliberately conservative.  A declared name that resolves to
+    a real non-continuous variable is kept out of the roster instead of being
+    re-bound to a different continuous column that only shares its casefold,
+    and an ambiguous casefold match (zero or several candidates) is skipped
+    rather than guessed; callers see an absent target, never a wrong one.
+    """
+
+    continuous_names = _continuous_planning_variable_names(context)
+    names_by_casefold: dict[str, list[str]] = {}
+    for name in continuous_names:
+        names_by_casefold.setdefault(name.casefold(), []).append(name)
+
+    targets: list[str] = []
+    for declared in AdjustmentSetAuthority.from_context(
+        context
+    ).operational_covariates:
+        if declared in continuous_names:
+            resolved = declared
+        elif context.variable(declared) is not None:
+            # A retrieved, non-continuous variable must not be silently
+            # replaced by a same-casefold continuous column.
+            continue
+        else:
+            matches = names_by_casefold.get(declared.casefold(), [])
+            if len(matches) != 1:
+                continue
+            resolved = matches[0]
+        if resolved not in targets:
+            targets.append(resolved)
+    return tuple(targets)
+
+
 def _available_ordered_trend_action(
     context: ResearchContext,
     analysis_types: Sequence[str],
@@ -1412,11 +1454,7 @@ class ProgressivePlannerAgent:
     ) -> str:
         contract_context = article_context or context
         adjustment_authority = AdjustmentSetAuthority.from_context(context)
-        continuous_exact_covariates = tuple(
-            name
-            for name in adjustment_authority.operational_covariates
-            if name in set(_continuous_planning_variable_names(context))
-        )
+        continuous_exact_covariates = _continuous_adjustment_targets(context)
         module_ids_by_analysis_type = {
             analysis_type: list(
                 progressive_module_ids_for_analysis_types((analysis_type,))
@@ -1763,10 +1801,16 @@ class ProgressivePlannerAgent:
             blocks.append(
                 "Host-resolved separate-analysis obligations:\n"
                 + json.dumps(list(separate_products), ensure_ascii=False)
-                + "\nEach listed product must have its own custom_analysis "
-                "outline step. Do not fold that step into robustness_replay; "
-                "the host will materialize its exact method, inputs, outputs, "
-                "and product edges later."
+                + "\nEach listed product must have its own dedicated, "
+                "secondary or sensitivity non-functional-form custom_analysis "
+                "outline step, and that step's objective must name the exact "
+                "typed product token. Do not fold that step into "
+                "robustness_replay and do not use a functional-form sensitivity "
+                "step as its owner; the host compiles executable method, "
+                "inputs, and outputs when the step is materialized. Include "
+                "exactly one such outline step per listed product; do not add "
+                "another secondary/sensitivity custom step unless it has its "
+                "own listed typed product."
             )
         if _requires_visualization_step(context):
             blocks.append(
@@ -1780,15 +1824,18 @@ class ProgressivePlannerAgent:
             blocks.append(
                 "Host-resolved functional-form obligation:\nIf the selected "
                 "association design uses an adjusted_association step, include "
-                "one downstream custom_analysis sensitivity step whose step_id "
-                "contains 'functional_form'. It must depend on the primary model "
-                "and include the applicable continuous adjustment variable(s) "
-                "from this metadata-only candidate roster: "
+                "one downstream custom_analysis sensitivity step per applicable "
+                "continuous adjustment variable. Every such step_id must contain "
+                "'functional_form', depend on the primary model, and include "
+                "exactly one target from this metadata-only candidate roster: "
                 + json.dumps(
                     list(continuous_exact_covariates),
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
+                + ". Do not combine multiple functional-form targets in one "
+                "outline step because each executable materialization owns one "
+                "functional_form_spec and one sensitivity_spec_id"
                 + ". This is a pre-result plan proposal for later plan approval, "
                 "not a claim that nonlinearity has already been tested."
             )
@@ -1949,6 +1996,7 @@ class ProgressivePlannerAgent:
         primary_exposure: str | None = None,
         target_outcome: str | None = None,
         required_exact_covariates: Sequence[str] = (),
+        required_functional_form_targets: Sequence[str] = (),
         context_required_method_layers: Sequence[str] | None = None,
         require_design_selection: bool = False,
         literature_design_evidence_cards: Sequence[LiteratureDesignEvidenceCard] = (),
@@ -2255,15 +2303,58 @@ class ProgressivePlannerAgent:
                     },
                 ),
             )
-        if required_custom_products and not any(
-            step.module_id == "custom_analysis" for step in outline.steps
+        # Only secondary/sensitivity custom steps can carry a required typed
+        # product.  Host-mandated custom steps (ordinal trend, phenotype
+        # comparison) and the provisional auxiliary baseline fallback are not
+        # separate-analysis owners, so counting every custom step here
+        # rejected plans whose product step coexisted with a host block.
+        product_owner_steps = [
+            step
+            for step in outline.steps
+            if step.module_id == "custom_analysis"
+            and "functional_form" not in step.step_id.casefold()
+            and step.scientific_action_id is None
+            and step.planned_analysis_role in {"secondary", "sensitivity"}
+        ]
+        product_owners_by_token: dict[str, list[str]] = {
+            product: [
+                step.step_id
+                for step in product_owner_steps
+                if product.casefold() in step.objective.casefold()
+            ]
+            for product in required_custom_products
+        }
+        missing_product_owners = sorted(
+            product
+            for product, owners in product_owners_by_token.items()
+            if not owners
+        )
+        duplicated_product_owners = {
+            product: owners
+            for product, owners in product_owners_by_token.items()
+            if len(owners) > 1
+        }
+        if required_custom_products and (
+            missing_product_owners or duplicated_product_owners
         ):
             raise ProgressivePlanCompileError(
                 "progressive_outline_separate_analysis_owner_missing",
-                "run-specific separate-analysis product(s) require a "
-                "custom_analysis outline step: " + ", ".join(required_custom_products),
+                "run-specific separate-analysis product(s) require exactly one "
+                "dedicated non-functional-form custom_analysis outline step per "
+                "typed product, and that step's objective must name the exact "
+                "typed product token: "
+                + ", ".join(required_custom_products),
                 path="steps",
-                findings=({"required_products": list(required_custom_products)},),
+                findings=(
+                    {
+                        "required_products": list(required_custom_products),
+                        "missing_products": missing_product_owners,
+                        "duplicate_product_owners": duplicated_product_owners,
+                        "candidate_step_ids": [
+                            step.step_id for step in product_owner_steps
+                        ],
+                    },
+                ),
             )
         if available_ordered_trend is not None:
             ordered_steps = [
@@ -2321,8 +2412,13 @@ class ProgressivePlannerAgent:
         adjusted_model_steps = [
             step for step in outline.steps if step.module_id == "adjusted_association"
         ]
-        continuous_exact_covariates = sorted(
-            set(exact_covariates) & continuous_domains
+        functional_form_targets = sorted(
+            {
+                str(value or "").strip()
+                for value in required_functional_form_targets
+                if str(value or "").strip()
+            }
+            & continuous_domains
         )
         if exact_covariates and adjusted_model_steps:
             missing_by_step = {
@@ -2393,7 +2489,7 @@ class ProgressivePlannerAgent:
                 pending.extend(upstream_by_step.get(candidate, ()))
             return False
 
-        if adjusted_model_steps and continuous_exact_covariates:
+        if adjusted_model_steps and functional_form_targets:
             functional_form_steps = [
                 step
                 for step in outline.steps
@@ -2401,24 +2497,51 @@ class ProgressivePlannerAgent:
                 and step.planned_analysis_role == "sensitivity"
                 and "functional_form" in step.step_id
             ]
-            usable_functional_form_steps = [
-                step
+            target_owners = {
+                target: [
+                    step.step_id
+                    for step in functional_form_steps
+                    if target in set(step.variable_names)
+                    and _has_primary_ancestor(step.step_id)
+                ]
+                for target in functional_form_targets
+            }
+            # A functional-form step may own one required target; single-target
+            # steps for other continuous model terms are additional checks the
+            # scientific review may legitimately demand, so only a step that
+            # combines several required targets is an invalid partition.
+            invalid_partitions = [
+                {
+                    "step_id": step.step_id,
+                    "functional_form_targets": sorted(
+                        set(step.variable_names) & set(functional_form_targets)
+                    ),
+                }
                 for step in functional_form_steps
-                if set(step.variable_names) & set(continuous_exact_covariates)
-                and _has_primary_ancestor(step.step_id)
+                if len(set(step.variable_names) & set(functional_form_targets)) > 1
             ]
-            if not usable_functional_form_steps:
+            missing_targets = sorted(
+                target for target, owners in target_owners.items() if not owners
+            )
+            duplicate_targets = {
+                target: owners
+                for target, owners in target_owners.items()
+                if len(owners) > 1
+            }
+            if missing_targets or invalid_partitions or duplicate_targets:
                 raise ProgressivePlanCompileError(
                     "progressive_outline_functional_form_sensitivity_missing",
-                    "an adjusted association with continuous exact covariates "
-                    "requires one primary-lineage custom sensitivity outline "
-                    "step whose id contains 'functional_form'",
+                    "an adjusted association with continuous covariates requires "
+                    "one primary-lineage custom sensitivity outline step per "
+                    "functional-form target; every owner must contain exactly "
+                    "one target",
                     path="steps",
                     findings=(
                         {
-                            "continuous_exact_covariates": (
-                                continuous_exact_covariates
-                            ),
+                            "required_functional_form_targets": functional_form_targets,
+                            "missing_targets": missing_targets,
+                            "duplicate_target_owners": duplicate_targets,
+                            "invalid_target_partitions": invalid_partitions,
                             "candidate_step_ids": [
                                 step.step_id for step in functional_form_steps
                             ],
@@ -2490,12 +2613,21 @@ class ProgressivePlannerAgent:
                     (
                         primary_exposure is not None
                         and target_outcome is not None
+                        and {primary_exposure, target_outcome}.issubset(
+                            available_variables
+                        )
                         and not {primary_exposure, target_outcome}.issubset(
                             closed_domains
                         )
                     )
                     or (
-                        (primary_exposure is None or target_outcome is None)
+                        (
+                            primary_exposure is None
+                            or target_outcome is None
+                            or not {primary_exposure, target_outcome}.issubset(
+                                available_variables
+                            )
+                        )
                         and len(set(step.variable_names) & closed_domains) < 2
                     )
                 )
@@ -3029,6 +3161,16 @@ class ProgressivePlannerAgent:
                     "to restricted_cubic_spline_sensitivity. Preserve the "
                     "already-valid parent product, output, sensitivity ids, "
                     "and literature bindings."
+                )
+            elif observation_reason == "progressive_functional_form_target_missing":
+                blocks.append(
+                    "Targeted functional-form repair: this sealed outline step "
+                    "owns exactly one continuous target. Set functional_form_spec "
+                    "to that exact target and set sensitivity_spec_ids to one "
+                    "stable identifier using only letters, digits, '.', '_' or "
+                    "'-' (for example age_rcs_vs_linear). Do not use a ':' prefix "
+                    "and do not add another target to this step. Preserve the "
+                    "parent product, output, method, and literature bindings."
                 )
         if outline_step.module_id == "cohort_definition":
             provenance = context.cohort.provenance
@@ -4000,6 +4142,7 @@ class ProgressivePlannerAgent:
             if adjustment_authority.selection == "exact"
             else ()
         )
+        required_functional_form_targets = _continuous_adjustment_targets(context)
         context_variable_map = {
             variable.name: variable for variable in context.variables
         }
@@ -4284,6 +4427,9 @@ class ProgressivePlannerAgent:
                     primary_exposure=context.primary_exposure,
                     target_outcome=context.target_outcome,
                     required_exact_covariates=required_exact_covariates,
+                    required_functional_form_targets=(
+                        required_functional_form_targets
+                    ),
                     context_required_method_layers=(
                         required_method_layers_for_context(context)
                     ),
@@ -4349,6 +4495,7 @@ class ProgressivePlannerAgent:
             primary_exposure=context.primary_exposure,
             target_outcome=context.target_outcome,
             required_exact_covariates=required_exact_covariates,
+            required_functional_form_targets=required_functional_form_targets,
             context_required_method_layers=required_method_layers_for_context(context),
             require_design_selection=resume_checkpoint is None,
             literature_design_evidence_cards=design_cards,
