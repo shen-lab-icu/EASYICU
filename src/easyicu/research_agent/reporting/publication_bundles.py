@@ -13,12 +13,15 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
+
+from ..authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,89 @@ def _build_probe_summary(
     return summary, files
 
 
+def _require_real_output_dir(out_dir: Path, run_dir: Optional[Path]) -> None:
+    """Refuse an agent-created link that redirects host promotion writes."""
+
+    if out_dir.is_symlink():
+        raise ValueError("publication output directory is a symlink")
+    if run_dir is None:
+        return
+    try:
+        relative = out_dir.absolute().relative_to(run_dir.absolute())
+        out_dir.resolve().relative_to(run_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("publication output directory escapes run root") from exc
+    current = run_dir
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("publication output directory contains a symlink")
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Replace a file without following a pre-existing destination link."""
+
+    with AnchoredDirectory.open(path.parent) as directory:
+        directory.assert_still_selected()
+        directory.replace_bytes(path.name, payload)
+
+
+def _read_step_summary_bytes(out_dir: Path) -> Optional[bytes]:
+    with AnchoredDirectory.open(out_dir) as directory:
+        if directory.is_absent("step_summary.json"):
+            return None
+        with directory.open_regular("step_summary.json") as handle:
+            return handle.read()
+
+
+def _copy_publication_file(
+    source: Path,
+    target: Path,
+    *,
+    out_dir: Path,
+    run_dir: Optional[Path],
+) -> None:
+    """Copy a regular run file to a real output path without following links."""
+
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("publication source is a symlink or not a regular file")
+    if run_dir is not None and not source.resolve().is_relative_to(run_dir.resolve()):
+        raise ValueError("publication source escapes run root")
+    try:
+        relative_parent = target.parent.absolute().relative_to(out_dir.absolute())
+        target.parent.resolve().relative_to(out_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("publication destination escapes output directory") from exc
+    current = out_dir
+    for part in relative_parent.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("publication destination contains a symlink")
+    if target.is_symlink():
+        raise ValueError("publication destination is a symlink")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with AnchoredDirectory.open(source.parent) as source_dir:
+        with AnchoredDirectory.open(target.parent) as target_dir:
+            with source_dir.open_regular(source.name) as source_handle:
+                temporary_name, descriptor = target_dir.create_temporary(stem=target.name)
+                try:
+                    with os.fdopen(descriptor, "wb") as handle:
+                        descriptor = -1
+                        shutil.copyfileobj(source_handle, handle)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    source_dir.assert_still_selected()
+                    target_dir.assert_still_selected()
+                    target_dir.replace_temporary(
+                        temporary_name, target.name, require_absent=False
+                    )
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
+                    target_dir.unlink(temporary_name, missing_ok=True)
+
+
 def _seal_corrupt_step_summary(out_dir: Path) -> Optional[str]:
     """Quarantine an unparseable ``step_summary.json`` before it is overwritten.
 
@@ -158,12 +244,13 @@ def _seal_corrupt_step_summary(out_dir: Path) -> Optional[str]:
     record.  Returns ``None`` when there is nothing corrupt to seal.
     """
 
-    summary_path = out_dir / "step_summary.json"
-    if not summary_path.is_file() or summary_path.is_symlink():
-        return None
+    if (out_dir / "step_summary.json").is_symlink():
+        raise ValueError("step_summary.json is a symlink")
     try:
-        raw = summary_path.read_bytes()
-    except OSError:
+        raw = _read_step_summary_bytes(out_dir)
+    except AuthorityFilesystemError as exc:
+        raise ValueError("step_summary.json cannot be preserved") from exc
+    if raw is None:
         return None
     try:
         parsed = json.loads(raw.decode("utf-8"))
@@ -173,12 +260,11 @@ def _seal_corrupt_step_summary(out_dir: Path) -> Optional[str]:
         return None
     digest = hashlib.sha256(raw).hexdigest()[:8]
     sealed_name = f"step_summary.corrupt.{digest}.json"
-    sealed_path = out_dir / sealed_name
-    if not sealed_path.exists():
-        try:
-            sealed_path.write_bytes(raw)
-        except OSError:
-            return None
+    try:
+        with AnchoredDirectory.open(out_dir) as directory:
+            directory.publish_immutable_bytes(sealed_name, raw)
+    except AuthorityFilesystemError as exc:
+        raise ValueError("corrupt summary seal cannot be preserved") from exc
     return sealed_name
 
 
@@ -278,14 +364,17 @@ def _promote_sibling_figure_exports(
     via :func:`_seal_corrupt_step_summary` before the rebuilt summary
     overwrites it, and the seal is recorded in the rescue block.
     """
+    _require_real_output_dir(out_dir, run_dir)
     parent = out_dir.parent
     source_stem = out_dir.name
     figure_suffixes = (".pdf", ".png", ".svg", ".tiff", ".tif", ".pptx")
-    figure_sources = [
-        parent / f"{source_stem}{suffix}"
-        for suffix in figure_suffixes
-        if (parent / f"{source_stem}{suffix}").is_file()
-    ]
+    figure_sources = []
+    for suffix in figure_suffixes:
+        candidate = parent / f"{source_stem}{suffix}"
+        if candidate.is_symlink():
+            raise ValueError("publication source is a symlink")
+        if candidate.is_file():
+            figure_sources.append(candidate)
     if not figure_sources:
         return None
 
@@ -303,29 +392,38 @@ def _promote_sibling_figure_exports(
         gate_roles = {str(role).strip().lower() for role in family_roles}
     if gate_roles is not None:
         contract_source = parent / f"{source_stem}.figure_contract.json"
+        if contract_source.is_symlink():
+            raise ValueError("publication contract is a symlink")
         if contract_source.is_file() and not _publication_bundle_has_any_role(
             {"contract": contract_source}, gate_roles
         ):
             return None
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    sealed_name = _seal_corrupt_step_summary(out_dir)
     target_stem = "publication_figure"
     exported_figure_files: List[str] = []
     for source in figure_sources:
         target = out_dir / f"{target_stem}{source.suffix.lower()}"
-        shutil.copy2(source, target)
+        _copy_publication_file(source, target, out_dir=out_dir, run_dir=run_dir)
         exported_figure_files.append(target.name)
 
     contract_source = parent / f"{source_stem}.figure_contract.json"
+    if contract_source.is_symlink():
+        raise ValueError("publication contract is a symlink")
     if contract_source.is_file():
-        shutil.copy2(contract_source, out_dir / f"{target_stem}.figure_contract.json")
+        _copy_publication_file(
+            contract_source,
+            out_dir / f"{target_stem}.figure_contract.json",
+            out_dir=out_dir,
+            run_dir=run_dir,
+        )
 
-    sealed_name = _seal_corrupt_step_summary(out_dir)
-    step_summary_path = out_dir / "step_summary.json"
     summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
+    raw_summary = _read_step_summary_bytes(out_dir)
+    if raw_summary is not None:
         try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            loaded = json.loads(raw_summary.decode("utf-8"))
             if isinstance(loaded, dict):
                 summary = loaded
         except Exception:
@@ -345,9 +443,9 @@ def _promote_sibling_figure_exports(
     summary["figure_files"] = sorted(exported_figure_files)
     if exported_figure_files:
         summary["figure_path"] = sorted(exported_figure_files)[0]
-    step_summary_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
+    _atomic_write_bytes(
+        out_dir / "step_summary.json",
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str).encode("utf-8"),
     )
     return "sibling_figure_exports_promote_v1"
 
@@ -361,7 +459,10 @@ def _promote_prior_publication_bundle(
     require_declared_sources: bool = False,
 ) -> Optional[str]:
     """Promote the strongest earlier figure bundle into a publication step."""
+    _require_real_output_dir(out_dir, run_dir)
     steps_dir = run_dir / "steps"
+    if steps_dir.is_symlink():
+        raise ValueError("publication steps directory is a symlink")
     if not steps_dir.exists():
         return None
 
@@ -388,13 +489,19 @@ def _promote_prior_publication_bundle(
         candidate_step_dirs = sorted(steps_dir.iterdir())
 
     for step_dir in candidate_step_dirs:
+        if step_dir.is_symlink():
+            raise ValueError("publication source step is a symlink")
         if not step_dir.is_dir() or step_dir.name == current_step_id:
             continue
         outputs_dir = step_dir / "outputs"
+        if outputs_dir.is_symlink():
+            raise ValueError("publication source outputs is a symlink")
         if not outputs_dir.exists():
             continue
         bundles: Dict[str, Dict[str, Path]] = {}
         for path in outputs_dir.iterdir():
+            if path.is_symlink():
+                raise ValueError("publication source is a symlink")
             if not path.is_file():
                 continue
             if path.name.endswith(contract_suffix):
@@ -428,12 +535,13 @@ def _promote_prior_publication_bundle(
     _, source_stem, files = best
     target_stem = "publication_figure"
     out_dir.mkdir(parents=True, exist_ok=True)
+    sealed_name = _seal_corrupt_step_summary(out_dir)
     for key, source in files.items():
         if key == "contract":
             target = out_dir / f"{target_stem}.figure_contract.json"
         else:
             target = out_dir / f"{target_stem}{key}"
-        shutil.copy2(source, target)
+        _copy_publication_file(source, target, out_dir=out_dir, run_dir=run_dir)
 
     # A figure contract is not self-contained when its source-data and panel
     # evidence files remain behind in the analysis step.  Promotion previously
@@ -460,16 +568,14 @@ def _promote_prior_publication_bundle(
             if not source.is_relative_to(source_outputs) or not source.is_file():
                 continue
             target = out_dir / relative_ref
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            _copy_publication_file(source, target, out_dir=out_dir, run_dir=run_dir)
             copied_trace_files.append(str(relative_ref))
 
-    sealed_name = _seal_corrupt_step_summary(out_dir)
-    step_summary_path = out_dir / "step_summary.json"
     summary: Dict[str, Any] = {}
-    if step_summary_path.exists():
+    raw_summary = _read_step_summary_bytes(out_dir)
+    if raw_summary is not None:
         try:
-            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            loaded = json.loads(raw_summary.decode("utf-8"))
             if isinstance(loaded, dict):
                 summary = loaded
         except Exception:
@@ -506,9 +612,9 @@ def _promote_prior_publication_bundle(
     summary["figure_files"] = exported_figure_files
     if exported_figure_files:
         summary["figure_path"] = exported_figure_files[0]
-    step_summary_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
+    _atomic_write_bytes(
+        out_dir / "step_summary.json",
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str).encode("utf-8"),
     )
     return "publication_bundle_promote_v1"
 
