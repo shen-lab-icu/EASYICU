@@ -1,47 +1,53 @@
-[
-  {
-    "url": "https://github.com/shen-lab-icu/EASYICU",
-    "status": 200
-  },
-  {
-    "url": "https://github.com/shen-lab-icu/EASYICU/issues",
-    "status": 200
-  },
-  {
-    "url": "https://github.com/shen-lab-icu/EASYICU/discussions",
-    "status": 200
-  },
-  {
-    "url": "https://github.com/shen-lab-icu/EASYICU/releases",
-    "status": 200
-  },
-  {
-    "url": "https://github.com/shen-lab-icu/EASYICU/blob/main/CITATION.cff",
-    "status": 200
-  },
-  {
-    "url": "https://physionet.org/content/mimiciv/3.1/",
-    "status": 200
-  },
-  {
-    "url": "https://physionet.org/content/eicu-crd/2.0/",
-    "status": 200
-  },
-  {
-    "source": "AmsterdamUMCdb",
-    "destination": "guide.html#data",
-    "status": "local fallback"
-  },
-  {
-    "url": "https://physionet.org/content/hirid/1.1.1/",
-    "status": 200
-  },
-  {
-    "url": "https://physionet.org/content/mimiciii/1.4/",
-    "status": 200
-  },
-  {
-    "url": "https://physionet.org/content/sicdb/1.0.6/",
-    "status": 200
-  }
-]
+{
+  "checked_at": "2026-09-17T11:33:26+00:00",
+  "head": "fe6ac51f3253b99672685878b6904f867f4971db",
+  "branch": "codex/dev9-web-acceptance-20260906",
+  "level": "public-link check for the static site; local fallback anchor verified in dist",
+  "results": [
+    {
+      "url": "https://github.com/shen-lab-icu/EASYICU",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/shen-lab-icu/EASYICU/issues",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/shen-lab-icu/EASYICU/discussions",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/shen-lab-icu/EASYICU/releases",
+      "status": 200
+    },
+    {
+      "url": "https://github.com/shen-lab-icu/EASYICU/blob/main/CITATION.cff",
+      "status": 200
+    },
+    {
+      "url": "https://physionet.org/content/mimiciv/3.1/",
+      "status": 200
+    },
+    {
+      "url": "https://physionet.org/content/eicu-crd/2.0/",
+      "status": 200
+    },
+    {
+      "source": "AmsterdamUMCdb",
+      "destination": "guide.html#data",
+      "status": "local fallback"
+    },
+    {
+      "url": "https://physionet.org/content/hirid/1.1.1/",
+      "status": 200
+    },
+    {
+      "url": "https://physionet.org/content/mimiciii/1.4/",
+      "status": 200
+    },
+    {
+      "url": "https://physionet.org/content/sicdb/1.0.6/",
+      "status": 200
+    }
+  ]
+}
