@@ -394,11 +394,18 @@ def test_every_js_contract_test_has_a_recorded_invocation() -> None:
         f"stale={sorted(set(CONTRACTS) - harnesses)}"
     )
 
+    # `"."` is the registry's explicit "the whole js/ directory" marker: the
+    # harness resolves argv[2] as a directory and loads its owner graph itself.
+    # Every other entry must name a file that still exists.
     missing = [
         f"{name} -> {owner}"
         for name, owners in CONTRACTS.items()
         for owner in owners
-        if not (STATIC / "js" / owner).is_file()
+        if not (
+            (STATIC / "js").is_dir()
+            if owner == "."
+            else (STATIC / "js" / owner).is_file()
+        )
     ]
     assert missing == [], f"recorded owner files that no longer exist: {missing}"
 

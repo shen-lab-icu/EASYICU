@@ -357,7 +357,10 @@
     state.studyProjectId = String(projectId || '');
     state.studyResources = (Array.isArray(resources) ? resources : []).map(safeResource).filter(Boolean);
     state.openStudyResource = typeof opener === 'function' ? opener : null;
-    state.studyTitle = String(context.title || '').slice(0, 200);
+    const studyTitle = String(context.title || '').trim();
+    state.studyTitle = studyTitle
+      ? window.EU_PRODUCT_LABELS.projectTitle(studyTitle, '').slice(0, 200)
+      : '';
     state.referenceResource = typeof context.reference === 'function' ? context.reference : null;
     // Workflow polling can update the shelf without replacing the open report.
     const nav = state.host && state.host.querySelector('[data-gpi-study-resources]');

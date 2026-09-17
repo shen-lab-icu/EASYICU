@@ -22,8 +22,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 7138,
-      "sha256": "54a8bdff1ea056a5400d0ce0a3340ff7167f72ba9e3661d199bc3194683680b8",
+      "loc": 7141,
+      "sha256": "cacc1b7fc91cb0436b2d2bb7bd954b19aed3c24891fce8c71eafce1e0d6844d2",
       "intra_package_import_edges": 130,
       "shim_bypass_violations": []
     },
@@ -226,8 +226,8 @@
       "shim_bypass_violations": []
     },
     "agents/coder.py": {
-      "loc": 1645,
-      "sha256": "287e76b413dcfe9fe367f8f7f5450e8ae53b2f5b2217651d688a13645715d1c2",
+      "loc": 1639,
+      "sha256": "faa42bbff608895138d87e9244ab83b73170bd30bf3f40f5a684b8112725a331",
       "intra_package_import_edges": 27,
       "shim_bypass_violations": []
     },
@@ -274,8 +274,8 @@
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
-      "loc": 3772,
-      "sha256": "e7dfb53a1a2ad485d6198d1eb05eb1611362e67df96dcfa04e3f1ca6eb9aa0cb",
+      "loc": 3785,
+      "sha256": "4ad351bd361b50e2a4fccfae86531e7abfe90021b1da8e8434ce1183f0223111",
       "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
@@ -304,8 +304,8 @@
       "shim_bypass_violations": []
     },
     "execution/runner.py": {
-      "loc": 3520,
-      "sha256": "7efbd1c8677110e08db2fcc8b9c32046e08656e0fec78b2a9bf36ee3f55a33c4",
+      "loc": 3593,
+      "sha256": "ce2d730f028ff1e7d36ebd7a4a3f99d9f32d500bafb924260be715f2ecef41d6",
       "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
@@ -316,8 +316,8 @@
       "shim_bypass_violations": []
     },
     "agents/progressive_planner.py": {
-      "loc": 4690,
-      "sha256": "9e878558596a47b6676b4a3c6409d6faa95672330c4f52aaca6430d8830a1b99",
+      "loc": 4867,
+      "sha256": "78d569db04a202acadf2fa5bdaf661f747cac5fab34ccf6e2447384331aa6e75",
       "intra_package_import_edges": 42,
       "shim_bypass_violations": []
     }
@@ -377,7 +377,7 @@
     },
     "pipeline.py::run": {
       "lines": 802,
-      "line_start": 4150,
+      "line_start": 4153,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 109,
@@ -397,7 +397,7 @@
     },
     "pipeline.py::_run_plan_phase": {
       "lines": 634,
-      "line_start": 2939,
+      "line_start": 2942,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 85,
@@ -406,71 +406,23 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Re-adjudicate the stale ratchet at remote base ec7b7d46d5ab, where 17 lower-is-better deviations already existed, then accept the reviewed 43-commit contract batch through ae3ca0fdf6. New growth is confined to prompt projection, hard-stop coordination, deterministic validation, RMST, and Docker-locality ownership; the six-module reporting cycle found in review was removed before this refresh. Evidence: docs/architecture/prepush_review_20260914.md.",
+  "baseline_reason": "Review 2026-09-17: accept reviewed growth accumulated after the 2026-09-14 baseline. execution/runner.py +73 and figures/skill.py +13 and pipeline.py +3 come from the committed execution-retry/preflight and publication-figure work; agents/progressive_planner.py +177 comes from the separate-analysis product-owner binding and functional-form partition fixes (each owner checked against its materialization contract). The ratchet is moved deliberately, with accepted_growth recorded below.",
   "baseline_accepted_growth": {
-    "execution/phase.py": {
-      "loc_was": 5636,
-      "loc_now": 5675
-    },
-    "execution/phase_support.py": {
-      "loc_was": 3745,
-      "loc_now": 3780
-    },
-    "execution/run_coordination.py": {
-      "loc_was": 239,
-      "loc_now": 288
-    },
     "pipeline.py": {
-      "loc_was": 7062,
-      "loc_now": 7138
+      "loc_was": 7138,
+      "loc_now": 7141
     },
-    "reporting/readiness.py": {
-      "loc_was": 3009,
-      "loc_now": 3067
-    },
-    "audits/validators.py": {
-      "loc_was": 2806,
-      "loc_now": 2933
-    },
-    "audits/figures.py": {
-      "loc_was": 5626,
-      "loc_now": 5643
-    },
-    "agents/planner.py": {
-      "loc_was": 2024,
-      "loc_now": 2066
-    },
-    "agents/coder.py": {
-      "loc_was": 1627,
-      "loc_now": 1645
-    },
-    "agents/reporting.py": {
-      "loc_was": 457,
-      "loc_now": 538
-    },
-    "schema.py": {
-      "loc_was": 3036,
-      "loc_now": 3115
-    },
-    "figures/promotion_contract.py": {
-      "loc_was": 116,
-      "loc_now": 120
-    },
-    "authority/evidence_store.py": {
-      "loc_was": 3431,
-      "loc_now": 3483
-    },
-    "discovery/idea_mining.py": {
-      "loc_was": 3654,
-      "loc_now": 3680
+    "figures/skill.py": {
+      "loc_was": 3772,
+      "loc_now": 3785
     },
     "execution/runner.py": {
-      "loc_was": 3498,
-      "loc_now": 3520
+      "loc_was": 3520,
+      "loc_now": 3593
     },
     "agents/progressive_planner.py": {
-      "loc_was": 4119,
-      "loc_now": 4690
+      "loc_was": 4690,
+      "loc_now": 4867
     }
   },
   "baseline_history": [
@@ -1113,6 +1065,27 @@
         "agents/progressive_planner.py": {
           "loc_was": 4119,
           "loc_now": 4690
+        }
+      }
+    },
+    {
+      "reason": "Review 2026-09-17: accept reviewed growth accumulated after the 2026-09-14 baseline. execution/runner.py +73 and figures/skill.py +13 and pipeline.py +3 come from the committed execution-retry/preflight and publication-figure work; agents/progressive_planner.py +177 comes from the separate-analysis product-owner binding and functional-form partition fixes (each owner checked against its materialization contract). The ratchet is moved deliberately, with accepted_growth recorded below.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 7138,
+          "loc_now": 7141
+        },
+        "figures/skill.py": {
+          "loc_was": 3772,
+          "loc_now": 3785
+        },
+        "execution/runner.py": {
+          "loc_was": 3520,
+          "loc_now": 3593
+        },
+        "agents/progressive_planner.py": {
+          "loc_was": 4690,
+          "loc_now": 4867
         }
       }
     }

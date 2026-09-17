@@ -51,6 +51,10 @@ def test_explicit_extraction_confirmation_grants_one_turn(message: str) -> None:
         "请对当前已保存、待人工审阅的完整候选计划做有来源的修订，再生成一份新候选计划。",
         "Please revise the complete candidate plan and explain the changes.",
         "Revise the analysis plan for review before analysis.",
+        "请调整后重新生成计划。",
+        "请重新生成计划。",
+        "生成一份新的分析计划，先供我审阅。",
+        "重新生成完整研究方案，暂不开始分析。",
     ],
 )
 def test_explicit_replan_request_grants_one_provider_turn(message: str) -> None:
@@ -115,6 +119,11 @@ def test_scheme_discussion_denial_and_report_only_do_not_grant_planning(
         "请审阅当前计划，只报告问题。",
         "请解释如何修订整份计划。",
         "请审阅计划，暂不修改研究计划。",
+        "请对计划的样本量调整给出建议。",
+        "请对计划的样本量调整给出你的意见。",
+        "请对计划中年龄的调整方式做敏感性分析。",
+        "请对计划的样本量调整做敏感性分析。",
+        "请给出生成计划的建议。",
         "不要修订整份计划。",
         "不要重新生成分析计划。",
         "How should I revise the analysis plan?",

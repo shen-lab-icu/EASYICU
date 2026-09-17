@@ -177,6 +177,41 @@ def test_system_validation_report_separates_execution_from_publication() -> None
     assert len(report.source_bindings) == 8
 
 
+def test_provider_usage_bindings_name_the_accounting_digest_and_each_ledger() -> None:
+    projections = _projections()
+    report = build_system_validation_report(
+        run_id="run_validation",
+        projections=projections,
+        run_status={
+            "gates": {"execution_complete": True, "completed_step_count": 2}
+        },
+        provider_usage={
+            "status": "completed",
+            "calls": 3,
+            "accounted_tokens": 1234,
+            "estimated_cost_usd": 0.42,
+            "ledger_sha256": "f" * 64,
+            "attempts": [
+                {"stage": "run", "ledger_digest": "1" * 64},
+                {"stage": "report_revision", "ledger_digest": "2" * 64},
+                {"stage": "corrupt", "ledger_digest": "not-a-digest"},
+            ],
+        },
+        projection_privacy_passed=True,
+    )
+
+    usage_bindings = {
+        binding.artifact: binding.sha256
+        for binding in report.source_bindings
+        if "provider" in binding.artifact
+    }
+    assert usage_bindings == {
+        "provider_usage_accounting": "f" * 64,
+        "provider_hard_stop_ledger.json[run]": "1" * 64,
+        "provider_hard_stop_ledger.json[report_revision]": "2" * 64,
+    }
+
+
 def test_system_validation_report_prefers_semantically_corrected_gallery() -> None:
     projections = _projections()
     projections["system_validation_figure_gallery.json"] = {

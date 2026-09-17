@@ -2,6 +2,7 @@
 
 from importlib.util import module_from_spec, spec_from_file_location
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -14,11 +15,27 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def load(relative):
+    """Execute an audit tool in-process and roll back its import-time env edits.
+
+    The extraction recipes set process-wide fast-path switches at module import
+    (for example ``EASYICU_DISABLE_AUTO_CHUNK`` in
+    ``scripts/r4_crossdb_sofa2_extract.py``).  Loading one here must not change
+    the environment that later tests run under.
+    """
+
     name = "audit_" + Path(relative).stem
     spec = spec_from_file_location(name, ROOT / relative)
     module = module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    before = dict(os.environ)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        for key in set(os.environ) - set(before):
+            del os.environ[key]
+        for key, value in before.items():
+            if os.environ.get(key) != value:
+                os.environ[key] = value
     return module
 
 
