@@ -28,6 +28,7 @@ disagreement is real but has no bearing here.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -156,7 +157,11 @@ def test_the_summary_registers_the_canonical_map_and_not_the_bare_one() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = Path(
+    os.environ.get(
+        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+    )
+)
 
 #: Names that reached ``aliases`` from a writer that no longer exists.
 #:
@@ -175,6 +180,7 @@ _CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
 _PRE_FIX_ALIAS_POLLUTION = frozenset({"robustness_grid"})
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

@@ -7,7 +7,7 @@
   "clinical_topics": ["lactate", "lactate clearance", "trajectory", "shock", "serial biomarker", "mortality"],
   "topic_aliases": ["lactate clearance", "lactate trajectory", "乳酸清除率", "乳酸轨迹"],
   "study_families": ["association", "time_to_event", "phenotyping"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "ICU patients with enough temporally ordered lactate observations for the declared trajectory or landmark analysis.",
     "time_zero": "ICU admission, shock recognition, or first qualifying lactate; select one landmark before deriving exposure trajectories.",

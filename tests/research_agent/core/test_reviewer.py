@@ -546,6 +546,12 @@ def test_pipeline_writes_reviewer_report_by_default(ra, synthetic_cohort, tmp_pa
         comment["topic"] == "reproducibility"
         for comment in methodologist["comments"]
     )
+    # Pipeline-level assembly: the persisted report must carry the Simulated
+    # declaration (not just the unit-level summary above).
+    markdown = (run_dir / "reviewer_report.md").read_text(encoding="utf-8")
+    assert "Simulated" in markdown
+    assert payload["summary"]["review_mode"] == "simulated_deterministic"
+    assert "Not independent external review" in payload["summary"]["claim_boundary"]
 
 
 def test_pipeline_reviewer_can_be_disabled(ra, synthetic_cohort, tmp_path):
@@ -571,3 +577,19 @@ def test_reviewer_report_declares_simulated_mode_and_claim_boundary() -> None:
 
     assert summary["review_mode"] == "simulated_deterministic"
     assert "Not independent external review" in summary["claim_boundary"]
+
+
+def test_discarded_ledger_leaves_a_traceable_major_instead_of_silence(ra, bound_primary):
+    # Ledger discard (missing per-step records) must fail closed with a visible
+    # major comment and keep the Simulated declaration — never silent accept.
+    args = dict(bound_primary)
+    args["per_step_records"] = None
+    report = ra.run_reviewer_round(**args, findings=[])
+    assert report.aggregated_recommendation() == "major_revision"
+    assert any(
+        c.topic == "effect_estimate" and c.severity == "major"
+        for q in report.critiques
+        for c in q.comments
+    )
+    assert "Simulated reviewer report" in report.to_markdown()
+    assert report.summary()["review_mode"] == "simulated_deterministic"

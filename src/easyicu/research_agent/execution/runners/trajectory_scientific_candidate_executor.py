@@ -24,6 +24,7 @@ from .trajectory_stability_executor import (
     _scale_coordinates,
     _sha256,
 )
+from ._shared import write_json as _write_json
 
 
 SCIENTIFIC_CANDIDATE_INPUTS = frozenset(
@@ -32,13 +33,6 @@ SCIENTIFIC_CANDIDATE_INPUTS = frozenset(
         "manifest:trajectory_representation_schema",
     }
 )
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
 
 def trajectory_scientific_candidate_executor_owns_step(

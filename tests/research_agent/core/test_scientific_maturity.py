@@ -13,7 +13,9 @@ from easyicu.research_agent.planning.novelty_contract import (
     NOVELTY_REVIEW_DIMENSIONS,
 )
 from easyicu.research_agent.reporting.scientific_maturity import (
+    _has_external_preregistration,
     _novelty_facts,
+    _preregistration_receipt_format_valid,
     _primary_figure_facts,
     _robustness_facts,
     _manuscript_section_prose_metrics,
@@ -1047,3 +1049,22 @@ def test_novelty_supported_requires_independent_dimension_review(tmp_path) -> No
     )
     assert facts["supported"] is False
     assert facts["reviewer_owner"] == ""
+
+
+def test_forged_preregistration_receipt_grants_nothing(tmp_path) -> None:
+    """P0: a run-dir JSON file is self-assertion, never a trust boundary.
+
+    Even a well-formed ``preregistration_receipt.json`` (four arbitrary
+    strings passed the earlier format check) must not grant paper authority:
+    no versioned-protocol system with an independent issuer exists, so the
+    gate stays unconditionally closed at engineering-complete.
+    """
+    forged = {
+        "protocol_version": "whatever",
+        "statistical_plan": "whatever",
+        "acceptance_contract": "whatever",
+        "signed_declarations": "whatever",
+    }
+    (tmp_path / "preregistration_receipt.json").write_text(json.dumps(forged))
+    assert _preregistration_receipt_format_valid(tmp_path) is True
+    assert _has_external_preregistration(tmp_path) is False

@@ -37,6 +37,12 @@ _OUTPUT_REGISTRY_CANONICALIZATION_REPAIR_ID = (
     "summary_output_registry_canonicalization_v1"
 )
 
+#: Provenance stamps written by the host when it salvages a step summary.
+#: ``StepSummaryIntegrityValidator`` turns either stamp into a warning
+#: finding; the stamp itself never changes a verdict.
+SUMMARY_PROVENANCE_SALVAGED_FROM_STDOUT = "salvaged_from_stdout"
+SUMMARY_PROVENANCE_SALVAGED_FROM_FILENAME = "salvaged_from_filename"
+
 
 def _extract_last_json_object(text: str) -> Optional[Dict[str, Any]]:
     decoder = json.JSONDecoder()
@@ -53,12 +59,52 @@ def _extract_last_json_object(text: str) -> Optional[Dict[str, Any]]:
     return latest
 
 
+def _stamp_salvage_provenance(data: Dict[str, Any], provenance: str) -> Dict[str, Any]:
+    """Stamp host-salvaged payloads so downstream audits stay honest.
+
+    The assignment overwrites any pre-existing ``summary_provenance`` key:
+    the file being written IS host-salvaged, so an agent-carried value must
+    not hide the host act from ``StepSummaryIntegrityValidator``.
+    """
+
+    data["summary_provenance"] = provenance
+    return data
+
+
+def _declared_salvage_filenames(step: Optional[AnalysisStep]) -> Optional[set]:
+    """Return exact filenames the plan declared as salvageable summaries.
+
+    Returns ``None`` when no step is available (legacy direct callers keep
+    the historical glob behaviour).  Otherwise only exact declared names
+    (or their basenames, for ``outputs/foo.json``-style declarations) may
+    be promoted; glob hits that the plan never declared are not evidence.
+    Matching is exact and case-sensitive: a near-miss fails closed to no
+    salvage, exactly like a missing file.
+    """
+
+    if step is None:
+        return None
+    declared: set = set()
+    for raw in step.expected_outputs or []:
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        declared.add(token)
+        base = token.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if base:
+            declared.add(base)
+    return declared
+
+
 def _salvage_stdout_json_step_summary(run_result: RunResult) -> bool:
     """Persist a JSON object printed to stdout as step_summary.json.
 
     Hosted coder models sometimes compute the right summary and print it,
     but forget to write artefacts into ``STEP_OUT_DIR``. This preserves the
     agent-generated result without replacing the analysis with fixed code.
+
+    The written payload is stamped
+    ``summary_provenance=salvaged_from_stdout``.
     """
 
     out_dir = run_result.out_dir
@@ -68,6 +114,7 @@ def _salvage_stdout_json_step_summary(run_result: RunResult) -> bool:
     data = _extract_last_json_object(run_result.stdout or "")
     if not isinstance(data, dict) or not data:
         return False
+    _stamp_salvage_provenance(data, SUMMARY_PROVENANCE_SALVAGED_FROM_STDOUT)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(
@@ -79,8 +126,19 @@ def _salvage_stdout_json_step_summary(run_result: RunResult) -> bool:
     return True
 
 
-def _salvage_named_json_step_summary(run_result: RunResult) -> bool:
-    """Promote an agent-written summary JSON artefact to step_summary.json."""
+def _salvage_named_json_step_summary(
+    run_result: RunResult,
+    step: Optional[AnalysisStep] = None,
+) -> bool:
+    """Promote an agent-written summary JSON artefact to step_summary.json.
+
+    The ``*.json`` glob below is candidate *discovery* only: when ``step``
+    is given, only a file whose exact name the plan declared in
+    ``step.expected_outputs`` is promoted, and the written payload is
+    stamped ``summary_provenance=salvaged_from_filename``.  Without a step
+    (legacy direct unit callers) the historical first-glob-hit behaviour is
+    preserved.
+    """
 
     out_dir = run_result.out_dir
     summary_path = out_dir / "step_summary.json"
@@ -91,18 +149,22 @@ def _salvage_named_json_step_summary(run_result: RunResult) -> bool:
         "visual_qa.json",
         "figure_contract.json",
     }
+    declared = _declared_salvage_filenames(step)
     candidates = sorted(
         path
         for path in out_dir.glob("*.json")
         if "summary" in path.name.lower() and path.name.lower() not in excluded
     )
     for candidate in candidates:
+        if declared is not None and candidate.name not in declared:
+            continue
         try:
             data = json.loads(candidate.read_text(encoding="utf-8"))
         except Exception:
             continue
         if not isinstance(data, dict) or not data:
             continue
+        _stamp_salvage_provenance(data, SUMMARY_PROVENANCE_SALVAGED_FROM_FILENAME)
         try:
             summary_path.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False, default=str),
@@ -404,6 +466,12 @@ def salvage_step_summary(
     selecting a primary row or aggregating performance rows would make the
     deterministic layer choose the scientific headline.
 
+    Salvaged payloads carry ``summary_provenance`` (``salvaged_from_stdout``
+    or ``salvaged_from_filename``) so the integrity audit can mark them with
+    a warning finding.  Named-artefact promotion is limited to filenames the
+    plan declared in ``step.expected_outputs``; the glob is candidate
+    discovery only and undeclared files are never promoted.
+
     Returns ``None`` when no salvage was needed or possible. The caller is
     responsible for recording the returned outcome in the repair ledger.
     """
@@ -420,7 +488,7 @@ def salvage_step_summary(
                 ),
                 reset_artefacts=True,
             )
-        if _salvage_named_json_step_summary(run_result):
+        if _salvage_named_json_step_summary(run_result, step):
             return SummarySalvageOutcome(
                 repair_id="summary_salvage_named_json_v1",
                 trigger_reason="step produced no step_summary.json",
@@ -453,6 +521,8 @@ def salvage_step_summary(
 
 
 __all__ = [
+    "SUMMARY_PROVENANCE_SALVAGED_FROM_FILENAME",
+    "SUMMARY_PROVENANCE_SALVAGED_FROM_STDOUT",
     "_extract_last_json_object",
     "_salvage_stdout_json_step_summary",
     "_salvage_named_json_step_summary",

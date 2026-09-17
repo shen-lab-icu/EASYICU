@@ -362,6 +362,12 @@ def build_schema_inventory(
             unlisted_member_count=len(unlisted),
         )
     except Exception:
+        # E-P2-10: rmtree guard — temp build dir must stay beside the
+        # requested output and never be a symlink.
+        assert temporary.resolve().is_relative_to(
+            requested_output.parent.resolve()
+        ), temporary
+        assert not temporary.is_symlink(), temporary
         shutil.rmtree(temporary, ignore_errors=True)
         raise
 

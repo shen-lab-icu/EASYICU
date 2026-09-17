@@ -11,8 +11,8 @@ Why this design:
   pipeline closes over its prelude locals (audit logger, progress
   emitter, run dir, etc.) when constructing these callables, so the
   workflow itself stays free of pipeline-specific argument plumbing.
-* Phase handoffs retain their real ``_PlanPhaseResult`` /
-  ``_ExecutePhaseResult`` / ``_WritePhaseResult`` contracts. There is no
+* Phase handoffs retain their real ``PlanPhaseResult`` /
+  ``ExecutePhaseResult`` / ``WritePhaseResult`` contracts. There is no
   second shadow state or process-local lookup table pretending to be a
   durable checkpoint.
 * Aborts during planning return directly without running
@@ -48,9 +48,9 @@ from ..authority.plan_lifecycle import load_approved_executable_plan
 from ..authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from ..canonical_json import canonical_sha256
 from ..contracts.runtime import (
-    _ExecutePhaseResult,
-    _PlanPhaseResult,
-    _WritePhaseResult,
+    ExecutePhaseResult,
+    PlanPhaseResult,
+    WritePhaseResult,
 )
 from ..schema import AnalysisPlan, PipelineResult
 
@@ -613,19 +613,19 @@ class PipelineWorkflow:
         self,
         *,
         plan_invoker: Callable[
-            [], _PlanPhaseResult | PlannerDesignCanaryComplete
+            [], PlanPhaseResult | PlannerDesignCanaryComplete
         ],
-        execute_invoker: Callable[[_PlanPhaseResult], _ExecutePhaseResult],
+        execute_invoker: Callable[[PlanPhaseResult], ExecutePhaseResult],
         write_invoker: Callable[
-            [_PlanPhaseResult, _ExecutePhaseResult], _WritePhaseResult
+            [PlanPhaseResult, ExecutePhaseResult], WritePhaseResult
         ],
         finalise_invoker: Callable[
-            [_PlanPhaseResult, _ExecutePhaseResult, _WritePhaseResult],
+            [PlanPhaseResult, ExecutePhaseResult, WritePhaseResult],
             PipelineResult,
         ],
-        provenance_hook: Optional[Callable[[_PlanPhaseResult], None]] = None,
+        provenance_hook: Optional[Callable[[PlanPhaseResult], None]] = None,
         human_review_invoker: Optional[
-            Callable[[_PlanPhaseResult], Sequence[HumanReviewRequest]]
+            Callable[[PlanPhaseResult], Sequence[HumanReviewRequest]]
         ] = None,
         human_review_recorder: Optional[
             Callable[[Sequence[Mapping[str, Any]]], None]
@@ -655,7 +655,7 @@ class PipelineWorkflow:
         self._human_review_finalize_start = human_review_finalize_start
         self._reviewer_identity_resolver = reviewer_identity_resolver
         self._state = "created"
-        self._plan_result: Optional[_PlanPhaseResult] = None
+        self._plan_result: Optional[PlanPhaseResult] = None
         self._requests: tuple[HumanReviewRequest, ...] = ()
         #: The pause exactly as it was offered, as JSON-serialized deep copies.
         #:
@@ -678,7 +678,7 @@ class PipelineWorkflow:
     def restore_paused(
         self,
         *,
-        plan_result: _PlanPhaseResult,
+        plan_result: PlanPhaseResult,
         requests: Sequence[HumanReviewRequest | Mapping[str, Any]],
         decision_payloads: Sequence[Mapping[str, Any]] = (),
         decision_records: Sequence[Mapping[str, Any]] = (),
@@ -686,7 +686,7 @@ class PipelineWorkflow:
         """Restore one already-verified typed pause without re-running Plan.
 
         The caller owns artifact/digest verification.  This method deliberately
-        accepts the same real ``_PlanPhaseResult`` used by ``start`` rather than
+        accepts the same real ``PlanPhaseResult`` used by ``start`` rather than
         a shadow workflow schema, then re-derives the review authority before
         making the pause answerable.  A mismatched checkpoint therefore fails
         before any decision can be recorded or any analysis can execute.
@@ -1245,16 +1245,16 @@ class PipelineWorkflow:
 
 def build_pipeline_workflow(
     *,
-    plan_invoker: Callable[[], _PlanPhaseResult | PlannerDesignCanaryComplete],
-    execute_invoker: Callable[[_PlanPhaseResult], _ExecutePhaseResult],
-    write_invoker: Callable[[_PlanPhaseResult, _ExecutePhaseResult], _WritePhaseResult],
+    plan_invoker: Callable[[], PlanPhaseResult | PlannerDesignCanaryComplete],
+    execute_invoker: Callable[[PlanPhaseResult], ExecutePhaseResult],
+    write_invoker: Callable[[PlanPhaseResult, ExecutePhaseResult], WritePhaseResult],
     finalise_invoker: Callable[
-        [_PlanPhaseResult, _ExecutePhaseResult, _WritePhaseResult],
+        [PlanPhaseResult, ExecutePhaseResult, WritePhaseResult],
         PipelineResult,
     ],
-    provenance_hook: Optional[Callable[[_PlanPhaseResult], None]] = None,
+    provenance_hook: Optional[Callable[[PlanPhaseResult], None]] = None,
     human_review_invoker: Optional[
-        Callable[[_PlanPhaseResult], Sequence[HumanReviewRequest]]
+        Callable[[PlanPhaseResult], Sequence[HumanReviewRequest]]
     ] = None,
     human_review_recorder: Optional[
         Callable[[Sequence[Mapping[str, Any]]], None]

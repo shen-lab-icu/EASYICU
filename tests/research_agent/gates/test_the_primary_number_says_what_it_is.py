@@ -28,6 +28,7 @@ recorded runs with a panel: 73 resolve end to end (all odds_ratio), 16 have no
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 import pytest
@@ -38,7 +39,11 @@ from easyicu.research_agent.reporting.writer_evidence import (  # noqa: E402
     _render_robustness_panel_block,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = pathlib.Path(
+    os.environ.get(
+        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+    )
+)
 
 #: The run whose manuscript reported a bare 6.47782.
 _E3_RUN = (
@@ -215,6 +220,7 @@ def test_the_real_run_now_publishes_what_its_number_means() -> None:
     assert "adjusted_for=age,sex" in interpretation
 
 
+@pytest.mark.requires_corpus
 def test_the_chain_resolves_across_the_recorded_corpus() -> None:
     """Read off the corpus, not restated from it.
 
@@ -249,6 +255,7 @@ def test_the_chain_resolves_across_the_recorded_corpus() -> None:
     assert resolved, "the corpus must still contain runs this fix serves"
 
 
+@pytest.mark.requires_corpus
 def test_a_panel_without_a_primary_row_gains_nothing() -> None:
     """No primary estimate, no interpretation, no invented line.
 

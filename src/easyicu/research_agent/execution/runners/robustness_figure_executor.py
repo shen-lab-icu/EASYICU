@@ -97,6 +97,7 @@ from .deterministic_robustness import (
 from ...figures.robustness import assess_robustness_effect_comparability
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
+from ._shared import figure_product as _figure_product, method_head as _method_head
 
 __all__ = [
     "ROBUSTNESS_FIGURE_INPUT",
@@ -120,21 +121,6 @@ _READ_COLUMNS = (
     "axis",
     "converged",
 )
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]*", product)
-    ):
-        return None
-    return product
 
 
 #: Statistics and companion tables the recorded steps bind alongside the

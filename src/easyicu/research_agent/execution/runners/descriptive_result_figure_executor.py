@@ -30,6 +30,7 @@ from ...figures.publication import (
 )
 from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
+from ._shared import method_head as _method_head, typed_product_value as _typed_product
 
 __all__ = [
     "DESCRIPTIVE_DISTRIBUTION_COLUMNS",
@@ -110,21 +111,6 @@ def _wide_distribution_shape(columns: list[str]) -> tuple[str, str] | None:
     if column_set != required_summaries | fixed | group_columns:
         return None
     return next(iter(group_columns)), stem
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _typed_product(value: Any, expected_kind: str) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != expected_kind
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]*", product)
-    ):
-        return None
-    return product
 
 
 def _binding_mode(binding: Any) -> str | None:

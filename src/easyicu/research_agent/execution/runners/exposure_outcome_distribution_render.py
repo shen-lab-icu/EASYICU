@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import statistics
 import textwrap
 from pathlib import Path
@@ -57,6 +56,11 @@ from .exposure_outcome_distribution_executor import (
 )
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input
+from ._shared import (
+    figure_product as _figure_product,
+    is_safe_figure_product_id as _is_safe_figure_product_id,
+    method_head as _method_head,
+)
 
 __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY",
@@ -71,10 +75,6 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT = EXPOSURE_OUTCOME_DISTRIBUTION_INPUT
 if EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT != EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT:
     raise RuntimeError("distribution figure input drifted from its producer output")
 
-#: Same rule as the missingness renderer: the figure product id is a
-#: Planner-owned label that becomes a filename, never a capability claim.
-_FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
-
 EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY = TypedInputCapability(
     required=frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT}),
 )
@@ -82,21 +82,6 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY = TypedInputCapability(
 _OVERALL_ROLE = "overall"
 _LEVEL_ROLE = "exposure_level"
 _ANALYSIS_KIND = "exposure_outcome_distribution_figure"
-
-
-def _is_safe_figure_product_id(value: Any) -> bool:
-    return bool(_FIGURE_PRODUCT_ID.fullmatch(str(value or "")))
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not _is_safe_figure_product_id(product):
-        return None
-    return product
 
 
 def exposure_outcome_distribution_figure_declaration_verdict(

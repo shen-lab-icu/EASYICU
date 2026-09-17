@@ -203,7 +203,7 @@ from ..resources.coder import (
     bind_primary_cohort_role,
 )
 from ..research_context.typed import resolved_raw_input_contracts_for_step
-from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from ..contracts.runtime import ValidationFinding, ExecutePhaseResult, PlanPhaseResult
 from ..gates.plausibility_obligation import (
     flag_only_plausibility_obligation_findings as _flag_only_plausibility_obligation_findings,
 )
@@ -346,11 +346,11 @@ from ..gates.visual import (
     VisualGateResult,
     VisualRepairAction,
     VisualRepairDecision,
-    _demote_cosmetic_visual_findings,
-    _is_cosmetic_visual_finding,
-    _visual_repair_request_log,
     collect_visual_gate_result,
     decide_visual_repair,
+    demote_cosmetic_visual_findings as _demote_cosmetic_visual_findings,
+    is_cosmetic_visual_finding as _is_cosmetic_visual_finding,
+    visual_repair_request_log as _visual_repair_request_log,
 )
 from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
@@ -501,6 +501,10 @@ from ..authority.runtime_artifacts import (
     write_run_checkpoint,
 )
 from ..scalar_utils import _expected_numeric_annotations_for_step
+from ..reporting.publication_bundles import (
+    required_contract_roles_for_analysis_family,
+    resolve_upstream_analysis_family,
+)
 from ..reporting.side_findings import SideFinding
 from ..skills import ClinicalSkill
 from ..authority.step_capsule import (
@@ -1009,7 +1013,7 @@ class _ExecutePhasePreparation:
 def _prepare_execute_phase_authority(
     pipeline: ExecutePhaseHost,
     *,
-    plan_result: _PlanPhaseResult,
+    plan_result: PlanPhaseResult,
     run_dir: Path,
     resume_from_step_id: Optional[str],
     stop_after_step_id: Optional[str],
@@ -1158,7 +1162,7 @@ def _prepare_execute_phase_authority(
 def run_execute_phase(
     pipeline: ExecutePhaseHost,
     *,
-    plan_result: _PlanPhaseResult,
+    plan_result: PlanPhaseResult,
     cohort_path: Path,
     trajectory_binding: Optional[StagedTrajectoryBinding],
     run_dir: Path,
@@ -1168,7 +1172,7 @@ def run_execute_phase(
     emit_progress: Callable[..., None],
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
-) -> _ExecutePhaseResult:
+) -> ExecutePhaseResult:
     preparation = _prepare_execute_phase_authority(
         pipeline,
         plan_result=plan_result,
@@ -2016,7 +2020,7 @@ def run_execute_phase(
         )
         plan_result.plan = plan
         plan_result.plan_path = plan_path
-        return _ExecutePhaseResult(
+        return ExecutePhaseResult(
             plan=plan,
             per_step_records=per_step_records,
             step_attempt_history=step_attempt_history,
@@ -2091,7 +2095,7 @@ def run_execute_phase(
 
     plan_result.plan = plan
     plan_result.plan_path = plan_path
-    return _ExecutePhaseResult(
+    return ExecutePhaseResult(
         plan=plan,
         per_step_records=per_step_records,
         step_attempt_history=step_attempt_history,
@@ -3372,7 +3376,9 @@ def _step_prepare_post_candidate_figures(
             source="publication_figure_sibling_promotion",
         ):
             promoted = services.promote_sibling_figure_exports(
-                out_dir=run_result.out_dir
+                out_dir=run_result.out_dir,
+                run_dir=run_dir,
+                current_step_id=step.step_id,
             )
         if promoted is not None:
             worker_progress.runner_repair_name = promoted
@@ -3420,9 +3426,19 @@ def _step_prepare_post_candidate_figures(
                 parent_step_id = str(step.step_id or "").removesuffix("_figure")
                 direct_parent = run_dir / "steps" / parent_step_id
                 promoted = None
+                # Generic terminal promotion must not satisfy a figure step
+                # with a cross-semantics bundle: the promoted contract's
+                # roles have to intersect the direct parent's analysis
+                # family vocabulary (mirroring the pipeline's
+                # required_roles=("primary_estimand",) precedent for the
+                # association path).  An unmapped family fails closed.
+                terminal_required_roles = required_contract_roles_for_analysis_family(
+                    resolve_upstream_analysis_family(run_dir, str(step.step_id or ""))
+                )
                 if (
                     parent_step_id != str(step.step_id or "")
                     and direct_parent.is_dir()
+                    and terminal_required_roles is not None
                     and _automatic_repair_authorized(
                         "publication_bundle_promote_v1",
                         step=step,
@@ -3433,6 +3449,7 @@ def _step_prepare_post_candidate_figures(
                         run_dir=run_dir,
                         current_step_id=step.step_id,
                         out_dir=run_result.out_dir,
+                        required_roles=terminal_required_roles,
                         require_declared_sources=True,
                     )
                 if promoted is not None:

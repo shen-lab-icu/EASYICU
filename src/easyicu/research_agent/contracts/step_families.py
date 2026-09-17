@@ -7,14 +7,14 @@ from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from .association_execution import association_binary_sensitivity_contract
 from .declared_product import effect_bearing_name, effect_bearing_product, typed_product
-from .primary_cohort import _is_primary_analysis_cohort_method
+from .primary_cohort import is_primary_analysis_cohort_method
 from .product_identity import (
-    normalised_expected_output_names as _normalised_expected_output_names,
-    normalised_method_head as _normalised_method_head,
-    normalised_structured_output_names as _normalised_structured_output_names,
+    normalised_expected_output_names,
+    normalised_method_head,
+    normalised_structured_output_names,
 )
 from ..planning.cohort_contract import cohort_definition_contract_issue
-from ..planning.figure_step_contract import _output_declares_figure, _step_produces_figure
+from ..planning.figure_step_contract import output_declares_figure, step_produces_figure
 from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
 
 
@@ -45,7 +45,7 @@ def _step_expects_figure(step: AnalysisStep) -> bool:
     method = re.sub(
         r"[^a-z0-9]+", "_", str(step.method or "").strip().lower()
     ).strip("_")
-    return method in _FIGURE_METHODS or _step_produces_figure(step)
+    return method in _FIGURE_METHODS or step_produces_figure(step)
 
 
 def _step_is_figure_only(step: AnalysisStep) -> bool:
@@ -62,7 +62,7 @@ def _step_is_figure_only(step: AnalysisStep) -> bool:
     if not _step_expects_figure(step):
         return False
     return not any(
-        not _output_declares_figure(output)
+        not output_declares_figure(output)
         and not _output_declares_auxiliary_log(output)
         for output in step.expected_outputs or []
     )
@@ -142,8 +142,8 @@ def _article_display_roles(steps: Sequence[AnalysisStep]) -> set[str]:
 
     roles: set[str] = set()
     for step in steps or []:
-        method = _normalised_method_head(str(step.method or ""))
-        outputs = _normalised_structured_output_names(step.expected_outputs or [])
+        method = normalised_method_head(str(step.method or ""))
+        outputs = normalised_structured_output_names(step.expected_outputs or [])
         if _cohort_change_contract_applies(step):
             roles.add("cohort_accounting")
         if method in {"descriptive", "table_one", "baseline_characteristics"} and (
@@ -274,8 +274,8 @@ def _clustering_contract_applies(
     otherwise agent-selected phenotyping methods.
     """
 
-    head = _normalised_method_head(method)
-    outputs = _normalised_structured_output_names(expected_outputs)
+    head = normalised_method_head(method)
+    outputs = normalised_structured_output_names(expected_outputs)
     output_signals = outputs & _CLUSTERING_CONTRACT_OUTPUTS
     allowed_methods = (
         _KMEANS_AUXILIARY_METHODS
@@ -470,7 +470,7 @@ def _has_closed_effect_contract_product(outputs: Sequence[str] | str) -> bool:
     values = [outputs] if isinstance(outputs, str) else list(outputs or [])
     return bool(_typed_effect_result_identities(values)) or any(
         effect_bearing_name(name)
-        for name in _normalised_structured_output_names(outputs)
+        for name in normalised_structured_output_names(outputs)
     )
 
 
@@ -562,7 +562,7 @@ def _has_closed_contract_product(
     products: frozenset[str],
     product_prefixes: Sequence[str] = (),
 ) -> bool:
-    names = _normalised_structured_output_names(expected_outputs)
+    names = normalised_structured_output_names(expected_outputs)
     return bool(names & products) or any(
         name.startswith(tuple(product_prefixes)) for name in names if product_prefixes
     )
@@ -682,7 +682,7 @@ def effect_output_authorized(
 def _effect_contract_applies(step: AnalysisStep) -> bool:
     """Whether this exact method owner declares a result-bearing effect product."""
 
-    method_head = _normalised_method_head(str(step.method or ""))
+    method_head = normalised_method_head(str(step.method or ""))
     outputs = step.expected_outputs or []
     ordinary_effect_contract = (
         method_head in _EFFECT_CONTRACT_METHODS
@@ -701,7 +701,7 @@ def _effect_contract_applies(step: AnalysisStep) -> bool:
 def _prediction_contract_applies(step: AnalysisStep) -> bool:
     """Whether this exact method owner declares a prediction-performance product."""
 
-    return _normalised_method_head(
+    return normalised_method_head(
         str(step.method or "")
     ) in _PREDICTION_CONTRACT_METHODS and _has_closed_contract_product(
         step.expected_outputs or [],
@@ -720,9 +720,9 @@ def _cohort_change_contract_applies(step: AnalysisStep) -> bool:
     """Whether a cohort owner declares a closed attrition/overlap product."""
 
     method = str(step.method or "")
-    method_matches = _normalised_method_head(
+    method_matches = normalised_method_head(
         method
-    ) in _COHORT_CHANGE_OWNER_METHODS or _is_primary_analysis_cohort_method(method)
+    ) in _COHORT_CHANGE_OWNER_METHODS or is_primary_analysis_cohort_method(method)
     return method_matches and _has_closed_contract_product(
         step.expected_outputs or [],
         products=_COHORT_CHANGE_PRODUCTS,
@@ -752,9 +752,89 @@ def _plan_step_owns_contract_family(family: str, step: AnalysisStep) -> bool:
         )
     if family == "prediction_model":
         return _prediction_contract_applies(step)
-    head = _normalised_method_head(str(step.method or ""))
+    head = normalised_method_head(str(step.method or ""))
     methods = _PLAN_FAMILY_METHODS.get(family, frozenset())
     products = _PLAN_FAMILY_OUTPUTS.get(family, frozenset())
-    outputs = _normalised_expected_output_names(step.expected_outputs or [])
+    outputs = normalised_expected_output_names(step.expected_outputs or [])
     return head in methods and bool(outputs & products)
+
+
+def step_is_figure_only(step: AnalysisStep) -> bool:
+    """Return whether ``step`` is a pure figure/render step with no result product.
+
+    Public cross-owner entrypoint for :func:`_step_is_figure_only`. The
+    figure-only vocabulary is owned here; plan-graph, figure-mutation, and
+    authority callers must use this name instead of the private one.
+    """
+
+    return _step_is_figure_only(step)
+
+
+def effect_contract_applies(step: AnalysisStep) -> bool:
+    """Return whether ``step`` owns a result-bearing effect contract.
+
+    Public cross-owner entrypoint for :func:`_effect_contract_applies`.
+    Ownership still requires both an exact normalized method family and a
+    declared structured effect product; see the private implementation.
+    """
+
+    return _effect_contract_applies(step)
+
+
+def typed_effect_result_identities(
+    outputs: Sequence[str],
+) -> set[Tuple[str, str]]:
+    """Return typed result products governed by the shared effect vocabulary.
+
+    Public cross-owner entrypoint for
+    :func:`_typed_effect_result_identities`.
+    """
+
+    return _typed_effect_result_identities(outputs)
+
+
+def cohort_definition_contract_findings(
+    plan: AnalysisPlan,
+) -> List[ValidationFinding]:
+    """Adapt the dependency-neutral cohort owner issue to runtime findings.
+
+    Public cross-owner entrypoint for
+    :func:`_cohort_definition_contract_findings`.
+    """
+
+    return _cohort_definition_contract_findings(plan)
+
+
+# Compatibility aliases: these private names were historically re-exported
+# from this module (imported here under a leading underscore, or delegated
+# from the planning side).  They keep resolving while cross-owner callers
+# migrate to the public names above.
+_normalised_expected_output_names = normalised_expected_output_names
+_normalised_method_head = normalised_method_head
+_normalised_structured_output_names = normalised_structured_output_names
+_is_primary_analysis_cohort_method = is_primary_analysis_cohort_method
+_output_declares_figure = output_declares_figure
+_step_produces_figure = step_produces_figure
+
+
+__all__ = [
+    "_cohort_definition_contract_findings",
+    "_effect_contract_applies",
+    "_is_primary_analysis_cohort_method",
+    "_normalised_expected_output_names",
+    "_normalised_method_head",
+    "_normalised_structured_output_names",
+    "_output_declares_figure",
+    "_step_is_figure_only",
+    "_step_produces_figure",
+    "_typed_effect_result_identities",
+    "clustering_contract_applies",
+    "cohort_change_contract_applies",
+    "cohort_definition_contract_findings",
+    "effect_contract_applies",
+    "effect_output_authorized",
+    "prediction_contract_applies",
+    "step_is_figure_only",
+    "typed_effect_result_identities",
+]
 

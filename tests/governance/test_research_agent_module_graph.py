@@ -242,3 +242,26 @@ def test_checked_in_module_graph_baseline_has_no_regression() -> None:
     )
 
     assert graph.compare_snapshots(graph.build_snapshot(), baseline) == []
+
+
+def test_public_api_0917_profile_reexports_are_explicitly_allowed() -> None:
+    """Explicit allowlist for the 0917 profile re-exports (E-P1-5 fallback).
+
+    ``tools/arch_baselines/research_agent_top_level_ownership.json`` has no
+    generator tool and the module-graph snapshot is module/edge-level, so the
+    ``easyicu.research_agent`` 0917 re-exports do not change either baseline.
+    They are pinned here instead of refreshing checked-in JSON: the checked-in
+    ``research_agent_module_graph.json`` (09-14) must not be re-emitted while
+    unrelated working-tree modules are present.
+    """
+
+    from easyicu import research_agent as public_api
+    from easyicu.research_agent.orchestration import profiles
+
+    allowed_0917_reexports = (
+        "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17",
+        "E1_REVIEWED_DEMO_2026_09_17",
+    )
+    for name in allowed_0917_reexports:
+        assert name in public_api.__all__, f"0917 re-export missing from __all__: {name}"
+        assert getattr(public_api, name) is getattr(profiles, name)

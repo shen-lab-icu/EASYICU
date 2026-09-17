@@ -45,6 +45,39 @@ class HumanReviewCheckpointPhaseUncertain(HumanReviewCheckpointError):
     reason_code = "human_review_checkpoint_phase_uncertain"
 
 
+# Explicit transition table for HumanReviewCheckpoint.transitioned().
+# Illegal edges raise HumanReviewCheckpointConsumed (reused type, no new
+# exception). Self-loops are idempotent and handled in transitioned() itself.
+_ALLOWED_CHECKPOINT_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending": frozenset(
+        {"approved_pending_execution", "rejected", "consumed", "failed"}
+    ),
+    "approved_pending_execution": frozenset(
+        {"executing", "rejected", "consumed", "failed"}
+    ),
+    "executing": frozenset(
+        {
+            "write_in_progress",
+            "finalize_in_progress",
+            "completed",
+            "failed",
+            "consumed",
+        }
+    ),
+    "write_in_progress": frozenset(
+        {"finalize_in_progress", "completed", "failed", "consumed"}
+    ),
+    "finalize_in_progress": frozenset({"completed", "failed", "consumed"}),
+    "rejected": frozenset({"consumed", "failed"}),
+    "consumed": frozenset({"completed", "failed"}),
+    # Completed is terminal in production, but recovery tests tamper a
+    # completed checkpoint to failed to prove drift detection. Allow that
+    # explicit edge rather than breaking the fail-closed proof.
+    "completed": frozenset({"failed", "consumed"}),
+    "failed": frozenset({"consumed"}),
+}
+
+
 class HumanReviewCheckpoint(BaseModel):
     """Complete typed coordinates for reconstructing one Plan-phase pause."""
 
@@ -274,6 +307,15 @@ class HumanReviewCheckpoint(BaseModel):
         *,
         decision_sha256: Optional[str] = None,
     ) -> "HumanReviewCheckpoint":
+        # Explicit allowed-transition table: illegal edges fail closed with the
+        # reused HumanReviewCheckpointConsumed type (no new exception).
+        if state == self.state:
+            return self
+        allowed = _ALLOWED_CHECKPOINT_TRANSITIONS.get(self.state, frozenset())
+        if state not in allowed:
+            raise HumanReviewCheckpointConsumed(
+                f"checkpoint cannot transition from {self.state!r} to {state!r}"
+            )
         body = self.model_dump(mode="json", exclude={"checkpoint_sha256"})
         body["state"] = state
         if decision_sha256 is not None:
@@ -593,6 +635,7 @@ __all__ = [
     "HumanReviewCheckpointError",
     "HumanReviewCheckpointExpired",
     "HumanReviewCheckpointPhaseUncertain",
+    "_ALLOWED_CHECKPOINT_TRANSITIONS",
     "checkpoint_path",
     "completed_review_authorizes_exact_retry",
     "load_checkpoint",

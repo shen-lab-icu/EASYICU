@@ -15,11 +15,14 @@ concept dictionary.
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from ..icu_rules import (
     ICU_RULES,
@@ -787,6 +790,17 @@ def build_research_context(
                 outcome_columns=episode.outcome_columns,
             )
         )
+    degraded_columns = sorted(
+        descriptor.name for descriptor in descriptors if descriptor.concept_enrichment_degraded
+    )
+    if degraded_columns:
+        # Formal path: enrichment loss is visible downstream via the per-column
+        # flag, and is also surfaced here as a warning (not silent).
+        logger.warning(
+            "concept_enrichment_degraded for %d column(s): %s",
+            len(degraded_columns),
+            ", ".join(degraded_columns[:12]),
+        )
     _enrich_target_outcome_descriptor(
         descriptors=descriptors,
         research_question=research_question,
@@ -1005,6 +1019,10 @@ def _describe_column(
             f"fixed {fixed_window_trajectory.window_width_hours:g}-hour windows "
             "on a relative time axis"
         )
+    # Explicit degradation marker: the EasyICU concept-dictionary enrichment
+    # was unavailable for this column (info is None). A user-supplied
+    # description does not clear it — the owner metadata is still missing.
+    enrichment_degraded = info is None
 
     return ConceptDescriptor(
         name=col,
@@ -1032,6 +1050,7 @@ def _describe_column(
         clinical_caveats=clinical_caveats or list(hint.pitfalls),
         missingness_semantics=missingness_semantics,
         missingness=miss,
+        concept_enrichment_degraded=enrichment_degraded,
     )
 
 

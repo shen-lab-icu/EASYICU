@@ -193,6 +193,9 @@ def _first_numeric_effect_from_text(payload: Any) -> Optional[float]:
 
 __all__ = [
     "coerce_finite_float",
+    "first_numeric_scalar_with_key_fragment",
+    "first_present_scalar",
+    "flatten_scalar_dict",
     "_expected_numeric_annotations_for_step",
     "_coerce_scalar",
     "_first_present_scalar",
@@ -200,3 +203,25 @@ __all__ = [
     "_flatten_scalar_dict",
     "_first_numeric_effect_from_text",
 ]
+
+
+def first_numeric_scalar_with_key_fragment(
+    payload: Dict[str, Any], fragments: Sequence[str]
+) -> Optional[float]:
+    """Public cross-owner entrypoint for :func:`_first_numeric_scalar_with_key_fragment`."""
+
+    return _first_numeric_scalar_with_key_fragment(payload, fragments)
+
+
+def first_present_scalar(
+    payload: Dict[str, Any], keys: Sequence[str]
+) -> Optional[Union[int, float, str, bool]]:
+    """Public cross-owner entrypoint for :func:`_first_present_scalar`."""
+
+    return _first_present_scalar(payload, keys)
+
+
+def flatten_scalar_dict(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Public cross-owner entrypoint for :func:`_flatten_scalar_dict`."""
+
+    return _flatten_scalar_dict(payload)

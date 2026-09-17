@@ -19,9 +19,65 @@ from easyicu.research_agent.orchestration.human_review_checkpoint import (
     HumanReviewCheckpoint,
 )
 
+# C-F13: the central retry-policy contract polices observed records (unknown
+# failure classes become error findings); normal runs are unchanged.
+from ..execution.retry_policy import (
+    budget_for_failure_class as _budget_for_failure_class,
+)
+
 
 def _text(value: Any, limit: int = 1_200) -> str:
     return re.sub(r"\s+", " ", str("" if value is None else value)).strip()[:limit]
+
+
+def _run_isolation_degraded(
+    *,
+    run_status: Mapping[str, Any],
+    source_manifest: Mapping[str, Any],
+    projections: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Return True when the run executed with degraded isolation.
+
+    Conservative additive signal for C-F8 / unsafe-fallback visibility. Checks
+    explicit ``isolation_degraded`` / ``allow_unsafe_host_fallback`` flags in
+    the run status, the source manifest, and any projected step records —
+    without changing non-degraded reports.
+    """
+
+    candidates: list[Mapping[str, Any]] = []
+    if isinstance(run_status, Mapping):
+        candidates.append(run_status)
+        gates = run_status.get("gates")
+        if isinstance(gates, Mapping):
+            candidates.append(gates)
+    if isinstance(source_manifest, Mapping):
+        candidates.append(source_manifest)
+    for payload in candidates:
+        if bool(payload.get("isolation_degraded")) is True:
+            return True
+        if bool(payload.get("allow_unsafe_host_fallback")) is True:
+            return True
+    for name in ("source_run_manifest.json", "run_status.json"):
+        payload = projections.get(name)
+        if not isinstance(payload, Mapping):
+            continue
+        if bool(payload.get("isolation_degraded")) is True:
+            return True
+        steps = payload.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if isinstance(step, Mapping) and bool(
+                    step.get("isolation_degraded")
+                ):
+                    return True
+        records = payload.get("per_step_records")
+        if isinstance(records, list):
+            for record in records:
+                if isinstance(record, Mapping) and bool(
+                    record.get("isolation_degraded")
+                ):
+                    return True
+    return False
 
 
 def projection_payload_sha256(payload: Mapping[str, Any]) -> str:
@@ -71,6 +127,12 @@ class ValidationSourceBinding(BaseModel):
     artifact: str
     sha256: str
     binding_scope: Literal["browser_projection_payload", "run_private_receipt"]
+    # C-F8: explicit marker for degraded-isolation runs. False by default so
+    # non-degraded reports are byte-identical to prior behavior.
+    isolation_degraded: bool = False
+    # C-F11: ledger rename note. Records the superseded historical artifact
+    # name without restoring the old artifact.
+    supersedes: Optional[str] = None
 
 
 class ValidationFigure(BaseModel):
@@ -100,6 +162,10 @@ class ValidationCaseStudy(BaseModel):
     scientific_claim_ceiling: str
     generated_numbers: Literal[False] = False
     primary_table: Optional[ValidationCaseTable] = None
+    # C-F12: explicit missing-vs-empty sentinel for the primary panel. None
+    # (missing) means no candidate table existed; "empty" means a candidate
+    # existed but carried no rows; "present" means rows are bound above.
+    primary_table_status: Literal["present", "missing", "empty"] = "missing"
     figures: List[ValidationFigure] = Field(default_factory=list, max_length=8)
 
 
@@ -166,7 +232,22 @@ _CASE_COLUMNS = (
 
 
 def _case_table(result_tables: Mapping[str, Any]) -> Optional[ValidationCaseTable]:
+    table, _status = _case_table_with_status(result_tables)
+    return table
+
+
+def _case_table_with_status(
+    result_tables: Mapping[str, Any],
+) -> tuple[Optional[ValidationCaseTable], str]:
+    """Return ``(table, status)`` with an explicit missing-vs-empty sentinel.
+
+    C-F12: ``missing`` means no candidate exposure table existed at all;
+    ``empty`` means a candidate existed but carried no rows; ``present``
+    means rows are bound in the returned table.
+    """
+
     fallback: Optional[ValidationCaseTable] = None
+    saw_candidate = False
     for raw in list(result_tables.get("tables") or [])[:40]:
         if not isinstance(raw, Mapping):
             continue
@@ -174,6 +255,7 @@ def _case_table(result_tables: Mapping[str, Any]) -> Optional[ValidationCaseTabl
         header_set = set(headers)
         if not {"exposure_level", "n_rows", "exposure_denominator", "exposure_pct"}.issubset(header_set):
             continue
+        saw_candidate = True
         selected = [column for column in _CASE_COLUMNS if column in headers]
         indices = [headers.index(column) for column in selected]
         rows = []
@@ -195,9 +277,13 @@ def _case_table(result_tables: Mapping[str, Any]) -> Optional[ValidationCaseTabl
                 rows=rows,
             )
             if {"outcome_events", "outcome_rate_pct"}.issubset(header_set):
-                return table
+                return table, "present"
             fallback = fallback or table
-    return fallback
+    if fallback is not None:
+        return fallback, "present"
+    if saw_candidate:
+        return None, "empty"
+    return None, "missing"
 
 
 def _scientific_findings(
@@ -527,6 +613,69 @@ def build_system_validation_report(
                     binding_scope="run_private_receipt",
                 )
             )
+    # C-F8: degraded-isolation runs carry an explicit marker binding. The
+    # detection is conservative and additive: non-degraded runs are unchanged.
+    if _run_isolation_degraded(
+        run_status=status_payload,
+        source_manifest=source_manifest,
+        projections=projections,
+    ):
+        marker = projection_payload_sha256(
+            {"isolation_degraded": True, "run_id": _text(run_id, 160)}
+        )
+        source_bindings.append(
+            ValidationSourceBinding(
+                artifact="execution_isolation",
+                sha256=marker,
+                binding_scope="run_private_receipt",
+                isolation_degraded=True,
+            )
+        )
+    # C-F13: the central retry-policy contract polices observed records. Every
+    # observed runtime failure class must exist in the table; an unknown value
+    # means the classifier/loop and the contract drifted apart, which fails
+    # closed as an error finding (normal runs only carry tabled classes, so
+    # their reports are byte-identical to before).
+    _unknown_failure_classes: list[str] = []
+    for _payload_name in ("source_run_manifest.json", "run_status.json"):
+        _payload = projections.get(_payload_name)
+        if not isinstance(_payload, Mapping):
+            continue
+        for _key in ("per_step_records", "steps"):
+            _rows = _payload.get(_key)
+            if not isinstance(_rows, list):
+                continue
+            for _row in _rows:
+                if not isinstance(_row, Mapping):
+                    continue
+                _failure_class = _row.get("runtime_failure_class") or _row.get(
+                    "failure_class"
+                )
+                if isinstance(_failure_class, str) and _failure_class:
+                    if _budget_for_failure_class(_failure_class) is None:
+                        if _failure_class not in _unknown_failure_classes:
+                            _unknown_failure_classes.append(_failure_class)
+    _retry_findings: list[ValidationFinding] = []
+    for _unknown in sorted(_unknown_failure_classes):
+        _retry_findings.append(
+            ValidationFinding(
+                code="retry_policy_contract_drift",
+                severity="error",
+                domain="execution_retry_policy",
+                message=(
+                    "Observed runtime failure class "
+                    f"{_unknown!r} is not in the central retry-policy table: "
+                    "the classifier and the contract drifted apart, so no "
+                    "retry budget may be assumed for it."
+                ),
+                remediation=(
+                    "Register the class in execution/retry_policy.py with an "
+                    "explicit budget row, or fix the classifier to emit a "
+                    "tabled class."
+                ),
+                evidence_refs=["execution/retry_policy.py"],
+            )
+        )
 
     engineering_complete = bool(
         planned_steps
@@ -535,7 +684,14 @@ def build_system_validation_report(
         and projection_privacy_passed
         and table_count
         and figure_count
+        and not _retry_findings
     )
+    _primary_table, _primary_table_status = _case_table_with_status(result_tables)
+    _base_findings = _scientific_findings(readiness)
+    _scientific_findings_all = [
+        *_retry_findings[:12],
+        *_base_findings[: max(0, 12 - len(_retry_findings))],
+    ]
     return SystemValidationReport(
         run_id=_text(run_id, 160),
         title="A Complete, Governed Research Workflow",
@@ -572,11 +728,12 @@ def build_system_validation_report(
             question=_text(run_context.get("question"), 1_200),
             analysis_type=analysis_type,
             scientific_claim_ceiling=scientific_ceiling,
-            primary_table=_case_table(result_tables),
+            primary_table=_primary_table,
+            primary_table_status=_primary_table_status,  # type: ignore[arg-type]
             figures=figure_rows,
         ),
         provider_usage=usage,
-        scientific_findings=_scientific_findings(readiness),
+        scientific_findings=_scientific_findings_all,
         source_bindings=source_bindings,
         next_validation_work=[
             "Add multi-task and multi-database benchmark cases with prespecified success criteria.",

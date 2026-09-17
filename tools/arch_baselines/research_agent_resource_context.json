@@ -1,7 +1,8 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json"
+      "src/easyicu/research_agent/planning/cohort_contract.py",
+      "src/easyicu/research_agent/schema.py"
     ],
     "summary_changes": {}
   },
@@ -482,9 +483,17 @@
         "src/easyicu/data/concept-dict.json"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "P0/P1/P2 fix program 2026-09-17: re-measured after reviewed fixes (replaces not-covered disclaimer)",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/cohort_contract.py",
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Review 2026-09-17: crea ceiling 15->25 widens the bound concept dictionary; new 20260917 E1 submission profiles re-lock to it. Review 2026-09-17 uncommitted working-tree fixes (SICdb death clock, novelty/publication chain, Copilot turn authority, usage bindings, frontend ownership splits) are separate source changes not covered by this resource measurement.",
+  "baseline_reason": "P0/P1/P2 fix program 2026-09-17: re-measured after reviewed fixes (replaces not-covered disclaimer)",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -504,7 +513,7 @@
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "090cd53523b66169a81a70797b038798d6e32b62ea233154a11ee72bf33a74d8",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "8a77e4ee1e765a24ac1275fef72d12c95af95c5d3ab1301460534e264374eb81",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "17cbe43c3626550a93d1753f3f21c171f430aba83e1daad3c9a42ddc0ce705c4",
     "src/easyicu/research_agent/planning/figure_strategy.py": "688f497e13b618ee13f17dd8821294a5bdc5bab5d5d849aa365e57af25a2f5bf",
     "src/easyicu/research_agent/planning/study_design.py": "8c26e3d42c1397839e3347317b90ceadab56beee58a500170cb182535aca7a3c",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "c8312eb455d0a65d8c3936bbf8f770cb15a64925923e679cc2509bcf5036d649",
@@ -518,7 +527,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "a1e58810ac0246ceeaf44a3b87017fc8fd36fd89bb70f0c16ec9e5db3aebdef9",
+    "src/easyicu/research_agent/schema.py": "4b54e5d969961579294cb2774c95f98ef819fb6be321b111f55df8d8e3803d0d",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {
@@ -593,7 +602,7 @@
             "bytes": 4657,
             "included": true,
             "required": true,
-            "sha256": "a913f61fd12d1d356c5c2f7c416cde9c113f6b7ff8d9ee49b641c65577d1dd4d"
+            "sha256": "b170df71aca19069218182603164f90342f29f660fd1739ac54a919fd2d2e56f"
           }
         },
         "system_bytes": 8444,
@@ -623,15 +632,15 @@
       "planning_contract_sha256": "1503bcadc43869ccfef3acd0a682303740b73d11d167d05db8208bab247c69e0",
       "question": "Estimate Sepsis-3 prevalence and mortality association.",
       "resource_added_bytes": 4657,
-      "resource_allowlist_sha256": "bdf3d416e565ee1e1d3c5a2fc47838fab40b1b524953445340aaee6fe091a7e8",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "8adc13a12942ac73918005d454a567e8477bbc5f25682e947d60e4e800ddf855",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "descriptive",
       "selected_know_how": [
         {
           "card_id": "sepsis_prognosis",
           "data_readiness": "partial",
-          "file_sha256": "30fcb80694d0f528a948e3a5dd7574640bd39858fb081e7b5b0587be758f767f",
+          "file_sha256": "026504ee8ac555ffce3cf3f34d684888b56f05de2c7529b1f153fa64bb243cc8",
           "score": 0.845385,
           "version": "1.0.0"
         }
@@ -701,7 +710,7 @@
             "bytes": 4419,
             "included": true,
             "required": true,
-            "sha256": "0777432de12b6391a459188322498687c57263b7982da963c0b7e824c6ac96db"
+            "sha256": "4976d3d22b218491ced190ba390dbde6c44242d02dad3fe9b8d7c3b4e51e0717"
           }
         },
         "system_bytes": 8444,
@@ -731,15 +740,15 @@
       "planning_contract_sha256": "50e21b7661aafd128d44ec79f5ee5b0828e92a427a3c6c505273ad900529caa3",
       "question": "Estimate the association of first-24-hour peak lactate with in-hospital mortality.",
       "resource_added_bytes": 4419,
-      "resource_allowlist_sha256": "8425b083b1c1310e40c47d0e55a1d7a167c8246bfb5e836380aabf936dd9398e",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [
         {
           "card_id": "early_peak_lactate_association",
           "data_readiness": "partial",
-          "file_sha256": "6dd71c90dfb32a55d63d2a219bd198d669f88f9606695992013fcc416c56b9ec",
+          "file_sha256": "5faecfef24d846e1e08167b2334bd1e98702427aa09e1537f230922aa835bba3",
           "score": 0.893182,
           "version": "1.1.0"
         }
@@ -833,8 +842,8 @@
       "planning_contract_sha256": "f8de06919f4548c497d699ae8ea732f6cd8ecd76030fb52c34ff13d1fe938662",
       "question": "Estimate the KDIGO AKI stage gradient for mortality and length of stay.",
       "resource_added_bytes": 0,
-      "resource_allowlist_sha256": "8425b083b1c1310e40c47d0e55a1d7a167c8246bfb5e836380aabf936dd9398e",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [],
@@ -927,8 +936,8 @@
       "planning_contract_sha256": "7787cb4516d89155e10167ef38a1fe6a75c18f2cab1dd33029a381712f6093de",
       "question": "Assess hepatobiliary SOFA and bilirubin missingness in mortality analysis.",
       "resource_added_bytes": 0,
-      "resource_allowlist_sha256": "8425b083b1c1310e40c47d0e55a1d7a167c8246bfb5e836380aabf936dd9398e",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [],
@@ -1004,7 +1013,7 @@
             "bytes": 4640,
             "included": true,
             "required": true,
-            "sha256": "8f99729b80786993213ceda809324fa0625026e2aefdb86926b2bafeb5056c6a"
+            "sha256": "5df7907d56d4a8386480890f1df9af1db127d4b2b4664c32145eeb7884bde161"
           }
         },
         "system_bytes": 8444,
@@ -1034,15 +1043,15 @@
       "planning_contract_sha256": "bfe258634fb7add9efb0ddfc113cde254a7772148b59c47af0f3f0182c0cc8bc",
       "question": "Build a first-24-hour mortality risk prediction model.",
       "resource_added_bytes": 4640,
-      "resource_allowlist_sha256": "353e34f54581acd05c5d457bf1ff864bd1521a219da40800d755378faa6f65db",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "a555fc5c589dbc20a2f3ccada523c79ada2ae697f4b009e477022b7bf09cee81",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "prediction",
       "selected_know_how": [
         {
           "card_id": "icu_mortality_prediction",
           "data_readiness": "partial",
-          "file_sha256": "62f3d0edd406f48c5db20fc8970f207012b4bfd8b977da5a8a258b7d93c5b4db",
+          "file_sha256": "ae02940fe3531aa24fca4446748888474bec0ff8de8ad899b7ec6a806817f72b",
           "score": 0.9375,
           "version": "1.0.0"
         }
@@ -1107,7 +1116,7 @@
             "bytes": 4500,
             "included": true,
             "required": true,
-            "sha256": "58bfae6f8be6bc5d94074babd88e231d5e7f6015bfc6e604e7ebb12a5fd826f8"
+            "sha256": "a280aa3e1242ab4b34e5ccd73abdf3b9b751cc5f99b0a979115c411d45413e74"
           }
         },
         "system_bytes": 8444,
@@ -1137,15 +1146,15 @@
       "planning_contract_sha256": "82172ff411943278938076647bd408f87f0369c127268bed8fe7bd529426cd8b",
       "question": "Discover candidate sepsis subphenotypes from labs and vital signs.",
       "resource_added_bytes": 4500,
-      "resource_allowlist_sha256": "61fe53327e49a922d31adbc835b46a0f06e20e5e49091667592a92baa098a578",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "phenotyping",
       "selected_know_how": [
         {
           "card_id": "longitudinal_icu_phenotyping",
           "data_readiness": "not_ready",
-          "file_sha256": "35a396ab07c6e0f4c7a272d63e36fc73296aad1cf262da3867864983b6e352a8",
+          "file_sha256": "51afa923a6ce2a1089c86c5d02b075eab8ae548ac6643b9ed31a88c34b17a431",
           "score": 0.8,
           "version": "2.0.0"
         }
@@ -1221,7 +1230,7 @@
             "bytes": 4643,
             "included": true,
             "required": true,
-            "sha256": "8dc1edce6b51c3cbc55ad1993069ed79e0495d6a3379874ceda8b3986ce93eb5"
+            "sha256": "b1ab9d351b6d8ed0103e390e368bf769304cf7eda4bf8437aedeb359b19632ee"
           }
         },
         "system_bytes": 8444,
@@ -1251,15 +1260,15 @@
       "planning_contract_sha256": "e227ee73ac9220ebc9cb705c73311d1533abeb13362f661160a2f6a24f4f1fc2",
       "question": "Estimate mechanical ventilation survival and 28-day mortality.",
       "resource_added_bytes": 4643,
-      "resource_allowlist_sha256": "cbdc057474f66ede5568ab7b6fc23d22e245102a4a6b9a6244501c9266ffa9bf",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "9fdb53508a14f7aeee8455163b7c328ee6430d83fb990fee9173a5719d84d7aa",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "time_to_event",
       "selected_know_how": [
         {
           "card_id": "mechanical_ventilation_liberation",
           "data_readiness": "partial",
-          "file_sha256": "79ece9edf2e7c3a00066a72253ecf3c391cade9c99d7daa8e7718b6054a16f1e",
+          "file_sha256": "1ea112b3d320a4f958517216154cc09a7f74986f575ba83339dafc2c7858470d",
           "score": 0.839091,
           "version": "1.0.0"
         }
@@ -1336,7 +1345,7 @@
             "bytes": 4533,
             "included": true,
             "required": true,
-            "sha256": "3de3769a06db36143b768db8c60ebed7f62c78d37a7f26d6a950f6f94b2a85ce"
+            "sha256": "5e855c4a9111e140154120e10325778b23e9fc23301730e44dbd548ab8f7713c"
           }
         },
         "system_bytes": 8444,
@@ -1366,15 +1375,15 @@
       "planning_contract_sha256": "aafe0c660d3095ecd5bb1da2d748f729f6bb180d98012f6af64edc302a9de199",
       "question": "Compare vasopressor strategies with a confounding-aware causal analysis.",
       "resource_added_bytes": 4533,
-      "resource_allowlist_sha256": "e6752b6437ea591ace799b991da9d953c655dbab0558d31954820fcae1a56cf4",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "2acd291bd3a92bcc1d6ac991e2af1e269e7f1a5db76a9c2f1a22b921f6e9dd29",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "causal_emulation",
       "selected_know_how": [
         {
           "card_id": "vasopressor_comparative_effectiveness",
           "data_readiness": "partial",
-          "file_sha256": "0ef5423aad58eeb3682704f297582cd14ebe277c466edade4fc1db9b9c9a62f5",
+          "file_sha256": "c3cea48d338a467a178d84b61cef5b470025089b0b2c23cfdb9f22f78945d6ed",
           "score": 0.840526,
           "version": "2.0.0"
         }
@@ -1437,7 +1446,7 @@
             "bytes": 4500,
             "included": true,
             "required": true,
-            "sha256": "58bfae6f8be6bc5d94074babd88e231d5e7f6015bfc6e604e7ebb12a5fd826f8"
+            "sha256": "a280aa3e1242ab4b34e5ccd73abdf3b9b751cc5f99b0a979115c411d45413e74"
           }
         },
         "system_bytes": 8444,
@@ -1467,15 +1476,15 @@
       "planning_contract_sha256": "5019311b1cd8e5ee709061265038eece15d09d9c7072757c4f4c2027609b143c",
       "question": "Cluster longitudinal ICU trajectories into stable subphenotypes.",
       "resource_added_bytes": 4500,
-      "resource_allowlist_sha256": "61fe53327e49a922d31adbc835b46a0f06e20e5e49091667592a92baa098a578",
-      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
+      "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "phenotyping",
       "selected_know_how": [
         {
           "card_id": "longitudinal_icu_phenotyping",
           "data_readiness": "not_ready",
-          "file_sha256": "35a396ab07c6e0f4c7a272d63e36fc73296aad1cf262da3867864983b6e352a8",
+          "file_sha256": "51afa923a6ce2a1089c86c5d02b075eab8ae548ac6643b9ed31a88c34b17a431",
           "score": 0.811765,
           "version": "2.0.0"
         }

@@ -2345,11 +2345,30 @@ def format_violation_message(violations: List[Dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def fallback_method_compatibility_findings(
+    *,
+    code: str,
+    context: ResearchContext,
+    step: Optional[AnalysisStep] = None,
+) -> List[Dict[str, object]]:
+    """Force fallback products through the method-compatibility gate.
+
+    C-F9: MockLLM / deterministic-fallback code must pass the same
+    compatibility check as LLM code. Returns violation dicts (empty when
+    clean); callers turn non-empty results into fail-closed findings.
+    Thin wrapper over :func:`detect_forbidden_pattern_usage` (no logic
+    change to the matrix itself).
+    """
+
+    return detect_forbidden_pattern_usage(code, context, step)
+
+
 __all__ = [
     "FORBIDDEN_METHOD_BY_KIND",
     "PAIRWISE_EVALUATION_FULL_COHORT_MAX_ROWS",
     "PAIRWISE_EVALUATION_MAX_SAMPLE_SIZE",
     "detect_forbidden_pattern_usage",
+    "fallback_method_compatibility_findings",
     "format_violation_message",
     "render_computational_budget_constraints",
     "render_variable_constraints",

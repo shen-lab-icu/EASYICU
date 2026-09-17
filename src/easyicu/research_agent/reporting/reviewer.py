@@ -56,6 +56,10 @@ from ..authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
 from ..contracts.product_identity import typed_product
+from .review_disclaimer import (
+    SIMULATED_REVIEW_CLAIM_BOUNDARY,
+    SIMULATED_REVIEW_MODE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +163,8 @@ class ReviewerReport:
             # roles; it is not independent external peer review.  Record that
             # explicitly so downstream gates cannot read the report as an
             # external scientific review receipt.
-            "review_mode": "simulated_deterministic",
-            "claim_boundary": (
-                "Simulated three-role checklist. Not independent external "
-                "review and not publication authority."
-            ),
+            "review_mode": SIMULATED_REVIEW_MODE,
+            "claim_boundary": SIMULATED_REVIEW_CLAIM_BOUNDARY,
         }
 
     def to_json(self) -> Dict[str, Any]:

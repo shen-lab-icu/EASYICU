@@ -752,7 +752,7 @@ def _normalize_legacy_export_categorical(
 
     from ...config import load_src_cfg
     from ...resources import load_dictionary
-    from ...concept.callback_apply import _apply_callback
+    from ...concept.callback_apply import apply_callback
 
     definition = load_dictionary().get(concept)
     levels = getattr(definition, "levels", None)
@@ -782,7 +782,7 @@ def _normalize_legacy_export_categorical(
             "requires a declared apply_map callback"
         )
 
-    normalized = _apply_callback(
+    normalized = apply_callback(
         frame.copy(),
         sources[0],
         concept,

@@ -2070,21 +2070,21 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
     to the next phase.
     """
     from easyicu.research_agent.contracts.runtime import (
-        _PlanPhaseResult,
-        _ExecutePhaseResult,
-        _WritePhaseResult,
+        PlanPhaseResult,
+        ExecutePhaseResult,
+        WritePhaseResult,
     )
     from easyicu.research_agent.pipeline import (
-        _PlanPhaseResult as PipelinePlanPhaseResult,
-        _ExecutePhaseResult as PipelineExecutePhaseResult,
-        _WritePhaseResult as PipelineWritePhaseResult,
+        PlanPhaseResult as PipelinePlanPhaseResult,
+        ExecutePhaseResult as PipelineExecutePhaseResult,
+        WritePhaseResult as PipelineWritePhaseResult,
     )
 
-    assert PipelinePlanPhaseResult is _PlanPhaseResult
-    assert PipelineExecutePhaseResult is _ExecutePhaseResult
-    assert PipelineWritePhaseResult is _WritePhaseResult
+    assert PipelinePlanPhaseResult is PlanPhaseResult
+    assert PipelineExecutePhaseResult is ExecutePhaseResult
+    assert PipelineWritePhaseResult is WritePhaseResult
 
-    plan_fields = {f.name for f in fields(_PlanPhaseResult)}
+    plan_fields = {f.name for f in fields(PlanPhaseResult)}
     # Names the execute phase actually reads off plan_result, verified
     # against pipeline_execute.run_execute_phase body 2026-05-17.
     required_plan_fields = {
@@ -2105,7 +2105,7 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
         f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
     )
 
-    exec_fields = {f.name for f in fields(_ExecutePhaseResult)}
+    exec_fields = {f.name for f in fields(ExecutePhaseResult)}
     required_exec_fields = {
         "plan",
         "per_step_records",
@@ -2119,7 +2119,7 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
         "by run_execute_phase / consumed by the write phase."
     )
 
-    write_fields = {f.name for f in fields(_WritePhaseResult)}
+    write_fields = {f.name for f in fields(WritePhaseResult)}
     required_write_fields = {
         "literature",
         "bound_path",

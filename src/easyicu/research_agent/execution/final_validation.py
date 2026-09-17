@@ -328,6 +328,7 @@ def _evaluate_final_deterministic_gates(
         step_summary=step_summary,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
+        semantic_stub_injected=step_record.get("semantic_stub_injected"),
         effect_output_is_authorized=effect_output_authorized(
             step,
             step_record=step_record,

@@ -617,7 +617,7 @@ def test_cross_step_resolution_still_flags_fabrication(tmp_path: Path):
         step=_fig_step(), out_dir=fig_out, run_dir=tmp_path, step_summary={}
     )
     errors = [f for f in findings if f.severity == "error"]
-    assert errors, "tampered figure must still be flagged"
+    assert len(errors) >= 1, "tampered figure must still be flagged"
 
 
 # --- fix #2 (2026-07-08): structural join fallback for unregistered key names ---
@@ -1646,7 +1646,7 @@ def test_declared_parent_cannot_be_laundered_by_unrelated_table(tmp_path: Path):
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors, "an unrelated table must not authenticate a declared parent"
+    assert len(errors) >= 1, "an unrelated table must not authenticate a declared parent"
     candidates = errors[0].detail.get("candidate_upstream_tables", [])
     assert candidates and all("declared_parent.csv" in item for item in candidates)
 
@@ -1685,7 +1685,7 @@ def test_duplicate_declared_basename_requires_exact_source_step(tmp_path: Path):
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["best_mismatch"]["reason"] == (
         "ambiguous_declared_source_table_lineage"
     )
@@ -1986,7 +1986,7 @@ def test_figure_source_rejects_summary_parent_that_conflicts_with_host_binding(
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "resolved_upstream_binding_mismatch"
 
 
@@ -2046,7 +2046,7 @@ def test_figure_source_cannot_use_unbound_table_from_same_producer(tmp_path: Pat
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["best_mismatch"]["reason"] == (
         "declared_source_table_not_found"
     )
@@ -2076,7 +2076,7 @@ def test_figure_source_rejects_parent_superseded_by_failure(tmp_path: Path):
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["noncurrent_upstream_step_ids"] == ["01_parent"]
 
 
@@ -2101,7 +2101,7 @@ def test_figure_source_rejects_tampered_parent_after_registration(
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert "hash-verified upstream" in errors[0].message
 
 
@@ -2143,7 +2143,7 @@ def test_figure_source_rejects_upstream_path_traversal(tmp_path: Path):
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["unsafe_upstream_step_ids"] == ["../../outside"]
 
 
@@ -2167,7 +2167,7 @@ def test_figure_source_rejects_declared_table_path_traversal(tmp_path: Path):
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["unsafe_declared_source_tables"] == [
         "../outcome_by_group.csv"
     ]
@@ -2189,7 +2189,7 @@ def test_figure_source_rejects_missing_upstream_binding(tmp_path: Path):
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "missing_upstream_step_binding"
 
 
@@ -2226,7 +2226,7 @@ def test_figure_source_rejects_unverifiable_source_data_file(
     )
 
     errors = [item for item in findings if item.severity == "error"]
-    assert errors, findings
+    assert len(errors) >= 1, findings
     reasons = {str(item.detail.get("reason") or "") for item in errors}
     expected = {
         "malformed": "source_data_read_failed",
@@ -2361,7 +2361,7 @@ def test_effect_figure_requires_contract_declared_local_source_data(tmp_path: Pa
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "missing_source_data"
 
 
@@ -2420,7 +2420,7 @@ def test_effect_figure_validator_rejects_noncanonical_source_descriptors(
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "invalid_contract_source_data"
 
 
@@ -2446,7 +2446,7 @@ def test_honest_decoy_bundle_cannot_authenticate_registered_forged_figure(
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "missing_figure_contract"
 
 
@@ -2473,7 +2473,7 @@ def test_statistic_backed_figure_also_requires_same_stem_contract(tmp_path: Path
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "missing_figure_contract"
 
 
@@ -2517,7 +2517,7 @@ def test_statistic_backed_result_cannot_self_label_as_supporting_to_skip_source(
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "missing_source_data"
 
 
@@ -2606,7 +2606,7 @@ def test_mixed_effect_step_still_rejects_forged_own_source_data(tmp_path: Path):
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert any(
         finding.detail.get("best_mismatch", {}).get("reason")
         == "source_values_disagree"
@@ -2911,7 +2911,7 @@ def test_statistic_backed_figure_rejects_wrong_source_value(tmp_path: Path):
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert any(
         finding.detail.get("reason")
         in {"no_verifiable_figure_values", "incomplete_source_lineage_coverage"}
@@ -3019,7 +3019,7 @@ def test_prediction_result_cannot_self_label_audit_to_skip_source_data(
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "missing_source_data"
 
 
@@ -3094,7 +3094,7 @@ def test_model_file_alone_cannot_authenticate_plotted_metrics(tmp_path: Path):
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert errors[0].detail["reason"] == "non_replayable_figure_input"
 
 
@@ -3301,7 +3301,7 @@ def test_foreign_typed_input_key_cannot_name_a_bound_source_table(tmp_path: Path
         figure_products=["figure:outcome_distribution"],
     )
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert any(
         (finding.detail or {}).get("reason")
         in {"declared_source_table_not_found", "incomplete_source_lineage_coverage"}
@@ -4293,7 +4293,7 @@ def test_multi_parent_effect_figure_requires_source_coverage_for_every_parent(
     )
 
     errors = [finding for finding in findings if finding.severity == "error"]
-    assert errors
+    assert len(errors) >= 1
     assert any(
         finding.detail.get("reason") == "incomplete_source_lineage_coverage"
         and "robust_or_estimates.csv" in finding.detail.get("missing_bound_tables", [])

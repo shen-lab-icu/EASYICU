@@ -74,6 +74,7 @@ from .exposure_outcome_distribution_executor import (
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import load_typed_input
+from ._shared import figure_product as _figure_product, method_head as _method_head
 
 __all__ = [
     "ADJUSTED_ASSOCIATION_FIGURE_INPUT",
@@ -138,21 +139,6 @@ ADJUSTED_ASSOCIATION_FIGURE_CAPABILITY = TypedInputCapability(
 #: Anything else is reported on the figure instead of being drawn as a point --
 #: a failed fit rendered as a dot is indistinguishable from a real estimate.
 _FITTED_STATUSES = frozenset({"fitted", "ok", "converged", "success"})
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]*", product)
-    ):
-        return None
-    return product
 
 
 def _binding_is_host_contract(binding: Any) -> bool:

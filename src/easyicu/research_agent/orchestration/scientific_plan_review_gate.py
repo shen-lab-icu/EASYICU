@@ -17,7 +17,7 @@ from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
 )
 from ..authority.evidence_store import EvidenceStore
-from ..contracts.runtime import _PlanPhaseResult
+from ..contracts.runtime import PlanPhaseResult
 from ..literature import LiteratureBundle
 from ..planning.figure_strategy import ArticleFigureStrategy
 from ..planning.scientific_review import (
@@ -66,7 +66,7 @@ class PreplanAbortContext:
     llm: Any
     resume_state: Any
 
-    def finish(self, pipeline: Any, *, reason: str) -> _PlanPhaseResult:
+    def finish(self, pipeline: Any, *, reason: str) -> PlanPhaseResult:
         aborted = pipeline._finalise_aborted(
             run_id=self.run_id,
             run_dir=self.run_dir,
@@ -76,7 +76,7 @@ class PreplanAbortContext:
             findings=self.findings,
             reason=reason,
         )
-        return _PlanPhaseResult(
+        return PlanPhaseResult(
             context=self.context,
             agent_context=self.agent_context,
             context_path=self.context_path,

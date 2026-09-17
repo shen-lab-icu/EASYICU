@@ -178,6 +178,7 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         "publication_figure_skill_summary",
         "publication_figure_svg",
         "manuscript_critique",
+        "retry_policy_receipt",
     } <= evidence_ids
     assert (run_dir / "hypothesis_blueprint.json").exists()
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
@@ -205,6 +206,17 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
     )
     assert partial["runtime_state"]["analysis_family"]
+    assert partial["retry_policy"]["attempt_denominator"] >= 1
+    retry_record = next(
+        record
+        for record in manifest["evidence"]
+        if record["evidence_id"] == "retry_policy_receipt"
+    )
+    retry_receipt = json.loads(
+        (run_dir / retry_record["relative_path"]).read_text(encoding="utf-8")
+    )
+    assert retry_receipt["attempt_denominator"] >= 1
+    assert len(retry_receipt["policy_sha256"]) == 64
     ok_step_records = [
         record
         for record in manifest["per_step_records"]
@@ -4323,7 +4335,7 @@ def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
             "skipped": "No valid lactate_max_24h data",
         },
     )
-    assert findings
+    assert len(findings) >= 1, "expected at least one step_contract finding"
     assert findings[0].validator == "step_contract"
     assert findings[0].severity == "error"
     assert "primary association estimate" in findings[0].message
@@ -4462,7 +4474,7 @@ def test_step_contract_findings_rejects_nested_ci_without_effect_value(ra):
         },
     )
 
-    assert findings
+    assert len(findings) >= 1, "expected at least one step_contract finding"
     assert findings[0].validator == "step_contract"
     assert findings[0].severity == "error"
 
@@ -5309,7 +5321,8 @@ def test_split_effect_figure_when_exact_bound_table_proves_figure_scale(ra):
         "04_primary_association_figure",
     ]
     assert revised.steps[1].inputs == ["table:primary_or"]
-    assert findings
+    assert len(findings) >= 1, "expected at least one plan-split finding"
+    assert findings[0].message, "split finding must carry a message"
 
 
 def test_split_generic_primary_adjusted_effect_from_planner_model_roster(ra):
@@ -5355,7 +5368,8 @@ def test_split_generic_primary_adjusted_effect_from_planner_model_roster(ra):
     assert revised.steps[1].inputs == [
         "table:adjusted_association_estimates",
     ]
-    assert findings
+    assert len(findings) >= 1, "expected at least one plan-split finding"
+    assert findings[0].message, "split finding must carry a message"
 
 
 @pytest.mark.parametrize(
@@ -5629,7 +5643,7 @@ def test_plan_cap_drops_figure_when_its_typed_source_closure_exceeds_cap(ra):
         "table:t3",
         "table:t4",
     }
-    assert findings
+    assert len(findings) >= 1, "expected at least one cap finding"
     assert findings[0].detail["dependency_displaced_figure_step_ids"]
 
 
@@ -5698,7 +5712,7 @@ def test_plan_cap_preserves_figure_source_parent_pair(ra):
         "05_sensitivity_comparison_figure"
     )
     assert "03_missingness" not in step_ids
-    assert findings
+    assert len(findings) >= 1, "expected at least one cap finding"
     assert findings[0].detail["preserved_figure_step_ids"] == [
         "05_sensitivity_comparison_figure"
     ]
@@ -5802,7 +5816,7 @@ def test_plan_cap_makes_room_for_late_primary_anchor_without_exceeding_cap(ra):
 
     assert len(step_ids) == 4
     assert "05_primary_adjusted_model" in step_ids
-    assert findings
+    assert len(findings) >= 1, "expected at least one cap finding"
     assert "05_primary_adjusted_model" in findings[0].detail["protected_step_ids"]
 
 

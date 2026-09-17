@@ -759,7 +759,9 @@ def test_locked_sensitivity_gate_blocks_missing_extra_ids_and_wrong_universe(
     )
     errors = [finding for finding in findings if finding.severity == "error"]
 
-    assert errors
+    assert len(errors) >= 1, "expected at least one robustness error"
+    assert all(finding.severity == "error" for finding in errors)
+    assert "robustness_spec_lock" in {finding.validator for finding in errors}
     assert all(
         finding.detail.get("step_id") == "07_cohort_definition_sensitivity_comparison"
         for finding in errors

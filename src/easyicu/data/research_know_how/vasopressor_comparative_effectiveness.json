@@ -7,7 +7,7 @@
   "clinical_topics": ["vasopressor", "norepinephrine", "shock", "comparative effectiveness", "target trial", "causal inference"],
   "topic_aliases": ["vasopressor", "norepinephrine", "vasopressor comparative effectiveness", "pressor treatment", "升压药", "去甲肾上腺素", "血管活性药"],
   "study_families": ["causal_emulation", "time_to_event"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "Patients simultaneously eligible for the compared vasopressor strategies at a reproducible treatment-decision landmark.",
     "time_zero": "The common treatment-eligibility and assignment time; avoid defining treatment using information after this point.",

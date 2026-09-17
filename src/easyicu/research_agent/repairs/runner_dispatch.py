@@ -2053,4 +2053,48 @@ def dispatch_runner_repair_candidate(
     return None
 
 
-__all__ = ["RunnerRepairServices", "dispatch_runner_repair_candidate"]
+_UNDEFINED_HELPER_STUB_REPAIR_RE = re.compile(
+    r"^undefined_helper_stub_(?P<name>[A-Za-z_][A-Za-z0-9_]*)_v1$"
+)
+
+
+def undefined_helper_stub_name_for_repair(repair_name: Any) -> Optional[str]:
+    """Return the stubbed helper name for a Fix F repair id, else ``None``.
+
+    Fix F repair ids embed the injected helper
+    (``undefined_helper_stub_<name>_v1``); every other repair id yields
+    ``None`` so callers can mark step records without allowlisting repairs.
+    """
+
+    match = _UNDEFINED_HELPER_STUB_REPAIR_RE.match(str(repair_name or ""))
+    return match.group("name") if match is not None else None
+
+
+def mark_semantic_stub_injection(
+    step_record: Any, repair_name: Any
+) -> Optional[str]:
+    """Record a Fix F stub injection on the step record.
+
+    When ``repair_name`` is a Fix F undefined-helper stub, sets
+    ``step_record["semantic_stub_injected"]`` to the helper name and returns
+    it; otherwise leaves the record untouched and returns ``None``.  The
+    step-result evidence gate turns the marker into a warning finding so the
+    semantic substitution stays visible without failing the step closed.
+    """
+
+    helper_name = undefined_helper_stub_name_for_repair(repair_name)
+    if helper_name is None:
+        return None
+    try:
+        step_record["semantic_stub_injected"] = helper_name
+    except (TypeError, AttributeError):
+        return None
+    return helper_name
+
+
+__all__ = [
+    "RunnerRepairServices",
+    "dispatch_runner_repair_candidate",
+    "mark_semantic_stub_injection",
+    "undefined_helper_stub_name_for_repair",
+]

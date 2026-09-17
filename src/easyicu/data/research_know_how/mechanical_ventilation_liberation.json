@@ -7,7 +7,7 @@
   "clinical_topics": ["mechanical ventilation", "weaning", "liberation", "extubation", "reintubation", "ventilator-free days"],
   "topic_aliases": ["mechanical ventilation", "mechanical ventilation liberation", "ventilator liberation", "ventilator weaning", "extubation failure", "reintubation", "ventilator-free days", "机械通气", "机械通气脱机", "撤机", "脱机", "拔管失败", "再插管", "呼吸机脱离"],
   "study_families": ["association", "time_to_event", "prediction"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "Patients with a reproducibly identified invasive-mechanical-ventilation episode and adequate episode timing.",
     "time_zero": "Intubation, start of invasive ventilation, or a defined readiness-to-wean landmark selected before exposure classification.",

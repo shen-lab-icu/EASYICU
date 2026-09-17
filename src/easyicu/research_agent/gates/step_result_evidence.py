@@ -765,6 +765,53 @@ def _payload_mentions_required_exposure(
     return bool(required_norm and required_norm in blob_norm)
 
 
+def semantic_stub_injection_findings(
+    *,
+    step: AnalysisStep,
+    semantic_stub_injected: Optional[str] = None,
+) -> List[ValidationFinding]:
+    """Surface a Fix F undefined-helper stub injection as a warning.
+
+    When the deterministic runner repair injected a tolerant stub for a
+    helper the agent referenced but never defined, the execution host passes
+    the stubbed helper name (read off the step record's
+    ``semantic_stub_injected`` marker) through ``semantic_stub_injected``.
+    The gate takes only that plain marker string — never the orchestration
+    step record — so the finding stays a report, not a control coupling.
+    The stub only fires at serialization-hook parameter positions, but it
+    still substitutes host code for agent intent, so the substitution stays
+    visible here.  This is deliberately warning-only: failing closed would
+    break existing flows that already rely on the serialization rescue.
+    """
+
+    helper_name = (
+        semantic_stub_injected.strip()
+        if isinstance(semantic_stub_injected, str)
+        else ""
+    )
+    if not helper_name:
+        return []
+    return [
+        ValidationFinding(
+            validator="semantic_stub_injection",
+            severity="warning",
+            message=(
+                f"Step {step.step_id} executed with a host-injected tolerant "
+                f"stub for undefined helper {helper_name!r}. The stub "
+                "only applies at serialization-hook parameter positions and "
+                "returns a JSON-friendly projection of its argument, but it "
+                "still replaces agent intent with host code; treat downstream "
+                "claims that depend on that helper as host-rescued."
+            ),
+            detail={
+                "kind": "semantic_stub_injected",
+                "step_id": step.step_id,
+                "helper_name": helper_name,
+            },
+        )
+    ]
+
+
 def _primary_exposure_measurement_filter_findings(
     *,
     step: AnalysisStep,
@@ -816,3 +863,111 @@ def _primary_exposure_measurement_filter_findings(
             },
         )
     ]
+
+
+# --- Public cross-module aliases (thin wrappers, no logic change) ---
+# Private names kept for backward compatibility; cross-owner callers must use
+# the public names below.
+
+
+def finite_float(value: Any) -> Optional[float]:
+    """Public alias of :data:`_finite_float` (no logic change)."""
+
+    return _finite_float(value)
+
+
+def exposure_names_match(required: str, actual: str) -> bool:
+    """Public alias of :func:`_exposure_names_match` (no logic change)."""
+
+    return _exposure_names_match(required, actual)
+
+
+def primary_effect_from_summary(
+    step_summary: Dict[str, Any],
+) -> Optional[float]:
+    """Public alias of :func:`_primary_effect_from_summary`."""
+
+    return _primary_effect_from_summary(step_summary)
+
+
+def primary_exposure_contract_findings(*args: Any, **kwargs: Any) -> List[ValidationFinding]:
+    """Public alias of :func:`_primary_exposure_contract_findings`."""
+
+    return _primary_exposure_contract_findings(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def primary_exposure_measurement_filter_findings(
+    *args: Any, **kwargs: Any
+) -> List[ValidationFinding]:
+    """Public alias of :func:`_primary_exposure_measurement_filter_findings`."""
+
+    return _primary_exposure_measurement_filter_findings(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def problematic_metric_keys(*args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    """Public alias of :func:`_problematic_metric_keys`."""
+
+    return _problematic_metric_keys(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def cluster_count_from_summary(*args: Any, **kwargs: Any) -> Optional[float]:
+    """Public alias of :func:`_cluster_count_from_summary`."""
+
+    return _cluster_count_from_summary(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def cluster_selection_evidence_key(*args: Any, **kwargs: Any) -> Optional[str]:
+    """Public alias of :func:`_cluster_selection_evidence_key`."""
+
+    return _cluster_selection_evidence_key(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def clustering_evidence_from_completed_records(
+    *args: Any, **kwargs: Any
+) -> Optional[Dict[str, Any]]:
+    """Public alias of :func:`_clustering_evidence_from_completed_records`."""
+
+    return _clustering_evidence_from_completed_records(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def prediction_auroc_from_completed_records(
+    *args: Any, **kwargs: Any
+) -> Optional[float]:
+    """Public alias of :func:`_prediction_auroc_from_completed_records`."""
+
+    return _prediction_auroc_from_completed_records(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def prediction_calibration_from_completed_records(
+    *args: Any, **kwargs: Any
+) -> Optional[float]:
+    """Public alias of :func:`_prediction_calibration_from_completed_records`."""
+
+    return _prediction_calibration_from_completed_records(*args, **kwargs)  # type: ignore[arg-type]
+
+
+__all__ = [
+    "_cluster_count_from_summary",
+    "_cluster_selection_evidence_key",
+    "_clustering_evidence_from_completed_records",
+    "_exposure_names_match",
+    "_finite_float",
+    "_prediction_auroc_from_completed_records",
+    "_prediction_calibration_from_completed_records",
+    "_primary_effect_from_summary",
+    "_primary_exposure_contract_findings",
+    "_primary_exposure_measurement_filter_findings",
+    "_problematic_metric_keys",
+    "cluster_count_from_summary",
+    "cluster_selection_evidence_key",
+    "clustering_evidence_from_completed_records",
+    "exposure_names_match",
+    "finite_float",
+    "prediction_auroc_from_completed_records",
+    "prediction_calibration_from_completed_records",
+    "primary_effect_from_summary",
+    "primary_exposure_contract_findings",
+    "primary_exposure_measurement_filter_findings",
+    "problematic_metric_keys",
+    "semantic_stub_injection_findings",
+]

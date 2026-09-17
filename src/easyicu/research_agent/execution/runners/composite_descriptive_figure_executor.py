@@ -33,6 +33,7 @@ from ...schema import AnalysisStep
 from .cohort_flow_figure_executor import render_cohort_flow_axis
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
+from ._shared import figure_product as _figure_product, method_head as _method_head
 
 COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS = (
     "table:cohort_flow",
@@ -190,21 +191,6 @@ _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
     TypedInputCapability(required=frozenset(profile))
     for profile in _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES
 )
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", product)
-    ):
-        return None
-    return product
 
 
 def _binding_carries_required_columns(binding: Any, input_key: str) -> bool:

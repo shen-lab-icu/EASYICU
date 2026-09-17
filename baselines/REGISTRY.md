@@ -12,6 +12,9 @@ and how to fetch the repo for a local A/B if needed.
 * To fetch any entry locally run
   `python tools/fetch_baselines.py --name <name>`; the tool reads the
   same YAML block at the end of this file.
+* `LOCK.json` pins only the 5 paper-cited A/B checkouts
+  (`data-to-paper`, `healthflow`, `ai-scientist-v2`, `openlens-ai`, `m4`).
+  Every other entry below is an unpinned reference at its listed ref.
 * Do not commit fetched baselines into the EasyICU repo. Fetches
   land under `baselines/_checkouts/` which is git-ignored.
 
@@ -101,7 +104,7 @@ and how to fetch the repo for a local A/B if needed.
 
 #### HealthFlow
 
-* **repo:** https://github.com/ylab-open/HealthFlow
+* **repo:** https://github.com/yhzhu99/HealthFlow
 * **pin:** `45dab966959b6730ec20e8f3b3e22998735523ac`
 * **contrast:** Self-evolving meta-planner with EHRFlowBench. EasyICU
   borrows the meta-planner digest (O10 / `RunMemory`) and targets

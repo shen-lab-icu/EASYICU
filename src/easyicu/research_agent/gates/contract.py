@@ -76,11 +76,11 @@ from ..contracts.step_families import (
     _step_expects_figure,
 )
 from .step_contract import (
-    _step_contract_findings,
+    step_contract_findings as _step_contract_findings,
 )
 from .step_result_evidence import (
-    _primary_exposure_contract_findings,
-    _primary_exposure_measurement_filter_findings,
+    primary_exposure_contract_findings as _primary_exposure_contract_findings,
+    primary_exposure_measurement_filter_findings as _primary_exposure_measurement_filter_findings,
 )
 from ..contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
@@ -693,6 +693,7 @@ def _step_deterministic_contract_findings(
     completed_step_records: Sequence[Mapping[str, Any]],
     resolved_input_bindings: Mapping[str, Mapping[str, Any]],
     effect_output_is_authorized: bool,
+    semantic_stub_injected: Optional[str] = None,
     out_dir: Path,
     run_dir: Path,
     universe_path: Path,
@@ -734,6 +735,10 @@ def _step_deterministic_contract_findings(
     (``step_execution_cohort_path`` in the early gate / ``execution_cohort_path``
     in the final gate — equal by the same ``primary_analysis_cohort_producer_uses_universe``
     predicate).
+    ``semantic_stub_injected`` carries the Fix F stub marker as a plain
+    string (the host reads it off the step record before calling): when
+    present, the shared sequence adds one warning finding without changing
+    any verdict.  The gate never touches the orchestration record itself.
     """
 
     findings: List[ValidationFinding] = _step_contract_findings(
@@ -742,6 +747,7 @@ def _step_deterministic_contract_findings(
         context=context,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
+        semantic_stub_injected=semantic_stub_injected,
         effect_output_is_authorized=effect_output_is_authorized,
         out_dir=out_dir,
         trajectory_role_contract_applies=trajectory_plan_contract_applies(

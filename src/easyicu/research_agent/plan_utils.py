@@ -36,18 +36,26 @@ from .contracts.step_families import (
     effect_output_authorized,
     prediction_contract_applies,
 )
-from .gates.step_contract import _step_contract_findings
+from .gates.step_contract import step_contract_findings as _step_contract_findings
+from .gates.step_contract import step_contract_findings
 from .gates.step_repair import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
     _step_contract_repair_guidance,
 )
 from .gates.step_result_evidence import (
-    _exposure_names_match,
-    _finite_float,
-    _primary_effect_from_summary,
-    _primary_exposure_contract_findings,
-    _primary_exposure_measurement_filter_findings,
+    exposure_names_match as _exposure_names_match,
+    finite_float as _finite_float,
+    primary_effect_from_summary as _primary_effect_from_summary,
+    primary_exposure_contract_findings as _primary_exposure_contract_findings,
+    primary_exposure_measurement_filter_findings as _primary_exposure_measurement_filter_findings,
+)
+from .gates.step_result_evidence import (
+    exposure_names_match,
+    finite_float,
+    primary_effect_from_summary,
+    primary_exposure_contract_findings,
+    primary_exposure_measurement_filter_findings,
 )
 from .planning.advanced_plan_contract import _enforce_advanced_plan_contract
 from .planning.cohort_contract import (

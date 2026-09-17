@@ -43,6 +43,7 @@ own ICU rules, and a max over ordinal stages is still a stage.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 import pytest
@@ -98,7 +99,9 @@ def test_the_value_preserving_set_is_not_silently_widened() -> None:
 
 
 _CORPUS = pathlib.Path(
-    "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+    os.environ.get(
+        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+    )
 )
 
 
@@ -117,6 +120,7 @@ def _h1_context() -> "ResearchContextV2":
     )
 
 
+@pytest.mark.requires_corpus
 def test_the_production_manifest_stops_publishing_the_impossible_domain() -> None:
     """Drives ``resolved_raw_input_contracts``, not the helper behind it.
 
@@ -162,6 +166,7 @@ def test_the_production_manifest_stops_publishing_the_impossible_domain() -> Non
     )
 
 
+@pytest.mark.requires_corpus
 def test_the_rule_keeps_the_categorical_column_and_drops_the_derived_ones() -> None:
     """Read off the recorded contracts, not restated from them.
 

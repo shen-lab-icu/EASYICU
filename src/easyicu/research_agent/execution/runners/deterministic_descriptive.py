@@ -22,6 +22,7 @@ import pandas as pd
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from .plausibility_receipt import render_standard_plausibility_receipt_code
+from ._shared import read_json_object as _read_json
 
 __all__ = ["absolute_risk_context_code", "run_absolute_risk_context"]
 
@@ -156,14 +157,6 @@ def _declared_product(step: Mapping[str, Any]) -> str:
         if separator and kind == "table" and name in _SUPPORTED_PRODUCTS:
             return name
     return "exposure_outcome_summary"
-
-
-def _read_json(path: Path) -> Dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def _normalise(value: Any) -> str:

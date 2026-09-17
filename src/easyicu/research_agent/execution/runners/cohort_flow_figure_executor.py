@@ -25,6 +25,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ._shared import figure_product as _figure_product, method_head as _method_head
 
 __all__ = [
     "COHORT_FLOW_INPUT",
@@ -52,18 +53,6 @@ _MODEL_FLOW_REQUIRED_COLUMNS = (
     "excluded_from_previous",
     "population_rule",
 )
-_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().casefold().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not _PRODUCT_ID.fullmatch(product):
-        return None
-    return product
 
 
 def _population_flow_input(step: AnalysisStep) -> str | None:
