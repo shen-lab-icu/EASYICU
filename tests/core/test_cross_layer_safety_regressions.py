@@ -1728,3 +1728,113 @@ def test_align_time_normal_load_preserves_duration_values(layout, frame_factory,
     frame["charttime"] = pd.to_timedelta([6.25], unit="h")
     out = resolver._align_time_to_admission(frame, source, id_columns, "charttime")
     assert out["charttime"].tolist() == [6.25]
+
+
+def _miiv_icustays_source() -> SimpleNamespace:
+    """One 2-day MIMIC-IV stay plus no record for stay 99 (fallback path)."""
+
+    return SimpleNamespace(
+        config=SimpleNamespace(name="miiv"),
+        load_table=lambda *_args, **_kwargs: SimpleNamespace(
+            data=pd.DataFrame(
+                {
+                    "stay_id": [10],
+                    "intime": pd.to_datetime(["2150-01-01 00:00"]),
+                    "outtime": pd.to_datetime(["2150-01-03 00:00"]),
+                    "los": [2.0],
+                }
+            )
+        ),
+    )
+
+
+def test_miiv_source_times_outside_the_icu_episode_are_quarantined():
+    """MIMIC rolling-join history must not enter producer staging.
+
+    2026-09-18 v6: miiv stays 31206864/31672975 carried cross-admission
+    events spanning -52,588..+52,711 h into staging; their hourly SOFA
+    grids (~105k rows/stay) tripped the sep3 replay bound. The numeric
+    fast path now enforces the same [-24 h, los_icu + 24 h] window the
+    native-v2 publisher enforces (AUMC precedent).
+    """
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._icustays_cache = None
+    frame = pd.DataFrame(
+        {
+            "stay_id": [10, 10, 10, 10, 10, 10, 99, 99],
+            "charttime": [-25.0, -24.0, 0.0, 72.0, 73.0, 50_000.0, 100.0, 9_000.0],
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame, _miiv_icustays_source(), ["stay_id"], "charttime"
+    )
+
+    # los 2 d -> upper 72 h; unknown stay 99 keeps the 366-day fallback.
+    assert out["charttime"].tolist() == [-24.0, 0.0, 72.0, 100.0]
+    assert out["value"].tolist() == [2.0, 3.0, 4.0, 7.0]
+    # The fix drops rows only: it must not introduce new output columns
+    # ('intime' passthrough on this path predates the fix).
+    assert "outtime" not in out.columns
+    assert "los" not in out.columns
+
+
+def test_miiv_kdigo_history_can_use_168h_without_widening_default_window():
+    """The phenotype window keeps seven-day history; generic concepts do not."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._icustays_cache = None
+    source = _miiv_icustays_source()
+    frame = pd.DataFrame(
+        {
+            "stay_id": [10, 10, 10, 10],
+            "charttime": [-169.0, -168.0, -120.0, 0.0],
+            "crea": [0.8, 0.9, 1.0, 1.6],
+        }
+    )
+
+    generic = resolver._align_time_to_admission(
+        frame.copy(), source, ["stay_id"], "charttime"
+    )
+    kdigo = resolver._align_time_to_admission(
+        frame.copy(),
+        source,
+        ["stay_id"],
+        "charttime",
+        pre_admission_hours=168,
+    )
+
+    assert generic["charttime"].tolist() == [0.0]
+    assert kdigo["charttime"].tolist() == [-168.0, -120.0, 0.0]
+
+
+def test_miiv_absolute_times_outside_the_icu_episode_are_quarantined():
+    """The absolute-timestamp path enforces the same producer-layer bound."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._icustays_cache = None
+    frame = pd.DataFrame(
+        {
+            "stay_id": [10, 10, 10, 10],
+            "charttime": pd.to_datetime(
+                [
+                    "2149-12-30 23:00",  # -25 h: dropped
+                    "2149-12-31 00:00",  # -24 h: kept
+                    "2150-01-04 00:00",  # +72 h: kept (los 2 d + 24 h)
+                    "2150-01-04 01:00",  # +73 h: dropped
+                ]
+            ),
+            "value": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame, _miiv_icustays_source(), ["stay_id"], "charttime"
+    )
+
+    assert out["charttime"].tolist() == pytest.approx([-24.0, 72.0])
+    assert out["value"].tolist() == [2.0, 3.0]
+    assert "intime" not in out.columns
+    assert "outtime" not in out.columns

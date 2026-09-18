@@ -174,6 +174,100 @@ def _default_id_columns_for_db(db_name: Optional[str]) -> List[str]:
     return mapping.get(db, ["stay_id"])
 
 
+def _mimic_episode_upper_for_rows(
+    bounds: pd.DataFrame,
+    *,
+    post_discharge_hours: float,
+    fallback_hours: float,
+) -> pd.Series:
+    """Return each row's last plausible ICU-relative event hour.
+
+    ``bounds`` carries ``los`` days and/or ``intime``/``outtime`` datetimes
+    per row. Preference mirrors the native-v2 publisher
+    (``outcome.los_icu`` first, episode length second, 366-day sanity
+    fallback last) so producer staging and publication agree on the window.
+    """
+
+    upper = pd.Series(np.nan, index=bounds.index, dtype="float64")
+    if "los" in bounds.columns:
+        los_days = pd.to_numeric(bounds["los"], errors="coerce")
+        valid_los = los_days.notna() & (los_days >= 0)
+        upper = upper.where(
+            ~valid_los, los_days * 24.0 + float(post_discharge_hours)
+        )
+    if "intime" in bounds.columns and "outtime" in bounds.columns:
+        episode = (
+            pd.to_datetime(bounds["outtime"], errors="coerce", utc=True)
+            - pd.to_datetime(bounds["intime"], errors="coerce", utc=True)
+        ).dt.total_seconds() / 3600.0
+        valid_episode = episode.notna() & (episode >= 0)
+        missing = upper.isna() & valid_episode
+        upper = upper.where(~missing, episode + float(post_discharge_hours))
+    return upper.fillna(float(fallback_hours))
+
+
+def _mimic_episode_upper_by_stay(
+    bounds: pd.DataFrame,
+    *,
+    stay_column: str,
+    post_discharge_hours: float,
+    fallback_hours: float,
+) -> pd.Series:
+    """Return each MIMIC stay's last plausible ICU-relative event hour."""
+
+    stays = pd.to_numeric(bounds[stay_column], errors="coerce")
+    valid = stays.notna()
+    upper = _mimic_episode_upper_for_rows(
+        bounds.loc[valid],
+        post_discharge_hours=post_discharge_hours,
+        fallback_hours=fallback_hours,
+    )
+    keyed = pd.DataFrame(
+        {"stay": stays.loc[valid].astype(np.int64), "upper": upper}
+    )
+    return keyed.groupby("stay", sort=False)["upper"].max()
+
+
+def _quarantine_rows_outside_icu_episode(
+    frame: pd.DataFrame,
+    *,
+    event_hours: pd.Series,
+    upper_hours: pd.Series,
+    allowed_pre_hours: float,
+    db_label: str,
+) -> pd.DataFrame:
+    """Drop rows outside ``[-allowed_pre_hours, per-row upper]``.
+
+    2026-09-18 v6: MIMIC-III/IV hospital tables are stay-mapped by rolling
+    join, so one ICU stay can attract years of cross-admission events (miiv
+    stays 31206864/31672975 spanned -52,588..+52,711 h in producer staging
+    and their hourly SOFA grids tripped the sep3 replay bound). AUMC already
+    quarantines at the loader layer; the native-v2 publisher independently
+    enforces the same window, so pre-clipped staging stays
+    publication-identical for point modules while hourly grids can no
+    longer expand across decades. Phenotype lookbacks (e.g. kdigo 168 h)
+    arrive via ``allowed_pre_hours`` and are honoured, never widened here.
+    """
+
+    event_hours = pd.to_numeric(event_hours, errors="coerce")
+    upper_hours = pd.to_numeric(upper_hours, errors="coerce")
+    invalid = event_hours.notna() & (
+        (event_hours < -allowed_pre_hours) | (event_hours > upper_hours)
+    )
+    excluded = int(pd.Series(invalid, index=frame.index).fillna(False).sum())
+    if excluded:
+        logger.warning(
+            "dropping %d %s row(s) outside the ICU episode "
+            "(%gh pre-ICU history; 24h post-discharge allowance)",
+            excluded,
+            db_label,
+            allowed_pre_hours,
+        )
+        keep = (~pd.Series(invalid, index=frame.index).fillna(False)).to_numpy()
+        return frame.loc[keep].copy()
+    return frame
+
+
 def _definition_has_runtime_dependencies(definition: object) -> bool:
     return bool(
         getattr(definition, "sub_concepts", None)
@@ -6271,7 +6365,8 @@ class ConceptResolver:
                     
                     self._icustays_cache = icustays_temp_df
                 
-                # 只合并 intime 列
+                # 只合并 intime 列（保持既有输出 schema；outtime/los 只读
+                # icustays 缓存供 producer 层截断，不并入 frame）。
                 data = data.merge(icustays_temp_df[[primary_id, 'intime']], on=primary_id, how='left')
             except Exception as exc:
                 if (
@@ -6360,12 +6455,71 @@ class ConceptResolver:
                 except Exception:
                     # cache warmup failed; leave the frame untouched
                     pass
-            # NOTE: previous implementation computed an `icu_len` from
-            # intime/outtime here but never consumed it (the only consumer
-            # — a time window filter — was commented out). The dead
-            # computation hit pd.to_datetime four times per call, so we
-            # drop it entirely. If a future caller actually needs ICU
-            # window length, read it off self._icustays_cache directly.
+            # 2026-09-18 v6: restore the MIMIC-family ICU-episode bound at
+            # the producer layer (AUMC precedent in this same function). The
+            # numeric fast path used to return here with no window check at
+            # all: MIMIC hospital tables are stay-mapped by rolling join, so
+            # one ICU stay can attract years of cross-admission events (miiv
+            # stays 31206864/31672975 reached -52,588..+52,711 h in staging
+            # and their hourly SOFA grids tripped the sep3 replay bound).
+            # The native-v2 publisher enforces the same window, so pre-clipped
+            # staging stays publication-identical while downstream grids stay
+            # bounded. Phenotype lookbacks (e.g. kdigo 168 h) arrive via
+            # pre_admission_hours and are honoured. Vectorized map/filter
+            # only: no per-row datetime parsing on this hot path.
+            if db_name in ("mimic", "miiv") or db_name.startswith("mimic"):
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
+                stay_col = (
+                    db_stay_id_col
+                    if db_stay_id_col in data.columns
+                    else (primary_id if primary_id in data.columns else None)
+                )
+                cache = self._icustays_cache
+                if (
+                    stay_col is not None
+                    and cache is not None
+                    and stay_col in cache.columns
+                ):
+                    upper_by_stay = _mimic_episode_upper_by_stay(
+                        cache,
+                        stay_column=stay_col,
+                        post_discharge_hours=float(
+                            ICU_TIME_POST_DISCHARGE_HOURS
+                        ),
+                        fallback_hours=float(ICU_TIME_FALLBACK_LIMIT_HOURS),
+                    )
+                    event_hours = pd.to_numeric(
+                        data[index_column], errors="coerce"
+                    )
+                    event_hours.index = data.index
+                    stay_keys = pd.to_numeric(
+                        data[stay_col], errors="coerce"
+                    ).astype("Int64")
+                    upper_hours = stay_keys.map(upper_by_stay).fillna(
+                        float(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                    )
+                    upper_hours.index = data.index
+                    data = _quarantine_rows_outside_icu_episode(
+                        data,
+                        event_hours=event_hours,
+                        upper_hours=upper_hours,
+                        allowed_pre_hours=allowed_pre_hours,
+                        db_label="MIMIC",
+                    )
             # Normalise dur_var to hours so the index and the duration share a
             # unit. Which conversion applies depends on what the producer
             # declared — hirid_vent emits minutes, ts_to_win_tbl on a numeric
@@ -6483,8 +6637,97 @@ class ConceptResolver:
                 minutes_col = np.floor(time_diff_col.dt.total_seconds() / 60.0)
                 data[time_col] = minutes_col / 60.0
             
-            # 注意：不过滤负时间（入ICU前）或超过outtime的数据，匹配 R ricu 行为
-            
+            # 2026-09-18 v6: the absolute-timestamp path gets the same
+            # producer-layer episode bound as the numeric fast path above.
+            # R ricu keeps out-of-window points, but native-v2 staging must
+            # not: publication clips them anyway, while unclipped hourly
+            # grids (SOFA fill_gaps) expand across decades and trip the sep3
+            # replay bound (miiv 31206864/31672975). Per-row bounds come
+            # from the merged admission times (outtime already carries the
+            # los fallback there); the stay-keyed layout falls back to the
+            # same icustays cache. Stays without any bound keep the 366-day
+            # sanity fallback, matching publication.
+            if db_name in ("mimic", "miiv") or db_name.startswith("mimic"):
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
+                if "intime" in data.columns or "outtime" in data.columns:
+                    if "outtime" in data.columns or "los" in data.columns:
+                        upper_row = _mimic_episode_upper_for_rows(
+                            data,
+                            post_discharge_hours=float(
+                                ICU_TIME_POST_DISCHARGE_HOURS
+                            ),
+                            fallback_hours=float(ICU_TIME_FALLBACK_LIMIT_HOURS),
+                        )
+                    else:
+                        # stay 主键布局只合并 intime；episode 上界走同一份
+                        # icustays 缓存（outtime/los 不并入 frame，保持既有
+                        # 输出 schema）。
+                        stay_col = (
+                            db_stay_id_col
+                            if db_stay_id_col in data.columns
+                            else (
+                                primary_id
+                                if primary_id in data.columns
+                                else None
+                            )
+                        )
+                        cache = self._icustays_cache
+                        if (
+                            stay_col is not None
+                            and cache is not None
+                            and stay_col in cache.columns
+                        ):
+                            upper_by_stay = _mimic_episode_upper_by_stay(
+                                cache,
+                                stay_column=stay_col,
+                                post_discharge_hours=float(
+                                    ICU_TIME_POST_DISCHARGE_HOURS
+                                ),
+                                fallback_hours=float(
+                                    ICU_TIME_FALLBACK_LIMIT_HOURS
+                                ),
+                            )
+                            upper_row = (
+                                pd.to_numeric(
+                                    data[stay_col], errors="coerce"
+                                )
+                                .astype("Int64")
+                                .map(upper_by_stay)
+                                .fillna(float(ICU_TIME_FALLBACK_LIMIT_HOURS))
+                            )
+                        else:
+                            upper_row = pd.Series(
+                                float(ICU_TIME_FALLBACK_LIMIT_HOURS),
+                                index=data.index,
+                                dtype="float64",
+                            )
+                    upper_row.index = data.index
+                    event_hours = pd.to_numeric(
+                        data[index_column], errors="coerce"
+                    )
+                    event_hours.index = data.index
+                    data = _quarantine_rows_outside_icu_episode(
+                        data,
+                        event_hours=event_hours,
+                        upper_hours=upper_row,
+                        allowed_pre_hours=allowed_pre_hours,
+                        db_label="MIMIC",
+                    )
+
             _normalize_duration_to_hours(data)
             
             # Drop the temporary alignment columns
