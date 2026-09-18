@@ -1,6 +1,8 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [],
+    "source_digest_changes": [
+      "src/easyicu/data/concept-dict.json"
+    ],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -515,9 +517,16 @@
       "reason": "second restock wave: GAM/Gray/nomogram kernels enter Coder selection (gee+mixed parked); RCS card loaded",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "Merge current main bcb5032f2 concept dictionary changes into Dev9 expansion; Canonical9 resource selections and prompt-size metrics are unchanged, only concept-dict source digest moves",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "second restock wave: GAM/Gray/nomogram kernels enter Coder selection (gee+mixed parked); RCS card loaded",
+  "baseline_reason": "Merge current main bcb5032f2 concept dictionary changes into Dev9 expansion; Canonical9 resource selections and prompt-size metrics are unchanged, only concept-dict source digest moves",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -527,7 +536,7 @@
   "schema_version": "easyicu.research_agent_resource_baseline/2",
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
-    "src/easyicu/data/concept-dict.json": "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba",
+    "src/easyicu/data/concept-dict.json": "ebce6b4e8cfadbbc2a6a6c8e923e64709012a0f14aa4e3284430fa796343edbf",
     "src/easyicu/data/sofa2-dict.json": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
     "src/easyicu/research_agent/agents/core.py": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
     "src/easyicu/research_agent/agents/planner.py": "8658b2b6024a796d28e7dc23d4a46f2542b3322e2b3412c0c5230addc1bcff1d",
