@@ -65,6 +65,29 @@ CURATED_METHOD_PACKAGES: Tuple[MethodPackage, ...] = (
         families=("prediction_model", "dynamic_prediction"),
         fallback="sklearn HistGradientBoostingClassifier / GradientBoostingClassifier",
     ),
+    MethodPackage(
+        import_name="lightgbm",
+        pip_name="lightgbm",
+        capability=(
+            "gradient-boosted trees for tabular prediction "
+            "(LGBMClassifier / LGBMRegressor)"
+        ),
+        families=("prediction_model", "dynamic_prediction"),
+        fallback="sklearn HistGradientBoostingClassifier / GradientBoostingClassifier",
+    ),
+    MethodPackage(
+        import_name="torch",
+        pip_name="torch",
+        capability=(
+            "deep learning for sequence/tabular prediction "
+            "(MLP, LSTM/GRU, attention encoders; CPU wheel suffices)"
+        ),
+        families=("prediction_model", "dynamic_prediction"),
+        fallback=(
+            "sklearn HistGradientBoostingClassifier / MLPClassifier "
+            "(no sequence-model fallback)"
+        ),
+    ),
 )
 
 # Distributions that change computed results but that the Coder is NOT invited to

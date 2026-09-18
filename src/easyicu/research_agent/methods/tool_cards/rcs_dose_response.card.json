@@ -1,0 +1,91 @@
+{
+  "card": {
+    "inputs": [
+      {
+        "description": "continuous exposure vector",
+        "name": "x",
+        "required": true,
+        "value_kind": "float_vector"
+      },
+      {
+        "description": "numeric outcome vector aligned to x",
+        "name": "y",
+        "required": true,
+        "value_kind": "float_vector"
+      },
+      {
+        "description": "optional linear adjusters aligned to x",
+        "name": "covariates",
+        "required": false,
+        "value_kind": "float_matrix"
+      }
+    ],
+    "method_meaning": "restricted cubic spline dose-response: Harrell natural-spline basis with exactly linear tails, OLS gaussian fit, joint Wald test of the nonlinear terms, and an equidistant curve with delta-method intervals",
+    "origin_output_sha256": "b88346e024a1dd5624b04c4f94d20bfd9adf41fb544455b5f0825328632f327d",
+    "outputs": [
+      {
+        "description": "",
+        "name": "coefficients",
+        "value_kind": "float_list"
+      },
+      {
+        "description": "",
+        "name": "nonlinearity_p_value",
+        "value_kind": "float"
+      },
+      {
+        "description": "",
+        "name": "curve_predicted",
+        "value_kind": "float_list"
+      },
+      {
+        "description": "",
+        "name": "curve_interval",
+        "value_kind": "float_list"
+      }
+    ],
+    "population_assumption": "complete-case numeric exposure/outcome; origin run on a synthetic U-shape fixture (seed 17, n=300, uniform dose 20..80 plus one gaussian adjuster, 4 quantile knots)",
+    "schema_version": "easyicu.tool_card/1",
+    "timing_assumption": "retrospective analysis on a frozen data extract; no observation-window or real-time constraint",
+    "tool_name": "rcs_dose_response",
+    "tool_version": "1.0.0",
+    "validation_evidence": [
+      {
+        "evidence_id": "rcs-sandbox-run-1",
+        "kind": "sandbox_run",
+        "note": "origin run: gaussian RCS, 4 quantile knots, one linear adjuster on the U-shape fixture; joint Wald p < 1e-6 against linearity; receipt binds fitted coefficients, nonlinearity test, and predicted curve with intervals",
+        "output_sha256": "b88346e024a1dd5624b04c4f94d20bfd9adf41fb544455b5f0825328632f327d",
+        "passed": true
+      },
+      {
+        "evidence_id": "rcs-repro-1",
+        "kind": "independent_reproduction",
+        "note": "deterministic rerun on identical fixed data with the kernel seed configuration pinned (random_state=0) and a different process-global RNG state (numpy seed 999 vs 17); synthetic-origin digest identical at eight significant digits. NOT a fresh data draw and NOT a different knot placement.",
+        "output_sha256": "b88346e024a1dd5624b04c4f94d20bfd9adf41fb544455b5f0825328632f327d",
+        "passed": true
+      },
+      {
+        "evidence_id": "rcs-applicability-1",
+        "kind": "applicability_check",
+        "note": "intended reuse is continuous-exposure dose-response shape analysis on complete-case vectors, inside the card population; no clinical transport claimed",
+        "output_sha256": "b88346e024a1dd5624b04c4f94d20bfd9adf41fb544455b5f0825328632f327d",
+        "passed": true
+      }
+    ]
+  },
+  "decision": {
+    "allowed_identity": "verified_tool",
+    "card_sha256": "df8935f1744ec224b9f88975b602038b16cd69b15db143442008e507a1a994be",
+    "executor_module": "easyicu.research_agent.methods.rcs_dose_response",
+    "granted_verified_tool": true,
+    "reasons": [
+      "granted_verified_tool: reproductions=1 boundary_covered=True"
+    ],
+    "schema_version": "easyicu.tool_promotion_decision/1",
+    "tool_name": "rcs_dose_response",
+    "tool_version": "1.0.0"
+  },
+  "executor_module": "easyicu.research_agent.methods.rcs_dose_response",
+  "issued_note": "Issued 2026-09-18 on a synthetic U-shape fixture; origin bounds the claim to dose-response mechanics (see card population assumption). Reproduction is deterministic rerun, not fresh data; knot placement must be reported on reuse. Origin receipt uses eight-significant-digit synthetic output canonicalisation across numeric runtimes; exact kernel result digests remain unchanged.",
+  "schema_version": "easyicu.tool_card_grant_file/1"
+}

@@ -140,6 +140,10 @@
     "literature_excerpt.py": {
       "owner": "shared_contract",
       "reason": "Dependency-neutral extractive excerpt selection for literature screening; consumed by literature.py."
+    },
+    "r_runtime.py": {
+      "owner": "r_runtime",
+      "reason": "Shared local-R probe, fingerprint and hardened-runner rails for R-backed adapters; scientific authority stays with the calling kernel."
     }
   }
 }

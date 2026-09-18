@@ -2,7 +2,7 @@
   "schema_version": "easyicu.dependency-upgrade-canaries/1",
   "verified_against": {
     "head": "71b287377",
-    "requirements_lock_sha256": "2a2984f70e862a0fb6f2d91a168130eff17577681c1427fa7650b120640b37c2",
+    "requirements_lock_sha256": "0ce2d33facf9560fac814c970c86319be58654d1fbe1096aac24236786992d83",
     "base_image_lock_sha256": "679fecef3802988372d0607aa159bb7a544b74ba6f2eb8399184b6e72cd4ef5a",
     "base_image_digest": "sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff"
   },

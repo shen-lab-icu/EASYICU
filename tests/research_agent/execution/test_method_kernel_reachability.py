@@ -269,6 +269,34 @@ def _coder_prompt(*, analysis_family: str, intent: str, method: str) -> str:
     return bundle.prompt_projection
 
 
+def _selected_software_imports(prompt: str) -> list[str]:
+    """The ``import_name`` values of the selected software resources.
+
+    Parses the projected JSON sections instead of substring-searching the
+    prompt: a name mentioned in neighbouring prose (fallbacks, capability
+    text) is not a selection, and only selections reach the Coder.
+    """
+
+    import json
+
+    selected: list[str] = []
+    for section in prompt.splitlines():
+        section = section.strip()
+        if not section.startswith("{"):
+            continue
+        try:
+            payload = json.loads(section)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("kind") != "software":
+            continue
+        for resource in payload.get("resources") or []:
+            name = str(resource.get("import_name", "") or "")
+            if name:
+                selected.append(name)
+    return selected
+
+
 def _required_packages_of(prompt: str, import_suffix: str) -> list[str] | None:
     """The parsed ``requires`` of one selected resource, or None if absent.
 
@@ -343,9 +371,11 @@ def test_a_plain_association_step_is_not_handed_the_trajectory_kernel():
         intent="Fit an adjusted logistic regression of the exposure on the outcome.",
         method="adjusted_association_models",
     )
-    assert "methods.temporal_features" not in prompt
-    assert "statsmodels" in prompt, (
-        "the tool this step actually needs was ranked out of its three slots"
+    selected = _selected_software_imports(prompt)
+    assert "easyicu.research_agent.methods.temporal_features" not in selected
+    assert "statsmodels" in selected, (
+        "the tool this step actually needs was ranked out of its three slots: "
+        f"{selected}"
     )
 
 

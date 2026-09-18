@@ -128,6 +128,62 @@ def _plausibility_errors_for_row(where: str, row: Dict[str, Any]) -> List[str]:
     return errs
 
 
+_LOW_EPV_EXPLICIT_N_KEYS = ("n_parameters", "n_params")
+
+
+def _low_events_per_variable_notes_for_row(
+    where: str, row: Dict[str, Any]
+) -> List[str]:
+    """Advise (never block) on thin event support for a fitted roster.
+
+    Review finding: this check previously lived inside the physical-
+    impossibility gate, where any EPV below a fixed 10 failed the run --
+    even for justified designs.  Low events-per-variable is a design
+    adequacy judgment, not a physical impossibility, so it is reported
+    here as reviewer advice.  Governance mining: sample-size justification
+    appears in ~17% of top ICU papers while silent overfitting is
+    unmeasured.
+
+    Parameter counting: an explicit ``n_parameters``/``n_params`` row field
+    wins when present; otherwise the ``;``-joined covariate roster plus one
+    exposure term.  Multi-df terms (multi-level categoricals, splines) are
+    undercounted by the roster fallback, so the estimate errs toward
+    *missing* thin designs, never toward false alarms; and the fixed-10
+    bar is conventional (see TRIPOD-Cluster guidance and Riley et al. on
+    prediction-model sample size), not a validity proof.  Rows without
+    both events and a roster stay silent.
+    """
+
+    events = _plausibility_first(row, _PLAUSIBILITY_EVENT_KEYS)
+    raw_covariates = row.get("covariates")
+    if events is None or events <= 0 or not isinstance(raw_covariates, str):
+        return []
+    roster_terms = len(
+        [part for part in raw_covariates.split(";") if part.strip()]
+    )
+    explicit = _plausibility_first(row, _LOW_EPV_EXPLICIT_N_KEYS)
+    n_parameters = int(explicit) if explicit is not None and explicit >= 1 else (
+        roster_terms + 1
+    )
+    if n_parameters < 1:
+        return []
+    epv = events / n_parameters
+    if epv >= 10:
+        return []
+    basis = (
+        "explicit parameter count"
+        if explicit is not None and explicit >= 1
+        else "covariate roster plus exposure"
+    )
+    return [
+        f"{where}: low events per variable for reviewer judgment (about "
+        f"{epv:.1f} events over {n_parameters} predictor terms by {basis}, "
+        "below the conventional 10; thresholds are context-dependent and "
+        "multi-df terms may be undercounted here): consider a leaner roster "
+        "or record the sample-size justification."
+    ]
+
+
 def _plausibility_walk(node: Any):
     if isinstance(node, dict):
         yield node
@@ -186,6 +242,67 @@ def primary_result_plausibility_errors(
         except Exception:
             continue
     return errors
+
+
+def low_events_per_variable_advisories(
+    run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> List[str]:
+    """Return reviewer advisories (never gate failures) on thin event support.
+
+    Mirrors :func:`primary_result_plausibility_errors` traversal (registered
+    summaries plus result CSVs) but collects only the events-per-variable
+    notes.  Callers surface these as major maturity findings, not analysis
+    errors: a justified low-EPV design must remain passable.
+    """
+
+    per_step_records = step_authority_records(run_dir, per_step_records)
+    advisories: List[str] = []
+    seen: set = set()
+
+    def _add(new_notes: List[str]) -> None:
+        for note in new_notes:
+            if note not in seen:
+                seen.add(note)
+                advisories.append(note)
+
+    for label, payload in authoritative_step_summaries(run_dir, per_step_records):
+        for mapping in _plausibility_walk(payload):
+            if isinstance(mapping, dict):
+                _add(_low_events_per_variable_notes_for_row(label, mapping))
+
+    if per_step_records is None:
+        csv_paths = [
+            path
+            for outputs_dir in sorted((run_dir / "steps").glob("*/outputs"))
+            for name in _PLAUSIBILITY_RESULT_CSVS
+            if (path := outputs_dir / name).exists()
+        ]
+    else:
+        csv_paths = [
+            path
+            for path in (
+                current_run_evidence_paths(
+                    run_dir,
+                    per_step_records=per_step_records,
+                )
+                or []
+            )
+            if path.name.split("__", 1)[-1] in _PLAUSIBILITY_RESULT_CSVS
+        ]
+    for path in csv_paths:
+        basename = path.name.split("__", 1)[-1]
+        try:
+            with path.open(newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    _add(
+                        _low_events_per_variable_notes_for_row(
+                            basename, dict(row)
+                        )
+                    )
+        except Exception:
+            continue
+    return advisories
 
 
 _SURVIVAL_RESULT_KEYS = ("hazard_ratio", "cox_terms", "log_hazard_ratio")

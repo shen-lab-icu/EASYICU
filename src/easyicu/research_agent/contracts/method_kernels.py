@@ -229,6 +229,223 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         families=("prediction", "prediction_model"),
         fallback="no distribution-free coverage guarantee",
     ),
+    MethodKernel(
+        module="propensity_weighting",
+        requires=("numpy", "pandas", "sklearn"),
+        entrypoints=(
+            "estimate_propensity_scores",
+            "match_nearest_neighbor",
+            "compute_iptw_weights",
+            "standardized_mean_difference",
+            "PropensityScoreResult",
+            "MatchingResult",
+            "IPTWResult",
+        ),
+        capability=(
+            "L2-logistic propensity scores with greedy 1:1 nearest-neighbour "
+            "matching (caliper) and stabilized IPTW weights plus SMD balance "
+            "diagnostics. Diagnostics only: the kernel estimates no effect, "
+            "so the step must hand pairs/weights to a downstream owner"
+        ),
+        # Deliberately NOT "association": confounding-adjustment kernels
+        # crowd statsmodels out of plain adjusted-logistic steps (measured
+        # 2026-09-18). Causal steps reach them via "causal_inference".
+        families=("causal_inference",),
+        fallback=(
+            "hand-rolled matching/weighting inside the analysis script, with "
+            "SMD balance tables recomputed from scratch"
+        ),
+    ),
+    MethodKernel(
+        module="reclassification",
+        requires=("numpy",),
+        entrypoints=(
+            "categorical_nri",
+            "continuous_nri",
+            "idi",
+            "NRIResult",
+            "IDIResult",
+        ),
+        capability=(
+            "categorical/continuous net reclassification improvement and "
+            "integrated discrimination improvement for binary outcomes with "
+            "bootstrap confidence intervals"
+        ),
+        families=("prediction", "prediction_model"),
+        fallback="hand-computed reclassification tables without CIs",
+    ),
+    MethodKernel(
+        module="mediation",
+        requires=("numpy", "scipy", "sklearn"),
+        entrypoints=(
+            "mediate",
+            "MediationResult",
+        ),
+        capability=(
+            "natural direct/indirect effects for linear outcomes (exact) and "
+            "binary outcomes (log-odds approximation). Callers must declare "
+            "no-interaction and sequential ignorability; violations fail "
+            "closed instead of returning a number"
+        ),
+        # NOT "association": same crowding rationale as propensity_weighting.
+        families=("causal_inference",),
+        fallback="no mediation decomposition; report total effects only",
+    ),
+    MethodKernel(
+        module="competing_risks",
+        requires=("numpy", "pandas", "lifelines"),
+        entrypoints=(
+            "estimate_cif",
+            "cif_difference",
+            "CIFResult",
+            "CIFDifferenceResult",
+        ),
+        capability=(
+            "cumulative incidence functions via lifelines Aalen-Johansen plus "
+            "descriptive group differences with bootstrap CIs. There is no "
+            "Gray test here, so group contrasts stay descriptive"
+        ),
+        families=("time_to_event", "survival"),
+        fallback=(
+            "1-minus-Kaplan-Meier (biased upward under competition) with an "
+            "explicit note that competition was ignored"
+        ),
+    ),
+    MethodKernel(
+        module="target_trial",
+        requires=("numpy", "pandas"),
+        entrypoints=(
+            "reconcile_eligibility",
+            "check_time_zero",
+            "clone_censor_weight_checklist",
+            "render_review_sheet",
+            "EligibilityReport",
+            "TimeZeroReport",
+            "CloneCensorWeightChecklist",
+        ),
+        capability=(
+            "target-trial scaffolding: eligibility denominator reconciliation, "
+            "time-zero alignment checks (immortal-time/grace), and a "
+            "clone-censor-weight manual-assumption review sheet. It never "
+            "estimates a causal effect"
+        ),
+        families=("causal_inference",),
+        fallback="no scripted eligibility/time-zero audit; the plan must show denominators by hand",
+    ),
+    MethodKernel(
+        module="lasso_selection",
+        requires=("numpy", "pandas", "sklearn"),
+        entrypoints=(
+            "lasso_select",
+            "LassoSelectionResult",
+            "result_sha256",
+            "LassoSelectionError",
+        ),
+        capability=(
+            "L1-penalized linear variable selection at a pinned alpha with "
+            "fixed KFold splits (or LassoCV at a pinned seed). Holds a "
+            "checked-in verified_tool grant"
+        ),
+        # Deliberately NOT "association": like temporal_features before it,
+        # a broad family claim crowds statsmodels out of the ranked slots
+        # for plain adjusted-logistic steps. Association steps that need
+        # selection keep the hand-written fallback.
+        families=("prediction", "prediction_model"),
+        fallback="univariate screening or full-model fit without selection",
+    ),
+    MethodKernel(
+        module="rcs_dose_response",
+        requires=("numpy", "pandas", "sklearn"),
+        entrypoints=(
+            "rcs_basis",
+            "rcs_fit",
+            "nonlinearity_wald_test",
+            "predict_curve",
+            "RCSBasis",
+            "RCSFitResult",
+        ),
+        capability=(
+            "restricted cubic spline dose-response shapes with Harrell "
+            "knot defaults, Wald nonlinearity test and delta-method curves. "
+            "Holds a checked-in verified_tool grant"
+        ),
+        # Start narrow: exposure-response modelling lives in association
+        # steps. Widen only with a ranking test proving no crowding (see
+        # the lasso/temporal_features precedent above).
+        families=("association",),
+        fallback="linear exposure term plus a linearity caveat",
+    ),
+
+    MethodKernel(
+        module="gam",
+        requires=("numpy", "pandas", "statsmodels"),
+        entrypoints=(
+            "fit_gam",
+            "GAMResult",
+            "GAMLinearTerm",
+            "GAMSmoothTerm",
+            "result_sha256",
+            "GAMError",
+        ),
+        capability=(
+            "generalized additive fits with B-spline smooth terms and "
+            "per-term effective degrees of freedom"
+        ),
+        families=("prediction",),
+        fallback="linear terms plus a linearity caveat",
+    ),
+    MethodKernel(
+        module="gray_test",
+        requires=("numpy", "scipy"),
+        entrypoints=(
+            "gray_test",
+            "GrayTestResult",
+            "result_sha256",
+            "GrayTestError",
+        ),
+        capability=(
+            "Gray K-sample comparison of cumulative incidence functions "
+            "under competing risks, with IPCW censoring adjustment"
+        ),
+        families=("time_to_event", "survival"),
+        fallback="log-rank on the event of interest with a competing-risk caveat",
+    ),
+    MethodKernel(
+        module="nomogram",
+        requires=("numpy", "scipy"),
+        entrypoints=(
+            "build_nomogram",
+            "nomogram_predict",
+            "NomogramResult",
+            "NomogramVariableTable",
+            "result_sha256",
+            "NomogramError",
+        ),
+        capability=(
+            "points-scale nomogram tables mapping fitted logistic or Cox "
+            "coefficients to total-point predicted probabilities (tables "
+            "only, no figure rendering)"
+        ),
+        families=("prediction",),
+        fallback="coefficient table without a points scale",
+    ),
+    MethodKernel(
+        module="shap_attribution",
+        requires=("numpy", "pandas", "sklearn", "shap"),
+        entrypoints=(
+            "shap_attribute",
+            "ShapAttributionResult",
+            "result_sha256",
+            "ShapAttributionError",
+        ),
+        capability=(
+            "exact TreeExplainer SHAP values for fixed tree models (values "
+            "only, no plots). Holds a checked-in verified_tool grant. "
+            "Non-tree models fail closed toward permutation importance"
+        ),
+        families=("prediction", "prediction_model", "dynamic_prediction"),
+        fallback="sklearn.inspection.permutation_importance or model coefficients",
+    ),
 )
 
 
@@ -255,7 +472,20 @@ class UnreachableKernel:
     pending_decision: str  # what must be decided; asserted non-empty
 
 
-# Empty, and that is the intended steady state rather than a gap.
+# Three estimand kernels are parked here, not offered, for a measured
+# reason -- not as "wire it later" parking.
+#
+# Measured 2026-09-18: offering ``doubly_robust`` / ``gformula`` / ``msm``
+# fills all three Coder software slots of a causal landmark step
+# (``test_the_causal_landmark_step_is_offered_it_too``) and evicts
+# ``survival_inputs`` -- the event-time reconciliation primitive whose
+# absence caused the h2 ``NaN > 24 became a survivor`` defect. The ranking
+# scores estimand relevance only and has no notion of prerequisite kernels,
+# so any three well-matched estimand kernels will always evict the
+# prerequisite. Un-parking these three requires prerequisite-aware ranking
+# (or reserved prerequisite slots), which is a scheduler design decision,
+# not a wiring task. The kernels stay tested, carded and promotion-granted;
+# only the Coder offer is withheld until that decision lands.
 #
 # Its only entry was ``evalue``: a second E-value kernel that agreed with the
 # wired ``sensitivity.compute_e_value`` on RR and HR but disagreed on OR -> RR,
@@ -269,7 +499,72 @@ class UnreachableKernel:
 # refuses rather than guessing when that rate is unavailable. ``evalue.py`` was
 # deleted; the four properties only its tests covered moved to
 # ``test_evalue_observed_baseline.py``.
-DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = ()
+DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = (
+    UnreachableKernel(
+        module="doubly_robust",
+        reason=(
+            "offering it fills the bounded Coder software slots of causal "
+            "landmark steps and evicts the survival_inputs event-time "
+            "reconciliation primitive (measured 2026-09-18; h2 defect "
+            "class). The kernel stays tested, carded and granted."
+        ),
+        pending_decision=(
+            "prerequisite-aware Coder ranking (or reserved prerequisite "
+            "slots) so estimand kernels cannot evict reconciliation kernels"
+        ),
+    ),
+    UnreachableKernel(
+        module="gformula",
+        reason=(
+            "same slot-eviction collision as doubly_robust (measured "
+            "2026-09-18). The kernel stays tested; no grant filed yet."
+        ),
+        pending_decision=(
+            "prerequisite-aware Coder ranking (or reserved prerequisite "
+            "slots) so estimand kernels cannot evict reconciliation kernels"
+        ),
+    ),
+    UnreachableKernel(
+        module="msm",
+        reason=(
+            "same slot-eviction collision as doubly_robust (measured "
+            "2026-09-18). The kernel stays tested; no grant filed yet."
+        ),
+        pending_decision=(
+            "prerequisite-aware Coder ranking (or reserved prerequisite "
+            "slots) so estimand kernels cannot evict reconciliation kernels"
+        ),
+    ),
+    UnreachableKernel(
+        module="gee",
+        reason=(
+            "offering it under association fills all three Coder software "
+            "slots with association-family kernels (measured 2026-09-18: "
+            "mixed_effects, gee, rcs_dose_response) and evicts statsmodels "
+            "from plain adjusted-logistic steps. The kernel stays tested; "
+            "clustered/longitudinal steps keep the documented pooled-fit "
+            "fallback."
+        ),
+        pending_decision=(
+            "prerequisite-aware Coder ranking (or reserved prerequisite "
+            "slots); longitudinal/clustered steps need a family of their "
+            "own rather than borrowing association"
+        ),
+    ),
+    UnreachableKernel(
+        module="mixed_effects",
+        reason=(
+            "same slot-eviction collision as gee (measured 2026-09-18); "
+            "alphabetical tie-breaks among family-only matches make any "
+            "fourth association kernel evictive. The kernel stays tested."
+        ),
+        pending_decision=(
+            "prerequisite-aware Coder ranking (or reserved prerequisite "
+            "slots); longitudinal/clustered steps need a family of their "
+            "own rather than borrowing association"
+        ),
+    ),
+)
 
 
 UNREACHABLE_MODULE_NAMES: frozenset = frozenset(
