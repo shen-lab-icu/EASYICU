@@ -1,0 +1,320 @@
+{
+ "abstracts_with_text": 5159,
+ "excluded_pubtypes": 51,
+ "fulltext_software_sample": {
+  "abstract_same_subset_any_pct": 8.2,
+  "any_software_pct": 68.5,
+  "n_methods_sections": 73,
+  "n_oa_fulltext": 75,
+  "n_sampled": 100,
+  "package_rates_pct": {
+   "MatchIt": 0.0,
+   "Python": 17.8,
+   "R": 42.5,
+   "SAS": 0.0,
+   "SPSS": 13.7,
+   "Stata": 8.2,
+   "lifelines": 2.7,
+   "lme4": 0.0,
+   "mice": 8.2,
+   "shap": 15.1,
+   "sklearn": 11.0,
+   "statsmodels": 2.7,
+   "survival": 2.7,
+   "torch": 4.1,
+   "xgboost": 13.7
+  },
+  "seed": 20260918
+ },
+ "limitations": [
+  "abstract-only mining: software mentions undercounted (68.5% in Methods sections vs 8.2% in abstracts of the same OA subset); abstract package rates are lower bounds",
+  "raw abstracts (~10MB) are not stored in the repo; regenerate via the documented PubMed queries (seed 20260918 for samples)",
+  "clinical scores mentioned as covariates can inflate sepsis_definition/aki_kdigo patterns",
+  "emerging-method recall depends on vocabulary date (2026-09-18); LLM/NLP share is rising"
+ ],
+ "method_mentions": {
+  "aki_kdigo": {
+   "n": 667,
+   "pct": 12.9
+  },
+  "bayesian": {
+   "n": 44,
+   "pct": 0.9
+  },
+  "calibration": {
+   "n": 381,
+   "pct": 7.4
+  },
+  "causal_forest": {
+   "n": 12,
+   "pct": 0.2
+  },
+  "clustering": {
+   "n": 195,
+   "pct": 3.8
+  },
+  "competing_risks": {
+   "n": 38,
+   "pct": 0.7
+  },
+  "cox_regression": {
+   "n": 1723,
+   "pct": 33.4
+  },
+  "cv_bootstrap": {
+   "n": 236,
+   "pct": 4.6
+  },
+  "decision_curve": {
+   "n": 411,
+   "pct": 8.0
+  },
+  "deep_learning": {
+   "n": 500,
+   "pct": 9.7
+  },
+  "delong": {
+   "n": 55,
+   "pct": 1.1
+  },
+  "doubly_robust": {
+   "n": 50,
+   "pct": 1.0
+  },
+  "external_validation": {
+   "n": 643,
+   "pct": 12.5
+  },
+  "gee": {
+   "n": 8,
+   "pct": 0.2
+  },
+  "gradient_boosting": {
+   "n": 564,
+   "pct": 10.9
+  },
+  "iv_did": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "joint_model": {
+   "n": 9,
+   "pct": 0.2
+  },
+  "kaplan_meier": {
+   "n": 1079,
+   "pct": 20.9
+  },
+  "landmark_analysis": {
+   "n": 18,
+   "pct": 0.3
+  },
+  "lasso_ridge_en": {
+   "n": 387,
+   "pct": 7.5
+  },
+  "lime_perm": {
+   "n": 37,
+   "pct": 0.7
+  },
+  "linear_regression": {
+   "n": 101,
+   "pct": 2.0
+  },
+  "logistic_regression": {
+   "n": 1374,
+   "pct": 26.6
+  },
+  "mediation": {
+   "n": 98,
+   "pct": 1.9
+  },
+  "meta_analysis": {
+   "n": 18,
+   "pct": 0.3
+  },
+  "mi_mice": {
+   "n": 50,
+   "pct": 1.0
+  },
+  "mixed_effects": {
+   "n": 10,
+   "pct": 0.2
+  },
+  "msm_gformula": {
+   "n": 25,
+   "pct": 0.5
+  },
+  "nri_idi": {
+   "n": 110,
+   "pct": 2.1
+  },
+  "propensity_matching": {
+   "n": 541,
+   "pct": 10.5
+  },
+  "propensity_weighting": {
+   "n": 151,
+   "pct": 2.9
+  },
+  "random_forest": {
+   "n": 397,
+   "pct": 7.7
+  },
+  "roc_auc": {
+   "n": 1380,
+   "pct": 26.7
+  },
+  "sensitivity_analysis": {
+   "n": 368,
+   "pct": 7.1
+  },
+  "sepsis_definition": {
+   "n": 657,
+   "pct": 12.7
+  },
+  "shap": {
+   "n": 474,
+   "pct": 9.2
+  },
+  "subgroup_interaction": {
+   "n": 487,
+   "pct": 9.4
+  },
+  "svm": {
+   "n": 188,
+   "pct": 3.6
+  },
+  "target_trial": {
+   "n": 24,
+   "pct": 0.5
+  },
+  "time_dependent_cox": {
+   "n": 23,
+   "pct": 0.4
+  }
+ },
+ "mined_at": "2026-09-18",
+ "no_abstract": 216,
+ "package_mentions_in_abstracts": {
+  "glmnet": {
+   "n": 2,
+   "pct": 0.0
+  },
+  "lightgbm_pkg": {
+   "n": 91,
+   "pct": 1.8
+  },
+  "mice_pkg": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "python": {
+   "n": 18,
+   "pct": 0.3
+  },
+  "r_lang": {
+   "n": 21,
+   "pct": 0.4
+  },
+  "r_survival": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "shap_pkg": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "sklearn": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "spss": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "sql_extract": {
+   "n": 25,
+   "pct": 0.5
+  },
+  "stata": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "tableone": {
+   "n": 1,
+   "pct": 0.0
+  },
+  "torch_pkg": {
+   "n": 3,
+   "pct": 0.1
+  },
+  "xgboost_pkg": {
+   "n": 382,
+   "pct": 7.4
+  }
+ },
+ "pubmed_query_hits": {
+  "AmsterdamUMCdb": 50,
+  "HiRID": 20,
+  "MIMIC-III": 1533,
+  "MIMIC-IV": 3811,
+  "SICdb": 20,
+  "eICU Collaborative Research Database": 491
+ },
+ "revised_patterns_validated_full_corpus": {
+  "auc_any": {
+   "n": 1416,
+   "pct": 27.4
+  },
+  "gam": {
+   "n": 69,
+   "pct": 1.3
+  },
+  "llm_nlp": {
+   "n": 291,
+   "pct": 5.6
+  },
+  "nomogram": {
+   "n": 351,
+   "pct": 6.8
+  },
+  "psm_hyphen_included": {
+   "n": 537,
+   "pct": 10.4
+  },
+  "rcs": {
+   "n": 1089,
+   "pct": 21.1
+  },
+  "rl_federated_moe_fairness": {
+   "n": 75,
+   "pct": 1.5
+  }
+ },
+ "schema_version": "easyicu.method_coverage_mining/1",
+ "tail_llm_rescan": {
+  "n": 696,
+  "of_abstracts_pct": 13.5,
+  "top_labels": {
+   "clustering": 33,
+   "deep_learning": 65,
+   "external_validation": 14,
+   "federated_learning": 13,
+   "llm_nlp": 143,
+   "other:machine_learning": 35,
+   "other:multivariable_adjustment": 11,
+   "other:multivariable_unclear": 16,
+   "other:restricted_cubic_spline": 15,
+   "reinforcement_learning": 17,
+   "roc_auc": 38,
+   "subgroup_interaction": 15
+  },
+  "verdicts": {
+   "has_methods": 523,
+   "methods_unclear": 79,
+   "no_methods": 94
+  }
+ },
+ "unique_pmids": 5427
+}

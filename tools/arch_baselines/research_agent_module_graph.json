@@ -61,6 +61,10 @@
     ],
     [
       "easyicu.research_agent",
+      "easyicu.research_agent.authority.tool_promotion"
+    ],
+    [
+      "easyicu.research_agent",
       "easyicu.research_agent.case_plugins.builder"
     ],
     [
@@ -113,6 +117,14 @@
     ],
     [
       "easyicu.research_agent",
+      "easyicu.research_agent.evaluation.independent_eval_harness"
+    ],
+    [
+      "easyicu.research_agent",
+      "easyicu.research_agent.execution.phase"
+    ],
+    [
+      "easyicu.research_agent",
       "easyicu.research_agent.execution.runner"
     ],
     [
@@ -122,6 +134,10 @@
     [
       "easyicu.research_agent",
       "easyicu.research_agent.figures.skill"
+    ],
+    [
+      "easyicu.research_agent",
+      "easyicu.research_agent.gates.literature_retrieval_gate"
     ],
     [
       "easyicu.research_agent",
@@ -169,6 +185,10 @@
     ],
     [
       "easyicu.research_agent",
+      "easyicu.research_agent.methods.tool_card"
+    ],
+    [
+      "easyicu.research_agent",
       "easyicu.research_agent.orchestration.config"
     ],
     [
@@ -190,6 +210,14 @@
     [
       "easyicu.research_agent",
       "easyicu.research_agent.planning.analysis_types"
+    ],
+    [
+      "easyicu.research_agent",
+      "easyicu.research_agent.planning.capability_registry"
+    ],
+    [
+      "easyicu.research_agent",
+      "easyicu.research_agent.planning.literature_retrieval_contract"
     ],
     [
       "easyicu.research_agent",
@@ -2390,6 +2418,10 @@
     [
       "easyicu.research_agent.authority.time_varying_runtime",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.authority.tool_promotion",
+      "easyicu.research_agent.methods.tool_card"
     ],
     [
       "easyicu.research_agent.authority.typed_binding",
@@ -7036,6 +7068,14 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.gates.literature_retrieval_gate",
+      "easyicu.research_agent.planning.literature_retrieval_contract"
+    ],
+    [
+      "easyicu.research_agent.gates.literature_retrieval_gate",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.gates.method_compatibility",
       "easyicu.research_agent.audits.patterns"
     ],
@@ -7572,12 +7612,44 @@
       "easyicu.research_agent.mcp_policy"
     ],
     [
+      "easyicu.research_agent.methods.gam",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.methods.gee",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.methods.gray_test",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.methods.lasso_selection",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.methods.mixed_effects",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
       "easyicu.research_agent.methods.multiple_testing",
       "easyicu.research_agent.authority.runtime_artifacts"
     ],
     [
+      "easyicu.research_agent.methods.nomogram",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
       "easyicu.research_agent.methods.prediction_validation",
       "easyicu.research_agent.contracts.prediction_validation"
+    ],
+    [
+      "easyicu.research_agent.methods.rcs_dose_response",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.methods.shap_attribution",
+      "easyicu.research_agent.canonical_json"
     ],
     [
       "easyicu.research_agent.methods.source_status",
@@ -7590,6 +7662,14 @@
     [
       "easyicu.research_agent.methods.table_one",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.methods.time_varying_exposure_cox",
+      "easyicu.research_agent.r_runtime"
+    ],
+    [
+      "easyicu.research_agent.methods.tool_card",
+      "easyicu.research_agent.canonical_json"
     ],
     [
       "easyicu.research_agent.orchestration.config",
@@ -8245,6 +8325,10 @@
     ],
     [
       "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.gates.literature_retrieval_gate"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.gates.preplan"
     ],
     [
@@ -8402,6 +8486,10 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.literature_retrieval_contract"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -8713,6 +8801,10 @@
     ],
     [
       "easyicu.research_agent.planning.capability_registry",
+      "easyicu.research_agent.authority.tool_promotion"
+    ],
+    [
+      "easyicu.research_agent.planning.capability_registry",
       "easyicu.research_agent.contracts.association_execution"
     ],
     [
@@ -8738,6 +8830,10 @@
     [
       "easyicu.research_agent.planning.capability_registry",
       "easyicu.research_agent.contracts.time_varying_exposure"
+    ],
+    [
+      "easyicu.research_agent.planning.capability_registry",
+      "easyicu.research_agent.methods.tool_card"
     ],
     [
       "easyicu.research_agent.planning.capability_registry",
@@ -11976,11 +12072,11 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2986,
+    "edge_count": 3010,
     "largest_scc_size": 0,
-    "module_count": 700,
+    "module_count": 722,
     "package_count": 32,
-    "top_level_module_count": 35
+    "top_level_module_count": 36
   },
   "modules": {
     "easyicu.research_agent": "__init__.py",
@@ -12095,6 +12191,7 @@
     "easyicu.research_agent.authority.step_runtime": "authority/step_runtime.py",
     "easyicu.research_agent.authority.table_one_binding": "authority/table_one_binding.py",
     "easyicu.research_agent.authority.time_varying_runtime": "authority/time_varying_runtime.py",
+    "easyicu.research_agent.authority.tool_promotion": "authority/tool_promotion.py",
     "easyicu.research_agent.authority.typed_binding": "authority/typed_binding.py",
     "easyicu.research_agent.authority.typed_input_receipt": "authority/typed_input_receipt.py",
     "easyicu.research_agent.authority.typed_input_sdk": "authority/typed_input_sdk.py",
@@ -12211,6 +12308,7 @@
     "easyicu.research_agent.discovery.source_provenance": "discovery/source_provenance.py",
     "easyicu.research_agent.evaluation": "evaluation/__init__.py",
     "easyicu.research_agent.evaluation.cross_model_panel": "evaluation/cross_model_panel.py",
+    "easyicu.research_agent.evaluation.independent_eval_harness": "evaluation/independent_eval_harness.py",
     "easyicu.research_agent.evaluation.tier2_jury": "evaluation/tier2_jury.py",
     "easyicu.research_agent.evaluation.tier2_rubric": "evaluation/tier2_rubric.py",
     "easyicu.research_agent.evaluation_scorecard": "evaluation_scorecard.py",
@@ -12357,6 +12455,7 @@
     "easyicu.research_agent.gates.host_helper_result": "gates/host_helper_result.py",
     "easyicu.research_agent.gates.host_helper_serialization": "gates/host_helper_serialization.py",
     "easyicu.research_agent.gates.interval_method": "gates/interval_method.py",
+    "easyicu.research_agent.gates.literature_retrieval_gate": "gates/literature_retrieval_gate.py",
     "easyicu.research_agent.gates.method_compatibility": "gates/method_compatibility.py",
     "easyicu.research_agent.gates.numeric_reduction": "gates/numeric_reduction.py",
     "easyicu.research_agent.gates.plan_declared_inputs": "gates/plan_declared_inputs.py",
@@ -12402,26 +12501,43 @@
     "easyicu.research_agent.mcp_server": "mcp_server.py",
     "easyicu.research_agent.mcp_transport": "mcp_transport.py",
     "easyicu.research_agent.methods": "methods/__init__.py",
+    "easyicu.research_agent.methods.competing_risks": "methods/competing_risks.py",
     "easyicu.research_agent.methods.conformal": "methods/conformal.py",
     "easyicu.research_agent.methods.decision_curve": "methods/decision_curve.py",
     "easyicu.research_agent.methods.delong_auc": "methods/delong_auc.py",
     "easyicu.research_agent.methods.descriptive_inputs": "methods/descriptive_inputs.py",
+    "easyicu.research_agent.methods.doubly_robust": "methods/doubly_robust.py",
     "easyicu.research_agent.methods.dynamic_prediction": "methods/dynamic_prediction.py",
     "easyicu.research_agent.methods.fairness": "methods/fairness.py",
+    "easyicu.research_agent.methods.gam": "methods/gam.py",
+    "easyicu.research_agent.methods.gee": "methods/gee.py",
+    "easyicu.research_agent.methods.gformula": "methods/gformula.py",
+    "easyicu.research_agent.methods.gray_test": "methods/gray_test.py",
+    "easyicu.research_agent.methods.lasso_selection": "methods/lasso_selection.py",
+    "easyicu.research_agent.methods.mediation": "methods/mediation.py",
     "easyicu.research_agent.methods.missing": "methods/missing.py",
     "easyicu.research_agent.methods.missing_data": "methods/missing_data.py",
+    "easyicu.research_agent.methods.mixed_effects": "methods/mixed_effects.py",
+    "easyicu.research_agent.methods.msm": "methods/msm.py",
     "easyicu.research_agent.methods.multiple_testing": "methods/multiple_testing.py",
+    "easyicu.research_agent.methods.nomogram": "methods/nomogram.py",
     "easyicu.research_agent.methods.ordered_trends": "methods/ordered_trends.py",
     "easyicu.research_agent.methods.ph_schoenfeld": "methods/ph_schoenfeld.py",
     "easyicu.research_agent.methods.prediction_validation": "methods/prediction_validation.py",
+    "easyicu.research_agent.methods.propensity_weighting": "methods/propensity_weighting.py",
+    "easyicu.research_agent.methods.rcs_dose_response": "methods/rcs_dose_response.py",
+    "easyicu.research_agent.methods.reclassification": "methods/reclassification.py",
     "easyicu.research_agent.methods.rmst": "methods/rmst.py",
     "easyicu.research_agent.methods.sensitivity": "methods/sensitivity.py",
+    "easyicu.research_agent.methods.shap_attribution": "methods/shap_attribution.py",
     "easyicu.research_agent.methods.source_status": "methods/source_status.py",
     "easyicu.research_agent.methods.survival_inputs": "methods/survival_inputs.py",
     "easyicu.research_agent.methods.table_one": "methods/table_one.py",
+    "easyicu.research_agent.methods.target_trial": "methods/target_trial.py",
     "easyicu.research_agent.methods.temporal_features": "methods/temporal_features.py",
     "easyicu.research_agent.methods.time_varying_cox": "methods/time_varying_cox.py",
     "easyicu.research_agent.methods.time_varying_exposure_cox": "methods/time_varying_exposure_cox.py",
+    "easyicu.research_agent.methods.tool_card": "methods/tool_card.py",
     "easyicu.research_agent.numeric_scalars": "numeric_scalars.py",
     "easyicu.research_agent.orchestration": "orchestration/__init__.py",
     "easyicu.research_agent.orchestration.config": "orchestration/config.py",
@@ -12465,6 +12581,7 @@
     "easyicu.research_agent.planning.literature_bindings": "planning/literature_bindings.py",
     "easyicu.research_agent.planning.literature_contract": "planning/literature_contract.py",
     "easyicu.research_agent.planning.literature_design_authority": "planning/literature_design_authority.py",
+    "easyicu.research_agent.planning.literature_retrieval_contract": "planning/literature_retrieval_contract.py",
     "easyicu.research_agent.planning.method_adapter_catalog": "planning/method_adapter_catalog.py",
     "easyicu.research_agent.planning.method_literature": "planning/method_literature.py",
     "easyicu.research_agent.planning.method_vocabulary": "planning/method_vocabulary.py",
@@ -12517,6 +12634,7 @@
     "easyicu.research_agent.providers.structured_retry": "providers/structured_retry.py",
     "easyicu.research_agent.providers.subprocess_env": "providers/subprocess_env.py",
     "easyicu.research_agent.publication_skills": "publication_skills.py",
+    "easyicu.research_agent.r_runtime": "r_runtime.py",
     "easyicu.research_agent.repair_registry": "repair_registry.py",
     "easyicu.research_agent.repairs": "repairs/__init__.py",
     "easyicu.research_agent.repairs.attempt_record": "repairs/attempt_record.py",
