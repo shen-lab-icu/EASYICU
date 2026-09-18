@@ -12,7 +12,6 @@ imputation policy, covariates, or scientific estimand.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,20 +212,19 @@ def fit_cluster_robust_time_varying_cox(
         input_path = root / "counting_process.csv"
         output_path = root / "coefficients.csv"
         local.to_csv(input_path, index=False)
-        try:
-            completed = subprocess.run(
-                [rscript, "--vanilla", "-e", _RSCRIPT, str(input_path), str(output_path)],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired as exc:
+        from ..r_runtime import run_rscript
+
+        completed = run_rscript(
+            rscript=rscript,
+            script=_RSCRIPT,
+            args=[str(input_path), str(output_path)],
+            timeout_s=120,
+        )
+        if completed.timed_out:
             raise TimeVaryingExposureCoxError(
                 "cluster-robust time-varying Cox fit timed out",
                 code="time_varying_cox_fit_timeout",
-            ) from exc
+            )
         if "EASYICU_COX_FIT_WARNING:" in completed.stderr:
             # R can exit successfully with finite coefficients despite an
             # infinite estimate/non-convergence. The fit owner promotes every

@@ -1,0 +1,80 @@
+{
+  "card": {
+    "inputs": [
+      {
+        "description": "binary 0/1 treatment indicator",
+        "name": "treatment",
+        "required": true,
+        "value_kind": "int_vector"
+      },
+      {
+        "description": "complete-case numeric confounders",
+        "name": "covariates",
+        "required": true,
+        "value_kind": "float_matrix"
+      }
+    ],
+    "method_meaning": "L2-logistic propensity scores with greedy 1:1 nearest-neighbour matching (caliper 0.1) and stabilized IPTW weights; diagnostics only, no effect estimation",
+    "origin_output_sha256": "b13064c59d2de0cf100b95570d166ae72191a3cb442300e500dbab8c33fda8ad",
+    "outputs": [
+      {
+        "description": "",
+        "name": "matched_pairs",
+        "value_kind": "index_pair_list"
+      },
+      {
+        "description": "",
+        "name": "balance_smd",
+        "value_kind": "float_list"
+      },
+      {
+        "description": "",
+        "name": "iptw_weights",
+        "value_kind": "float_list"
+      }
+    ],
+    "population_assumption": "complete-case numeric confounders; origin run on a synthetic imbalanced fixture (seed 7, n_t=150, n_c=600)",
+    "schema_version": "easyicu.tool_card/1",
+    "timing_assumption": "retrospective analysis on a frozen data extract; no observation-window or real-time constraint",
+    "tool_name": "psm_confounding_adjustment",
+    "tool_version": "1.0.0",
+    "validation_evidence": [
+      {
+        "evidence_id": "psm-sandbox-run-1",
+        "kind": "sandbox_run",
+        "note": "origin run: L2 logistic PS + greedy 1:1 match (caliper 0.1, seed 42) on the imbalance fixture; post-match SMD < 0.1 on both covariates",
+        "output_sha256": "b13064c59d2de0cf100b95570d166ae72191a3cb442300e500dbab8c33fda8ad",
+        "passed": true
+      },
+      {
+        "evidence_id": "psm-repro-1",
+        "kind": "independent_reproduction",
+        "note": "deterministic rerun on identical fixed data with kernel seeds pinned under a different process-global RNG state (numpy seed 999 vs 7); output digest byte-identical. NOT a fresh data draw.",
+        "output_sha256": "b13064c59d2de0cf100b95570d166ae72191a3cb442300e500dbab8c33fda8ad",
+        "passed": true
+      },
+      {
+        "evidence_id": "psm-applicability-1",
+        "kind": "applicability_check",
+        "note": "intended reuse is confounding adjustment on complete-case covariates, inside the card population; no clinical transport claimed",
+        "output_sha256": "b13064c59d2de0cf100b95570d166ae72191a3cb442300e500dbab8c33fda8ad",
+        "passed": true
+      }
+    ]
+  },
+  "decision": {
+    "allowed_identity": "verified_tool",
+    "card_sha256": "a4b146a7dc4d7a88e5568a82ed984c57d94e75be80e891803903a7bc7103f300",
+    "executor_module": "easyicu.research_agent.methods.propensity_weighting",
+    "granted_verified_tool": true,
+    "reasons": [
+      "granted_verified_tool: reproductions=1 boundary_covered=True"
+    ],
+    "schema_version": "easyicu.tool_promotion_decision/1",
+    "tool_name": "psm_confounding_adjustment",
+    "tool_version": "1.0.0"
+  },
+  "executor_module": "easyicu.research_agent.methods.propensity_weighting",
+  "issued_note": "Issued 2026-09-18 on synthetic fixtures; origin bounds the claim to method mechanics (see card population assumption). Reproduction is deterministic rerun, not fresh data.",
+  "schema_version": "easyicu.tool_card_grant_file/1"
+}

@@ -92,7 +92,11 @@ methods = [
   "lifelines>=0.27",
   "numba>=0.59",
   "shap>=0.44",
-  "xgboost>=2.0"
+  "xgboost>=2.0",
+  "lightgbm>=4.0",
+  # CPU wheel suffices for the sandbox (CUDA builds are a local override);
+  # mirrors contracts/method_packages.py, which the Coder reads for imports.
+  "torch>=2.0"
 ]
 # Optional adapters are deliberately separate from ``methods``: installing one
 # does not advertise it to the Coder or promote a scientific capability.  It
@@ -160,6 +164,7 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
   "runner_image/requirements.lock",
   "runner_image/base-image.lock",
   "runner_image/README.md",
+  "methods/tool_cards/*.card.json",
 ]
 
 [tool.ruff]
