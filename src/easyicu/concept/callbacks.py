@@ -2571,14 +2571,20 @@ def _callback_norepi_equiv(
 
     combined = pd.concat(scaled_frames, ignore_index=True)
 
-    # R ricu uses median aggregation for numeric data (see tbl-utils.R aggregate.id_tbl)
+    # 2026-09-18 v6: sum (not median) across co-administered vasopressors.
+    # Norepinephrine equivalents are additive potency: total effect = sum of
+    # scaled doses. Median systematically understages multi-drug shock (e.g.
+    # norepi 0.2 + epi 0.2 + adh 0.04 -> scaled 0.2+0.2+0.1=0.5 sum vs 0.2
+    # median). R ricu median applies to repeated measures of ONE concept, not
+    # to potency summation across DIFFERENT drugs. SOFA cardio is unaffected:
+    # it consumes norepi60/dopa60/dobu60/epi60 + map, never norepi_equiv.
     if key_cols:
         aggregated = (
-            combined.groupby(key_cols)["norepi_equiv"].median().reset_index()
+            combined.groupby(key_cols)["norepi_equiv"].sum().reset_index()
         )
         aggregated = aggregated.sort_values(key_cols).reset_index(drop=True)
     else:
-        aggregated = pd.DataFrame({"norepi_equiv": [combined["norepi_equiv"].median()]})
+        aggregated = pd.DataFrame({"norepi_equiv": [combined["norepi_equiv"].sum()]})
 
     return _as_icutbl(
         aggregated,
