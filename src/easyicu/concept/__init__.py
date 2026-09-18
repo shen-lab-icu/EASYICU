@@ -228,6 +228,42 @@ def _mimic_episode_upper_by_stay(
     return keyed.groupby("stay", sort=False)["upper"].max()
 
 
+def _eicu_episode_upper_by_stay(
+    bounds: pd.DataFrame,
+    *,
+    stay_column: str,
+    post_discharge_hours: float,
+    fallback_hours: float,
+) -> pd.Series:
+    """Return each eICU stay's last plausible ICU-relative event hour.
+
+    ``bounds`` carries ``unitdischargeoffset`` minutes from the ``patient``
+    table (0 is unit admission). Preference mirrors the native-v2 publisher
+    (``outcome.los_icu`` first, 366-day sanity fallback last) so producer
+    staging and publication agree on the window.
+    """
+
+    stays = pd.to_numeric(bounds[stay_column], errors="coerce")
+    discharge_min = pd.to_numeric(
+        bounds["unitdischargeoffset"], errors="coerce"
+    )
+    valid_stay = stays.notna()
+    upper = pd.Series(np.nan, index=bounds.index, dtype="float64")
+    valid_discharge = (
+        valid_stay & discharge_min.notna() & (discharge_min >= 0)
+    )
+    upper = upper.where(
+        ~valid_discharge,
+        discharge_min / 60.0 + float(post_discharge_hours),
+    )
+    upper = upper.fillna(float(fallback_hours))
+    keyed = pd.DataFrame(
+        {"stay": stays.loc[valid_stay].astype(np.int64),
+         "upper": upper.loc[valid_stay]}
+    )
+    return keyed.groupby("stay", sort=False)["upper"].max()
+
+
 def _quarantine_rows_outside_icu_episode(
     frame: pd.DataFrame,
     *,
@@ -5896,6 +5932,97 @@ class ConceptResolver:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     data[col] = minutes_to_hours_series(data[col])
             _normalize_duration_to_hours(data)
+            # 2026-09-19 v6: eICU producer-layer ICU-episode bound (MIMIC
+            # bcb5032f / AUMC precedent). Raw eICU offsets carry corrupt
+            # far-out values (e.g. lab labresultoffset -52,578,464 min for
+            # stays 2385766/1699503 -> -876,308 h after /60); unclipped
+            # hourly SOFA fill_gaps then spans ~1.75M rows/stay and trips
+            # the sep3 replay bound (DerivationContextError). The native-v2
+            # publisher enforces the same [-24h, los_icu+24h] window, so
+            # pre-clipped staging stays publication-identical. Phenotype
+            # lookbacks (e.g. kdigo 168h) arrive via pre_admission_hours
+            # and are honoured. Vectorized map/filter only.
+            if index_column and index_column in data.columns:
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
+                stay_col = next(
+                    (col for col in id_columns if col in data.columns),
+                    None,
+                )
+                if stay_col is None and "patientunitstayid" in data.columns:
+                    stay_col = "patientunitstayid"
+                if stay_col is not None:
+                    try:
+                        cache = getattr(self, "_eicu_patient_cache", None)
+                        if (
+                            cache is None
+                            or stay_col not in cache.columns
+                            or "unitdischargeoffset" not in cache.columns
+                        ):
+                            patient_table = data_source.load_table(
+                                "patient",
+                                columns=[stay_col, "unitdischargeoffset"],
+                                verbose=False,
+                            )
+                            cache_df = (
+                                patient_table.data
+                                if hasattr(patient_table, "data")
+                                else patient_table
+                            )
+                            cache_df = cache_df[
+                                [stay_col, "unitdischargeoffset"]
+                            ].drop_duplicates(
+                                subset=[stay_col], keep="last"
+                            ).copy()
+                            self._eicu_patient_cache = cache_df
+                            cache = cache_df
+                        upper_by_stay = _eicu_episode_upper_by_stay(
+                            cache,
+                            stay_column=stay_col,
+                            post_discharge_hours=float(
+                                ICU_TIME_POST_DISCHARGE_HOURS
+                            ),
+                            fallback_hours=float(
+                                ICU_TIME_FALLBACK_LIMIT_HOURS
+                            ),
+                        )
+                        event_hours = pd.to_numeric(
+                            data[index_column], errors="coerce"
+                        )
+                        event_hours.index = data.index
+                        stay_keys = pd.to_numeric(
+                            data[stay_col], errors="coerce"
+                        ).astype("Int64")
+                        upper_hours = stay_keys.map(upper_by_stay).fillna(
+                            float(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                        )
+                        upper_hours.index = data.index
+                        data = _quarantine_rows_outside_icu_episode(
+                            data,
+                            event_hours=event_hours,
+                            upper_hours=upper_hours,
+                            allowed_pre_hours=allowed_pre_hours,
+                            db_label="eICU",
+                        )
+                    except ValueError:
+                        raise
+                    except Exception:
+                        # Cache warmup failed; leave the frame untouched
+                        # rather than returning unaligned times.
+                        pass
             return data
 
         if db_name == 'aumc':
