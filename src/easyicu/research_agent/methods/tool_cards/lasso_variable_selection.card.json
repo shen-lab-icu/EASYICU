@@ -1,0 +1,91 @@
+{
+  "card": {
+    "inputs": [
+      {
+        "description": "complete-case numeric design matrix",
+        "name": "X",
+        "required": true,
+        "value_kind": "float_matrix"
+      },
+      {
+        "description": "numeric outcome vector aligned to X rows",
+        "name": "y",
+        "required": true,
+        "value_kind": "float_vector"
+      },
+      {
+        "description": "pinned L1 penalty for method=lasso",
+        "name": "alpha",
+        "required": false,
+        "value_kind": "float"
+      }
+    ],
+    "method_meaning": "L1-penalized linear variable selection at a pinned alpha with fixed KFold splits; |coef| above threshold selects",
+    "origin_output_sha256": "5858c5a27b312634a38601a91146445b9f1fd0578c01ef21cf5452f01723f8d4",
+    "outputs": [
+      {
+        "description": "",
+        "name": "selected_vars",
+        "value_kind": "string_list"
+      },
+      {
+        "description": "",
+        "name": "coefs",
+        "value_kind": "float_list"
+      },
+      {
+        "description": "",
+        "name": "alpha",
+        "value_kind": "float"
+      },
+      {
+        "description": "",
+        "name": "cv_mean_mse",
+        "value_kind": "float_list"
+      }
+    ],
+    "population_assumption": "complete-case numeric design matrices; origin run on a synthetic orthogonal-Gaussian fixture (seed 0, n=200, p=10)",
+    "schema_version": "easyicu.tool_card/1",
+    "timing_assumption": "retrospective analysis on a frozen data extract; no observation-window or real-time constraint",
+    "tool_name": "lasso_variable_selection",
+    "tool_version": "1.0.0",
+    "validation_evidence": [
+      {
+        "evidence_id": "lasso-sandbox-run-1",
+        "kind": "sandbox_run",
+        "note": "origin run: fixed-alpha lasso, alpha=0.1, cv=5, random_state=0 on the orthogonal fixture",
+        "output_sha256": "5858c5a27b312634a38601a91146445b9f1fd0578c01ef21cf5452f01723f8d4",
+        "passed": true
+      },
+      {
+        "evidence_id": "lasso-repro-1",
+        "kind": "independent_reproduction",
+        "note": "deterministic rerun on identical fixed data with the kernel seed configuration pinned (random_state=0) and a different process-global RNG state (numpy seed 999 vs 0); output digest byte-identical. NOT a fresh data draw and NOT a different CV partition; cross-seed LassoCV stability is explicitly not claimed.",
+        "output_sha256": "5858c5a27b312634a38601a91146445b9f1fd0578c01ef21cf5452f01723f8d4",
+        "passed": true
+      },
+      {
+        "evidence_id": "lasso-applicability-1",
+        "kind": "applicability_check",
+        "note": "intended reuse is variable selection on complete-case numeric matrices, inside the card population; no clinical transport claimed",
+        "output_sha256": "5858c5a27b312634a38601a91146445b9f1fd0578c01ef21cf5452f01723f8d4",
+        "passed": true
+      }
+    ]
+  },
+  "decision": {
+    "allowed_identity": "verified_tool",
+    "card_sha256": "fd817deaef1e7480b6bbc203df84be63e58c1d455a04a4dc086a9d2b6fb67a5b",
+    "executor_module": "easyicu.research_agent.methods.lasso_selection",
+    "granted_verified_tool": true,
+    "reasons": [
+      "granted_verified_tool: reproductions=1 boundary_covered=True"
+    ],
+    "schema_version": "easyicu.tool_promotion_decision/1",
+    "tool_name": "lasso_variable_selection",
+    "tool_version": "1.0.0"
+  },
+  "executor_module": "easyicu.research_agent.methods.lasso_selection",
+  "issued_note": "Issued 2026-09-18 on synthetic fixtures; origin bounds the claim to method mechanics (see card population assumption). Reproduction is deterministic rerun, not fresh data.",
+  "schema_version": "easyicu.tool_card_grant_file/1"
+}

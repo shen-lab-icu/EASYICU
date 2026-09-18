@@ -68,6 +68,31 @@ def test_method_package_contract_is_frozen_and_complete() -> None:
                 "sklearn HistGradientBoostingClassifier / " "GradientBoostingClassifier"
             ),
         ),
+        MethodPackage(
+            import_name="lightgbm",
+            pip_name="lightgbm",
+            capability=(
+                "gradient-boosted trees for tabular prediction "
+                "(LGBMClassifier / LGBMRegressor)"
+            ),
+            families=("prediction_model", "dynamic_prediction"),
+            fallback=(
+                "sklearn HistGradientBoostingClassifier / " "GradientBoostingClassifier"
+            ),
+        ),
+        MethodPackage(
+            import_name="torch",
+            pip_name="torch",
+            capability=(
+                "deep learning for sequence/tabular prediction "
+                "(MLP, LSTM/GRU, attention encoders; CPU wheel suffices)"
+            ),
+            families=("prediction_model", "dynamic_prediction"),
+            fallback=(
+                "sklearn HistGradientBoostingClassifier / MLPClassifier "
+                "(no sequence-model fallback)"
+            ),
+        ),
     )
     # patsy moves computed numbers (statsmodels formulas are built on it) but is
     # deliberately NOT a MethodPackage: declaring it would advertise a direct
@@ -167,6 +192,8 @@ def test_runtime_fingerprint_uses_the_declared_distribution_set(monkeypatch) -> 
             "lifelines",
             "shap",
             "xgboost",
+            "lightgbm",
+            "torch",
             "patsy",
         }
     )

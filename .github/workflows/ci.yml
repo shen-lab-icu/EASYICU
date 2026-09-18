@@ -109,6 +109,10 @@ jobs:
           # The openai floor (>=1.40.0) comes via the webapp extra in
           # pyproject.toml; no separate explicit install here.
           pip install -e ".[dev,webapp]"
+          # The research-agent method contracts execute these optional kernels;
+          # install their tested packages without pulling the full methods extra
+          # (which also includes the much larger torch runtime).
+          pip install "lifelines>=0.27" "shap>=0.44" "xgboost>=2.0"
 
       - name: Compile Python source and tests
         run: python -m compileall -q src tests
@@ -204,6 +208,16 @@ jobs:
           for required in ("Dockerfile", "requirements.lock", "base-image.lock", "README.md"):
               assert required in names, f"{required} missing from the wheel: {names}"
           print("runner_image ships:", ", ".join(names))
+          cards = files("easyicu.research_agent") / "methods" / "tool_cards"
+          card_names = {p.name for p in cards.iterdir()}
+          required_cards = {
+              "lasso_variable_selection.card.json",
+              "psm_confounding_adjustment.card.json",
+              "rcs_dose_response.card.json",
+              "shap_tree_attribution.card.json",
+          }
+          assert required_cards <= card_names, f"Tool Cards missing from wheel: {required_cards - card_names}"
+          print("Tool Cards ship:", ", ".join(sorted(required_cards)))
           PY
 
       - name: Install the sdist into a clean environment
