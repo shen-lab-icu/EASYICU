@@ -65,3 +65,37 @@ def test_rrt_criteria_drops_false_outer_merge_row_without_time() -> None:
 def test_rrt_criteria_rejects_positive_result_without_time() -> None:
     with pytest.raises(ValueError, match="positive rows without an event time"):
         _callback_rrt_criteria(_tables(positive_null_time=True), _context())
+
+
+def test_rrt_criteria_is_longitudinal_not_stay_level() -> None:
+    """2026-09-19 v6: rrt_criteria must stay timed at the producer layer.
+
+    eICU staging carried 2 untimed TRUE rows (stays 560871/1073908, all
+    other renal columns NULL) plus 843 untimed FALSE merge artifacts. The
+    timed labs behind them (e.g. 560871 crea 6.48/k 6.5 at 28 h, upper
+    25.86 h from discharge 112 min + 24 h) are outside the ICU episode and
+    are dropped at publication as out-of-window; collapsing the survivors
+    via id_tbl ANY to a stay-level TRUE resurrects them as untimed events
+    that trip the publication fail-closed. Declaring rrt_criteria
+    longitudinal (no id_tbl target) keeps out-of-window TRUE timed so the
+    publication window drops it as excluded_rows instead of raising, while
+    the publication fail-closed itself stays intact for genuine bugs.
+    """
+
+    import json
+    from pathlib import Path
+
+    for dict_name in ("concept-dict.json", "sofa2-dict.json"):
+        path = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "easyicu"
+            / "data"
+            / dict_name
+        )
+        with open(path) as handle:
+            entry = json.load(handle).get("rrt_criteria", {})
+        assert entry.get("target") != "id_tbl", (
+            f"{dict_name} rrt_criteria must not aggregate to stay-level"
+        )
+        assert entry.get("callback") == "rrt_criteria"
