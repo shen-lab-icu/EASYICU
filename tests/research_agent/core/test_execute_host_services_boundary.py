@@ -41,6 +41,9 @@ def _absolute_import_targets(module) -> set[str]:
 
 
 def test_execute_entrypoint_parameter_shape_is_stable() -> None:
+    # Deliberate extension (Track 2 wiring): the optional session-log pair
+    # rides as trailing keyword-only Nones. Any other shape change must
+    # update this pin explicitly, not drift silently.
     expected_names = (
         "pipeline",
         "plan_result",
@@ -53,22 +56,24 @@ def test_execute_entrypoint_parameter_shape_is_stable() -> None:
         "emit_progress",
         "resume_from_step_id",
         "stop_after_step_id",
+        "session_event_log",
+        "session_key",
     )
     shape = _parameter_shape(pipeline_execute.run_execute_phase)
     assert tuple(item[0] for item in shape) == expected_names
     assert shape[0][1] is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert all(item[1] is inspect.Parameter.KEYWORD_ONLY for item in shape[1:])
-    assert tuple(item[2] for item in shape[:-2]) == (inspect.Parameter.empty,) * 9
-    assert tuple(item[2] for item in shape[-2:]) == (None, None)
+    assert tuple(item[2] for item in shape[:-4]) == (inspect.Parameter.empty,) * 9
+    assert tuple(item[2] for item in shape[-4:]) == (None,) * 4
 
     method_shape = _parameter_shape(pipeline.ResearchAgentPipeline._run_execute_phase)
     assert tuple(item[0] for item in method_shape) == ("self", *expected_names[1:])
     assert method_shape[0][1] is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert all(item[1] is inspect.Parameter.KEYWORD_ONLY for item in method_shape[1:])
     assert (
-        tuple(item[2] for item in method_shape[:-2]) == (inspect.Parameter.empty,) * 9
+        tuple(item[2] for item in method_shape[:-4]) == (inspect.Parameter.empty,) * 9
     )
-    assert tuple(item[2] for item in method_shape[-2:]) == (None, None)
+    assert tuple(item[2] for item in method_shape[-4:]) == (None,) * 4
 
 
 def test_output_helper_legacy_paths_preserve_identity() -> None:

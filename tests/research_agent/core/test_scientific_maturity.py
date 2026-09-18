@@ -698,6 +698,38 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
     assert "PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE" in codes
     assert "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE" not in codes
 
+    summary_dir = tmp_path / "steps" / "primary_model" / "outputs"
+    summary_dir.mkdir(parents=True)
+    (summary_dir / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "estimate": 1.2,
+                "n": 200,
+                "n_events": 20,
+                "covariates": "age;sex",
+            }
+        ),
+        encoding="utf-8",
+    )
+    low_epv_audit = build_scientific_maturity_audit(
+        context=context,
+        plan=plan,
+        run_dir=tmp_path,
+        display_suite={"display_suite_complete": True},
+        publication_bundle={
+            "publication_figure_contract_ready": True,
+            "publication_figure_source_data_ready": True,
+            "publication_figure_visual_qa_passed": True,
+        },
+    )
+    epv_findings = [
+        finding for finding in low_epv_audit.findings
+        if finding.code == "LOW_EVENTS_PER_VARIABLE"
+    ]
+    assert len(epv_findings) == 1
+    assert epv_findings[0].severity == "minor"
+    assert low_epv_audit.article_grade == audit.article_grade
+
     receipt_path.write_text("{}", encoding="utf-8")
     tampered = build_scientific_maturity_audit(
         context=context,

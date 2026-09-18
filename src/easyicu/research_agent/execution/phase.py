@@ -1175,7 +1175,17 @@ def run_execute_phase(
     emit_progress: Callable[..., None],
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
+    session_event_log: Optional[Any] = None,
+    session_key: Optional[Tuple[str, str, str]] = None,
 ) -> ExecutePhaseResult:
+    """Execute the planned steps, optionally resuming a logged session.
+
+    ``session_event_log``/``session_key`` wire the Track 2 session memory
+    into the execute path: a restored log filters the queue (retained steps
+    skipped, restart at the earliest affected step, stop condition empties
+    the queue) and step outcomes are recorded back into the log.  Both
+    must travel together; when both are absent the path is unchanged.
+    """
     preparation = _prepare_execute_phase_authority(
         pipeline,
         plan_result=plan_result,
@@ -1898,6 +1908,15 @@ def run_execute_phase(
             executed_step_ids=set(preexecuted_step_ids),
         )
     )
+    require_session_log_pair(session_event_log, session_key)
+    if session_event_log is not None and session_key is not None:
+        steps_to_run = session_resume_step_filter(
+            steps_to_run=steps_to_run,
+            session_event_log=session_event_log,
+            session_key=session_key,
+            findings=findings,
+            evidence_store=evidence,
+        )
     has_typed_input_dependencies, has_primary_cohort_universe_producer = (
         _step_emit_execution_preflight(
             plan_block_reason=plan_block_reason,
@@ -2023,6 +2042,12 @@ def run_execute_phase(
         )
         plan_result.plan = plan
         plan_result.plan_path = plan_path
+        _record_session_outcomes_best_effort(
+            session_event_log=session_event_log,
+            session_key=session_key,
+            per_step_records=per_step_records,
+            findings=findings,
+        )
         return ExecutePhaseResult(
             plan=plan,
             per_step_records=per_step_records,
@@ -2098,6 +2123,12 @@ def run_execute_phase(
 
     plan_result.plan = plan
     plan_result.plan_path = plan_path
+    _record_session_outcomes_best_effort(
+        session_event_log=session_event_log,
+        session_key=session_key,
+        per_step_records=per_step_records,
+        findings=findings,
+    )
     return ExecutePhaseResult(
         plan=plan,
         per_step_records=per_step_records,
@@ -5693,3 +5724,437 @@ def _step_finalize_step(
         total_steps=total_steps,
     )
     return runtime_state, step_record
+
+
+# ---------------------------------------------------------------------------
+# Track 2 — minimal execute-phase session resume (long-task memory).
+# ---------------------------------------------------------------------------
+#
+# Pure step planner over the EvidenceStore-backed session event log: valid
+# completed steps are retained (skipped), execution continues from the
+# earliest affected (failed/suspended) step, and the stop condition
+# (attempts >= max_attempts, or no next executable diagnosis) halts retries
+# instead of looping forever.
+
+SESSION_STEP_RESUME_DEFAULT_MAX_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class SessionStepResumePlan:
+    """Ordered resume plan for execute-phase steps."""
+
+    steps_to_run: Tuple[str, ...] = ()
+    steps_skipped_retained: Tuple[str, ...] = ()
+    stopped: bool = False
+    reason: str = "no_affected_steps"
+
+
+def should_stop_session_retry(
+    *,
+    attempts: int,
+    max_attempts: int = SESSION_STEP_RESUME_DEFAULT_MAX_ATTEMPTS,
+    has_next_diagnosis: bool,
+) -> bool:
+    """Return True when the stop condition is reached (never infinite-retry)."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+    try:
+        seen = int(attempts)
+    except (TypeError, ValueError):
+        seen = 0
+    return seen >= max_attempts or not has_next_diagnosis
+
+
+def plan_session_resume_steps(
+    *,
+    ordered_step_ids: Sequence[str],
+    retained_step_ids: Sequence[str],
+    failed_or_suspended_step_ids: Sequence[str],
+    attempts_by_step: Optional[Mapping[str, int]] = None,
+    has_diagnosis_by_step: Optional[Mapping[str, bool]] = None,
+    max_attempts: int = SESSION_STEP_RESUME_DEFAULT_MAX_ATTEMPTS,
+) -> SessionStepResumePlan:
+    """Plan which ordered steps run after restoring the session log.
+
+    Valid completed steps before the earliest affected step are retained
+    (skipped); every step from the earliest affected step onward reruns so
+    downstream work cannot silently reuse inputs from a failed predecessor.
+    Any affected step at its stop condition halts the whole resume.
+    """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+    ordered = [str(step_id) for step_id in (ordered_step_ids or []) if str(step_id)]
+    if not ordered:
+        return SessionStepResumePlan(
+            steps_to_run=(), steps_skipped_retained=(), stopped=False,
+            reason="empty_plan",
+        )
+    affected = [s for s in (failed_or_suspended_step_ids or []) if s in ordered]
+    if not affected:
+        retained = tuple(s for s in ordered if s in set(retained_step_ids or ()))
+        return SessionStepResumePlan(
+            steps_to_run=tuple(s for s in ordered if s not in set(retained)),
+            steps_skipped_retained=retained,
+            stopped=False,
+            reason="no_affected_steps",
+        )
+    attempts = dict(attempts_by_step or {})
+    diagnoses = dict(has_diagnosis_by_step or {})
+    for step_id in affected:
+        raw_attempts = attempts.get(step_id, 0)
+        try:
+            seen = int(raw_attempts)
+        except (TypeError, ValueError):
+            seen = 0
+        if should_stop_session_retry(
+            attempts=seen,
+            max_attempts=max_attempts,
+            has_next_diagnosis=bool(diagnoses.get(step_id, False)),
+        ):
+            return SessionStepResumePlan(
+                steps_to_run=(),
+                steps_skipped_retained=tuple(
+                    s for s in ordered if s in set(retained_step_ids or ())
+                ),
+                stopped=True,
+                reason=f"stop_condition_reached:{step_id}",
+            )
+    earliest = min(ordered.index(step_id) for step_id in affected)
+    retained_set = set(retained_step_ids or ())
+    skipped = tuple(s for s in ordered[:earliest] if s in retained_set)
+    to_run = tuple(ordered[earliest:])
+    return SessionStepResumePlan(
+        steps_to_run=to_run,
+        steps_skipped_retained=skipped,
+        stopped=False,
+        reason="resume_from_earliest_affected",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Track 2 wiring: session-log-driven resume for ``run_execute_phase``.
+#
+# ``run_execute_phase`` accepts an optional live ``SessionEventLog`` plus a
+# ``(project_id, task_id, session_id)`` key.  When both are absent the execute
+# path is unchanged.  When present:
+# entry: an already-completed session refuses (fail closed); sessions with
+#   recorded step outcomes filter the queue through
+#   ``plan_session_resume_steps`` so retained steps are skipped and execution
+#   restarts at the earliest affected step; a reached stop condition empties
+#   the queue with an error finding instead of retrying.
+# exit: per-step outcomes are recorded back into the log (completed artefacts
+#   carry the producing step id; terminal failures carry the failing step
+#   id) and the session transitions to completed/failed.  Blocked runs with
+#   no step records leave the session status untouched.
+# Lifecycle calls (start/suspend/resume, attempts, diagnoses) stay with the
+# caller: the execute phase never invents them.  There is no production
+# resume entrypoint supplying a log yet; the parameters are live code
+# exercised by every execute-phase run (as explicit no-ops) and by the
+# focused wiring tests.
+
+_SESSION_RESUME_RUNNABLE_STATUSES = frozenset({"pending", "running"})
+_SESSION_RESUME_RESUMABLE_STATUSES = frozenset({"suspended", "failed"})
+
+
+def _session_key_or_raise(session_key: Any) -> Tuple[str, str, str]:
+    if (
+        not isinstance(session_key, (tuple, list))
+        or len(session_key) != 3
+        or not all(isinstance(part, str) and part.strip() for part in session_key)
+    ):
+        raise ValueError(
+            "session_key must be a (project_id, task_id, session_id) triple "
+            "of non-empty strings"
+        )
+    return (session_key[0], session_key[1], session_key[2])
+
+
+def require_session_log_pair(session_event_log: Any, session_key: Any) -> None:
+    """Fail closed unless the session log and key travel together."""
+    if (session_event_log is None) != (session_key is None):
+        raise ValueError(
+            "session_event_log and session_key must be provided together; "
+            "pass neither for the legacy path"
+        )
+
+
+def _session_step_outcomes(
+    session_event_log: Any, session_key: Tuple[str, str, str]
+) -> Tuple[Dict[str, List[str]], List[str]]:
+    """Split recorded steps for one session into (evidence_by_step, affected).
+
+    ``evidence_by_step`` maps a producing step id to the evidence ids its
+    completed-artefact events claim.  Claimed ids are NOT trusted here: the
+    caller verifies each against the live EvidenceStore before skipping
+    anything (a log entry is a claim, presence in the store is the fact).
+    """
+    from ..authority.evidence_store import SessionEventKind
+
+    evidence_by_step: Dict[str, List[str]] = {}
+    affected: List[str] = []
+    for event in session_event_log.events_for_session(*session_key):
+        payload = getattr(event, "payload", None) or {}
+        if not isinstance(payload, dict):
+            continue
+        if event.kind == SessionEventKind.COMPLETED_ARTIFACT.value:
+            produced = str(payload.get("produced_by_step") or "").strip()
+            claimed = str(payload.get("evidence_id") or "").strip()
+            if produced and claimed:
+                evidence_by_step.setdefault(produced, [])
+                if claimed not in evidence_by_step[produced]:
+                    evidence_by_step[produced].append(claimed)
+        elif event.kind == SessionEventKind.FAILURE_REASON.value:
+            failed = str(payload.get("step_id") or "").strip()
+            if failed and failed not in affected:
+                affected.append(failed)
+    return evidence_by_step, affected
+
+
+def _verify_retained_steps(
+    *,
+    evidence_by_step: Dict[str, List[str]],
+    ordered: List[str],
+    evidence_store: Any,
+    findings: List[Any],
+) -> Tuple[List[str], List[str]]:
+    """Keep only steps whose every claimed output verifies byte-for-byte.
+
+    Returns ``(retained, phantom)``.  Record presence alone is not enough
+    (review finding): each claimed id must resolve to a record whose
+    backing file still exists under the store root with matching bytes,
+    checked with :func:`verified_run_evidence_path`.  A step with phantom
+    (missing record, deleted file, or digest mismatch) rejoins the
+    affected set downstream; each phantom id is reported in one error
+    finding so a log that outruns its store can never silently skip work.
+    """
+    store_root = getattr(evidence_store, "root", None)
+    retained: List[str] = []
+    phantom: List[str] = []
+    for step_id, claimed_ids in evidence_by_step.items():
+        if step_id not in set(ordered):
+            continue
+        missing = []
+        for evidence_id in claimed_ids:
+            record = evidence_store.get(evidence_id)
+            if (
+                record is None
+                or store_root is None
+                or verified_run_evidence_path(store_root, record) is None
+            ):
+                missing.append(evidence_id)
+        if missing:
+            phantom.append(step_id)
+            findings.append(
+                ValidationFinding(
+                    validator="session_resume",
+                    severity="error",
+                    message=(
+                        f"Session log claims completed outputs for step "
+                        f"{step_id!r} that are absent from the evidence "
+                        f"store; the step will rerun instead of being "
+                        f"skipped."
+                    ),
+                    detail={
+                        "kind": "session_resume_phantom_evidence",
+                        "step_id": step_id,
+                        "missing_evidence_ids": missing,
+                    },
+                )
+            )
+        else:
+            retained.append(step_id)
+    return retained, phantom
+
+
+def session_resume_step_filter(
+    *,
+    steps_to_run: Sequence[Any],
+    session_event_log: Any,
+    session_key: Tuple[str, str, str],
+    findings: List[Any],
+    evidence_store: Any,
+) -> List[Any]:
+    """Filter an execute-phase queue through the restored session log.
+
+    Unknown sessions raise ``KeyError`` and already-completed sessions raise
+    ``ValueError`` (fail closed: rerunning a completed session needs a new
+    session, not a silent replay).  Sessions with no recorded step outcomes
+    pass the queue through untouched.  Retained steps are skipped only when
+    every output the log claims for them resolves in ``evidence_store``;
+    phantom outputs rejoin the affected set with an error finding (review
+    finding: step names in a log entry are claims, store presence is the
+    fact).  Otherwise the queue is filtered through
+    :func:`plan_session_resume_steps`; a reached stop condition empties the
+    queue and appends one error finding explaining why.  ``evidence_store``
+    is required (no default): skipping work without a store to check
+    against is exactly the hole being closed.
+    """
+    from ..authority.evidence_store import SessionStatus
+
+    if evidence_store is None:
+        raise ValueError("session resume filtering requires an evidence store")
+    key = _session_key_or_raise(session_key)
+    node = session_event_log.get_session(*key)
+    if node.status == SessionStatus.COMPLETED.value:
+        raise ValueError(
+            f"session {key!r} is already completed; start a new session "
+            "instead of rerunning it"
+        )
+    ordered = [str(getattr(step, "step_id", "") or "") for step in steps_to_run]
+    evidence_by_step, affected = _session_step_outcomes(session_event_log, key)
+    if not evidence_by_step and not affected:
+        return list(steps_to_run)
+    retained, phantom = _verify_retained_steps(
+        evidence_by_step=evidence_by_step,
+        ordered=ordered,
+        evidence_store=evidence_store,
+        findings=findings,
+    )
+    affected = list(affected) + [step_id for step_id in phantom if step_id not in affected]
+    try:
+        attempts = int(getattr(node, "attempt_count", 0) or 0)
+    except (TypeError, ValueError):
+        attempts = 0
+    diagnosis = bool(getattr(node, "next_diagnosis", None))
+    resume_plan = plan_session_resume_steps(
+        ordered_step_ids=ordered,
+        retained_step_ids=retained,
+        failed_or_suspended_step_ids=affected,
+        attempts_by_step={step_id: attempts for step_id in affected},
+        has_diagnosis_by_step={step_id: diagnosis for step_id in affected},
+        max_attempts=SESSION_STEP_RESUME_DEFAULT_MAX_ATTEMPTS,
+    )
+    if resume_plan.stopped:
+        findings.append(
+            ValidationFinding(
+                validator="session_resume",
+                severity="error",
+                message=(
+                    "Session resume reached its stop condition "
+                    f"({resume_plan.reason}); the execute queue is emptied "
+                    "instead of retrying. Record a next diagnosis and resume "
+                    "the session to continue."
+                ),
+                detail={
+                    "kind": "session_resume_stopped",
+                    "reason": resume_plan.reason,
+                    "session_key": list(key),
+                },
+            )
+        )
+        return []
+    if node.status in (
+        SessionStatus.SUSPENDED.value,
+        SessionStatus.FAILED.value,
+    ):
+        # The planner checks attempts already consumed.  Advance only after it
+        # admits this retry: checking again after the increment would reject
+        # the last permitted attempt without running a step.
+        rationale = (
+            str(getattr(node, "next_diagnosis", None) or "").strip()
+            or str(getattr(node, "failure_reason", None) or "").strip()
+            or f"operator-requested resume (attempt {attempts + 1})"
+        )
+        session_event_log.resume_session(*key, attempt_rationale=rationale)
+    wanted = set(resume_plan.steps_to_run)
+    return [
+        step
+        for step, step_id in zip(steps_to_run, ordered)
+        if not step_id or step_id in wanted
+    ]
+
+
+def record_session_step_outcomes(
+    *,
+    session_event_log: Any,
+    session_key: Tuple[str, str, str],
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> None:
+    """Record execute-phase outcomes back into the session log.
+
+    Records with ``status == "ok"`` contribute their real
+    ``evidence_ids`` as completed artefacts carrying the producing step
+    id; no synthetic ids are invented (review finding: invented ids let a
+    later resume skip work whose outputs were never registered).  Steps
+    without registered evidence ids contribute nothing — an ok record
+    with no outputs is not a retainable artefact.  Any other recorded
+    step contributes to one terminal failure reason (the session keeps
+    its prior valid artefacts).  An empty record list (blocked runs that
+    executed nothing) leaves the session status untouched.
+    """
+    key = _session_key_or_raise(session_key)
+    records = [item for item in (per_step_records or []) if isinstance(item, Mapping)]
+    if not records:
+        return
+    failed: List[str] = []
+    for record in records:
+        step_id = str(record.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        if str(record.get("status") or "") == "ok":
+            evidence_ids = [
+                str(item).strip()
+                for item in (record.get("evidence_ids") or [])
+                if str(item or "").strip()
+            ]
+            for evidence_id in evidence_ids:
+                session_event_log.log_completed_artifact(
+                    *key,
+                    evidence_id=evidence_id,
+                    produced_by_step=step_id,
+                )
+        elif step_id not in failed:
+            failed.append(step_id)
+    if failed:
+        session_event_log.log_failure_reason(
+            *key,
+            reason=(
+                f"execute phase ended with {len(failed)} non-ok step "
+                f"record(s): {', '.join(failed)}"
+            ),
+            step_id=failed[0],
+        )
+    else:
+        session_event_log.complete_session(*key)
+
+
+def _record_session_outcomes_best_effort(
+    *,
+    session_event_log: Any,
+    session_key: Any,
+    per_step_records: Sequence[Mapping[str, Any]],
+    findings: List[Any],
+) -> None:
+    """Record outcomes without letting log bookkeeping mask real results.
+
+    Session recording runs after execution finished: an invalid step id (or
+    any other log failure) is reported as one error finding while the real
+    ``ExecutePhaseResult`` still returns.  Outcomes are persisted to the
+    evidence store (review finding: memory-only logs made the next entry
+    reload stale state), exactly once per phase execution.
+    """
+    if session_event_log is None and session_key is None:
+        return
+    try:
+        require_session_log_pair(session_event_log, session_key)
+        record_session_step_outcomes(
+            session_event_log=session_event_log,
+            session_key=session_key,
+            per_step_records=per_step_records,
+        )
+        session_event_log.save()
+    except Exception as exc:
+        findings.append(
+            ValidationFinding(
+                validator="session_resume",
+                severity="error",
+                message=(
+                    "Session outcome recording failed; step results above "
+                    "are unaffected: " + str(exc)
+                ),
+                detail={
+                    "kind": "session_resume_record_failed",
+                    "error": str(exc),
+                },
+            )
+        )

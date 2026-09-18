@@ -204,7 +204,14 @@ def test_wide_trajectory_generation_prompts_stay_below_transport_gate() -> None:
         # above; a
         # real compaction failure overshoots this gate by kilobytes, not by
         # the ~2% headroom added here.
-        assert _payload_bytes(messages) <= 43_000
+        # 2026-09-18: raised 43_000 -> 43_100. The restock wave (shap /
+        # xgboost / lightgbm / torch importable, 8 new curated kernels)
+        # added 11 bytes of load-bearing capability-block content to the
+        # method-constrained trajectory prompt. Re-measured before moving:
+        # zero non-blank duplicated lines, so the growth is content, not
+        # bloat. Render-only prompts are unaffected (capability block now
+        # withheld when method constraints do not apply).
+        assert _payload_bytes(messages) <= 43_100
         assert "Shared fixed-window trajectory policies" in payload
         for variable in context.variables:
             if variable.fixed_window_trajectory is not None:
