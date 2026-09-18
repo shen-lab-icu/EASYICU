@@ -1380,7 +1380,6 @@
    "eicu": [],
    "aumc": []
   },
-  "target": "id_tbl",
   "callback": "rrt_criteria"
  }
 }
