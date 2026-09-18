@@ -391,14 +391,15 @@ def test_an_interval_too_narrow_to_see_is_printed_not_left_bare(tmp_path):
         )
     )
     metadata = contract["panels"][0]["metadata"]
-    # only the sub-resolution row is named, and it is named
-    assert metadata["sub_axis_resolution_rows"] == [
-        "signed_linear_functional_form_sensitivity"
-    ]
+    assert metadata["sub_axis_resolution_rows"] == []
+    assert metadata["chart_type"] == "specification_grid"
+    svg = (tmp_path / "out" / "robustness_plot.svg").read_text()
+    assert "0.9999976" in svg
+    assert "0.9999782" in svg
+    assert "1.000017" in svg
     note = contract["statistics_note"]
     note = note if isinstance(note, str) else " ".join(note)
-    assert "narrower than the axis resolution" in note
-    assert "signed linear functional form sensitivity" in note
+    assert "without a common effect axis" in note
 
 
 def test_the_figure_says_whether_a_shared_effect_axis_was_authorized(tmp_path):
@@ -406,10 +407,8 @@ def test_the_figure_says_whether_a_shared_effect_axis_was_authorized(tmp_path):
 
     The planning owner refuses to authorize one axis from `effect_scale`
     alone, because a per-unit OR and a high-vs-reference OR carry the same
-    scale while answering different questions. This renderer draws them on one
-    axis anyway -- the producer does not yet emit the identity columns the
-    assessment needs -- so the verdict has to travel with the figure instead of
-    being assumed away.
+    scale while answering different questions. The specification table retains
+    each result without implying a common effect axis.
     """
     run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
     run_robustness_figure(
@@ -447,7 +446,7 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     # The line at no effect. ``OR`` is the producer's own spelling and was
     # unrecognised until 2026-07-31, so this forest was drawn with no anchor
     # for a reader to judge an interval against, and nothing recorded that.
-    assert summary["null_line_drawn"] is True
+    assert summary["null_line_drawn"] is False
     assert summary["specifications_drawn"] == 1
     assert summary["specifications_not_estimable"] == 1
     assert summary["any_specification_not_estimable"] is True
@@ -460,10 +459,79 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     )
     assert contract["panels"][0]["panel_id"] == "robustness_grid"
     assert contract["panels"][0]["metadata"]["article_role"] == "robustness"
-    assert contract["panels"][0]["metadata"]["chart_type"] == "sensitivity_forest"
+    assert contract["panels"][0]["metadata"]["chart_type"] == "specification_grid"
     assert contract["panels"][0]["metadata"]["source_products"] == [
         "table:robustness_matrix"
     ]
+
+
+def test_one_specification_can_report_multiple_declared_contrasts(tmp_path):
+    rows = [
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "spec_label": "age: RCS instead of linear adjustment",
+            "contrast_id": "lactate:1_vs_2",
+            "contrast_label": "1 vs 2",
+            "effect_unit": "mmol/L",
+        },
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "spec_label": "age: RCS instead of linear adjustment",
+            "contrast_id": "lactate:4.9_vs_2",
+            "contrast_label": "4.9 vs 2",
+            "effect_unit": "mmol/L",
+        },
+    ]
+    columns = [
+        *_MATRIX_COLUMNS,
+        "spec_label",
+        "contrast_id",
+        "contrast_label",
+        "effect_unit",
+    ]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows, columns)
+
+    summary = run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["specifications_drawn"] == 2
+    svg = (tmp_path / "out" / "robustness_plot.svg").read_text()
+    assert "1 vs 2" in svg
+    assert "4.9 vs 2" in svg
+
+
+def test_one_specification_cannot_repeat_the_same_contrast(tmp_path):
+    rows = [
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "contrast_id": "lactate:1_vs_2",
+        },
+        {
+            **_REAL_ROWS[0],
+            "spec_id": "age_functional_form_rcs_vs_linear",
+            "contrast_id": "lactate:1_vs_2",
+        },
+    ]
+    columns = [*_MATRIX_COLUMNS, "contrast_id"]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows, columns)
+
+    with pytest.raises(ValueError, match="unique non-empty ids"):
+        run_robustness_figure(
+            out_dir=tmp_path / "out",
+            run_dir=run_dir,
+            resolved_inputs=manifest,
+            step_id="07_robustness_sensitivity_figure",
+            figure_product="robustness_plot",
+        )
 
 
 def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):
@@ -479,7 +547,8 @@ def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):
     )
 
     assert summary["anchor_input_bound"] is True
-    assert summary["anchor_line_drawn"] is True
+    assert summary["anchor_line_drawn"] is False
+    assert "Primary estimate: 1.566 (contrast not declared)" in (tmp_path / "out" / "robustness_plot.svg").read_text()
     source = pd.read_csv(
         tmp_path / "out" / "robustness_plot_bound_statistics_source_data.csv"
     )
@@ -501,6 +570,80 @@ def test_it_refuses_conflicting_primary_effect_aliases(tmp_path):
             step_id="07_robustness_sensitivity_figure",
             figure_product="robustness_plot",
         )
+
+
+@pytest.mark.parametrize("mutation", [None, "contrast", "missing_identity", "duplicate", "nonconverged"])
+def test_forest_requires_comparable_independent_estimates(tmp_path, mutation):
+    rows = [dict(_REAL_ROWS[0], spec_id=f"model_{index}", estimand_id="mortality_association",
+                 contrast_id="high_vs_reference", effect_unit="odds_ratio", independent_variant=True)
+            for index in range(2)]
+    if mutation == "contrast":
+        rows[1]["contrast_id"] = "per_unit"
+    elif mutation == "missing_identity":
+        rows[1]["effect_unit"] = ""
+    elif mutation == "duplicate":
+        rows[1]["independent_variant"] = False
+    elif mutation == "nonconverged":
+        rows[1]["converged"] = False
+    columns = list(_MATRIX_COLUMNS) + ["estimand_id", "contrast_id", "effect_unit", "independent_variant"]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows, columns)
+    _bind_statistic(run_dir, manifest, ROBUSTNESS_PRIMARY_EFFECT_INPUT, 1.566)
+    kwargs = dict(out_dir=tmp_path / "out", run_dir=run_dir, resolved_inputs=manifest,
+                  step_id="07_robustness_sensitivity_figure", figure_product="robustness_plot", chart_type="sensitivity_forest")
+    if mutation:
+        with pytest.raises(ValueError, match="common robustness effect axis is not authorized"):
+            run_robustness_figure(**kwargs)
+        assert not (tmp_path / "out" / "robustness_plot.png").exists()
+    else:
+        summary = run_robustness_figure(**kwargs)
+        assert summary["null_line_drawn"] and summary["anchor_line_drawn"]
+        assert summary["chart_type"] == "sensitivity_forest"
+        # The legend has to describe the axis the reader is actually looking at:
+        # a logarithmic scale, a null line, and an anchor line are three separate
+        # claims, and each is drawn only under its own condition.
+        caption = json.loads(
+            (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )["reader_caption"]
+        assert "logarithmic" in caption
+        assert "dashed vertical line" in caption
+        assert "solid vertical line" in caption
+        assert "specification table" not in caption
+
+
+def test_failed_fit_with_numeric_placeholders_remains_not_estimable(tmp_path):
+    rows = [dict(_REAL_ROWS[0], converged=False)]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows)
+    summary = run_robustness_figure(out_dir=tmp_path / "out", run_dir=run_dir,
+                                  resolved_inputs=manifest, step_id="07_robustness_sensitivity_figure",
+                                  figure_product="robustness_plot")
+    assert summary["specifications_drawn"] == 0
+    assert summary["specifications_not_estimable"] == 1
+    assert "Not estimable" in (tmp_path / "out" / "robustness_plot.svg").read_text()
+
+
+def test_forest_labels_and_legend_do_not_overlap_at_export_size(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution.runners import robustness_figure_executor as owner
+    save = owner.save_publication_figure
+    checked = []
+
+    def inspect_and_save(fig, *args, **kwargs):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        ax = fig.axes[0]
+        xmin, xmax = ax.get_xlim()
+        boxes = [label.get_window_extent(renderer) for value, label in zip(ax.get_xticks(), ax.get_xticklabels())
+                 if xmin <= value <= xmax]
+        assert len(boxes) >= 2
+        assert all(not left.overlaps(right) for index, left in enumerate(boxes) for right in boxes[index + 1:])
+        assert all(not legend.get_window_extent(renderer).overlaps(ax.get_window_extent(renderer)) for legend in fig.legends)
+        checked.append(True)
+        return save(fig, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "save_publication_figure", inspect_and_save)
+    test_forest_requires_comparable_independent_estimates(tmp_path, None)
+    assert checked == [True]
 
 
 def test_it_refuses_to_draw_a_matrix_the_replay_owner_did_not_write(tmp_path):
@@ -548,3 +691,93 @@ def test_it_refuses_a_grid_that_mixes_two_effect_scales(tmp_path):
             step_id="07_robustness_sensitivity_figure",
             figure_product="robustness_plot",
         )
+
+
+def test_specification_table_retains_declared_contrasts_and_omits_duplicate_scalar():
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        _draw_specification_table, _validated_rows,
+    )
+    from easyicu.research_agent.figures.robustness import assess_robustness_effect_comparability
+
+    frame = pd.DataFrame([
+        dict(spec_id='internal_primary', spec_label='Nonlinear model, upper contrast',
+             axis='primary', point_estimate=1.96, ci_low=1.89, ci_high=2.03,
+             contrast_id='x:4.9_vs_2', contrast_label='4.9 vs 2',
+             independent_variant=True),
+        dict(spec_id='internal_linear', spec_label='Linear sensitivity model',
+             axis='functional_form', point_estimate=1.27, ci_low=1.25, ci_high=1.28,
+             contrast_id='x:per_1_unit', contrast_label='Per 1 unit increase',
+             independent_variant=True),
+        dict(spec_id='internal_missing', spec_label='Primary complete-case set',
+             axis='missing', point_estimate=1.96, ci_low=1.89, ci_high=2.03,
+             contrast_id='x:4.9_vs_2', contrast_label='4.9 vs 2',
+             independent_variant=False),
+    ]).assign(effect_scale='OR', converged=True, effect_unit='recorded exposure units')
+    assert not assess_robustness_effect_comparability(frame).authorized
+    rows, scale, _ = _validated_rows(frame)
+    fig, ax = plt.subplots()
+    try:
+        _draw_specification_table(ax, rows, scale, True, 1.96)
+        rendered = '\n'.join(t.get_text() for t in ax.texts)
+        assert '4.9 vs 2' in rendered
+        assert 'Per 1 unit increase' in rendered
+        assert 'not an independent variant' in rendered.replace('\n', ' ')
+        assert 'Nonlinear model, upper contrast' in rendered.replace('\n', ' ')
+        assert 'internal' not in rendered
+        assert 'not declared' not in rendered
+        assert 'Bound primary estimate' not in rendered
+        assert 'Primary estimate:' not in rendered
+        assert '1.96 [1.89, 2.03]' in rendered
+        assert '1.27 [1.25, 1.28]' in rendered
+    finally:
+        plt.close(fig)
+
+
+def test_the_specification_table_states_its_own_reader_legend(tmp_path):
+    """A figure a reader cannot explain is not an article figure.
+
+    ``build_manuscript_figures`` deliberately refuses to promote a bare
+    ``core_claim`` into a legend, so a contract that states no ``reader_caption``
+    is reported as an evidence error rather than papered over. This renderer was
+    the last article-facing owner still silent about its own panel, and on
+    2026-09-12 that single gap held an otherwise complete 13/13 run at
+    ``evidence_complete=false``, which also kept ``manuscript_ready`` false.
+    """
+    run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
+    summary = run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+    contract = json.loads(
+        (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    caption = contract["reader_caption"]
+
+    assert summary["status"] == "ok"
+    assert caption
+    # The field is a plain-text legend; a stray newline would fail model
+    # validation for every consumer that re-reads the registered contract.
+    assert not any(ord(character) < 32 for character in caption)
+    # It names the panel the contract declares, so the two cannot drift apart.
+    assert contract["panels"][0]["title"] in caption
+    # One sentence per element this drawing actually produced: a table rather
+    # than an axis, the refused comparability, and the row that did not fit.
+    assert "specification table" in caption
+    assert "not authorized as directly comparable" in caption
+    # These two real rows declare no contrast or effect unit, so the legend may
+    # not assert a pair the table cannot show.
+    assert "says so on its own line" in caption
+    assert "declared contrast and effect unit" not in caption
+    assert "Not estimable" in caption
+    assert f"{len(_REAL_ROWS)} locked specifications" in caption
+    assert "without recomputation" in caption
+    # And nothing about furniture a table never drew.
+    assert "logarithmic" not in caption
+    assert "dashed vertical line" not in caption
+    assert "solid vertical line" not in caption

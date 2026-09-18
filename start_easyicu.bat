@@ -12,7 +12,9 @@ set "EXIT_CODE=1"
 
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
-  for %%V in (3.13 3.12 3.11 3.10) do (
+  rem Keep the launcher inside the CI-proven interpreter range (ci.yml tops
+  rem out at 3.12). The :try_python probe below additionally rejects 3.13+.
+  for %%V in (3.12 3.11 3.10) do (
     if not defined PY_CMD (
       call :try_python py "-%%V"
     )
@@ -58,8 +60,9 @@ if defined PY_CMD (
   goto :done
 )
 
-echo Python 3.10+ was not found. Checked PATH, the Python launcher, and common Conda/Anaconda locations.
-echo If you use Conda, install Python 3.10+ in base or activate/set CONDA_PREFIX before launching.
+echo Python 3.10-3.12 was not found. Checked PATH, the Python launcher, and common Conda/Anaconda locations.
+echo CI proves up to 3.12; newer interpreters are intentionally skipped.
+echo If you use Conda, install Python 3.10-3.12 in base or activate/set CONDA_PREFIX before launching.
 set "EXIT_CODE=1"
 goto :done
 
@@ -73,7 +76,7 @@ if not "%TRY_CMD%"=="py" (
     if errorlevel 1 exit /b 0
   )
 )
-"%TRY_CMD%" %TRY_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
+"%TRY_CMD%" %TRY_ARGS% -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] <= (3, 12) else 1)" >nul 2>nul
 if errorlevel 1 exit /b 0
 set "PY_CMD=%TRY_CMD%"
 set "PY_ARGS=%TRY_ARGS%"

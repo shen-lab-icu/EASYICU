@@ -1,3 +1,4 @@
+/* Owner: Cross-DB job continuity widget. */
 /* Cross-DB registered/raw job continuity: bounded local metadata + reconnect. */
 (function () {
   'use strict';

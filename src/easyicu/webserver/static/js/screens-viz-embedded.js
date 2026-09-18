@@ -1,3 +1,4 @@
+/* Owner: Visualization embedded workspace widget. */
 /* Read-only embedded form of the native Patient/Cohort/Cross-DB workspaces.
    It reuses their renderers; it does not own transport or scientific data. */
 (function () {

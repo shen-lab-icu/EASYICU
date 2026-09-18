@@ -55,8 +55,13 @@ def test_bootstrap_token_is_exchanged_for_httponly_cookie(monkeypatch):
         follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/?lang=zh"
+    assert response.status_code == 200
+    assert 'http-equiv="refresh"' in response.text
+    assert 'content="0;url=/?lang=zh"' in response.text
+    assert "desktop-secret" not in response.text
+    assert "desktop_token" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
     cookie = response.headers["set-cookie"]
     assert f"{DESKTOP_COOKIE}=desktop-secret" in cookie
     assert "HttpOnly" in cookie

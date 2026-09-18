@@ -1,3 +1,4 @@
+/* Owner: Patient Review navigation widget. */
 /* Patient Review entity-navigation owner: bounded pages and verified detail loads. */
 (function () {
   'use strict';

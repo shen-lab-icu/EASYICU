@@ -49,7 +49,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from easyicu.api import load_concepts  # noqa: E402
 
-DB_ROOT = Path("/Volumes/外置硬盘/databases")
+DB_ROOT = Path(os.environ.get("EASYICU_DB_ROOT", "/Volumes/外置硬盘/databases"))
 # label, subdir, id_table (for exact N), easyicu db key
 DBS = {
     "mimic": ("MIMIC-III", "mimiciii", "icustays.parquet", "mimic"),
@@ -83,11 +83,49 @@ def _summ_numeric(series) -> dict:
     }
 
 
-def _full_n(subdir: str, id_table: str):
+def _full_n(subdir: str, id_table: str) -> dict:
+    """Full-cohort stay count from the ID table metadata.
+
+    Always a JSON object: {"n": int} on success, {"n": null, "error": str}
+    on failure — a (None, error) tuple would serialize as [null, "..."].
+    """
     try:
-        return pq.read_metadata(DB_ROOT / subdir / id_table).num_rows
+        return {"n": int(pq.read_metadata(DB_ROOT / subdir / id_table).num_rows)}
     except Exception as e:  # noqa: BLE001
-        return None, str(e)
+        return {"n": None, "error": str(e)}
+
+
+def _normalize_full_n(value) -> dict:
+    """Migrate legacy scalar/list counts to the current object representation."""
+
+    if isinstance(value, dict):
+        normalized = {"n": value.get("n")}
+        if value.get("error"):
+            normalized["error"] = str(value["error"])
+        return normalized
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"n": value}
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        normalized = {"n": value[0]}
+        if value[1]:
+            normalized["error"] = str(value[1])
+        return normalized
+    return {"n": None, "error": "invalid legacy icu_stays_full value"}
+
+
+def _normalize_existing_databases(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for label, raw in value.items():
+        if not isinstance(raw, dict):
+            normalized[label] = raw
+            continue
+        record = dict(raw)
+        if "icu_stays_full" in record:
+            record["icu_stays_full"] = _normalize_full_n(record["icu_stays_full"])
+        normalized[label] = record
+    return normalized
 
 
 def extract_db(db_key: str, perstay_dir: Path) -> dict:
@@ -189,12 +227,14 @@ def main() -> None:
     existing = {}
     if out_path.exists():
         try:
-            existing = json.loads(out_path.read_text(encoding="utf-8")).get(
-                "databases", {})
+            existing = _normalize_existing_databases(
+                json.loads(out_path.read_text(encoding="utf-8")).get("databases", {})
+            )
         except Exception:  # noqa: BLE001
             existing = {}
 
     result = {
+        "schema_version": "easyicu.r4_crossdb_sofa2_extract/2",
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "method": (
             "ONE-SHOT full-cohort load_concepts per DB (no patient_ids, no "

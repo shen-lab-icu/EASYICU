@@ -21,7 +21,10 @@ pure functions with no pipeline state, so isolating them here cuts
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..literature import LiteratureBundle
 
 from ..authority.evidence_store import (
     EvidenceEnforcementError,
@@ -34,6 +37,8 @@ from ..authority.evidence_store import (
 )
 from ..schema import ResearchContext
 from .writer_repair_decision import coerce_writer_repair_decisions
+from .manuscript_sentence_context import contextual_sentence_deletion
+from .manuscript_bibliographic_years import bibliographic_year_spans
 from .side_findings import (
     SideFinding,
     annotate_side_finding_leaks,
@@ -449,13 +454,28 @@ def _apply_writer_evidence_repair_decisions(
     rewritten = scaffold
     applied: List[Dict[str, object]] = []
     seen: set[int] = set()
+    removed_context: set[str] = set()
     for decision in validated:
         index = decision.index
         if index >= len(sentences) or index in seen:
             raise ValueError("writer evidence repair index is invalid or duplicated")
+        if decision.action == "cite" and allowed_evidence and any(
+            item not in allowed_evidence for item in decision.evidence_ids
+        ):
+            raise ValueError("cite decision requires registered allowed evidence ids")
+        if decision.action == "claim" and decision.claim_ref not in allowed_claims:
+            raise ValueError("claim decision requires an allowed claim_ref")
         target = sentences[index]
         target_span = _writer_repair_target_span(rewritten, target)
         if target_span is None:
+            if " ".join(target.split()) in removed_context:
+                seen.add(index)
+                applied.append({
+                    "index": index, "action": "drop", "evidence_ids": [],
+                    "sentence": target[:500],
+                    "reason_code": "writer_dependent_context_already_removed",
+                })
+                continue
             raise ValueError(
                 "writer evidence repair target is absent from the current scaffold"
             )
@@ -463,13 +483,8 @@ def _apply_writer_evidence_repair_decisions(
         matched_target = rewritten[target_start:target_end]
         action = decision.action
         evidence_ids = list(decision.evidence_ids)
+        dependent_context_drops: tuple[str, ...] = ()
         if action == "cite":
-            if allowed_evidence and any(
-                evidence_id not in allowed_evidence for evidence_id in evidence_ids
-            ):
-                raise ValueError(
-                    "cite decision requires registered allowed evidence ids"
-                )
             replacement = matched_target
             if allowed_evidence:
                 replacement, _ = _remove_unregistered_evidence_placeholders(
@@ -483,8 +498,6 @@ def _apply_writer_evidence_repair_decisions(
                     replacement = _append_evidence_citation(replacement, evidence_id)
         elif action == "claim":
             claim_ref = decision.claim_ref
-            if claim_ref not in allowed_claims:
-                raise ValueError("claim decision requires an allowed claim_ref")
             token = "{claim:" + claim_ref + "}"
             line_start = rewritten.rfind("\n", 0, target_start) + 1
             before_target = rewritten[line_start:target_start]
@@ -506,6 +519,10 @@ def _apply_writer_evidence_repair_decisions(
                 )
         else:  # "drop" — the only remaining legal action
             replacement = ""
+            deletion = contextual_sentence_deletion(rewritten, target_start, target_end)
+            target_end = deletion.end
+            dependent_context_drops = deletion.dependent_sentences
+            removed_context.update(" ".join(item.split()) for item in dependent_context_drops)
         rewritten = rewritten[:target_start] + replacement + rewritten[target_end:]
         seen.add(index)
         applied.append(
@@ -517,6 +534,8 @@ def _apply_writer_evidence_repair_decisions(
                 "action": action,
                 "evidence_ids": evidence_ids,
                 "sentence": target[:500],
+                **({"dependent_context_drops": list(dependent_context_drops)}
+                   if dependent_context_drops else {}),
             }
         )
     return rewritten, sorted(applied, key=lambda item: int(item["index"]))
@@ -1592,7 +1611,9 @@ def _select_numeric_claim(
     return None, True
 
 
-_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(r"(?:[.!?](?=\s|$)|\n{2,})")
+_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(
+    r"[.!?](?=\s|$)|(?P<paragraph>\r?\n[^\S\r\n]*\r?\n)"
+)
 
 _EFFECT_SCALE_PHRASE_PATTERNS = {
     NumericEffectScale.ODDS_RATIO: re.compile(r"\bodds[\s-]+ratios?\b", re.I),
@@ -1744,25 +1765,33 @@ def _numeric_sentence_bounds(text: str, *, start: int, end: int) -> Tuple[int, i
     # it cannot by itself produce a wrong bind.
     next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.end() if next_boundary is not None else len(text)
-    context_end = _extend_through_trailing_citations(text, context_end)
+    if next_boundary is not None and next_boundary.group("paragraph") is not None:
+        # A paragraph can end without punctuation. Do not start a citation walk
+        # after consuming its blank line: that would borrow the next owner.
+        context_end = next_boundary.start()
+    else:
+        context_end = _extend_through_trailing_citations(text, context_end)
     max_chars = 1600
     context_start = max(context_start, start - max_chars)
     context_end = min(context_end, end + max_chars)
     return context_start, context_end
 
 
-#: A markdown link whose target is an evidence artefact, as the writer emits
-#: it: ``[label](evidence/<file> "sha256=...")``. Anchored so only an unbroken
-#: run of such links is absorbed.
-_TRAILING_CITATION_RE = re.compile(r"\s*\[[^\]\n]*\]\(evidence/[^)\n]*\)")
+#: Claim expansion emits raw evidence placeholders; manuscript rendering emits
+#: Markdown links. Both must remain in scope after the sentence's period, or
+#: the strict binder loses the cited owner of otherwise verified numeric claims.
+#: Allow a single folded line, but never a blank line or following prose.
+_TRAILING_CITATION_RE = re.compile(
+    r"[^\S\r\n]*(?:\r?\n[^\S\r\n]*)?"
+    r"(?:\[[^\]\n]*\]\(evidence/[^)\n]*\)|\{evidence:[^}\n]+\})"
+)
 
 
 def _extend_through_trailing_citations(text: str, context_end: int) -> int:
     """Extend a sentence window over the citations written after its period.
 
-    Nothing but evidence links is absorbed: the first thing that is not one
-    stops the walk, so a following sentence's prose -- and therefore its
-    claims -- can never be pulled into this sentence's context.
+    Only evidence links and placeholders in the same paragraph are absorbed;
+    a blank line or other token stops the walk before following claims.
     """
 
     cursor = context_end
@@ -1770,7 +1799,7 @@ def _extend_through_trailing_citations(text: str, context_end: int) -> int:
         match = _TRAILING_CITATION_RE.match(text, cursor)
         if match is None or match.end() <= cursor:
             # A pattern that can match the empty string would spin here
-            # forever. The one above cannot -- it requires a bracketed label --
+            # forever. The one above cannot -- it requires a citation token --
             # but a walk that trusts a regex to advance is one edit away from
             # hanging the writer phase, and a mutation of exactly that shape
             # did hang this test suite.
@@ -1910,6 +1939,7 @@ def bind_numeric_values(
     enforcement_mode: Optional[EvidenceEnforcementMode] = None,
     footnote_prefix: str = "claim",
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    literature: LiteratureBundle | None = None,
 ) -> Tuple[str, Dict[str, NumericClaim], List[str]]:
     """Bind every numeric value in ``manuscript`` to a registered claim.
 
@@ -1955,7 +1985,7 @@ def bind_numeric_values(
     )
 
     lineage = _evidence_lineage(evidence)
-    skip_spans = _spans_to_skip(manuscript)
+    skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
     miscited: List[Dict[str, Any]] = []
@@ -2107,6 +2137,7 @@ def drop_untraceable_numeric_sentences(
     *,
     evidence: EvidenceStore,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    literature: LiteratureBundle | None = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Remove only sentences that the unchanged STRICT numeric gate rejects.
 
@@ -2120,7 +2151,7 @@ def drop_untraceable_numeric_sentences(
 
     if not manuscript:
         return manuscript, []
-    skip_spans = _spans_to_skip(manuscript)
+    skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
     for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
         start, end = match.start("value"), match.end("value")
@@ -2144,6 +2175,7 @@ def drop_untraceable_numeric_sentences(
                 evidence=evidence,
                 enforcement_mode=EvidenceEnforcementMode.STRICT,
                 per_step_records=per_step_records,
+                literature=literature,
             )
         except EvidenceEnforcementError as exc:
             detail = dict(exc.detail or {})
@@ -2157,6 +2189,10 @@ def drop_untraceable_numeric_sentences(
         return manuscript, []
     merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
     for (start, end), detail in sorted(rejected_by_span.items()):
+        deletion = contextual_sentence_deletion(manuscript, start, end)
+        end = deletion.end
+        if deletion.dependent_sentences:
+            detail["dependent_context_drops"] = list(deletion.dependent_sentences)
         if merged and start <= merged[-1][1]:
             previous_start, previous_end, previous_details = merged[-1]
             merged[-1] = (
@@ -2189,6 +2225,9 @@ def drop_untraceable_numeric_sentences(
                     for detail in details
                     for item in detail.get("miscited", [])
                 ],
+                **({"dependent_context_drops": [
+                    item for detail in details for item in detail.get("dependent_context_drops", [])
+                ]} if any(detail.get("dependent_context_drops") for detail in details) else {}),
             }
         )
     return filtered, removed

@@ -532,8 +532,8 @@ class PublicationFigureSkill:
             try:
                 copy_path = out_dir / f"publication_figure_source_{name}.csv"
                 frame.to_csv(copy_path, index=False)
-            except Exception:
-                continue
+            except Exception as exc:
+                raise ValueError(f"Required figure source CSV could not be written: {name}") from exc
             record = evidence.register_file(
                 kind="table",
                 description=f"Source data copied for the {rendered.generation_mode}.",
@@ -728,8 +728,8 @@ class PublicationFigureSkill:
                         out_dir / "publication_figure_source_stratified_outcome.csv",
                         index=False,
                     )
-            except Exception:
-                strata_df = pd.DataFrame()
+            except Exception as exc:
+                raise ValueError(f"Stratified panel source failed: {strata_record.evidence_id}") from exc
         if missingness_record is not None:
             try:
                 missingness_df = _normalise_missingness_frame(
@@ -742,8 +742,8 @@ class PublicationFigureSkill:
                         out_dir / "publication_figure_source_missingness.csv",
                         index=False,
                     )
-            except Exception:
-                missingness_df = pd.DataFrame()
+            except Exception as exc:
+                raise ValueError(f"Missingness panel source failed: {missingness_record.evidence_id}") from exc
 
         n_side_panels = int(not strata_df.empty) + int(not missingness_df.empty)
         if n_side_panels:
@@ -948,8 +948,8 @@ class PublicationFigureSkill:
                 "claim": (
                     (
                         "The prespecified unadjusted risk difference in percentage "
-                        "points and its 95% confidence interval are drawn from the "
-                        "typed distribution table."
+                        f"points and its {100 * float(plot_df.attrs['confidence_level']):g}% "
+                        "confidence interval are drawn from the typed distribution table."
                     )
                     if typed_distribution
                     else (
@@ -1166,7 +1166,7 @@ class PublicationFigureSkill:
             if row.spec_id != panel.primary_spec_id
             and not _duplicates_primary_row(row, primary)
         ]
-        plot_rows = (primary_rows + other_rows)[:10]
+        plot_rows = primary_rows + other_rows
         source_df = pd.DataFrame(
             [
                 {
@@ -1177,6 +1177,7 @@ class PublicationFigureSkill:
                     "point_estimate": row.point_estimate,
                     "ci_low": row.ci_low,
                     "ci_high": row.ci_high,
+                    "ci_source": row.ci_source,
                     "converged": row.converged,
                     "notes": row.notes,
                 }
@@ -1193,6 +1194,7 @@ class PublicationFigureSkill:
                     "point_estimate": row.point_estimate,
                     "ci_low": row.ci_low,
                     "ci_high": row.ci_high,
+                    "ci_source": row.ci_source,
                     "notes": row.notes,
                 }
                 for row in panel.rows
@@ -1268,8 +1270,10 @@ class PublicationFigureSkill:
                 if str(row["spec_id"]) == panel.primary_spec_id
                 else str(row["display_label"])
             )
+            + ("*" if str(row["ci_source"]) == "reconstructed_wald" else "")
             for _, row in source_df.iterrows()
         ]
+        has_reconstructed_ci = source_df["ci_source"].eq("reconstructed_wald").any()
         for idx, row in source_df.iterrows():
             center = float(row["point_estimate"])
             lo = float(row["ci_low"])
@@ -1304,7 +1308,11 @@ class PublicationFigureSkill:
         ax.set_yticks(y, labels)
         header_y = -0.75
         ax.set_ylim(len(source_df) - 0.5, header_y - 0.15)
-        ax.set_xlabel("Primary effect estimate (95% CI)")
+        ax.set_xlabel(
+            "Primary effect estimate (95% CI"
+            + ("; * reconstructed from SE" if has_reconstructed_ci else "")
+            + ")"
+        )
         ax.set_title("Pre-specified robustness panel", loc="left", pad=8)
         ax.grid(
             axis="x",
@@ -1495,6 +1503,11 @@ class PublicationFigureSkill:
             statistics_note=(
                 "Generated deterministically from the registered robustness panel "
                 "after analysis validation; no model pickle is required."
+                + (
+                    " At least one 95% CI was reconstructed by EasyICU from the "
+                    "reported estimate and standard error using the Wald method."
+                    if has_reconstructed_ci else ""
+                )
             ),
         )
         paths = save_publication_figure(

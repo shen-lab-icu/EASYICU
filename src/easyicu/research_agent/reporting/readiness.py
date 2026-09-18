@@ -103,7 +103,7 @@ from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
 from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
-from ..gates.visual import _is_cosmetic_visual_finding
+from ..gates.visual import is_cosmetic_visual_finding
 from ..planning.capability_registry import (
     assess_scientific_capability,
     get_capability_by_id,
@@ -115,7 +115,7 @@ from ..robustness.panel import load_robustness_panel, unexecuted_locked_spec_ids
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..planning.figure_step_contract import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
-from .reviewer import run_reviewer_round
+from .reviewer import derive_reviewer_primary_result_bindings, run_reviewer_round
 from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
@@ -130,6 +130,7 @@ _MANUSCRIPT_ERROR_VALIDATORS = frozenset(
         "manuscript_language_guard",
         "manuscript_literature",
         "manuscript_quality",
+        "manuscript_figure_projection",
         "manuscript_result_sufficiency",
         "writer_agent",
     }
@@ -687,7 +688,10 @@ _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
 # location the predicate left in 60284da.  Import the owner instead; the
 # historical private name is kept because ``reporting.write_phase`` and the
 # governance tests bind to it.
-_is_cosmetic_visual_error = _is_cosmetic_visual_finding
+_is_cosmetic_visual_error = is_cosmetic_visual_finding
+# Public alias for cross-owner callers; the leading-underscore name above
+# remains for historical bindings.
+is_cosmetic_visual_error = is_cosmetic_visual_finding
 
 
 def _publication_figure_bundle_ready(
@@ -1464,12 +1468,161 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
 )
 
 
-def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
+def _is_fallback_generation(record: Mapping[str, Any]) -> bool:
+    """Return True when a step record was produced in fallback generation mode."""
+
+    return str(record.get("generation_mode") or "").strip().lower() == "fallback"
+
+
+def _fallback_primary_allowed(plan: Any, step_id: str) -> bool:
+    """Return True only when the plan explicitly allows fallback as primary."""
+
+    steps = getattr(plan, "steps", None)
+    if not isinstance(steps, list):
+        return False
+    for step in steps:
+        candidate_id = getattr(step, "step_id", None)
+        if isinstance(step, Mapping):
+            candidate_id = step.get("step_id")
+        if str(candidate_id or "") != str(step_id or ""):
+            continue
+        flag = getattr(step, "allow_fallback_as_primary", None)
+        if isinstance(step, Mapping):
+            flag = step.get("allow_fallback_as_primary")
+        return bool(flag) is True
+    return False
+
+
+def _primary_records_for_readiness(
+    per_step_records: Any, plan: Any = None
+) -> list[dict[str, Any]]:
+    """Filter step records for primary estimation: downgrade fallbacks.
+
+    C-F9: ``generation_mode=fallback`` steps do not count as primary unless
+    the plan explicitly allows it via
+    ``AnalysisStep.allow_fallback_as_primary``. Downgraded steps remain
+    visible in execution records; they are only excluded from the primary
+    headline binding.
+    """
+
+    filtered: list[dict[str, Any]] = []
+    for record in per_step_records or []:
+        if not isinstance(record, dict):
+            continue
+        if _is_fallback_generation(record) and not _fallback_primary_allowed(
+            plan, str(record.get("step_id") or "")
+        ):
+            continue
+        filtered.append(record)
+    return filtered
+
+
+def _fallback_method_compatibility_errors(
+    *,
+    per_step_records: Any,
+    context: Any,
+    plan: Any = None,
+) -> list[Any]:
+    """Force fallback products through the method-compatibility gate (C-F9).
+
+    Every fallback-generation record must have passed
+    :func:`fallback_method_compatibility_findings`. When the executed code is
+    available on the record it is scanned; otherwise a missing
+    ``method_compatibility_checked`` marker fails closed. Plan-allowed
+    fallback primaries are still checked — the flag only controls primary
+    counting, never gate bypass.
+    """
+
+    from ..contracts.runtime import ValidationFinding as _ValidationFinding
+    from ..gates.method_compatibility import fallback_method_compatibility_findings
+
+    errors: list[Any] = []
+    for record in per_step_records or []:
+        if not isinstance(record, dict):
+            continue
+        if not _is_fallback_generation(record):
+            continue
+        summary = record.get("step_summary")
+        summary_map = summary if isinstance(summary, Mapping) else {}
+        checked = bool(
+            record.get("method_compatibility_checked")
+            or summary_map.get("method_compatibility_checked")
+        )
+        code = record.get("code") or record.get("executed_code") or ""
+        if not isinstance(code, str):
+            code = ""
+        violations: list[dict[str, object]] = []
+        if code and context is not None and hasattr(context, "variables"):
+            try:
+                plan_step = None
+                steps = getattr(plan, "steps", None)
+                if isinstance(steps, list):
+                    for candidate in steps:
+                        cid = (
+                            candidate.get("step_id")
+                            if isinstance(candidate, Mapping)
+                            else getattr(candidate, "step_id", None)
+                        )
+                        if str(cid or "") == str(record.get("step_id") or ""):
+                            plan_step = (
+                                candidate
+                                if not isinstance(candidate, Mapping)
+                                else None
+                            )
+                            break
+                violations = fallback_method_compatibility_findings(
+                    code=code, context=context, step=plan_step
+                )
+            except Exception:
+                violations = []
+        if violations:
+            errors.append(
+                _ValidationFinding(
+                    validator="method_compatibility",
+                    severity="error",
+                    message=(
+                        f"Fallback step {record.get('step_id')} produced "
+                        "method-incompatible code; fallback products must pass "
+                        "the method_compatibility gate."
+                    ),
+                    detail={
+                        "step_id": str(record.get("step_id") or ""),
+                        "generation_mode": "fallback",
+                        "violations": violations,
+                    },
+                )
+            )
+        elif not checked and not code:
+            errors.append(
+                _ValidationFinding(
+                    validator="method_compatibility",
+                    severity="error",
+                    message=(
+                        f"Fallback step {record.get('step_id')} has no "
+                        "method_compatibility evidence; fallback products must "
+                        "pass the method_compatibility gate."
+                    ),
+                    detail={
+                        "step_id": str(record.get("step_id") or ""),
+                        "generation_mode": "fallback",
+                    },
+                )
+            )
+    return errors
+
+
+def _deterministic_primary_estimate_bound(
+    per_step_records: Any, plan: Any = None
+) -> bool:
     """Require a complete primary effect emitted by a currently registered owner."""
 
     from ..contracts.prediction_validation import PredictionValidationReceipt
 
-    for record in per_step_records or []:
+    # C-F9: fallback steps are downgraded (not counted as primary) unless the
+    # plan explicitly allows fallback as primary on that exact step.
+    records = _primary_records_for_readiness(per_step_records, plan)
+
+    for record in records:
         if (
             not isinstance(record, dict)
             or record.get("deterministic_standard_analysis")
@@ -1479,7 +1632,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         if landmark_spline_runtime_receipt_valid(record.get("step_summary")):
             return True
 
-    for record in per_step_records or []:
+    for record in records:
         if (
             not isinstance(record, dict)
             or record.get("deterministic_standard_analysis")
@@ -1489,7 +1642,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         if phenotyping_runtime_receipt_valid(record.get("step_summary")):
             return True
 
-    for record in per_step_records or []:
+    for record in records:
         if (
             not isinstance(record, dict)
             or record.get("deterministic_standard_analysis")
@@ -1507,7 +1660,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
             continue
         return True
 
-    for record in per_step_records or []:
+    for record in records:
         if not isinstance(record, dict):
             continue
         if record.get("deterministic_standard_analysis") != (
@@ -1522,11 +1675,11 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         _extract_primary_effect_payload_from_records,
     )
 
-    payload = _extract_primary_effect_payload_from_records(per_step_records or [])
+    payload = _extract_primary_effect_payload_from_records(records)
     if not payload or payload.get("primary_or") is None:
         return False
     step_id = str(payload.get("step_id") or "")
-    for record in per_step_records or []:
+    for record in records:
         if not isinstance(record, dict):
             continue
         if str(record.get("step_id") or "") == step_id:
@@ -1724,32 +1877,19 @@ def _plan_truncation_status(
     }
 
 
-def _compute_readiness_gates(
-    *,
-    context: ResearchContext,
-    plan: Optional[AnalysisPlan],
-    per_step_records: Sequence[Dict[str, Any]],
-    findings: Sequence[ValidationFinding],
-    evidence: EvidenceStore,
-    run_dir: Path,
-    manuscript_path: Path,
-    stop_after_analysis: bool,
-    writer_probe_mode: bool = False,
-    writer_probe_failed_steps: Optional[Sequence[str]] = None,
-    force_diagnostic_only: bool = False,
-    execution_paper_eligible: bool = False,
-    plan_authority_verified: bool = False,
-    plan_authority_sha256: Optional[str] = None,
-) -> Dict[str, Any]:
-    execution = execution_gate_status(
-        plan=plan, per_step_records=per_step_records, run_dir=run_dir
-    )
-    manuscript_text = ""
-    if manuscript_path.exists():
-        try:
-            manuscript_text = manuscript_path.read_text(encoding="utf-8")
-        except Exception:
-            manuscript_text = ""
+def current_validation_findings(
+    *, plan: Optional[AnalysisPlan], per_step_records: Sequence[Dict[str, Any]],
+    findings: Sequence[ValidationFinding], evidence: EvidenceStore, run_dir: Path,
+    manuscript_text: str, stop_after_analysis: bool = False,
+    writer_probe_mode: bool = False, execution: Optional[Dict[str, Any]] = None,
+) -> tuple[list[ValidationFinding], list[ValidationFinding], Dict[str, bool]]:
+    """Resolve current versus historical findings for readiness and review.
+
+    Both consumers use the same current artifacts, attempt identities and
+    supersession policy. Historical failures remain in the persisted ledger.
+    """
+    if execution is None:
+        execution = execution_gate_status(plan=plan, per_step_records=per_step_records, run_dir=run_dir)
     missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
     # General supersession rule: if a step eventually succeeded
     # (status="ok" in per_step_records), any earlier ValidationFinding
@@ -1876,6 +2016,64 @@ def _compute_readiness_gates(
         known_step_ids=known_step_ids,
         gate_state=current_gate_state,
         latest_publication_audit=latest_publication_audit,
+    )
+    # A new review must evaluate validators, not inherit its own previous
+    # reject. Retire older derived verdicts only after a review bound to these
+    # exact manuscript bytes exists; current validator errors remain active.
+    from hashlib import sha256
+
+    source_digest = sha256(manuscript_text.encode("utf-8")).hexdigest()
+    reviewer_findings = [f for f in active_findings if f.validator == "reviewer_round"]
+    if reviewer_findings:
+        latest = reviewer_findings[-1]
+        records = [evidence.get(identifier) for identifier in latest.evidence_ids]
+        current_review = any(
+            record is not None and record.producer == "pipeline"
+            and record.generation_mode == "system"
+            and record.evidence_id.startswith("reviewer_report_json")
+            and record.metadata.get("source_manuscript_sha256") == source_digest
+            and verified_run_evidence_path(run_dir, record) is not None
+            for record in records
+        )
+        if current_review and latest.detail.get("source_manuscript_sha256") == source_digest:
+            historical = [f for f in reviewer_findings if f is not latest]
+            superseded_findings.extend(historical)
+            active_findings = [f for f in active_findings if all(f is not old for old in historical)]
+    return active_findings, superseded_findings, current_gate_state
+
+
+def _compute_readiness_gates(
+    *,
+    context: ResearchContext,
+    plan: Optional[AnalysisPlan],
+    per_step_records: Sequence[Dict[str, Any]],
+    findings: Sequence[ValidationFinding],
+    evidence: EvidenceStore,
+    run_dir: Path,
+    manuscript_path: Path,
+    stop_after_analysis: bool,
+    writer_probe_mode: bool = False,
+    writer_probe_failed_steps: Optional[Sequence[str]] = None,
+    force_diagnostic_only: bool = False,
+    execution_paper_eligible: bool = False,
+    plan_authority_verified: bool = False,
+    plan_authority_sha256: Optional[str] = None,
+) -> Dict[str, Any]:
+    execution = execution_gate_status(
+        plan=plan, per_step_records=per_step_records, run_dir=run_dir
+    )
+    manuscript_text = ""
+    if manuscript_path.exists():
+        try:
+            manuscript_text = manuscript_path.read_text(encoding="utf-8")
+        except Exception:
+            manuscript_text = ""
+    missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
+    active_findings, superseded_findings, current_gate_state = current_validation_findings(
+        plan=plan, per_step_records=per_step_records, findings=findings,
+        evidence=evidence, run_dir=run_dir, manuscript_text=manuscript_text,
+        stop_after_analysis=stop_after_analysis, writer_probe_mode=writer_probe_mode,
+        execution=execution,
     )
     numeric_errors = [
         f.message
@@ -2025,6 +2223,11 @@ def _compute_readiness_gates(
         + source_feasibility_validation_errors
         + signed_trajectory_validation_errors
         + time_varying_validation_errors
+        + _fallback_method_compatibility_errors(
+            per_step_records=per_step_records,
+            context=context,
+            plan=plan,
+        )
     )
     selected_capability = get_capability_by_id(capability_assessment.capability_id)
     _no_det_primary_expected = bool(
@@ -2038,7 +2241,9 @@ def _compute_readiness_gates(
         has_base_errors=bool(base_analysis_errors),
         evidence_complete=bool(evidence_complete),
         numeric_verified=bool(numeric_verified),
-        primary_estimate_bound=_deterministic_primary_estimate_bound(per_step_records),
+        primary_estimate_bound=_deterministic_primary_estimate_bound(
+            per_step_records, plan
+        ),
         no_deterministic_primary_expected=_no_det_primary_expected,
     )
     analysis_errors = base_analysis_errors + (
@@ -2195,6 +2400,8 @@ def write_readiness_artifacts(
     execution_paper_eligible: bool = False,
     plan_authority_verified: bool = False,
     plan_authority_sha256: Optional[str] = None,
+    current_case_scientific_runtime_authority: Any = None,
+    scientific_runtime_projection_sha256: Optional[str] = None,
 ) -> tuple[Dict[str, Any], Dict[str, str]]:
     gates = _compute_readiness_gates(
         context=context,
@@ -2525,9 +2732,23 @@ def write_readiness_artifacts(
                 "scientific_maturity_score": gates["scientific_maturity_score"],
             },
         )
+        active_review_findings, _, _ = current_validation_findings(
+            plan=plan, per_step_records=per_step_records, findings=findings,
+            evidence=evidence, run_dir=run_dir,
+            manuscript_text=manuscript_path.read_text(encoding="utf-8") if manuscript_path.exists() else "",
+            stop_after_analysis=stop_after_analysis, writer_probe_mode=writer_probe_mode,
+        )
+        primary_bindings = derive_reviewer_primary_result_bindings(
+            evidence_store=evidence, per_step_records=per_step_records,
+            current_case_scientific_runtime_authority=current_case_scientific_runtime_authority,
+            scientific_runtime_projection_sha256=scientific_runtime_projection_sha256,
+        )
         final_reviewer_report = run_reviewer_round(
             evidence_records=evidence.current_verified_records(per_step_records),
-            findings=[*findings, final_gate_finding],
+            findings=[*[f for f in active_review_findings if f.validator != "reviewer_round"], final_gate_finding],
+            per_step_records=per_step_records,
+            primary_result_bindings=primary_bindings,
+            run_dir=run_dir,
             round_index=1,
         )
         final_reviewer_md = run_dir / "reviewer_report_post_readiness.md"
@@ -2593,16 +2814,12 @@ def write_readiness_artifacts(
         json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    if evidence.get("run_status") is None:
-        evidence.register_file(
-            kind="log",
-            description="Fail-closed run readiness gate summary.",
-            source_path=run_status_path,
-            evidence_id="run_status",
-            aliases=["run_status"],
-            producer="pipeline",
-            generation_mode="system",
-        )
+    evidence.register_json(
+        kind="log", description="Fail-closed run readiness gate summary.",
+        payload=run_status_payload, filename="run_status.json",
+        evidence_id="run_status", on_sha_change="new_id",
+        producer="pipeline", generation_mode="system",
+    )
 
     return gates, artifact_paths
 

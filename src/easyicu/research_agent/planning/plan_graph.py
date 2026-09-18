@@ -10,8 +10,8 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product,
 )
-from ..contracts.step_families import _effect_contract_applies, _prediction_contract_applies, _step_is_figure_only
-from .figure_step_contract import _parent_step_id_for_figure_step, _step_produces_figure
+from ..contracts.step_families import effect_contract_applies, prediction_contract_applies, step_is_figure_only
+from .figure_step_contract import parent_step_id_for_figure_step, step_produces_figure
 from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
 
 def _step_is_primary_estimand_model(step: AnalysisStep) -> bool:
@@ -30,13 +30,13 @@ def _step_is_primary_estimand_model(step: AnalysisStep) -> bool:
     # (which the replanner can emit before the figure/table splitter runs). Both
     # contract helpers below already require a closed result-bearing product, so
     # a combined step that owns the estimand stays primary.
-    if _step_is_figure_only(step):
+    if step_is_figure_only(step):
         return False
     # Both helpers normalize only the ``<head>`` of a ``<head>_with_<rider>``
     # method and require a closed result-bearing product.  Thus a legitimate
     # mixed-effects model with a cohort-robust rider remains primary, while a
     # propensity-preparation or audit step cannot qualify through prose.
-    return _effect_contract_applies(step) or _prediction_contract_applies(step)
+    return effect_contract_applies(step) or prediction_contract_applies(step)
 
 
 def _step_is_baseline_context_table(step: AnalysisStep) -> bool:
@@ -47,7 +47,7 @@ def _step_is_baseline_context_table(step: AnalysisStep) -> bool:
     intent and free-form method text are deliberately excluded.
     """
 
-    if _step_produces_figure(step):
+    if step_produces_figure(step):
         return False
     structured = " ".join(
         [step.step_id or "", " ".join(step.expected_outputs or [])]
@@ -179,9 +179,9 @@ def _typed_plan_dependency_graph(
     # direct parent even when a legacy child omitted its typed table input.
     step_ids = set(dependencies)
     for step in steps:
-        if not _step_produces_figure(step):
+        if not step_produces_figure(step):
             continue
-        parent_id = _parent_step_id_for_figure_step(step)
+        parent_id = parent_step_id_for_figure_step(step)
         if parent_id in step_ids and parent_id != step.step_id:
             dependencies[step.step_id].add(parent_id)
     return dependencies, findings
@@ -381,9 +381,9 @@ def _cap_plan_preserving_figure_steps(
         protected: set[str] = set()
         for step_id in ids:
             step = step_by_id.get(step_id)
-            if step is None or not _step_produces_figure(step):
+            if step is None or not step_produces_figure(step):
                 continue
-            parent_id = _parent_step_id_for_figure_step(step)
+            parent_id = parent_step_id_for_figure_step(step)
             if parent_id in ids:
                 protected.add(parent_id)
         return protected
@@ -394,7 +394,7 @@ def _cap_plan_preserving_figure_steps(
             step_id
             for step_id in kept_ids
             if step_id not in protected
-            and not _step_produces_figure(step_by_id[step_id])
+            and not step_produces_figure(step_by_id[step_id])
         ]
         if not candidates:
             candidates = [step_id for step_id in kept_ids if step_id not in protected]
@@ -413,9 +413,9 @@ def _cap_plan_preserving_figure_steps(
             break
 
     for step in steps[cap:]:
-        if not _step_produces_figure(step):
+        if not step_produces_figure(step):
             continue
-        parent_id = _parent_step_id_for_figure_step(step)
+        parent_id = parent_step_id_for_figure_step(step)
         required_ids = {step.step_id}
         if parent_id in step_by_id:
             required_ids.add(parent_id)
@@ -477,7 +477,7 @@ def _cap_plan_preserving_figure_steps(
         figure_leaves = [
             step_id
             for step_id in leaf_candidates
-            if _step_produces_figure(step_by_id[step_id])
+            if step_produces_figure(step_by_id[step_id])
         ]
         candidates = figure_leaves or leaf_candidates
         displaced_id = max(candidates, key=lambda sid: original_index.get(sid, -1))
@@ -585,4 +585,43 @@ def _cap_plan_preserving_figure_steps(
             )
         )
     return capped, findings
+
+
+def typed_plan_dag_findings(plan: AnalysisPlan) -> List[ValidationFinding]:
+    """Validate the generic typed product DAG without choosing any science.
+
+    Public cross-owner entrypoint for :func:`_typed_plan_dag_findings`.
+    The typed dependency vocabulary is owned here; replan gates and final
+    shape checks must use this name instead of the private one.
+    """
+
+    return _typed_plan_dag_findings(plan)
+
+
+def cap_plan_preserving_figure_steps(
+    *,
+    plan: AnalysisPlan,
+    cap: int,
+    protected_step_ids: Optional[Sequence[str]] = None,
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Truncate a plan without orphaning required figure steps.
+
+    Public cross-owner entrypoint for
+    :func:`_cap_plan_preserving_figure_steps`. The plan authority owns
+    revision approval; this owner only projects the bounded DAG.
+    """
+
+    return _cap_plan_preserving_figure_steps(
+        plan=plan,
+        cap=cap,
+        protected_step_ids=protected_step_ids,
+    )
+
+
+__all__ = [
+    "_cap_plan_preserving_figure_steps",
+    "_typed_plan_dag_findings",
+    "cap_plan_preserving_figure_steps",
+    "typed_plan_dag_findings",
+]
 

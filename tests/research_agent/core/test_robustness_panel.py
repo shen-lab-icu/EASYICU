@@ -388,7 +388,7 @@ def test_panel_excludes_variant_outside_plan_time_lock() -> None:
     )
 
     assert "invented_after_lock" not in {row.spec_id for row in panel.rows}
-    assert panel.range_high == pytest.approx(1.8)
+    assert panel.range_high is None  # No shared contrast identity was supplied.
 
 
 def test_panel_writer_rejects_nonprimary_rows_without_verified_lock(
@@ -1055,7 +1055,7 @@ def test_non_convergence_does_not_abort() -> None:
     assert row.n == 0
 
 
-def test_panel_range_correctness() -> None:
+def test_panel_without_effect_identity_does_not_infer_a_range() -> None:
     from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
@@ -1072,8 +1072,8 @@ def test_panel_range_correctness() -> None:
         locked_at="2026-05-27T00:00:00Z",
     )
 
-    assert panel.range_low == 0.8
-    assert panel.range_high == 2.0
+    assert panel.range_low is None
+    assert panel.range_high is None
 
 
 def test_panel_numeric_digest_deduplicates_repeated_panel_values() -> None:
@@ -1224,7 +1224,7 @@ def test_writer_digest_contains_panel_block(ra, tmp_path: Path) -> None:
 
     assert "## robustness panel" in digest
     assert "n_variants=2" in digest
-    assert cohort_hidden_id not in digest
+    assert cohort_hidden_id in digest
     assert "OR=1.9" not in digest
 
 
@@ -1358,7 +1358,9 @@ def test_panel_numerics_registered_in_evidence_store(ra, tmp_path: Path) -> None
     )
 
     fields = {claim.source_field for claim in evidence.numeric_claims()}
-    assert {"n_variants", "range_low", "range_high"} <= fields
+    assert "n_variants" in fields
+    assert "range_low" not in fields
+    assert "range_high" not in fields
     assert "primary_point_estimate" in fields
     assert "row_primary_point_estimate" not in fields
 

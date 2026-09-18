@@ -468,3 +468,31 @@ def test_replan_gate_rejects_unbound_scientific_step() -> None:
         and finding.validator == "replanner_literature_authority"
         for finding in findings
     )
+
+
+def test_strict_transport_drops_only_the_illustrative_binding_examples() -> None:
+    """A strict schema carries the binding shape; keep every key and rule."""
+
+    allowed = ["strobe_2007", "record_2015"]
+    full = bind_literature_citation_authority(
+        "BASE CONTRACT",
+        allowed,
+        required_method_layers=("reporting_standard",),
+    )
+    lean = bind_literature_citation_authority(
+        "BASE CONTRACT",
+        allowed,
+        required_method_layers=("reporting_standard",),
+        include_examples=False,
+    )
+
+    marker = "Minimal schema-valid examples by required layer"
+    assert marker in full
+    assert marker not in lean
+    assert len(lean.encode()) < len(full.encode())
+    for kept in (
+        "allowed_literature_citation_keys",
+        "case_applicable_required_method_layers",
+        "Cover every listed layer at least once",
+    ):
+        assert kept in lean

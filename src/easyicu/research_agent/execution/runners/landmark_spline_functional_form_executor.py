@@ -1,9 +1,9 @@
-"""Deterministic functional-form projection for a signed landmark spline.
+"""Target-bound functional-form comparison for a signed landmark spline.
 
 The signed primary owner already fits the nested spline and linear models on
 one exact landmark population.  This executor exposes that registered model
-comparison as the Planner-requested sensitivity table without refitting a
-different cohort or sending the task to the Coder.
+comparison only for the exact exposure target. A covariate target instead
+refits both forms on the same primary model population and covariance policy.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from ...authority.current_case_scientific_runtime import (
 )
 from ...numeric_scalars import coerce_finite_float
 from ...schema import AnalysisPlan, AnalysisStep
+from ...contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
+from ...contracts.cohort_product_keys import is_closed_cohort_product_key, sole_typed_cohort_input
 
 LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND = (
     "signed_landmark_spline_functional_form"
@@ -32,7 +34,6 @@ _REQUIRED_DIAGNOSTIC_COLUMNS = frozenset(
         "spline_aic",
         "linear_bic",
         "spline_bic",
-        "likelihood_ratio_statistic",
         "additional_spline_parameters",
         "nonlinearity_p_value",
     }
@@ -50,24 +51,22 @@ def landmark_spline_functional_form_executor_owns_step(
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         return False
-    sealed.governed_step(plan)
+    if step.functional_form_spec is None or step.method not in RCS_LINEAR_SENSITIVITY_METHODS:
+        return False
+    primary = sealed.governed_step(plan)
+    expected_inputs = sealed.functional_form_inputs(step, cohort_input=sole_typed_cohort_input(primary))
     outputs = tuple(str(value) for value in step.expected_outputs)
     contracts = {
         item.input_key: item.mode for item in step.input_consumption_contracts
-    }
-    signed_inputs = {
-        sealed.downstream_parent_product,
-        sealed.linear_sensitivity_product,
     }
     return bool(
         step.planned_analysis_role == "sensitivity"
         and step.scientific_capability is None
         and step.robustness_replay_spec is None
         and len(step.sensitivity_spec_ids) == 1
-        and len(outputs) == 1
-        and outputs[0].startswith("table:")
-        and signed_inputs.issubset(step.inputs)
-        and all(contracts.get(value) == "all_rows" for value in signed_inputs)
+        and outputs == sealed.functional_form_outputs(step)
+        and tuple(step.inputs) == expected_inputs
+        and all(contracts.get(value) == "all_rows" for value in expected_inputs if ":" in value)
     )
 
 
@@ -114,23 +113,83 @@ def run_landmark_spline_functional_form(
     linear_evidence_id: str,
     out_dir: Path,
     input_bindings: list[dict[str, Any]] | None = None,
+    cohort_frame: Any = None,
+    primary_contrasts: Any = None,
 ) -> dict[str, Any]:
-    import pandas as pd
-
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         raise TypeError("functional-form executor received wrong authority kind")
+    form = sealed.require_functional_form_spec(step)
+    if sealed.schema_version.endswith("/3"):
+        raise ValueError("clustered functional-form execution requires a newly reviewed v4 authority")
     if len(str(runtime_projection_sha256)) != 64:
         raise ValueError("runtime projection digest is required")
     if len(linear_sensitivity) != 1:
         raise ValueError("signed linear sensitivity must contain exactly one row")
-    missing = sorted(_REQUIRED_DIAGNOSTIC_COLUMNS - set(linear_sensitivity.columns))
+    if form.target_column != sealed.exposure_column:
+        if cohort_frame is None or primary_contrasts is None:
+            raise ValueError("covariate functional-form target requires a cohort refit, not exposure-result projection")
+        from .landmark_spline_fit import compare_covariate_functional_form
+
+        result = compare_covariate_functional_form(
+            frame=cohort_frame, authority=sealed, form=form,
+            primary_diagnostics=linear_sensitivity.iloc[0],
+        )
+        from .functional_form_effect_products import seal_functional_form_effects
+
+        curve, points, contract = seal_functional_form_effects(
+            step=step, authority=sealed, runtime_projection_sha256=runtime_projection_sha256,
+            comparison=result, contrasts=primary_contrasts,
+            linear_sensitivity=linear_sensitivity, input_bindings=input_bindings or [],
+        )
+        diagnostics = {key: value for key, value in result.items() if key != "effect_bundle"}
+        return _write_result(
+            step=step, row=diagnostics, out_dir=out_dir,
+            source_evidence_id=linear_evidence_id, input_bindings=input_bindings or [],
+            effect_tables=(curve, points), effect_contract=contract,
+        )
+    robust = sealed.schema_version.endswith("/4")
+    comparison_columns = (
+        {"nonlinearity_test", "nonlinearity_target_column", "nonlinearity_statistic", "information_criteria_basis"}
+        if robust else {"likelihood_ratio_statistic"}
+    )
+    missing = sorted(
+        (_REQUIRED_DIAGNOSTIC_COLUMNS | comparison_columns) - set(linear_sensitivity.columns)
+    )
     if missing:
         raise ValueError(
             "signed linear sensitivity lacks functional-form diagnostics: "
             + ", ".join(missing)
         )
     row = linear_sensitivity.iloc[0]
+    if robust:
+        if (
+            row["nonlinearity_test"] != "cluster_robust_nested_wald_chi2"
+            or row["nonlinearity_target_column"] != sealed.exposure_column
+            or "likelihood_ratio_statistic" in linear_sensitivity.columns
+            or row["information_criteria_basis"] != "working_independence_loglikelihood_descriptive_only"
+        ):
+            raise ValueError("signed robust functional-form method or target mismatch")
+        statistic = coerce_finite_float(row["nonlinearity_statistic"], label="Wald statistic")
+        if statistic < 0:
+            raise ValueError("signed robust functional-form statistic is negative")
+        comparison = {
+            "method": "cluster_robust_nested_wald_chi2",
+            "target_column": sealed.exposure_column,
+            "statistic": statistic,
+            "information_criteria_basis": row["information_criteria_basis"],
+        }
+    else:
+        comparison = {
+            "method": "nested_logistic_likelihood_ratio_test",
+            "target_column": form.target_column,
+            "likelihood_ratio_statistic": coerce_finite_float(
+                row["likelihood_ratio_statistic"], label="likelihood ratio"
+            ),
+        }
+    p_value = coerce_finite_float(row["nonlinearity_p_value"], label="nonlinearity p-value")
+    if not 0 <= p_value <= 1:
+        raise ValueError("signed functional-form p-value is outside [0, 1]")
     n = int(coerce_finite_float(row["n"], label="complete-case n"))
     events = int(coerce_finite_float(row["events"], label="event count"))
     extra_df = int(
@@ -141,6 +200,45 @@ def run_landmark_spline_functional_form(
     )
     if n <= 0 or events < 0 or events > n or extra_df <= 0:
         raise ValueError("signed functional-form diagnostic counts are invalid")
+    if primary_contrasts is None:
+        raise ValueError(
+            "exposure functional-form projection requires the sealed primary contrasts"
+        )
+    result = {
+        **comparison,
+        "n_complete_case": n, "event_n": events,
+        "linear_aic": coerce_finite_float(row["linear_aic"], label="linear AIC"),
+        "spline_aic": coerce_finite_float(row["spline_aic"], label="spline AIC"),
+        "linear_bic": coerce_finite_float(row["linear_bic"], label="linear BIC"),
+        "spline_bic": coerce_finite_float(row["spline_bic"], label="spline BIC"),
+        "additional_spline_parameters": extra_df, "nonlinearity_p_value": p_value,
+        "execution_mode": "exact_primary_exposure_projection",
+    }
+    from .functional_form_effect_products import seal_functional_form_projection
+
+    # The nested linear model is already fitted and sealed by the primary owner.
+    # Restating that line on the primary exposure grid is a coordinate change,
+    # not a second estimate, and it gives the article figure a comparable
+    # specification contrast instead of a one-row diagnostic.
+    curve, points, contract = seal_functional_form_projection(
+        step=step, authority=sealed, runtime_projection_sha256=runtime_projection_sha256,
+        contrasts=primary_contrasts, linear_sensitivity=linear_sensitivity,
+        input_bindings=input_bindings or [], nonlinearity_p_value=p_value,
+    )
+    return _write_result(
+        step=step, row=result, out_dir=out_dir,
+        source_evidence_id=linear_evidence_id, input_bindings=input_bindings or [],
+        effect_tables=(curve, points), effect_contract=contract,
+    )
+
+
+def _write_result(*, step, row, out_dir, source_evidence_id, input_bindings,
+                  effect_tables=(), effect_contract=None):
+    import pandas as pd
+
+    # Validate before writing CSV so non-finite diagnostics cannot leave a
+    # plausible-looking partial output followed by a failed JSON receipt.
+    json.dumps(row, allow_nan=False)
     output_product = str(step.expected_outputs[0])
     output_name = output_product.partition(":")[2]
     if not output_name:
@@ -151,21 +249,8 @@ def run_landmark_spline_functional_form(
         [
             {
                 "check": "restricted_cubic_spline_vs_linear",
-                "method": "nested_logistic_likelihood_ratio_test",
-                "n_complete_case": n,
-                "event_n": events,
-                "linear_aic": coerce_finite_float(row["linear_aic"], label="linear AIC"),
-                "spline_aic": coerce_finite_float(row["spline_aic"], label="spline AIC"),
-                "linear_bic": coerce_finite_float(row["linear_bic"], label="linear BIC"),
-                "spline_bic": coerce_finite_float(row["spline_bic"], label="spline BIC"),
-                "likelihood_ratio_statistic": coerce_finite_float(
-                    row["likelihood_ratio_statistic"], label="likelihood ratio"
-                ),
-                "additional_spline_parameters": extra_df,
-                "nonlinearity_p_value": coerce_finite_float(
-                    row["nonlinearity_p_value"], label="nonlinearity p-value"
-                ),
-                "source_evidence_id": linear_evidence_id,
+                **row,
+                "source_evidence_id": source_evidence_id,
             }
         ]
     )
@@ -176,11 +261,27 @@ def run_landmark_spline_functional_form(
         "analysis_family": "association",
         "analysis_kind": LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
         "interpretation_class": "descriptive_prognostic_association",
-        "n_complete_case": n,
-        "event_n": events,
-        "input_bindings": input_bindings or [],
+        "n_complete_case": row["n_complete_case"],
+        "event_n": row["event_n"],
+        "target_column": row["target_column"],
+        "execution_mode": row["execution_mode"],
+        "input_bindings": input_bindings,
         "output_files": {output_product: output_path.name},
     }
+    if effect_contract is not None:
+        from .functional_form_effect_products import effect_product_summary
+
+        # Full parameters/covariance/lineage remain in both registered effect
+        # tables. The downstream native robustness owner reads those bytes and
+        # publishes its compact reportable_model_contrasts. Do not recursively
+        # expose model internals to the Writer's bounded numeric-leaf budget.
+        summary["functional_form_effect_products"] = effect_product_summary(
+            contract=effect_contract, step=step
+        )
+        for product, table in zip(step.expected_outputs[1:], effect_tables, strict=True):
+            name = product.partition(":")[2] + ".csv"
+            table.to_csv(out_dir / name, index=False)
+            summary["output_files"][product] = name
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
@@ -203,22 +304,34 @@ def run_bound_landmark_spline_functional_form(
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         raise TypeError("functional-form executor received wrong authority kind")
+    form = sealed.require_functional_form_spec(step)
+    # This owner consumes one cohort plus two model tables. The single-input
+    # executor helper deliberately declines such multi-product steps.
+    cohort_inputs = [key for key in step.inputs if is_closed_cohort_product_key(key)]
+    cohort_input = cohort_inputs[0] if len(cohort_inputs) == 1 else None
+    if form.target_column != sealed.exposure_column and cohort_input is None:
+        raise ValueError("covariate functional-form refit requires a typed cohort")
+    expected_inputs = sealed.functional_form_inputs(step, cohort_input=cohort_input or "")
+    if tuple(step.inputs) != expected_inputs:
+        raise ValueError("functional-form inputs do not match the target contract")
     manifest = json.loads(resolved_inputs.read_text(encoding="utf-8"))
     receipts = []
     loaded = {}
-    for input_key in (
-        sealed.downstream_parent_product,
-        sealed.linear_sensitivity_product,
-    ):
+    for input_key in (key for key in expected_inputs if ":" in key):
         bound = load_typed_input(
             input_key=input_key,
             run_dir=run_dir,
             resolved_inputs=manifest,
             step_id=step.step_id,
-            expected_declared_kind="table",
-            expected_evidence_kind="table",
+            # The shared loader validates canonical product identity; a
+            # published cohort: alias can be recorded under dataset:.
+            expected_declared_kind=None if input_key == cohort_input else "table",
+            expected_evidence_kind=None if input_key == cohort_input else "table",
+            # The cohort can contain additional audit/profile columns. The
+            # loader validates its complete recorded schema; the shared model
+            # population owner separately requires every model column.
             minimum_row_count=(
-                2 if input_key == sealed.downstream_parent_product else 1
+                30 if input_key == cohort_input else 2 if input_key == sealed.downstream_parent_product else 1
             ),
             require_consumption_contract=True,
         )
@@ -241,6 +354,8 @@ def run_bound_landmark_spline_functional_form(
         linear_evidence_id=linear.evidence_id,
         out_dir=out_dir,
         input_bindings=receipts,
+        cohort_frame=loaded[cohort_input].frame if cohort_input else None,
+        primary_contrasts=loaded[sealed.downstream_parent_product].frame,
     )
 
 

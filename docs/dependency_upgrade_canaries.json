@@ -1,0 +1,59 @@
+{
+  "schema_version": "easyicu.dependency-upgrade-canaries/1",
+  "verified_against": {
+    "head": "71b287377",
+    "requirements_lock_sha256": "2a2984f70e862a0fb6f2d91a168130eff17577681c1427fa7650b120640b37c2",
+    "base_image_lock_sha256": "679fecef3802988372d0607aa159bb7a544b74ba6f2eb8399184b6e72cd4ef5a",
+    "base_image_digest": "sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff"
+  },
+  "layer_1_structure_and_permission": {
+    "description": "Fixed-input host/JS/permission regressions. Zero Provider; required for every dependency or model-route change.",
+    "canaries": [
+      "tests/research_agent/critical_regressions.txt",
+      "tests/webserver/test_web_execution_runtime_preflight.py",
+      "tools/run_js_contracts.py",
+      "tools/check_agent_runtime.py",
+      "tests/webserver/test_execution_retry_seed_superseded.py"
+    ]
+  },
+  "layer_2_numeric_oracles": {
+    "description": "Offline reference-implementation oracles; required for scientific-stack upgrades. Tolerances stay owned by each oracle test, never redefined here.",
+    "oracles": [
+      {
+        "domain": "method_kernels",
+        "reference": "R survival / pROC / EValue",
+        "oracle": "tests/research_agent/data/method_kernel_oracles.json",
+        "tests": [
+          "tests/research_agent/execution/test_method_kernel_r_oracles.py"
+        ]
+      },
+      {
+        "domain": "prediction_validation",
+        "reference": "R base oracles",
+        "oracle": "tests/research_agent/data/prediction_validation_r_oracle.json",
+        "tests": [
+          "tests/research_agent/authority/test_prediction_validation_provenance.py",
+          "tests/research_agent/gates/test_prediction_validation_owner.py"
+        ]
+      }
+    ],
+    "known_not_covered": [
+      "methods.rmst",
+      "methods.decision_curve"
+    ]
+  },
+  "layer_3_model_diagnostics": {
+    "description": "Optional, authorization-bound model diagnostics (e.g. cross_model_panel). Never a prerequisite for dependency upgrades.",
+    "required_prerequisites": [
+      "external_llm_opt_in",
+      "recorded_budget_and_failure_denominator"
+    ]
+  },
+  "rollback": {
+    "image": "previous immutable image id recorded in the deploy packet receipts",
+    "dependency": "requirements.lock sha256 above plus the upgraded lock's own digest",
+    "source": "pre-upgrade HEAD and the minimal upgrade patch",
+    "kernel_identity": "execution/kernel_identity.py identity_sha256 before and after"
+  },
+  "policy_doc": "docs/dependency_model_change_regression_policy.md"
+}

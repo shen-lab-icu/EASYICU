@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from ..authority.evidence_store import EvidenceEnforcementError
 from ..providers.structured_retry import StructuredResponseFailure
 from .writer_repair_decision import WriterRepairDecision, drop_every_sentence
+from .manuscript_sentence_context import contextual_sentence_deletion
 
 DecisionProvider = Callable[..., Sequence[WriterRepairDecision]]
 DecisionApplier = Callable[..., tuple[str, List[Dict[str, object]]]]
@@ -66,13 +67,23 @@ class ManuscriptRepairPass:
 
         sentences = [str(sentence).strip() for sentence in rejected_sentences]
         repaired = scaffold
+        context_drops: dict[str, list[str]] = {}
         for sentence in sorted(set(sentences), key=lambda value: (-len(value), value)):
             if not sentence:
                 continue
             while (span := self.target_locator(repaired, sentence)) is not None:
-                repaired = repaired[: span[0]] + repaired[span[1] :]
+                deletion = contextual_sentence_deletion(repaired, *span)
+                repaired = repaired[: deletion.start] + repaired[deletion.end :]
+                if deletion.dependent_sentences:
+                    context_drops.setdefault(sentence, []).extend(
+                        deletion.dependent_sentences
+                    )
         applied = [
-            {**decision.as_dict(), "sentence": sentence[:500]}
+            {
+                **decision.as_dict(), "sentence": sentence[:500],
+                **({"dependent_context_drops": context_drops[sentence]}
+                   if sentence in context_drops else {}),
+            }
             for decision, sentence in zip(
                 drop_every_sentence(len(sentences)), sentences
             )

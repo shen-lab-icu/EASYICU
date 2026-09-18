@@ -97,23 +97,36 @@ def _json_pointer(source_field: str) -> str:
     return "/" + "/".join(escaped)
 
 
-def _verify_record(evidence: EvidenceStore, record: EvidenceRecord) -> None:
-    """Fail closed if a registered artifact is missing, escaped, or stale."""
+def _record_status(evidence: EvidenceStore, record: EvidenceRecord) -> str:
+    """Return current / stale / missing / escaped without raising."""
 
     root = evidence.root.resolve()
     path = (root / record.relative_path).resolve()
     try:
         path.relative_to(root)
-    except ValueError as exc:
+    except ValueError:
+        return "escaped"
+    if not path.is_file():
+        return "missing"
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != record.sha256:
+        return "stale"
+    return "current"
+
+
+def _verify_record(evidence: EvidenceStore, record: EvidenceRecord) -> None:
+    """Fail closed if a registered artifact is missing, escaped, or stale."""
+
+    status = _record_status(evidence, record)
+    if status == "escaped":
         raise ManuscriptProvenanceError(
             f"evidence path escapes run root: {record.evidence_id}"
-        ) from exc
-    if not path.is_file():
+        )
+    if status == "missing":
         raise ManuscriptProvenanceError(
             f"evidence file is missing: {record.evidence_id}"
         )
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != record.sha256:
+    if status == "stale":
         raise ManuscriptProvenanceError(
             f"evidence digest is stale: {record.evidence_id}"
         )
@@ -125,6 +138,8 @@ def _related_artifacts(
     evidence: EvidenceStore,
     records_by_id: Mapping[str, EvidenceRecord],
     records: Sequence[EvidenceRecord],
+    display_index: Mapping[str, Mapping[str, str]] | None = None,
+    verify: str = "raise",
 ) -> list[dict[str, Any]]:
     selected: list[tuple[EvidenceRecord, str]] = [(record, "source_json")]
     if record.script_evidence_id:
@@ -150,8 +165,18 @@ def _related_artifacts(
         if item.evidence_id in seen:
             continue
         seen.add(item.evidence_id)
-        _verify_record(evidence, item)
-        public.append(_safe_artifact(item, role=role))
+        status = _record_status(evidence, item)
+        if verify == "raise":
+            _verify_record(evidence, item)
+        projected = _safe_artifact(item, role=role)
+        projected["status"] = status
+        display = (display_index or {}).get(item.sha256)
+        if display:
+            projected["display_id"] = str(display["display_id"])
+            projected["display_contract_sha256"] = str(
+                display.get("contract_sha256") or ""
+            )
+        public.append(projected)
         if len(public) >= 12:
             break
     return public
@@ -228,19 +253,82 @@ def strip_numeric_provenance(markdown: str) -> str:
     )
 
 
+_METHOD_SUMMARY_FIELDS = (
+    "intent",
+    "planned_analysis_role",
+    "time_window_label",
+    "exposure_label",
+    "outcome_label",
+    "population_label",
+)
+
+
+def _summarize_method(record: Mapping[str, Any] | None) -> dict[str, str]:
+    """Keep only short scalar step coordinates; never expose rows or paths."""
+
+    if not isinstance(record, Mapping):
+        return {}
+    summary: dict[str, str] = {}
+    for key in _METHOD_SUMMARY_FIELDS:
+        value = record.get(key)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                summary[key] = text[:400]
+    return summary
+
+
+def _safe_reader_notes(notes: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    """Project bounded verification notes without paths or patient content."""
+
+    public: list[dict[str, Any]] = []
+    for note in notes or []:
+        if not isinstance(note, Mapping):
+            continue
+        code = str(note.get("code") or "").strip()[:120]
+        text = str(note.get("text") or "").strip()[:600]
+        if not code or not text:
+            continue
+        projected: dict[str, Any] = {
+            "code": code,
+            "severity": str(note.get("severity") or "warning").strip()[:20],
+            "text": text,
+        }
+        evidence_id = str(note.get("evidence_id") or "").strip()
+        if evidence_id:
+            projected["evidence_id"] = evidence_id[:160]
+        sha256 = str(note.get("sha256") or "").strip().lower()
+        if re.fullmatch(r"[a-f0-9]{64}", sha256):
+            projected["sha256"] = sha256
+        public.append(projected)
+        if len(public) >= 24:
+            break
+    return public
+
+
 def build_manuscript_provenance(
     *,
     manuscript: str,
     evidence: EvidenceStore,
     binding_map: Mapping[str, NumericClaim] | None = None,
     claim_ceiling: str = "analysis_only",
+    verify: str = "raise",
+    display_index: Mapping[str, Mapping[str, str]] | None = None,
+    method_summaries: Mapping[str, Mapping[str, Any]] | None = None,
+    reader_notes: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a digest-bound, path-free reader projection.
 
     Every referenced numeric footnote must resolve to exactly one registered
-    NumericClaim and one current EvidenceRecord.  Any disagreement fails
-    closed instead of producing a plausible-looking reader link.
+    NumericClaim and one current EvidenceRecord.  With ``verify="raise"`` the
+    publication/binding path fails closed on any disagreement instead of
+    producing a plausible-looking reader link.  ``verify="mark"`` is reserved
+    for the reader build: missing or stale links are marked explicitly so the
+    projection can still be reviewed, while publication paths keep raising.
     """
+
+    if verify not in {"raise", "mark"}:
+        raise ValueError("verify must be 'raise' or 'mark'")
 
     definitions = {
         match.group("id"): _parse_definition(match.group("body"))
@@ -278,32 +366,57 @@ def build_manuscript_provenance(
             raise ManuscriptProvenanceError(
                 f"{claim_id} references missing evidence {claim.evidence_id}"
             )
-        _verify_record(evidence, record)
-        claims.append(
-            {
-                "claim_id": claim_id,
-                "display_value": displays[0],
-                "source_value": claim.value,
-                "canonical_value": claim.canonical,
-                "step_id": claim.step_id,
-                "source_field": claim.source_field,
-                "source_json_pointer": _json_pointer(claim.source_field),
-                "evidence": _safe_artifact(record, role="source_json"),
-                "related_artifacts": _related_artifacts(
+        status = _record_status(evidence, record)
+        if verify == "raise":
+            _verify_record(evidence, record)
+        claim_payload: dict[str, Any] = {
+            "claim_id": claim_id,
+            "display_value": displays[0],
+            "source_value": claim.value,
+            "canonical_value": claim.canonical,
+            "step_id": claim.step_id,
+            "source_field": claim.source_field,
+            "source_json_pointer": _json_pointer(claim.source_field),
+            "evidence": _safe_artifact(record, role="source_json"),
+            "related_artifacts": (
+                _related_artifacts(
                     record,
                     evidence=evidence,
                     records_by_id=records_by_id,
                     records=records,
-                ),
-                "effect_scale": (
-                    claim.effect_scale.value if claim.effect_scale is not None else None
-                ),
-                "estimand": claim.estimand.value
-                if claim.estimand is not None
-                else None,
-                "occurrence_count": len(displays),
+                    display_index=display_index,
+                    verify=verify,
+                )
+                if status == "current"
+                else []
+            ),
+            "effect_scale": (
+                claim.effect_scale.value if claim.effect_scale is not None else None
+            ),
+            "estimand": claim.estimand.value if claim.estimand is not None else None,
+            "occurrence_count": len(displays),
+            "status": status,
+        }
+        claim_payload["evidence"]["status"] = status
+        if status == "current":
+            related_statuses = {
+                item["status"] for item in claim_payload["related_artifacts"]
             }
+            claim_payload["status"] = next(
+                (state for state in ("escaped", "missing", "stale") if state in related_statuses),
+                "current",
+            )
+        method_summary = _summarize_method(
+            (method_summaries or {}).get(claim.step_id)
         )
+        if method_summary:
+            claim_payload["method_summary"] = method_summary
+        claims.append(claim_payload)
+
+    blocks = _reader_blocks(manuscript)
+    notes = _safe_reader_notes(reader_notes)
+    if notes:
+        blocks.append({"kind": "verification_notes", "notes": notes})
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -312,13 +425,15 @@ def build_manuscript_provenance(
         "claim_count": len(claims),
         "claim_ceiling": claim_ceiling,
         "publication_authorized": False,
-        "article_blocks": _reader_blocks(manuscript),
+        "article_blocks": blocks,
         "claims": claims,
         "integrity": {
             "path_values_returned": False,
             "patient_rows_returned": False,
             "raw_data_returned": False,
-            "numeric_claims_verified": True,
+            "numeric_claims_verified": all(
+                claim.get("status") == "current" for claim in claims
+            ),
         },
     }
 

@@ -99,10 +99,19 @@ ALLOWED_TURN_ACTIONS = frozenset(
         "extract",
         "run",
         "provider_run",
+        "report_revision",
         "cancel",
         "workspace_write",
         "mcp_read",
     }
+)
+# Privileged one-use actions can never be pre-granted by the browser alone.
+# They are granted only when the backend infers the same action from the
+# current user text (see turn_authority.infer_explicit_turn_actions).  The
+# browser's `allowed_actions` (notably the `full` access mode, which ships
+# every capability with each message) is ignored for these three.
+PRIVILEGED_ONE_SHOT_TURN_ACTIONS = frozenset(
+    {"provider_run", "extract", "report_revision"}
 )
 HOST_ACTION_JOB_KINDS = {
     "auto_generate_plan": frozenset({"agent-run"}),
@@ -901,12 +910,11 @@ class PiCopilotService:
         source = cls._session_source_reference(context)
         if source is not None:
             return PiSessionDataSourceAuthorization(
-                status="confirmed",
-                reason=None,
-                confirmation_mode="agent_default_study_required",
+                status="pending",
+                reason="project_source_confirmation_required",
+                confirmation_mode=None,
                 extraction_scope="study_required",
                 source=source,
-                confirmed_at=utc_now(),
             )
         return PiSessionDataSourceAuthorization(
             status="pending",
@@ -1288,25 +1296,9 @@ class PiCopilotService:
             clean_project,
             record.binding.study_context_id,
         )
-        authorization = record.data_source_authorization
-        if (
-            record.agent_mode == "research"
-            and authorization.status == "pending"
-            and authorization.reason == "project_source_confirmation_required"
-            and not self._stale_details(record).get("stale")
-        ):
-            context = study_contexts.get_context(record.binding.study_context_id)
-            source = self._session_source_reference(context or {})
-            if source is not None:
-                record.data_source_authorization = PiSessionDataSourceAuthorization(
-                    status="confirmed",
-                    reason=None,
-                    confirmation_mode="agent_default_study_required",
-                    extraction_scope="study_required",
-                    source=source,
-                    confirmed_at=utc_now(),
-                )
-                self._save_record(record)
+        # Reading a session must not manufacture a source-selection decision.
+        # Existing confirmations remain historical facts; pending ones require
+        # the explicit source action (or an exact user-selected source).
         return record
 
     def create_session(
@@ -2088,7 +2080,16 @@ class PiCopilotService:
             self._save_record(record)
         requested_actions = frozenset(
             str(item).strip() for item in allowed_actions if str(item).strip()
-        ) | infer_explicit_turn_actions(provider_text)
+        )
+        inferred_actions = infer_explicit_turn_actions(provider_text)
+        # D-P1-1: privileged one-use actions require backend text inference.
+        # Ordinary actions keep union compatibility; privileged actions are
+        # granted only from the backend inference so a tampered `full`-mode
+        # client cannot pre-authorize a full run with chit-chat text.
+        requested_actions = (
+            (requested_actions | inferred_actions)
+            - PRIVILEGED_ONE_SHOT_TURN_ACTIONS
+        ) | (inferred_actions & PRIVILEGED_ONE_SHOT_TURN_ACTIONS)
         unknown_actions = sorted(requested_actions - ALLOWED_TURN_ACTIONS)
         if unknown_actions:
             raise PiCopilotError(
@@ -2245,6 +2246,7 @@ class PiCopilotService:
                         "easyicu_demo_source_preparation_submitted",
                         "easyicu_run_submitted",
                         "easyicu_full_run_submitted",
+                        "easyicu_report_repair_submitted",
                     }
                 ):
                     self._watch_child_job_for_replay(
@@ -3370,8 +3372,14 @@ class PiCopilotService:
                             study,
                             cohort_file=plan_run / "cohort.parquet",
                             plan_file=plan_run / "analysis_plan.json",
+                            context_file=plan_run / "research_context.json",
                         )
-                except (PiCopilotError, DataPackageReviewError):
+                except DataPackageReviewError as exc:
+                    if exc.code != "plan_bound_data_preview_files_unavailable":
+                        raise
+                    # Before a materialized cohort exists, the registered
+                    # export remains the preview. Never hide binding drift or
+                    # unreadable semantic evidence behind a different source.
                     payload = None
             if payload is None:
                 payload = build_registered_data_package_review(study)
@@ -3904,6 +3912,7 @@ class PiCopilotService:
         project_id: str,
         run_id: str,
         document_name: str,
+        expected_sha256: str | None = None,
     ) -> Dict[str, Any]:
         """Return one fixed, receipt-bound manuscript document for preview."""
 
@@ -3957,15 +3966,16 @@ class PiCopilotService:
             ),
             None,
         )
-        expected_sha256 = (
+        registered_sha256 = (
             str(registered.get("sha256") or "").lower()
             if isinstance(registered, Mapping)
             else ""
         )
         current_sha256 = hashlib.sha256(loaded["content"]).hexdigest()
         if (
-            not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)
-            or current_sha256 != expected_sha256
+            not re.fullmatch(r"[a-f0-9]{64}", registered_sha256)
+            or current_sha256 != registered_sha256
+            or (expected_sha256 is not None and current_sha256 != expected_sha256)
         ):
             raise PiCopilotError(
                 "pi_research_document_digest_mismatch",
@@ -4201,6 +4211,7 @@ def reset_pi_copilot_service_for_tests() -> None:
 
 __all__ = [
     "ALLOWED_TURN_ACTIONS",
+    "PRIVILEGED_ONE_SHOT_TURN_ACTIONS",
     "PiCopilotService",
     "get_pi_copilot_service",
     "shutdown_pi_copilot_service",

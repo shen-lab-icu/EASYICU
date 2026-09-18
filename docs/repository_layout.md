@@ -11,15 +11,37 @@ that can be checked mechanically.
 | `tools/` | Maintainer and experiment launchers; no reusable product policy. |
 | `scripts/` | Small operator entry scripts. |
 | `benchmarks/` | The only benchmark owner: cases, catalogs, evaluation fixtures, and frozen formal suites. |
-| `docs/` | Maintainer documentation, reviews, QA records, and checked-in evidence summaries. |
+| `docs/` | User guides, maintainer documentation, reviews, QA records, and checked-in evidence summaries. |
+| `desktop/` | Desktop shell, icons, dependency locks, and installer build scripts. |
 | `examples/` | Curated, runnable onboarding examples. |
 | `baselines/` | Checked-in comparison baselines. |
 | `sources/` | Source definitions and source-facing metadata. |
 
 Local-only directories such as `.venv/`, `.codegraph/`, `output/`,
-`research_output/`, `task_logs/`, and tool caches are not source-of-truth.
-They may exist in a working copy, but their generated payloads must stay
-ignored.  CodeGraph keeps only `.codegraph/.gitignore` in Git.
+`research_output/`, `task_logs/`, and tool caches stay out of the public Git
+tree. Run outputs and receipts can be irreplaceable evidence: being ignored
+does not make them disposable. Check ownership, active processes, and recovery
+requirements before moving them. CodeGraph keeps only `.codegraph/.gitignore`
+in Git.
+
+## What users receive
+
+| Delivery | Contents |
+|---|---|
+| Git checkout | Product source, tests and fixtures, tools, examples, public documentation, and reproducibility material. |
+| Source distribution (`sdist`) | The tracked source and verification material, with private and generated paths excluded. |
+| Python wheel | Installable product modules, dictionaries, templates, frontend resources, and required notices. Tests and repository tools remain outside it. |
+| Desktop app | The installed product, frozen Python dependencies, Node runtime, native shell, and required notices. Users need no development checkout. |
+
+Build the original sdist from a clean Git checkout. The setuptools-scm file
+finder carries tracked support files into the archive; the archive test also
+collects representative tests from that extracted tree. New public guides,
+scripts, and fixtures must not require `git add -f`.
+
+Keep new private documentation in `docs/_internal/` and local scripts in
+`scripts/_local/`. Existing private files have explicit exclusions until their
+owners choose to migrate them. See [installation.md](installation.md) for the
+user entrypoints and [../desktop/README.md](../desktop/README.md) for build inputs.
 
 ## Rules
 

@@ -8,8 +8,21 @@ import pytest
 
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
 from easyicu.research_agent.reporting.manuscript_quality import render_reader_manuscript
+from easyicu.research_agent.reporting import pdf_render
 from easyicu.research_agent.reporting.pdf_render import render_pdf_for_run
 from easyicu.research_agent.reporting.write_phase import _latex_figure_paths
+
+
+def test_pdf_renderer_finds_standard_local_tool_without_service_path(
+    tmp_path, monkeypatch
+) -> None:
+    engine = tmp_path / "latexmk"
+    engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    engine.chmod(0o755)
+    monkeypatch.setattr(pdf_render.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(pdf_render, "_LOCAL_TOOL_DIRS", (tmp_path,))
+
+    assert pdf_render._which_first("latexmk") == str(engine)
 
 
 def test_scaffold_draft_watermark_is_explicit_and_opt_in() -> None:
@@ -38,7 +51,7 @@ def test_scaffold_uses_run_relative_figure_path_without_duplicate_evidence_prefi
     )
 
     assert (
-        r"\includegraphics[width=\textwidth]{evidence/figure\_primary\_\_primary\_association.pdf}"
+        r"\includegraphics[width=\textwidth,height=0.70\textheight,keepaspectratio]{evidence/figure\_primary\_\_primary\_association.pdf}"
         in tex
     )
     assert "evidence/evidence/" not in tex
@@ -68,6 +81,8 @@ def test_scaffold_separates_main_and_supplementary_figures() -> None:
     assert r"\section*{Supplementary figures}" in tex
     assert "figures/main/figure1.png" in tex
     assert "figures/supplementary/figure\\_s1.png" in tex
+    assert tex.count(r"height=0.70\textheight,keepaspectratio") == 1
+    assert tex.count(r"height=0.58\textheight,keepaspectratio") == 1
 
 
 def test_latex_figure_selection_uses_one_compile_safe_export_per_figure() -> None:
@@ -157,71 +172,49 @@ def test_latex_figure_selection_reports_figures_without_a_safe_export() -> None:
     assert omitted == ("vector_only_svg",)
 
 
-def test_latex_reader_selection_uses_contract_labels_and_drops_primary_duplicate(
-    tmp_path,
-) -> None:
-    primary_dir = tmp_path / "publication_figures"
-    primary_dir.mkdir()
-    supporting_dir = tmp_path / "steps" / "descriptive" / "outputs"
-    supporting_dir.mkdir(parents=True)
-    cohort_dir = tmp_path / "steps" / "cohort" / "outputs"
-    cohort_dir.mkdir(parents=True)
+def test_latex_reader_selection_uses_registered_contracts_and_exact_promotion(tmp_path):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
-    def write_contract(path, figure_id, roles):
-        path.write_text(
-            json.dumps(
-                {
-                    "figure_id": figure_id,
-                    "panels": [
-                        {"panel_id": f"p{index}", "role": role}
-                        for index, role in enumerate(roles)
-                    ],
-                }
-            ),
-            encoding="utf-8",
+    evidence = EvidenceStore(tmp_path)
+    records = []
+
+    def register(stem, step, image, inputs=()):
+        producer = "runner" if step else "publication_figure_skill"
+        mode = "deterministic_standard" if step else "deterministic_figure_skill"
+        contract_source = tmp_path / f"{stem}.figure_contract.json"
+        contract_source.write_text(json.dumps({
+            "figure_id": f"figure:{stem}", "core_claim": "Observed summaries",
+            "reader_caption": f"Source legend for {stem}.",
+            "panels": [{"panel_id": "A", "title": "Summary", "claim": "Observed",
+                        "role": "descriptive_result", "metadata": {"placement": "main"}}],
+        }))
+        contract = evidence.register_file(
+            kind="log", description="Figure contract", source_path=contract_source,
+            evidence_id=f"{stem}_contract", produced_by_step=step,
+            producer=producer, generation_mode=mode,
         )
+        figure_source = tmp_path / f"{stem}.pdf"
+        figure_source.write_bytes(image)
+        figure = evidence.register_file(
+            kind="figure", description="Figure", source_path=figure_source,
+            evidence_id=f"{stem}_pdf", produced_by_step=step,
+            producer=producer, generation_mode=mode,
+            inputs=[*inputs, contract.evidence_id],
+            metadata={"contract_evidence_id": contract.evidence_id},
+        )
+        records.extend([contract, figure])
+        # The mutable producer copy is not reader authority.
+        contract_source.write_text('{"reader_caption": "Unregistered changed conclusion"}')
+        return figure
 
-    write_contract(
-        primary_dir / "easyicu_publication_figure.figure_contract.json",
-        "easyicu_publication_figure",
-        ["distribution", "descriptive_result"],
-    )
-    write_contract(
-        supporting_dir / "descriptive_context.figure_contract.json",
-        "figure:descriptive_context",
-        ["distribution", "descriptive_result"],
-    )
-    write_contract(
-        cohort_dir / "cohort_flow.figure_contract.json",
-        "figure:cohort_flow",
-        ["cohort_accounting"],
-    )
-    records = [
-        SimpleNamespace(
-            kind="figure",
-            evidence_id="step_descriptive_pdf",
-            relative_path="evidence/step_descriptive_pdf__descriptive_context.pdf",
-        ),
-        SimpleNamespace(
-            kind="figure",
-            evidence_id="step_cohort_pdf",
-            relative_path="evidence/step_cohort_pdf__cohort_flow.pdf",
-        ),
-        SimpleNamespace(
-            kind="figure",
-            evidence_id="publication_pdf",
-            relative_path="evidence/publication_pdf__easyicu_publication_figure.pdf",
-        ),
-    ]
+    descriptive = register("descriptive", "descriptive", b"same plot")
+    cohort = register("cohort_flow", "cohort", b"different plot")
+    primary = register("primary", None, b"same plot", [descriptive.evidence_id])
 
     selected, omitted = _latex_figure_paths(records, run_dir=tmp_path)
-
     assert selected == [
-        (
-            "Primary publication figure",
-            "evidence/publication_pdf__easyicu_publication_figure.pdf",
-        ),
-        ("Cohort flow", "evidence/step_cohort_pdf__cohort_flow.pdf"),
+        ("Source legend for primary.", primary.relative_path),
+        ("Source legend for cohort_flow.", cohort.relative_path),
     ]
     assert omitted == ()
 

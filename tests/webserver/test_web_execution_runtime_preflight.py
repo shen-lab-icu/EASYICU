@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 
 import pytest
 
@@ -94,6 +95,61 @@ def test_a_ready_runtime_is_not_an_obstacle(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
+@pytest.mark.parametrize("result_kind", ["roundtrip", "missing_output", "wrong_output", "mount_denied", "timeout"])
+def test_workspace_probe_requires_a_real_roundtrip_and_cleans_up(monkeypatch, tmp_path, result_kind):
+    commands = []
+    monkeypatch.setattr(runner_module, "resolve_docker_executable", lambda _: "docker")
+
+    def run(command, **kwargs):
+        commands.append(command)
+        assert kwargs["timeout"] <= 5
+        if command[1] == "image":
+            return SimpleNamespace(returncode=0, stdout="sha256:" + "a" * 64, stderr="")
+        if command[1] == "rm":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert "--network=none" in command and "--read-only" in command
+        assert "--pull=never" in command and "--cap-drop=ALL" in command
+        assert "--entrypoint=python" in command
+        assert "sha256:" + "a" * 64 in command
+        mount = command[command.index("--mount") + 1]
+        directory = Path(mount.split("src=", 1)[1].split(",dst=", 1)[0])
+        assert directory.parent == tmp_path.resolve()
+        assert directory != tmp_path.resolve()
+        if result_kind == "timeout":
+            raise subprocess.TimeoutExpired(command, 5)
+        if result_kind in {"roundtrip", "wrong_output"}:
+            (directory / "output").write_bytes(
+                (directory / "input").read_bytes() if result_kind == "roundtrip" else b"wrong"
+            )
+        return SimpleNamespace(returncode=125 if result_kind == "mount_denied" else 0, stdout="", stderr=_SOCKET_PATH)
+
+    monkeypatch.setattr(runner_module, "_run_with_bounded_output", run)
+    result = runner_module.probe_runner_availability("docker", image="easyicu:test", workdir=tmp_path)
+    assert result.available is (result_kind == "roundtrip")
+    if not result.available:
+        assert result.reason_code == "docker_workspace_unavailable"
+    assert _SOCKET_PATH not in repr(result)
+    assert list(tmp_path.iterdir()) == []
+    if result_kind == "timeout":
+        assert commands[-1][1:3] == ["rm", "--force"]
+        assert commands[-1][-1] in commands[1][3]
+
+
+def test_execution_preflight_passes_exact_project_root_to_probe(monkeypatch, tmp_path):
+    seen = []
+    def probe(kind, **kwargs):
+        seen.append(kwargs["workdir"])
+        return _unavailable("docker_workspace_unavailable")
+    monkeypatch.setattr(runner_module, "probe_runner_availability", probe)
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as error:
+        research_launch_runtime._require_execution_runtime(
+            budget_mode="full_reviewed", runner_image="easyicu:test", project_root=str(tmp_path),
+        )
+    assert seen == [tmp_path]
+    assert error.value.details["reason_code"] == "docker_workspace_unavailable"
+    assert "file sharing" in str(error.value)
+
+
 def test_a_planner_only_launch_never_asks_for_a_container_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,6 +215,46 @@ def test_the_run_reads_the_profile_mapping_from_one_place() -> None:
     assert after_factory
     assert "CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF" not in after_factory
     assert "CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF" not in after_factory
+
+
+@pytest.mark.parametrize("budget_mode", ["planner_canary", "full_reviewed"])
+def test_current_web_profiles_match_the_packaged_clinical_dictionaries(budget_mode):
+    research_launch_runtime._require_profile_dictionaries(budget_mode=budget_mode)
+
+
+@pytest.mark.parametrize("stale_live_pubmed", [False, True])
+@pytest.mark.parametrize("budget_mode", ["planner_canary", "full_reviewed"])
+def test_dictionary_preflight_refuses_either_stale_variant_without_mutating_it(
+    monkeypatch, stale_live_pubmed, budget_mode,
+):
+    from dataclasses import replace
+
+    from easyicu.research_agent.orchestration import profiles
+
+    get_profile = profiles.get_submission_profile
+    stale_ref = research_launch_runtime._submission_profile_ref(
+        budget_mode=budget_mode, live_pubmed=stale_live_pubmed,
+    )
+    stale = replace(get_profile(stale_ref), expected_concept_dict_sha="0" * 64)
+    monkeypatch.setattr(
+        profiles, "get_submission_profile",
+        lambda ref: stale if ref == stale_ref else get_profile(ref),
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        research_launch_runtime._require_profile_dictionaries(budget_mode=budget_mode)
+
+    assert exc.value.code == "research_pipeline_profile_dictionary_mismatch"
+    assert exc.value.details["profile_ref"] == stale_ref
+    assert exc.value.details["reason_code"] == "concept_dictionary_profile_mismatch"
+    assert stale.expected_concept_dict_sha == "0" * 64
+
+
+def test_launch_preparation_checks_dictionary_before_execution_runtime():
+    source = Path("src/easyicu/webserver/research_pipeline_run_preparation.py").read_text()
+    assert source.index("_require_profile_dictionaries(budget_mode=") < source.index(
+        "_require_execution_runtime("
+    )
 
 
 def test_a_runtime_that_dies_mid_run_is_attributable_not_anonymous() -> None:
@@ -250,7 +346,13 @@ def test_a_stopped_daemon_and_a_missing_image_are_not_the_same_problem(
 def test_a_missing_docker_executable_is_reported_without_a_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from easyicu.research_agent.execution import docker_locality
+
     monkeypatch.setattr(runner_module.shutil, "which", lambda _name: None)
+    # The resolver also probes standard local install locations, so this case has
+    # to remove them: otherwise it passes only on machines without Docker, and a
+    # developer machine would silently stop testing the missing-executable path.
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", ())
 
     def fail(*_args, **_kwargs):  # pragma: no cover - must never run
         raise AssertionError("no probe is possible without an executable")
@@ -260,6 +362,46 @@ def test_a_missing_docker_executable_is_reported_without_a_probe(
     availability = runner_module.probe_runner_availability("docker")
     assert availability.available is False
     assert availability.reason_code == "docker_executable_missing"
+
+
+def test_preflight_finds_docker_that_a_short_service_path_cannot_see(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The submitted-rejection path: installed binary, invisible to the service.
+
+    A launchd-hosted web service has a PATH without the Homebrew bin directory.
+    Answering ``docker_executable_missing`` there rejects the run before it is
+    spent, and tells the user to install Docker they already have.
+    """
+
+    from easyicu.research_agent.execution import docker_locality
+
+    local = tmp_path / "homebrew-bin"
+    local.mkdir()
+    binary = local / "docker"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", (local,))
+
+    probed: list = []
+
+    def probe(command, *_args, **_kwargs):
+        probed.append(command[0])
+        raise OSError("daemon stopped; availability only needs the executable")
+
+    monkeypatch.setattr(runner_module, "_run_with_bounded_output", probe)
+
+    availability = runner_module.probe_runner_availability("docker")
+
+    assert probed == [str(binary)], "the local install must be the one probed"
+    assert availability.available is False
+    assert (
+        availability.reason_code != "docker_executable_missing"
+    ), "the executable exists, so that answer would be false"
+
 
 
 def test_the_web_projection_mirrors_the_owner_contract() -> None:

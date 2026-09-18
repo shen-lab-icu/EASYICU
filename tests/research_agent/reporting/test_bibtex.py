@@ -116,6 +116,62 @@ def test_render_bibtex_empty(ra):
     assert render_bibtex(LiteratureBundle(research_question="x", citations=[])) == ""
 
 
+def test_bibliography_never_derives_authors_from_citation_keys(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.bibtex import render_bibtex
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[
+            CitationRecord(key="record_2015", title="Reporting guidance", year="2015"),
+            CitationRecord(key="surname_2020", title="Clinical study", year="2020"),
+        ],
+    )
+    rendered = render_bibtex(bundle)
+
+    assert not re.search(r"\bauthor\s*=", rendered)
+    assert "et al." not in rendered
+
+
+def test_bibliography_preserves_source_author_names_without_reparsing_them(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.bibtex import (
+        render_bibtex,
+        render_thebibliography_block,
+    )
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[CitationRecord(
+            key="unrelated_stable_key", title="A study", year="2020",
+            authors=["de Silva AB", "Research and Care Group"],
+        )],
+    )
+
+    assert "author  = {{de Silva AB} and {Research and Care Group}}" in render_bibtex(bundle)
+    inline = render_thebibliography_block(bundle)
+    assert "de Silva AB; Research and Care Group. A study" in inline
+    assert "Unrelated" not in inline
+
+
+def test_bibliography_escapes_source_author_names(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.bibtex import (
+        render_bibtex,
+        render_thebibliography_block,
+    )
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[CitationRecord(
+            key="source", title="Study", year="2020", authors=["Research & Care"],
+        )],
+    )
+
+    assert r"author  = {{Research \& Care}}" in render_bibtex(bundle)
+    assert r"Research \& Care. Study" in render_thebibliography_block(bundle)
+
+
 def test_bibliography_omits_explicitly_excluded_candidates(ra):
     from easyicu.research_agent.literature import (
         CitationRecord,
@@ -325,7 +381,7 @@ def test_scaffold_to_latex_inline_bibliography_fallback(ra):
         ],
     )
     tex = scaffold_to_latex(
-        markdown="# Methods\n\nbody\n",
+        markdown="# Methods\n\nbody [@ricu_2023]\n",
         bibliography=bundle,
         inline_bibliography=True,
     )
@@ -408,3 +464,17 @@ def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path)
     bib_keys = set(re.findall(r"@\w+\{([^,]+),", bib_text))
     missing = [k for k in cite_keys if k not in bib_keys]
     assert not missing, f"\\cite keys absent from .bib: {missing}"
+
+
+def test_inline_bibliography_only_prints_cited_records_in_first_citation_order():
+    from easyicu.research_agent.literature import LiteratureBundle, CitationRecord
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+    bundle = LiteratureBundle(research_question='test', citations=[
+        CitationRecord(key=k, title=k, year='2023') for k in ('unused', 'first', 'second')
+    ])
+    tex = scaffold_to_latex(markdown='# Report\n\nSee [@second; @first] and [@second].', bibliography=bundle, inline_bibliography=True)
+    assert r'\bibitem{unused}' not in tex
+    assert tex.count(r'\bibitem{second}') == 1
+    assert tex.index(r'\bibitem{second}') < tex.index(r'\bibitem{first}')
+    uncited = scaffold_to_latex(markdown='# Report\n\nNo citations.', bibliography=bundle, inline_bibliography=True)
+    assert r'\bibitem' not in uncited

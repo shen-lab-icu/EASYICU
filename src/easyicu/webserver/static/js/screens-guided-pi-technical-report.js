@@ -1,3 +1,4 @@
+/* Owner: Guided Pi technical-report widget. */
 /* Guided Copilot technical-report projection owner.
    Composes already-governed run artifacts into a concise human report. It
    never recalculates scientific estimates or changes their claim authority. */

@@ -387,31 +387,109 @@ def kpa_to_mmhg(pressure: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """压力 kPa -> mmHg"""
     return pressure / 0.133322
 
+
+def _is_vector_weight(value: object) -> bool:
+    """Whether a weight value needs element-wise (NaN) handling."""
+    return isinstance(value, (pd.Series, np.ndarray, list, tuple))
+
+
+def _require_valid_scalar_weight(weight_kg: object, from_unit: str) -> float:
+    """Validate a scalar weight; raise with concept + unit context."""
+    try:
+        w = float(weight_kg)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid patient weight {weight_kg!r} for vasopressor conversion "
+            f"from '{from_unit}' (SOFA cardiovascular concept): weight must be "
+            "a positive finite number in kg"
+        ) from exc
+    if not np.isfinite(w) or w <= 0:
+        raise ValueError(
+            f"Invalid patient weight {weight_kg!r} for vasopressor conversion "
+            f"from '{from_unit}' (SOFA cardiovascular concept): weight must be "
+            "a positive finite number in kg"
+        )
+    return w
+
+
+def _divide_by_weight(
+    rate: object, weight_kg: object, *, scale: float, is_series: bool
+) -> object:
+    """Element-wise rate/weight with NaN (not inf) at invalid weights."""
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if is_series:
+            assert isinstance(rate, pd.Series)
+            w_coerced = pd.to_numeric(weight_kg, errors="coerce")
+            result = (rate.astype(float) * scale) / pd.to_numeric(
+                w_coerced, errors="coerce"
+            ).astype(float)
+            # Invalid positions: missing / non-positive / non-finite weight.
+            if isinstance(w_coerced, pd.Series):
+                w_float = pd.to_numeric(w_coerced, errors="coerce").astype(float)
+                invalid = w_float.isna() | (w_float <= 0) | (~np.isfinite(w_float))
+                # Align positionally when indexes differ; fall back to labels.
+                try:
+                    invalid = invalid.reindex(result.index)
+                except Exception:
+                    pass
+            else:
+                w_arr = np.asarray(w_coerced, dtype=float)
+                invalid = ~np.isfinite(w_arr) | (w_arr <= 0)
+            return result.mask(invalid, np.nan)
+        rate_is_array = isinstance(rate, (list, tuple, np.ndarray))
+        rate_arr = np.asarray(rate, dtype=float) if rate_is_array else rate
+        try:
+            w_arr = np.asarray(
+                pd.to_numeric(weight_kg, errors="coerce"), dtype=float
+            )
+        except Exception:
+            w_arr = np.asarray(weight_kg, dtype=float)
+        invalid = ~np.isfinite(w_arr) | (w_arr <= 0)
+        result_arr = (np.asarray(rate_arr, dtype=float) * scale) / w_arr
+        result_arr = np.asarray(result_arr, dtype=float)
+        # Broadcast scalar invalid mask to the result shape.
+        try:
+            invalid_b = np.broadcast_to(invalid, result_arr.shape)
+        except ValueError:
+            invalid_b = invalid
+        result_arr[invalid_b] = np.nan
+        return result_arr
+
 def convert_vaso_rate(
     rate: Union[float, np.ndarray, 'pd.Series'],
     from_unit: str,
     weight_kg: Optional[Union[float, np.ndarray, 'pd.Series']] = None,
 ) -> Union[float, np.ndarray, 'pd.Series']:
     """Convert vasopressor/inotrope infusion rates to μg/kg/min (SOFA standard).
-    
+
     CRITICAL for SOFA cardiovascular scoring accuracy.
-    
+
     Supported conversions:
     - 'ug/kg/min' or 'mcg/kg/min' → no conversion (already standard)
     - 'ug/min' or 'mcg/min' → divide by weight_kg
     - 'mg/h' or 'mg/hr' → (rate * 1000 μg/mg) / (60 min/h * weight_kg)
     - 'mg/kg/h' → (rate * 1000) / 60
-    
+
+    Weight guards (vasopressor concept, SOFA cardiovascular): a non-positive
+    or non-finite weight (0, negative, NaN, inf) has no physiological meaning
+    and would otherwise yield ``inf`` (vector path) or an undeclared
+    ``ZeroDivisionError`` (scalar path), silently inflating the SOFA
+    cardiovascular score. Scalar weights raise ``ValueError`` naming the
+    concept and unit; Series/ndarray weights yield ``NaN`` at the invalid
+    positions (the file's existing NA expression) instead of ``inf``.
+
     Args:
         rate: Infusion rate value(s)
         from_unit: Source unit string (case-insensitive)
         weight_kg: Patient weight in kg (required for non-weight-adjusted units)
-        
+
     Returns:
         Rate in μg/kg/min
-        
+
     Raises:
-        ValueError: If weight is required but not provided, or unit is unsupported
+        ValueError: If weight is required but not provided, if a scalar
+            weight is non-positive/non-finite (vasopressor concept), or if
+            the unit is unsupported
         
     Examples:
         >>> # Already in standard unit
@@ -454,6 +532,9 @@ def convert_vaso_rate(
     if unit in ['ug/min', 'mcg/min', 'μg/min']:
         if weight_kg is None:
             raise ValueError(f"Patient weight (kg) required to convert from '{from_unit}' to μg/kg/min")
+        if _is_vector_weight(weight_kg):
+            return _divide_by_weight(rate, weight_kg, scale=1.0, is_series=is_series)
+        _require_valid_scalar_weight(weight_kg, from_unit)
         if is_series:
             return rate / weight_kg
         else:
@@ -463,6 +544,9 @@ def convert_vaso_rate(
         if weight_kg is None:
             raise ValueError(f"Patient weight (kg) required to convert from '{from_unit}' to μg/kg/min")
         # mg/h → μg/kg/min: (mg/h * 1000 μg/mg) / (60 min/h * weight_kg)
+        if _is_vector_weight(weight_kg):
+            return _divide_by_weight(rate, weight_kg, scale=1000.0 / 60.0, is_series=is_series)
+        _require_valid_scalar_weight(weight_kg, from_unit)
         if is_series:
             return (rate * 1000.0) / (60.0 * weight_kg)
         else:

@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..canonical_json import canonical_sha256
-from ..authority.declared_levels import observed_levels_for
+from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
 from ..research_context.typed import declared_domain_for_variable
 from ..cohort.schema import (
     materialized_input_column_authority,
@@ -24,9 +24,17 @@ from ..planning.analysis_types import (
     list_analysis_types,
     validate_host_authorized_analysis_family,
 )
+from ..concept_availability import (
+    ConceptSourceUnavailableError,
+    require_supported_variable_source,
+)
 from ..planning.design_selection import (
     ResearchDesignSelectionError,
     validate_research_design_selection,
+)
+from ..planning.baseline_requirements import (
+    baseline_outline_coverage,
+    baseline_requirement_projection,
 )
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
@@ -35,6 +43,7 @@ from ..planning.literature_bindings import (
     validate_literature_citation_bindings,
 )
 from ..planning.literature_design_authority import (
+    LITERATURE_DESIGN_DIMENSIONS,
     LiteratureDesignAuthorityError,
     LiteratureDesignEvidenceCard,
     render_literature_design_cards_for_prompt,
@@ -62,9 +71,13 @@ from ..planning.progressive_compiler import (
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
-from ..planning.dependence_authority import context_counts_only_authority
+from ..planning.dependence_authority import (
+    context_counts_only_authority,
+    descriptive_counts_only_required,
+)
 from ..planning.progressive_contract import (
     PROGRESSIVE_ARTICLE_ROLES,
+    PROGRESSIVE_FIXED_MODULE_ACTION_IDS,
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
@@ -76,6 +89,7 @@ from ..planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
     progressive_module_ids_for_analysis_types,
+    validate_progressive_module_action_compatibility,
 )
 from ..planning.progressive_host_materialization import (
     host_materialize_progressive_step,
@@ -89,6 +103,8 @@ from ..planning.progressive_artifacts import (
     ProgressivePlannerCheckpointEmitter,
 )
 from ..planning.progressive_resume import (
+    article_role_repair_owners,
+    final_acceptance_repair_start,
     ProgressivePrefixState,
     assemble_progressive_skeleton,
     build_progressive_checkpoint_authorities,
@@ -101,18 +117,27 @@ from ..planning.progressive_resume import (
 )
 from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
-from ..planning.scientific_review import required_method_layers_for_context
+from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
-from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
+from ..planning.prompt_projection import (
+    planner_prompt_byte_limit,
+    project_plan_revision_prompt,
+    retry_shape_reminder,
+)
 from ..providers.prompts import load_prompt_pack
 from ..providers.protocol import LLMClient, LLMMessage, StructuredOutputRequest
 from ..providers.structured_retry import call_llm_with_structured_retry
 from ..reporting.article_contract import (
     build_article_analysis_contract,
+    hinted_typed_products,
     validate_plan_against_article_contract,
 )
-from ..research_context.outbound import format_outbound_safe_context
+from ..research_context.outbound import (
+    format_outbound_safe_context,
+    outbound_safe_context_payload,
+)
+from ..contracts.table_one_semantics import table_one_measurement_columns
 from ..schema import AnalysisPlan, ResearchContext
 from .progressive_payload import (
     parse_progressive_model as _parse_model,
@@ -139,7 +164,9 @@ from .progressive_attempt import (
 )
 
 
-_GUIDE = load_prompt_pack()["progressive_planner"]
+from ..contracts.research_display import RESEARCH_DISPLAY_GUIDE
+
+_GUIDE = load_prompt_pack()["progressive_planner"] + "\n\n" + RESEARCH_DISPLAY_GUIDE
 # The outline crosses independent family, module, required-output, and action
 # contracts. A targeted repair may expose the next boundary only after fixing
 # the previous one, so permit one fourth and final outline attempt.
@@ -162,7 +189,6 @@ _NON_REPAIRABLE_COORDINATE_FINDINGS = frozenset(
 _MAX_OUTLINE_OUTPUT_TOKENS = 4_000
 _MAX_FOUNDATION_OUTPUT_TOKENS = 4_000
 _MAX_STEP_OUTPUT_TOKENS = 8_000
-_MAX_REQUEST_BYTES = DEFAULT_MAX_PROMPT_TOKENS * 4
 _TYPED_PRODUCT_TOKEN = re.compile(
     r"\b(?:artifact|dataset|model|statistic|table):[a-z][a-z0-9_]*\b"
 )
@@ -292,13 +318,65 @@ def _preserve_non_targeted_coordinates_across_literature_repair(
     preventing an unrelated regression from consuming the final repair turn.
     """
 
-    if previous is None or previous.step.step_id != current.step.step_id:
+    if (
+        previous is None
+        or previous.step.step_id != current.step.step_id
+        or previous.outline_step_sha256 != current.outline_step_sha256
+    ):
         return current
     observation_path = str((compiler_observation or {}).get("path") or "").strip()
     if observation_path != "literature_bindings":
         return current
+    bindings = list(current.step.literature_bindings)
+    if (compiler_observation or {}).get("reason_code") in {
+        "progressive_step_required_method_layer_unbound",
+        "progressive_final_method_layer_unbound",
+    }:
+        # A coverage-only finding follows successful source-scope validation.
+        # It authorizes adding a use, not revoking another use of the same
+        # source. Preserve both model-authored explanations; never infer a new
+        # design element or silently truncate an application/divergence.
+        prior = {
+            item.citation_key: item for item in previous.step.literature_bindings
+        }
+        keys = [item.citation_key for item in bindings]
+        if (
+            len(prior) == len(previous.step.literature_bindings)
+            and len(keys) == len(set(keys))
+        ):
+            merged = []
+            for item in bindings:
+                old = prior.get(item.citation_key)
+                if old is None or old == item:
+                    merged.append(item)
+                    continue
+                payload = item.model_dump(mode="python")
+                payload["design_elements"] = list(
+                    dict.fromkeys([*old.design_elements, *item.design_elements])
+                )
+                for field in ("application", "divergence"):
+                    texts = list(
+                        dict.fromkeys(
+                            text
+                            for text in (getattr(old, field), getattr(item, field))
+                            if text
+                        )
+                    )
+                    payload[field] = "\n\n".join(texts) or None
+                try:
+                    merged.append(type(item).model_validate(payload))
+                except ValueError as exc:
+                    raise ProgressivePlanCompileError(
+                        "progressive_literature_repair_scope_conflict",
+                        "coverage-only repair must retain prior design uses and "
+                        "caveats within the bounded binding contract; provide a "
+                        "complete combined binding with concise rationale",
+                        step_id=current.step.step_id,
+                        path="literature_bindings",
+                    ) from exc
+            bindings = merged
     repaired_step = previous.step.model_copy(
-        update={"literature_bindings": list(current.step.literature_bindings)}
+        update={"literature_bindings": bindings}
     )
     return current.model_copy(update={"step": repaired_step})
 
@@ -634,7 +712,7 @@ def _continuous_planning_variable_names(
     excluded_roles = {"id", "time", "index", "meta", "outcome"}
     names: list[str] = []
     for variable in context.variables:
-        if observed_levels_for(name=variable.name, variables=variable_map):
+        if closed_planning_levels_for(name=variable.name, variables=variable_map):
             continue
         domain = variable.observed_domain or {}
         if domain.get("is_binary") is True:
@@ -645,6 +723,48 @@ def _continuous_planning_variable_names(
         if domain.get("is_binary") is False or is_numeric_metadata_dtype(dtype):
             names.append(variable.name)
     return tuple(names)
+
+
+def _continuous_adjustment_targets(
+    context: ResearchContext,
+) -> tuple[str, ...]:
+    """Resolve declared covariates to their continuous metadata column names.
+
+    A user-facing covariate label can differ from the retrieved column only by
+    case (for example ``Charlson`` versus ``charlson``).  Functional-form
+    obligations must bind the actual metadata name so outline validation cannot
+    silently drop that covariate before any patient rows are read.
+
+    Resolution is deliberately conservative.  A declared name that resolves to
+    a real non-continuous variable is kept out of the roster instead of being
+    re-bound to a different continuous column that only shares its casefold,
+    and an ambiguous casefold match (zero or several candidates) is skipped
+    rather than guessed; callers see an absent target, never a wrong one.
+    """
+
+    continuous_names = _continuous_planning_variable_names(context)
+    names_by_casefold: dict[str, list[str]] = {}
+    for name in continuous_names:
+        names_by_casefold.setdefault(name.casefold(), []).append(name)
+
+    targets: list[str] = []
+    for declared in AdjustmentSetAuthority.from_context(
+        context
+    ).operational_covariates:
+        if declared in continuous_names:
+            resolved = declared
+        elif context.variable(declared) is not None:
+            # A retrieved, non-continuous variable must not be silently
+            # replaced by a same-casefold continuous column.
+            continue
+        else:
+            matches = names_by_casefold.get(declared.casefold(), [])
+            if len(matches) != 1:
+                continue
+            resolved = matches[0]
+        if resolved not in targets:
+            targets.append(resolved)
+    return tuple(targets)
 
 
 def _available_ordered_trend_action(
@@ -849,11 +969,12 @@ def candidate_analysis_types(
         if score:
             scored.append((score, -position, spec.key))
     scored.sort(reverse=True)
-    candidates = [key for _score, _position, key in scored]
     inferred = infer_analysis_type(context).key
-    if context.primary_exposure and context.target_outcome:
-        candidates.insert(0, "association_study")
-    candidates.extend([inferred, "descriptive_epidemiology"])
+    # The question-aware owner ranks the headline family. A pair of columns
+    # does not make association a better candidate than description,
+    # prediction, or causal inference.
+    candidates = [inferred, *(key for _score, _position, key in scored)]
+    candidates.append("descriptive_epidemiology")
     authorized: list[str] = []
     for key in candidates:
         if key in authorized:
@@ -978,8 +1099,33 @@ def select_progressive_variables(
     limit = max(1, int(max_variables))
     variable_by_name = {variable.name: variable for variable in context.variables}
     source_counts: dict[str, int] = {}
-    selected: list[str] = []
+    baseline = baseline_requirement_projection(context)
+    baseline_columns = {
+        name for table in baseline["tables"]
+        for coordinate in [table["group_by"], *table["variables"]]
+        for name in coordinate["available_columns"]
+    }
+    # These are available representations of accepted content, not a host
+    # choice of aggregation. Exposing first/min/mean/max in review feedback but
+    # pruning them from the schema makes valid repairs impossible. Keep every
+    # offered clinical alternative, plus the exact study anchors, before the
+    # relevance/source-family quota allocates optional retrieval space.
+    required = (baseline_columns | exact) & variable_by_name.keys() if baseline["tables"] else set()
+    if len(required) > limit:
+        raise ProgressivePlanCompileError(
+            "progressive_required_variables_exceed_budget",
+            f"Accepted baseline representations and study anchors require {len(required)} "
+            f"columns; retrieval limit={limit}. No required column was silently pruned.",
+            path="variables",
+        )
+    selected = [variable.name for variable in context.variables if variable.name in required]
+    # Required clinical alternatives do not consume the optional family quota;
+    # that quota must still expose measurement-process inputs for the audit.
     for _score, _position, name in scored:
+        if len(selected) >= limit:
+            break
+        if name in required:
+            continue
         variable = variable_by_name[name]
         source = str(variable.source_concept or name).casefold()
         if source in primary_concepts:
@@ -1049,6 +1195,7 @@ def _action_catalog(
                                 action.runtime_contract.article_roles
                             ),
                             "standard_executor": action.runtime_contract.standard_executor,
+                            "execution_parameters": dict(action.runtime_contract.execution_parameters),
                         }
                         if action.runtime_contract is not None
                         else None
@@ -1100,9 +1247,14 @@ def _accept_compiled_plan(
 ) -> None:
     """Apply the same fresh-plan authorities after host compilation."""
 
+    # Retain a closed, host-owned gate coordinate when the lower-level
+    # validator only supplies a ValueError. Its text can contain private
+    # candidate values and must not become the public diagnostic.
+    gate = "robustness_specs"
     try:
         if plan.robustness_specs:
             validate_planner_robustness_specs(plan.robustness_specs)
+        gate = "literature_citation_bindings"
         validate_literature_citation_bindings(
             plan,
             allowed_literature_citation_keys,
@@ -1110,11 +1262,13 @@ def _accept_compiled_plan(
             direct_comparator_keys=direct_comparator_literature_keys,
         )
         if allowed_know_how_decisions is not None:
+            gate = "know_how_decisions"
             verify_know_how_decisions(
                 plan.know_how_decisions,
                 allowed_know_how_decisions,
             )
         if enforce_article_contract:
+            gate = "article_contract"
             contract = build_article_analysis_contract(
                 article_context,
                 analysis_type=plan.analysis_type,
@@ -1134,23 +1288,45 @@ def _accept_compiled_plan(
             if "robustness" in contract.required_roles and not plan.robustness_specs:
                 missing_roles = sorted({*missing_roles, "robustness_specs"})
             if missing_roles:
-                raise ValueError(
+                message = (
                     "progressive article contract is missing required role(s): "
                     + ", ".join(missing_roles)
                 )
+                role_owners = article_role_repair_owners(plan, contract, missing_roles)
+                located = all(role_owners.get(role) for role in missing_roles)
+                index = min(i for indices in role_owners.values() for i in indices) if located else 0
+                raise ProgressivePlanCompileError(
+                    "progressive_article_required_roles_missing",
+                    message,
+                    step_id=plan.steps[index].step_id if plan.steps else None,
+                    step_index=index if plan.steps else None,
+                    path=f"article_analysis_contract.{missing_roles[0]}",
+                    findings=({
+                        "missing_roles": missing_roles,
+                        "role_owner_indices": role_owners,
+                        "repair_localization": (
+                            "declared_article_products" if located
+                            else "unlocated_full_materialization"
+                        ),
+                    },),
+                )
         if not llm_is_mockish(llm):
+            gate = "typed_product_specs"
             validate_fresh_planner_typed_product_specs(
                 plan,
                 context=agent_context,
             )
+        gate = "context_bindings"
         validate_plan_typed_bindings_against_context(
             plan=plan,
             context=agent_context,
         )
+        gate = "adjustment_authority"
         validate_plan_against_adjustment_authority(
             plan=plan,
             context=agent_context,
         )
+        gate = "primary_cohort"
         cohort_findings = primary_analysis_cohort_plan_findings(plan=plan)
         if cohort_findings:
             raise ValueError(
@@ -1161,6 +1337,7 @@ def _accept_compiled_plan(
                     default=str,
                 )
             )
+        gate = "primary_result"
         validate_required_primary_result(plan=plan, context=agent_context)
     except ProgressivePlanCompileError:
         raise
@@ -1169,11 +1346,11 @@ def _accept_compiled_plan(
         index = _step_index_from_error(plan, message)
         step = plan.steps[index] if plan.steps else None
         raise ProgressivePlanCompileError(
-            "progressive_fresh_plan_gate_failed",
+            f"progressive_{gate}_invalid",
             message,
             step_id=step.step_id if step is not None else None,
             step_index=index if step is not None else None,
-            path="fresh_plan_acceptance",
+            path=gate,
         ) from exc
 
 
@@ -1214,26 +1391,44 @@ class ProgressivePlannerAgent:
     ) -> list[dict[str, Any]]:
         selected = set(variables)
         variable_map = {variable.name: variable for variable in context.variables}
+        safe_cards = {
+            card["name"]: card
+            for card in outbound_safe_context_payload(
+                context, variable_names=variables
+            )["variables"]
+        }
+        measurement_columns = table_one_measurement_columns(context)
         cards = []
         for variable in context.variables:
             if variable.name not in selected:
                 continue
-            card = variable.model_dump(
-                mode="json",
-                include={
+            card = {
+                key: value
+                for key, value in safe_cards[variable.name].items()
+                if key in {
                     "name",
                     "role",
                     "dtype",
                     "source_concept",
                     "derived_from_concepts",
-                },
-            )
+                    "source_unavailability",
+                    "materialized_representation",
+                    "analysis_window",
+                    "analysis_window_role",
+                }
+            }
+            if variable.name in measurement_columns:
+                card["table_one_restriction"] = (
+                    "measurement_audit_only_unless_question_anchor"
+                )
             observed_levels = observed_levels_for(
                 name=variable.name,
                 variables=variable_map,
             )
             declared_levels, declared_basis = declared_domain_for_variable(variable)
-            closed_levels = observed_levels or list(declared_levels or ())
+            closed_levels = closed_planning_levels_for(
+                name=variable.name, variables=variable_map,
+            )
             level_count = len(closed_levels)
             card["closed_domain_level_count"] = level_count
             card["supports_closed_level_contrast"] = level_count >= 2
@@ -1259,16 +1454,26 @@ class ProgressivePlannerAgent:
     ) -> str:
         contract_context = article_context or context
         adjustment_authority = AdjustmentSetAuthority.from_context(context)
-        continuous_exact_covariates = tuple(
-            name
-            for name in adjustment_authority.operational_covariates
-            if name in set(_continuous_planning_variable_names(context))
-        )
+        continuous_exact_covariates = _continuous_adjustment_targets(context)
         module_ids_by_analysis_type = {
             analysis_type: list(
                 progressive_module_ids_for_analysis_types((analysis_type,))
             )
             for analysis_type in analysis_types
+        }
+        reviewed_design_card_keys = tuple(
+            card.citation_key
+            for card in literature_design_evidence_cards
+            if card.citation_key in set(allowed_literature_citation_keys)
+        )
+        reviewed_design_card_keys_by_dimension = {
+            dimension: tuple(
+                card.citation_key
+                for card in literature_design_evidence_cards
+                if card.citation_key in set(reviewed_design_card_keys)
+                and any(item.dimension == dimension for item in card.evidence)
+            )
+            for dimension in LITERATURE_DESIGN_DIMENSIONS
         }
         article_contracts = []
         for analysis_type in analysis_types:
@@ -1317,6 +1522,9 @@ class ProgressivePlannerAgent:
             _outline_shape_contract(
                 analysis_types=analysis_types,
                 module_ids_by_analysis_type=module_ids_by_analysis_type,
+                literature_design_card_keys_by_dimension=(
+                    reviewed_design_card_keys_by_dimension
+                ),
             ),
             "Retrieved scientific actions (only these may be selected):\n"
             + json.dumps(list(action_rows), ensure_ascii=False, separators=(",", ":")),
@@ -1360,12 +1568,19 @@ class ProgressivePlannerAgent:
             "robustness_replay module must always set scientific_action_id to "
             "null because it replays the sealed sensitivity specifications; a "
             "separate scientific action needs its own custom_analysis step. "
-            "Cohort-definition, measurement_audit, raw-distribution, "
+            "Cohort-definition, measurement_audit, absolute_risk_context, raw-distribution, "
             "visualization, and report support steps must also set "
             "scientific_action_id to null. A table_one step must bind "
             "descriptive.table_one when that exact action appears in the "
             "selected analysis family's scientific_action_ids; otherwise it "
             "must use null.",
+            "Fixed host module action compatibility:\n"
+            + json.dumps(PROGRESSIVE_FIXED_MODULE_ACTION_IDS, separators=(",", ":"))
+            + "\nAn empty action list requires null. A null action does not "
+            "change the module's fixed estimator. A fixed primary estimator's "
+            "compatible action must belong to the selected analysis family, "
+            "even when its scientific_action_id is null. Bind a different "
+            "family action through its own custom_analysis execution contract.",
             "Citation-role separation:\n"
             + json.dumps(
                 {
@@ -1419,7 +1634,13 @@ class ProgressivePlannerAgent:
                 "user-confirmed, and state what data checks could trigger revision."
             ),
             "Candidate-specific host article role contracts:\n"
-            + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":")),
+            + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":"))
+            + "\nThese requirements apply only after selecting a family that "
+            "answers the original question. They do not expand its scope. "
+            "Grouped prevalence, counts, or outcome rates do not by themselves "
+            "request adjusted association, prediction, or causal effects. Do not "
+            "reject a sufficient descriptive design for lacking another family's "
+            "model or robustness roles.",
             "Executable module ownership for required article result roles:\n"
             + json.dumps(
                 {
@@ -1458,18 +1679,9 @@ class ProgressivePlannerAgent:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            "User-owned adjustment-set authority (host compiled; do not revise):\n"
+            "Adjustment-set authority (host compiled; preserve exact roster):\n"
             + json.dumps(
-                {
-                    "selection": adjustment_authority.selection,
-                    "scientific_covariates": list(adjustment_authority.covariates),
-                    "operational_covariates": list(
-                        adjustment_authority.operational_covariates
-                    ),
-                    "operationalizations": dict(
-                        adjustment_authority.operationalizations
-                    ),
-                },
+                adjustment_authority.prompt_projection(),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -1489,7 +1701,27 @@ class ProgressivePlannerAgent:
                 ProgressivePlannerAgent._retrieved_data_cards(context, variables),
                 ensure_ascii=False,
                 separators=(",", ":"),
-            ),
+            )
+            + "\nanalysis_window is the exact physical observation coordinate. "
+            "A data card with source_unavailability is not an executable source: "
+            "do not add it to the selected design's required_variables or any "
+            "step as an optional input. Keep rejected alternatives auditable. "
+            "If the original question requires it, expose the source limitation; "
+            "do not remove or substitute a requested endpoint or exposure. "
+            "An outer_observation_window is not the phenotype definition or "
+            "outcome follow-up. Bind descriptive denominators and captions to "
+            "that window; never relabel it whole-stay prevalence. A post-zero "
+            "association additionally needs an executable temporal design; "
+            "mentioning landmark in prose does not implement one. "
+            "Identity/index fields are lineage coordinates, not clinical "
+            "Table 1 rows or strata. Fields with table_one_restriction belong "
+            "in measurement_audit, not Table 1: observation counts and "
+            "availability flags are not their source clinical value. An "
+            "explicitly bound measurement-process question anchor is the "
+            "only exception, not an optional baseline choice. A "
+            "baseline-context step should select "
+            "available clinically interpretable descriptors; exposure/outcome "
+            "columns alone do not describe baseline population composition.",
             (
                 "Closed-domain module rule:\nInclude a table_one outline step "
                 "only when the grouping variable represents the study's primary "
@@ -1518,6 +1750,15 @@ class ProgressivePlannerAgent:
                 "role."
             ),
         ]
+        baseline = baseline_requirement_projection(contract_context)
+        if baseline["tables"]:
+            blocks.append(
+                "Accepted baseline content (host-bound; preserve every row in one table_one):\n"
+                + json.dumps(baseline, ensure_ascii=False, separators=(",", ":"))
+                + "\nChoose a clinical representation from available_columns for each row and "
+                "the scientific grouping. Required concept labels are not physical column names; "
+                "choose the aggregation scientifically, never substitute measurement metadata."
+            )
         if literature_design_evidence_cards:
             blocks.append(
                 render_literature_design_cards_for_prompt(
@@ -1529,9 +1770,23 @@ class ProgressivePlannerAgent:
                 "Typed counts-only design ceiling (binding): the selected design "
                 "may promise counts and proportions only. Its estimand, "
                 "primary_method, figure_role, supports, and six reviewable_plan "
-                "items must not mention confidence intervals, uncertainty, "
-                "standard errors, or p-values. Put limitations in cannot_prove; "
-                "do not describe a forbidden output and then negate it."
+                "items must not promise confidence intervals, uncertainty, "
+                "standard errors, or p-values. Put the full limitation in "
+                "cannot_prove. A clear statement that an output will not be "
+                "reported is permitted, but never authorizes that output."
+            )
+        elif descriptive_counts_only_required(context, analysis_type="descriptive_epidemiology"):
+            blocks.append(
+                "Source-bound descriptive inference ceiling (binding): repeated "
+                "units cannot be ruled out and patient grouping is unavailable. "
+                "If selecting descriptive epidemiology, promise counts and "
+                "proportions only in estimand, primary_method, figure_role, "
+                "supports and reviewable_plan; put the dependence limitation in "
+                "cannot_prove. No confidence intervals, uncertainty, standard "
+                "errors, p-values or inferential contrasts are executable. "
+                "Do not change the question or claim another family to evade "
+                "this source limitation. No user confirmation or invented "
+                "patient identifier resolves missing grouping authority."
             )
         if planning_contract_context:
             blocks.append(
@@ -1546,10 +1801,16 @@ class ProgressivePlannerAgent:
             blocks.append(
                 "Host-resolved separate-analysis obligations:\n"
                 + json.dumps(list(separate_products), ensure_ascii=False)
-                + "\nEach listed product must have its own custom_analysis "
-                "outline step. Do not fold that step into robustness_replay; "
-                "the host will materialize its exact method, inputs, outputs, "
-                "and product edges later."
+                + "\nEach listed product must have its own dedicated, "
+                "secondary or sensitivity non-functional-form custom_analysis "
+                "outline step, and that step's objective must name the exact "
+                "typed product token. Do not fold that step into "
+                "robustness_replay and do not use a functional-form sensitivity "
+                "step as its owner; the host compiles executable method, "
+                "inputs, and outputs when the step is materialized. Include "
+                "exactly one such outline step per listed product; do not add "
+                "another secondary/sensitivity custom step unless it has its "
+                "own listed typed product."
             )
         if _requires_visualization_step(context):
             blocks.append(
@@ -1563,15 +1824,18 @@ class ProgressivePlannerAgent:
             blocks.append(
                 "Host-resolved functional-form obligation:\nIf the selected "
                 "association design uses an adjusted_association step, include "
-                "one downstream custom_analysis sensitivity step whose step_id "
-                "contains 'functional_form'. It must depend on the primary model "
-                "and include the applicable continuous adjustment variable(s) "
-                "from this metadata-only candidate roster: "
+                "one downstream custom_analysis sensitivity step per applicable "
+                "continuous adjustment variable. Every such step_id must contain "
+                "'functional_form', depend on the primary model, and include "
+                "exactly one target from this metadata-only candidate roster: "
                 + json.dumps(
                     list(continuous_exact_covariates),
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
+                + ". Do not combine multiple functional-form targets in one "
+                "outline step because each executable materialization owns one "
+                "functional_form_spec and one sensitivity_spec_id"
                 + ". This is a pre-result plan proposal for later plan approval, "
                 "not a claim that nonlinearity has already been tested."
             )
@@ -1732,6 +1996,7 @@ class ProgressivePlannerAgent:
         primary_exposure: str | None = None,
         target_outcome: str | None = None,
         required_exact_covariates: Sequence[str] = (),
+        required_functional_form_targets: Sequence[str] = (),
         context_required_method_layers: Sequence[str] | None = None,
         require_design_selection: bool = False,
         literature_design_evidence_cards: Sequence[LiteratureDesignEvidenceCard] = (),
@@ -1745,6 +2010,98 @@ class ProgressivePlannerAgent:
                 f"outline selected unavailable analysis type {outline.analysis_type!r}",
                 path="analysis_type",
             )
+        if article_context is not None:
+            # Validate Planner-owned choices inside the outline parser's local
+            # retry, before sealing a foundation or spending step calls. A
+            # contradictory host envelope still raises its own authority error.
+            if (
+                context_counts_only_authority(article_context)
+                and outline.analysis_type != "descriptive_epidemiology"
+            ):
+                raise ProgressivePlanCompileError(
+                    "progressive_selected_family_counts_only_incompatible",
+                    "The host-bound none_counts_only ceiling cannot support "
+                    "the selected model/inferential family. Revise this unsealed "
+                    "selection only if a descriptive design answers the original "
+                    "question; otherwise request a host design revision. Never "
+                    "change the variance ceiling or the scientific question.",
+                    path="analysis_type",
+                )
+        primary_clusters = [
+            step.step_id for step in outline.steps
+            if step.scientific_action_id == "phenotyping.cluster_solution"
+            and step.planned_analysis_role == "primary"
+        ]
+        required_cluster_outcomes = set(
+            requested_outcomes(article_context) if article_context is not None
+            else ([target_outcome] if target_outcome else [])
+        )
+        if primary_clusters and required_cluster_outcomes:
+            comparisons = [step for step in outline.steps if step.scientific_action_id == "phenotyping.outcome_by_cluster"]
+            if not (
+                len(primary_clusters) == 1 and len(comparisons) == 1
+                and comparisons[0].planned_analysis_role == "secondary"
+                and comparisons[0].module_id == "custom_analysis"
+                and primary_clusters[0] in comparisons[0].depends_on
+                and required_cluster_outcomes.issubset(comparisons[0].variable_names)
+            ):
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_phenotype_comparison_incomplete",
+                    "Requested post-clustering outcomes require one separate secondary phenotyping.outcome_by_cluster step, "
+                    "directly dependent on the primary cluster solution and naming every requested outcome. "
+                    "A fit/profile/figure step is not the comparison owner.", path="steps",
+                    findings=({"required_outcomes": sorted(required_cluster_outcomes), "primary_step_ids": primary_clusters},),
+                )
+        if article_context is not None:
+            from ..planning.population_requirements import validate_population_choice
+
+            for step_index, step in enumerate(outline.steps):
+                if step.population_scope is None:
+                    continue  # Legacy restored outlines have no typed choice.
+                try:
+                    validate_population_choice(
+                        article_context, product="table:absolute_risk_context",
+                        scope=step.population_scope,
+                        change_reason=step.population_scope_change_reason,
+                    )
+                except ValueError as exc:
+                    raise ProgressivePlanCompileError(
+                        "progressive_outline_population_requirement_drift",
+                        str(exc), step_id=step.step_id, step_index=step_index,
+                        path="population_scope",
+                    ) from exc
+            baseline = baseline_outline_coverage(
+                article_context,
+                [step.model_dump(mode="json") for step in outline.steps],
+            )
+            if baseline["status"] == "incomplete":
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_accepted_baseline_incomplete",
+                    "The outline must preserve each accepted baseline roster in one "
+                    "table_one step before foundation or step materialization. "
+                    "Include the required grouping and one available clinical-value "
+                    "column per required variable; measurement metadata and mentions "
+                    "in an audit or prose do not satisfy this requirement. "
+                    + json.dumps(baseline, ensure_ascii=False, sort_keys=True),
+                    path="steps", findings=(baseline,),
+                )
+            descriptors = {variable.name: variable for variable in article_context.variables}
+            for step_index, step in enumerate(outline.steps):
+                for name in step.variable_names:
+                    descriptor = descriptors.get(name)
+                    if descriptor is None:
+                        continue  # Existing name-authority validation owns absent columns.
+                    try:
+                        require_supported_variable_source(
+                            descriptor, article_context.cohort.database,
+                        )
+                    except ConceptSourceUnavailableError as exc:
+                        raise ProgressivePlanCompileError(
+                            "progressive_outline_input_structurally_unavailable",
+                            str(exc), step_id=step.step_id, step_index=step_index,
+                            path="variable_names",
+                            findings=({"column": name, "source_concepts": [r.concept_id for r in exc.receipts]},),
+                        ) from exc
         try:
             validate_research_design_selection(
                 outline.design_selection,
@@ -1761,8 +2118,13 @@ class ProgressivePlannerAgent:
                 str(exc),
                 path=exc.path,
             ) from exc
-        if article_context is not None and context_counts_only_authority(
-            article_context
+        if article_context is not None:
+            # The selected design can add an unavailable input without naming
+            # it in any step. Its source check belongs to outline repair, not
+            # the subsequent reader-label request outside that retry boundary.
+            required_reader_display_label_keys(article_context, outline.design_selection)
+        if article_context is not None and descriptive_counts_only_required(
+            article_context, analysis_type=outline.analysis_type,
         ):
             coordinate = _selected_counts_only_inference_coordinate(outline)
             if coordinate is not None:
@@ -1770,8 +2132,10 @@ class ProgressivePlannerAgent:
                     "progressive_selected_design_counts_only_claim_exceeded",
                     "the typed counts-only design permits counts and proportions "
                     "but no uncertainty or inferential output; rewrite the "
-                    f"selected design field {coordinate!r} without confidence "
-                    "intervals, uncertainty, standard errors, or p-values",
+                    f"selected design field {coordinate!r} so it does not promise "
+                    "confidence intervals, uncertainty, standard errors, or "
+                    "p-values. Explicit output disclaimers are permitted; "
+                    "ambiguous or contradictory wording must be clarified",
                     path=f"design_selection.candidates.selected.{coordinate}",
                 )
         if article_context is not None and outline.design_selection is not None:
@@ -1939,15 +2303,58 @@ class ProgressivePlannerAgent:
                     },
                 ),
             )
-        if required_custom_products and not any(
-            step.module_id == "custom_analysis" for step in outline.steps
+        # Only secondary/sensitivity custom steps can carry a required typed
+        # product.  Host-mandated custom steps (ordinal trend, phenotype
+        # comparison) and the provisional auxiliary baseline fallback are not
+        # separate-analysis owners, so counting every custom step here
+        # rejected plans whose product step coexisted with a host block.
+        product_owner_steps = [
+            step
+            for step in outline.steps
+            if step.module_id == "custom_analysis"
+            and "functional_form" not in step.step_id.casefold()
+            and step.scientific_action_id is None
+            and step.planned_analysis_role in {"secondary", "sensitivity"}
+        ]
+        product_owners_by_token: dict[str, list[str]] = {
+            product: [
+                step.step_id
+                for step in product_owner_steps
+                if product.casefold() in step.objective.casefold()
+            ]
+            for product in required_custom_products
+        }
+        missing_product_owners = sorted(
+            product
+            for product, owners in product_owners_by_token.items()
+            if not owners
+        )
+        duplicated_product_owners = {
+            product: owners
+            for product, owners in product_owners_by_token.items()
+            if len(owners) > 1
+        }
+        if required_custom_products and (
+            missing_product_owners or duplicated_product_owners
         ):
             raise ProgressivePlanCompileError(
                 "progressive_outline_separate_analysis_owner_missing",
-                "run-specific separate-analysis product(s) require a "
-                "custom_analysis outline step: " + ", ".join(required_custom_products),
+                "run-specific separate-analysis product(s) require exactly one "
+                "dedicated non-functional-form custom_analysis outline step per "
+                "typed product, and that step's objective must name the exact "
+                "typed product token: "
+                + ", ".join(required_custom_products),
                 path="steps",
-                findings=({"required_products": list(required_custom_products)},),
+                findings=(
+                    {
+                        "required_products": list(required_custom_products),
+                        "missing_products": missing_product_owners,
+                        "duplicate_product_owners": duplicated_product_owners,
+                        "candidate_step_ids": [
+                            step.step_id for step in product_owner_steps
+                        ],
+                    },
+                ),
             )
         if available_ordered_trend is not None:
             ordered_steps = [
@@ -2005,8 +2412,13 @@ class ProgressivePlannerAgent:
         adjusted_model_steps = [
             step for step in outline.steps if step.module_id == "adjusted_association"
         ]
-        continuous_exact_covariates = sorted(
-            set(exact_covariates) & continuous_domains
+        functional_form_targets = sorted(
+            {
+                str(value or "").strip()
+                for value in required_functional_form_targets
+                if str(value or "").strip()
+            }
+            & continuous_domains
         )
         if exact_covariates and adjusted_model_steps:
             missing_by_step = {
@@ -2077,7 +2489,7 @@ class ProgressivePlannerAgent:
                 pending.extend(upstream_by_step.get(candidate, ()))
             return False
 
-        if adjusted_model_steps and continuous_exact_covariates:
+        if adjusted_model_steps and functional_form_targets:
             functional_form_steps = [
                 step
                 for step in outline.steps
@@ -2085,24 +2497,51 @@ class ProgressivePlannerAgent:
                 and step.planned_analysis_role == "sensitivity"
                 and "functional_form" in step.step_id
             ]
-            usable_functional_form_steps = [
-                step
+            target_owners = {
+                target: [
+                    step.step_id
+                    for step in functional_form_steps
+                    if target in set(step.variable_names)
+                    and _has_primary_ancestor(step.step_id)
+                ]
+                for target in functional_form_targets
+            }
+            # A functional-form step may own one required target; single-target
+            # steps for other continuous model terms are additional checks the
+            # scientific review may legitimately demand, so only a step that
+            # combines several required targets is an invalid partition.
+            invalid_partitions = [
+                {
+                    "step_id": step.step_id,
+                    "functional_form_targets": sorted(
+                        set(step.variable_names) & set(functional_form_targets)
+                    ),
+                }
                 for step in functional_form_steps
-                if set(step.variable_names) & set(continuous_exact_covariates)
-                and _has_primary_ancestor(step.step_id)
+                if len(set(step.variable_names) & set(functional_form_targets)) > 1
             ]
-            if not usable_functional_form_steps:
+            missing_targets = sorted(
+                target for target, owners in target_owners.items() if not owners
+            )
+            duplicate_targets = {
+                target: owners
+                for target, owners in target_owners.items()
+                if len(owners) > 1
+            }
+            if missing_targets or invalid_partitions or duplicate_targets:
                 raise ProgressivePlanCompileError(
                     "progressive_outline_functional_form_sensitivity_missing",
-                    "an adjusted association with continuous exact covariates "
-                    "requires one primary-lineage custom sensitivity outline "
-                    "step whose id contains 'functional_form'",
+                    "an adjusted association with continuous covariates requires "
+                    "one primary-lineage custom sensitivity outline step per "
+                    "functional-form target; every owner must contain exactly "
+                    "one target",
                     path="steps",
                     findings=(
                         {
-                            "continuous_exact_covariates": (
-                                continuous_exact_covariates
-                            ),
+                            "required_functional_form_targets": functional_form_targets,
+                            "missing_targets": missing_targets,
+                            "duplicate_target_owners": duplicate_targets,
+                            "invalid_target_partitions": invalid_partitions,
                             "candidate_step_ids": [
                                 step.step_id for step in functional_form_steps
                             ],
@@ -2152,18 +2591,43 @@ class ProgressivePlannerAgent:
                     step_index=index,
                     path="variable_names",
                 )
+            if step.module_id == "table_one" and article_context is not None:
+                measurement = sorted(
+                    set(step.variable_names)
+                    & table_one_measurement_columns(article_context)
+                )
+                if measurement:
+                    raise ProgressivePlanCompileError(
+                        "progressive_table_one_measurement_metadata_ineligible",
+                        "Table 1 cannot select auxiliary measurement metadata "
+                        f"{measurement!r} as clinical baseline descriptors; "
+                        "keep these fields in measurement_audit and select "
+                        "clinical-value representations from the retrieved roster",
+                        step_id=step.step_id,
+                        step_index=index,
+                        path="variable_names",
+                    )
             if step.module_id == "exposure_outcome_distribution" and (
                 closed_domains is not None
                 and (
                     (
                         primary_exposure is not None
                         and target_outcome is not None
+                        and {primary_exposure, target_outcome}.issubset(
+                            available_variables
+                        )
                         and not {primary_exposure, target_outcome}.issubset(
                             closed_domains
                         )
                     )
                     or (
-                        (primary_exposure is None or target_outcome is None)
+                        (
+                            primary_exposure is None
+                            or target_outcome is None
+                            or not {primary_exposure, target_outcome}.issubset(
+                                available_variables
+                            )
+                        )
                         and len(set(step.variable_names) & closed_domains) < 2
                     )
                 )
@@ -2214,30 +2678,12 @@ class ProgressivePlannerAgent:
                     step_index=index,
                     path="scientific_action_id",
                 )
-            if (
-                step.module_id == "adjusted_association"
-                and action is not None
-                and action != "association.adjusted_association"
-            ):
-                raise ProgressivePlanCompileError(
-                    "progressive_outline_action_module_mismatch",
-                    "the host-compiled adjusted_association module cannot "
-                    f"execute scientific action {action!r}; use the action's "
-                    "own executable module or select "
-                    "'association.adjusted_association'",
-                    step_id=step.step_id,
-                    step_index=index,
-                    path="scientific_action_id",
-                    findings=(
-                        {
-                            "module_id": step.module_id,
-                            "scientific_action_id": action,
-                            "compatible_action_ids": [
-                                "association.adjusted_association"
-                            ],
-                        },
-                    ),
-                )
+            validate_progressive_module_action_compatibility(
+                step,
+                available_action_ids=allowed_actions,
+                step_index=index,
+                phase="outline",
+            )
             if (
                 step.module_id == "table_one"
                 and "descriptive.table_one" in allowed
@@ -2257,24 +2703,6 @@ class ProgressivePlannerAgent:
                             "module_id": step.module_id,
                             "scientific_action_id": action,
                             "compatible_action_ids": ["descriptive.table_one"],
-                        },
-                    ),
-                )
-            if step.module_id == "robustness_replay" and action is not None:
-                raise ProgressivePlanCompileError(
-                    "progressive_outline_action_module_mismatch",
-                    "the host-compiled robustness_replay module replays only "
-                    "the sealed robustness specification and cannot substitute "
-                    f"scientific action {action!r}; use a separate executable "
-                    "analysis step for that action",
-                    step_id=step.step_id,
-                    step_index=index,
-                    path="scientific_action_id",
-                    findings=(
-                        {
-                            "module_id": step.module_id,
-                            "scientific_action_id": action,
-                            "compatible_action_ids": [],
                         },
                     ),
                 )
@@ -2556,6 +2984,7 @@ class ProgressivePlannerAgent:
         prefix_summary: Sequence[Mapping[str, Any]],
         available_product_refs: Sequence[tuple[str, str]],
         compiler_observation: Mapping[str, Any] | None = None,
+        prior_literature_bindings: Sequence[Mapping[str, Any]] = (),
     ) -> str:
         sealed_citation_keys = set(allowed_literature_citation_keys)
         method_source_scope = []
@@ -2623,7 +3052,9 @@ class ProgressivePlannerAgent:
             "subset of allowed_design_elements. Never add a plausible-sounding "
             "element outside this exact source authority. Sealed citations not "
             "listed here are topic or direct-comparator sources and remain "
-            "subject to the normal evidence review.\n"
+            "subject to the normal evidence review. Use one binding per "
+            "citation; a source serving several purposes must list all those "
+            "design_elements in that single binding.\n"
             + json.dumps(
                 method_source_scope,
                 ensure_ascii=False,
@@ -2650,7 +3081,49 @@ class ProgressivePlannerAgent:
             )
         if know_how_context:
             blocks.append("Retrieved protocol know-how (binding):\n" + know_how_context)
+        if outline_step.module_id == "custom_analysis":
+            article_contract = build_article_analysis_contract(
+                context, analysis_type=outline.analysis_type,
+            )
+            blocks.append(
+                "Selected-family article product contract (final-plan coverage; "
+                "only materialize this current step's declared objective):\n"
+                + json.dumps(
+                    [{
+                        "role": requirement.role,
+                        "typed_products": hinted_typed_products(
+                            requirement.role, [requirement.module_id],
+                        ),
+                        "requires_primary_lineage": (
+                            requirement.role in article_contract.planner_owned_result_roles
+                        ),
+                    } for requirement in article_contract.requirements if requirement.required],
+                    ensure_ascii=False, separators=(",", ":"),
+                )
+                + "\nA protocol artifact or a plausible product name does not "
+                "itself declare an article display. Use the listed typed product "
+                "for a display this step actually owns. Preserve legitimate "
+                "intermediate artifacts and all sealed product dependencies. "
+                "A primary-lineage display must consume a typed product of "
+                "the primary result or its descendants; depends_on alone does "
+                "not establish result lineage. "
+                "Do not implement future steps or invent results to fill roles."
+            )
         if compiler_observation:
+            if (
+                compiler_observation.get("path") == "literature_bindings"
+                and prior_literature_bindings
+            ):
+                blocks.append(
+                    "Previous model-authored literature bindings for this same "
+                    "uncompiled step (repair only the reported defect; a missing "
+                    "coverage layer does not revoke other valid uses or caveats):\n"
+                    + json.dumps(
+                        list(prior_literature_bindings),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
             blocks.append(
                 "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP:\n"
                 + json.dumps(
@@ -2688,6 +3161,16 @@ class ProgressivePlannerAgent:
                     "to restricted_cubic_spline_sensitivity. Preserve the "
                     "already-valid parent product, output, sensitivity ids, "
                     "and literature bindings."
+                )
+            elif observation_reason == "progressive_functional_form_target_missing":
+                blocks.append(
+                    "Targeted functional-form repair: this sealed outline step "
+                    "owns exactly one continuous target. Set functional_form_spec "
+                    "to that exact target and set sensitivity_spec_ids to one "
+                    "stable identifier using only letters, digits, '.', '_' or "
+                    "'-' (for example age_rcs_vs_linear). Do not use a ':' prefix "
+                    "and do not add another target to this step. Preserve the "
+                    "parent product, output, method, and literature bindings."
                 )
         if outline_step.module_id == "cohort_definition":
             provenance = context.cohort.provenance
@@ -2759,6 +3242,13 @@ class ProgressivePlannerAgent:
                 "figure and must retain its own independently traceable "
                 "source-data projection; move other article roles to separate "
                 "rendering steps instead of binding unused context."
+                " A robustness_matrix display uses a specification grid; a "
+                "common forest axis requires verified shared estimand, contrast "
+                "and unit. Functional-form comparison products contain model "
+                "diagnostics (nonlinearity test and information criteria), not "
+                "effect estimates: keep those products in the report as a "
+                "diagnostic table, outside the robustness_matrix figure. Never "
+                "turn their P values or information criteria into effect sizes."
             )
             if (
                 len(executors) == 1
@@ -2865,7 +3355,8 @@ class ProgressivePlannerAgent:
                 "independent_inference or descriptive_smd_only; provide at "
                 "least one table_one_variables item using the exact nested "
                 "shape above; include the group and summarized variables in "
-                "raw_inputs. Keep outputs=[] because the host owns the canonical "
+                "raw_inputs. Never summarize or group by owner-declared "
+                "identity/index coordinates. Keep outputs=[] because the host owns the canonical "
                 "Table 1 product."
             )
         if outline_step.module_id == "absolute_risk_context":
@@ -2874,7 +3365,21 @@ class ProgressivePlannerAgent:
                 "outcome to exact available variable names and include both "
                 "in raw_inputs. Keep outputs=[] because the host owns "
                 "table:absolute_risk_context. This module describes exposure "
-                "and absolute outcome risk without selecting a fitted primary "
+                "and observed outcome risk in an explicitly chosen population: "
+                "set population_scope=analysis_cohort for the broader eligible "
+                "cohort, or primary_model for the preceding primary model's "
+                "exact eligibility and complete-case population. The host binds "
+                "that primary result dependency; prose alone does not select "
+                "a population. If the outline declares population_scope, copy "
+                "it and population_scope_change_reason exactly; the whole-plan "
+                "stage already selected this population. Match the objective and interpretation to this "
+                "choice. Preserve source-bound plan_population_requirements in the context. "
+                "Only an intentional scientific scope amendment may depart from them; "
+                "then provide population_scope_change_reason explaining the requested "
+                "change for fresh complete-plan review. Cosmetic revisions do not "
+                "justify changing populations. Otherwise leave that field null. "
+                "A broader-cohort table must not be described as the "
+                "primary-model population. This does not select a fitted primary "
                 "effect. Keep contrast indexes, denominator/missingness policy "
                 "fields, model terms, Table 1 fields, custom_method, and "
                 "sensitivity_spec_ids null or empty."
@@ -2913,7 +3418,8 @@ class ProgressivePlannerAgent:
                 blocks.append(
                     "Host-owned scientific-action contract (binding): copy its "
                     "outputs exactly, bind exactly its required_product_inputs "
-                    "from preceding depended-on producers, and do not substitute "
+                    "from preceding depended-on producers, describe the exact "
+                    "execution_parameters and their interpretation limits, and do not substitute "
                     "artifact products or contextual tables:\n"
                     + json.dumps(
                         current_action["runtime_contract"],
@@ -2929,7 +3435,7 @@ class ProgressivePlannerAgent:
                 "array, or prose paragraph in custom_method. The step object "
                 "must contain only step_id, planned_analysis_role, module_id, "
                 "objective, depends_on, raw_inputs, product_inputs, outputs, "
-                "scientific_action_id, custom_method, sensitivity_spec_ids, "
+                "scientific_action_id, custom_method, sensitivity_spec_ids, functional_form_spec, phenotyping_feature_columns, "
                 "and literature_bindings. Do not emit Table 1, association, "
                 "contrast, denominator, missingness-policy, or confidence "
                 "fields, even as null or empty values."
@@ -2944,7 +3450,10 @@ class ProgressivePlannerAgent:
                     "restricted_cubic_spline_sensitivity. This exact typed "
                     "method is required for executable nonlinear-versus-linear "
                     "comparison authority; do not use a generic label such as "
-                    "continuous_functional_form_check."
+                    "continuous_functional_form_check. Set functional_form_spec "
+                    "to the exact continuous model term being checked and the "
+                    "prespecified three knot quantiles. A covariate check is not "
+                    "an exposure check; never derive the target from a step id."
                 )
             blocks.append(
                 "Custom-analysis output contract: a generic custom result uses "
@@ -3000,6 +3509,107 @@ class ProgressivePlannerAgent:
         )
         return plan, receipt
 
+    def _accept_materialized_plan(
+        self, prefix_state: ProgressivePrefixState, *,
+        context: ResearchContext, article_context: ResearchContext,
+        outline: ProgressivePlanOutline,
+        foundation_materialization: ProgressiveFoundationMaterialization,
+        allowed_literature_citation_keys: Sequence[str],
+        direct_comparator_literature_keys: Sequence[str],
+        allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
+        enforce_article_contract: bool, planning_contract_context: str,
+        progress_callback: Optional[Callable[[Any], None]],
+        checkpoint_emitter: ProgressivePlannerCheckpointEmitter, resumed: bool,
+    ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt, ProgressivePlanSkeleton]:
+        """Recheck a complete plan, repairing only a bounded unaccepted suffix."""
+        foundation = foundation_materialization.foundation
+        selected_action_ids, selected_action_rows = _action_catalog((outline.analysis_type,))
+        reporting_source_keys = _article_reporting_source_keys(
+            article_context=article_context, analysis_type=outline.analysis_type,
+            enforce_article_contract=enforce_article_contract,
+        )
+        for final_revision in range(_MAX_COMPILE_REVISIONS + 1):
+            skeleton = assemble_progressive_skeleton(
+                outline=outline, foundation=foundation, steps=prefix_state.steps,
+            )
+            try:
+                plan, receipt = self._compile_and_accept(
+                    skeleton,
+                    agent_context=context,
+                    article_context=article_context,
+                    allowed_literature_citation_keys=allowed_literature_citation_keys,
+                    direct_comparator_literature_keys=direct_comparator_literature_keys,
+                    allowed_know_how_decisions=allowed_know_how_decisions,
+                    enforce_article_contract=enforce_article_contract,
+                )
+            except ProgressivePlanCompileError as exc:
+                start = final_acceptance_repair_start(exc, outline)
+                if (
+                    start is None or final_revision >= _MAX_COMPILE_REVISIONS
+                    or len(self._attempt.prompt_metrics.get("final_acceptance_repairs", []))
+                    >= _MAX_COMPILE_REVISIONS
+                ):
+                    raise
+                previous_suffix = {
+                    m.step.step_id: m for m in prefix_state.materializations[start:]
+                }
+                retained = prefix_state.materializations[:start]
+                prefix_state = ProgressivePrefixState()
+                for materialization in retained:
+                    prefix_state = compile_progressive_prefix(
+                        prefix_state, materialization, outline=outline,
+                        foundation=foundation, context=context,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        allowed_know_how_decisions=allowed_know_how_decisions,
+                        reporting_method_source_keys=reporting_source_keys,
+                    )
+                self._attempt.materializations = list(retained)
+                # Historical call/schema counters remain append-only. Resume
+                # must bind the revised active prefix to its own request schemas.
+                metrics = self._attempt.prompt_metrics
+                metrics["active_step_materialization_schema_sha256"] = list(
+                    metrics.get("active_step_materialization_schema_sha256",
+                                metrics["step_materialization_schema_sha256"])
+                )[:start]
+                self._attempt.prompt_metrics["suffix_revision_count"] += 1
+                self._attempt.prompt_metrics.setdefault("final_acceptance_repairs", []).append({
+                    **exc.easyicu_safe_diagnostic,
+                    "findings": (
+                        exc.details.get("findings", [])
+                        if exc.reason_code == "progressive_article_required_roles_missing" else []
+                    ),
+                    "repair_localization": (
+                        (exc.details.get("findings") or [{}])[0].get("repair_localization")
+                        or (
+                            "unlocated_full_materialization"
+                            if exc.reason_code == "progressive_article_required_roles_missing"
+                            else "validator_step_coordinate"
+                        )
+                    ),
+                    "retained_step_count": start,
+                    "retained_materializations_sha256": canonical_sha256(
+                        [m.model_dump(mode="json") for m in retained]
+                    ),
+                })
+                prefix_state = self._materialize_remaining_steps(
+                    prefix_state, context=context, outline=outline,
+                    foundation_materialization=foundation_materialization,
+                    scientific_action_ids=selected_action_ids,
+                    action_rows=selected_action_rows,
+                    allowed_literature_citation_keys=allowed_literature_citation_keys,
+                    allowed_know_how_decisions=allowed_know_how_decisions,
+                    reporting_method_source_keys=reporting_source_keys,
+                    planning_contract_context=planning_contract_context,
+                    progress_callback=progress_callback,
+                    checkpoint_emitter=checkpoint_emitter,
+                    resumed=resumed,
+                    acceptance_observation=exc.details,
+                    previous_suffix=previous_suffix,
+                )
+                continue
+            break
+        return plan, receipt, skeleton
+
     def _materialize_remaining_steps(
         self,
         prefix_state: ProgressivePrefixState,
@@ -3016,6 +3626,8 @@ class ProgressivePlannerAgent:
         progress_callback: Optional[Callable[[Any], None]],
         checkpoint_emitter: ProgressivePlannerCheckpointEmitter,
         resumed: bool,
+        acceptance_observation: Mapping[str, Any] | None = None,
+        previous_suffix: Mapping[str, ProgressiveStepMaterialization] | None = None,
     ) -> ProgressivePrefixState:
         """Materialize and locally repair only the uncompiled suffix."""
 
@@ -3027,6 +3639,22 @@ class ProgressivePlannerAgent:
         )
         for step_index in range(len(prefix_state.steps), len(outline.steps)):
             outline_step = outline.steps[step_index]
+            step_planning_contract_context, step_revision_projection = (
+                project_plan_revision_prompt(
+                    planning_contract_context,
+                    stage="step",
+                    step_id=outline_step.step_id,
+                )
+            )
+            if step_revision_projection:
+                self._attempt.prompt_metrics.setdefault(
+                    "step_plan_revision_projection", []
+                ).append(
+                    {
+                        "step_id": outline_step.step_id,
+                        "receipts": step_revision_projection,
+                    }
+                )
             visible_product_refs = product_refs_for_materialization_coordinate(
                 outline_step,
                 prefix_state.available_product_refs,
@@ -3050,7 +3678,26 @@ class ProgressivePlannerAgent:
                     allowed_literature_citation_keys=step_citations,
                     available_product_refs=visible_product_refs,
                 )
-            compiler_observation: Mapping[str, Any] | None = None
+            compiler_observation: Mapping[str, Any] | None = (
+                {
+                    **acceptance_observation,
+                    "repair_scope": "unaccepted_suffix",
+                    "current_step_id": outline_step.step_id,
+                    "previous_materialization": (
+                        previous_suffix[outline_step.step_id].model_dump(mode="json")
+                        if previous_suffix and outline_step.step_id in previous_suffix
+                        else None
+                    ),
+                    "preservation_contract": (
+                        "Repair the reported final-plan contract in this current "
+                        "step only, using the preceding valid product references. "
+                        "Preserve its scientific requirements and all sealed "
+                        "outline/foundation coordinates; do not invent results "
+                        "or remove requirements to satisfy a missing role."
+                    ),
+                }
+                if acceptance_observation is not None else None
+            )
             self._attempt.compile_failure_attempts = []
             host_materialization = (
                 None
@@ -3105,6 +3752,8 @@ class ProgressivePlannerAgent:
                     self._attempt.prompt_metrics[
                         "step_materialization_schema_sha256"
                     ].append(None)
+                    if "active_step_materialization_schema_sha256" in self._attempt.prompt_metrics:
+                        self._attempt.prompt_metrics["active_step_materialization_schema_sha256"].append(None)
                     self._attempt.prompt_metrics.setdefault(
                         "host_step_materialization_count", 0
                     )
@@ -3125,6 +3774,11 @@ class ProgressivePlannerAgent:
                     )
                     continue
             for revision in range(_MAX_COMPILE_REVISIONS + 1):
+                prior_materialization = (
+                    self._attempt.compile_failure_attempts[-1].materialization
+                    if self._attempt.compile_failure_attempts
+                    else None
+                )
                 materialization_prompt = self._materialization_prompt(
                     context=context,
                     outline=outline,
@@ -3134,10 +3788,18 @@ class ProgressivePlannerAgent:
                     action_rows=action_rows,
                     allowed_literature_citation_keys=step_citations,
                     know_how_context="",
-                    planning_contract_context=planning_contract_context,
+                    planning_contract_context=step_planning_contract_context,
                     prefix_summary=prefix_state.prompt_summary,
                     available_product_refs=visible_product_refs,
                     compiler_observation=compiler_observation,
+                    prior_literature_bindings=(
+                        [
+                            item.model_dump(mode="json")
+                            for item in prior_materialization.step.literature_bindings
+                        ]
+                        if prior_materialization is not None
+                        else ()
+                    ),
                 )
                 step_messages = [
                     LLMMessage(role="system", content=_GUIDE),
@@ -3146,11 +3808,11 @@ class ProgressivePlannerAgent:
                 step_payload_bytes = sum(
                     len(item.content.encode("utf-8")) for item in step_messages
                 ) + (step_schema.payload_bytes if step_schema is not None else 0)
-                if step_payload_bytes > _MAX_REQUEST_BYTES:
+                if step_payload_bytes > planner_prompt_byte_limit(self.llm):
                     raise ProgressivePlanCompileError(
                         "progressive_step_prompt_budget_exceeded",
                         f"current-step request uses {step_payload_bytes} bytes; "
-                        f"limit={_MAX_REQUEST_BYTES}",
+                        f"limit={planner_prompt_byte_limit(self.llm)}",
                         step_id=outline_step.step_id,
                         step_index=step_index,
                         path="planner_request",
@@ -3201,24 +3863,17 @@ class ProgressivePlannerAgent:
                     available_product_refs=visible_product_refs,
                 )
                 self.capture_efficiency_metrics()
-                prior_materialization = (
-                    self._attempt.compile_failure_attempts[-1].materialization
-                    if self._attempt.compile_failure_attempts
-                    else None
-                )
-                materialization = (
-                    _preserve_non_targeted_coordinates_across_literature_repair(
+                try:
+                    materialization = _preserve_non_targeted_coordinates_across_literature_repair(
                         current=materialization,
                         previous=prior_materialization,
                         compiler_observation=compiler_observation,
                     )
-                )
-                materialization = _preserve_literature_roster_across_targeted_repair(
-                    current=materialization,
-                    previous=prior_materialization,
-                    outline_step=outline_step,
-                )
-                try:
+                    materialization = _preserve_literature_roster_across_targeted_repair(
+                        current=materialization,
+                        previous=prior_materialization,
+                        outline_step=outline_step,
+                    )
                     _validate_progressive_method_binding_scope(
                         materialization,
                         step_index=step_index,
@@ -3360,6 +4015,10 @@ class ProgressivePlannerAgent:
                 self._attempt.prompt_metrics[
                     "step_materialization_schema_sha256"
                 ].append(step_schema.authority_sha256 if step_schema else None)
+                if "active_step_materialization_schema_sha256" in self._attempt.prompt_metrics:
+                    self._attempt.prompt_metrics["active_step_materialization_schema_sha256"].append(
+                        step_schema.authority_sha256 if step_schema else None
+                    )
                 self._attempt.prompt_metrics["step_materialization_count"] += 1
                 if resumed:
                     self._attempt.prompt_metrics[
@@ -3483,6 +4142,7 @@ class ProgressivePlannerAgent:
             if adjustment_authority.selection == "exact"
             else ()
         )
+        required_functional_form_targets = _continuous_adjustment_targets(context)
         context_variable_map = {
             variable.name: variable for variable in context.variables
         }
@@ -3490,7 +4150,7 @@ class ProgressivePlannerAgent:
             variable.name
             for variable in context.variables
             if len(
-                observed_levels_for(
+                closed_planning_levels_for(
                     name=variable.name,
                     variables=context_variable_map,
                 )
@@ -3502,7 +4162,7 @@ class ProgressivePlannerAgent:
             for variable in context.variables
             if (
                 len(
-                    observed_levels_for(
+                    closed_planning_levels_for(
                         name=variable.name,
                         variables=context_variable_map,
                     )
@@ -3515,12 +4175,39 @@ class ProgressivePlannerAgent:
             )
         )
         continuous_domain_variables = _continuous_planning_variable_names(context)
-        resolved_planning_contract_context = bind_literature_citation_authority(
+        strict_transport_schema = llm_supports_strict_json_schema(self.llm)
+        sealed_planning_contract_context = bind_literature_citation_authority(
             planning_contract_context,
             allowed_citations,
             direct_comparator_keys=direct_keys,
             required_method_layers=required_method_layers_for_context(context),
+            # The enforced outline/step schemas already carry the binding
+            # shape; illustrative JSON would be paid for twice.
+            include_examples=not strict_transport_schema,
         )
+        outline_schema = None
+        if strict_transport_schema:
+            design_card_keys = tuple(
+                card.citation_key
+                for card in design_cards
+                if card.citation_key in set(comparison_keys)
+            )
+            outline_schema = progressive_outline_structured_output_request(
+                analysis_types=analysis_types,
+                variable_names=variables,
+                scientific_action_ids=action_ids,
+                allowed_literature_citation_keys=allowed_citations,
+                design_card_citation_keys=design_card_keys,
+            )
+        # The compact source plan keeps every declared requirement and is the
+        # only outline projection offered; a smaller roster-style view would
+        # delete exactly the inputs, scientific actions and typed specs the
+        # planner must preserve. Measure the fully assembled request exactly,
+        # then try the one budget-pressure rung that exists: collapse ancestor
+        # failed-execution replans to digest pointers while the current source
+        # plan keeps its complete view. Nothing is elided unless the request
+        # actually overflows, so an ordinary request still restores every
+        # version from what is sent.
         required_custom_products = _required_separate_analysis_products(context)
         required_visualization_step = _requires_visualization_step(context)
         available_ordered_trend = _available_ordered_trend_action(
@@ -3541,7 +4228,7 @@ class ProgressivePlannerAgent:
             "comparison_literature_keys": list(comparison_keys),
             "allowed_know_how_decisions": dict(allowed_know_how_decisions or {}),
             "know_how_context": know_how_context,
-            "planning_contract_context": resolved_planning_contract_context,
+            "planning_contract_context": sealed_planning_contract_context,
             "required_primary_cohort_selection_mode": (
                 required_primary_cohort_selection_mode
             ),
@@ -3566,55 +4253,93 @@ class ProgressivePlannerAgent:
             ),
             source_checkpoint=resume_checkpoint,
         )
-        outline_schema = None
-        if llm_supports_strict_json_schema(self.llm):
-            design_card_keys = tuple(
-                card.citation_key
-                for card in design_cards
-                if card.citation_key in set(comparison_keys)
-            )
-            outline_schema = progressive_outline_structured_output_request(
-                analysis_types=analysis_types,
-                variable_names=variables,
-                scientific_action_ids=action_ids,
-                allowed_literature_citation_keys=allowed_citations,
-                design_card_citation_keys=design_card_keys,
-            )
-        user_prompt = self._user_prompt(
-            context,
-            article_context=article_context,
-            analysis_types=analysis_types,
-            variables=variables,
-            action_rows=action_rows,
-            allowed_literature_citation_keys=allowed_citations,
-            literature_design_evidence_cards=design_cards,
-            know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
-        )
-        user_prompt_without_know_how = self._user_prompt(
-            context,
-            article_context=article_context,
-            analysis_types=analysis_types,
-            variables=variables,
-            action_rows=action_rows,
-            allowed_literature_citation_keys=allowed_citations,
-            literature_design_evidence_cards=design_cards,
-            planning_contract_context=resolved_planning_contract_context,
-        )
-        messages = [
-            LLMMessage(role="system", content=_GUIDE),
-            LLMMessage(role="user", content=user_prompt),
-        ]
-        message_bytes = sum(len(item.content.encode("utf-8")) for item in messages)
+        resolved_planning_contract_context = ""
+        foundation_planning_contract_context = ""
+        revision_projection: list[dict] = []
+        foundation_revision_projection: list[dict] = []
+        user_prompt = ""
+        user_prompt_without_know_how = ""
+        messages: list[LLMMessage] = []
+        message_bytes = 0
         schema_bytes = outline_schema.payload_bytes if outline_schema else 0
-        total_bytes = message_bytes + schema_bytes
-        if total_bytes > _MAX_REQUEST_BYTES:
+        total_bytes = 0
+        for elide_superseded_replans in (False, True):
+            resolved_planning_contract_context, revision_projection = (
+                project_plan_revision_prompt(
+                    sealed_planning_contract_context,
+                    stage="outline",
+                    elide_superseded_replans=elide_superseded_replans,
+                )
+            )
+            foundation_planning_contract_context, foundation_revision_projection = (
+                project_plan_revision_prompt(
+                    sealed_planning_contract_context,
+                    stage="foundation",
+                    elide_superseded_replans=elide_superseded_replans,
+                )
+            )
+            self._attempt.prompt_metrics["plan_revision_projection"] = (
+                revision_projection
+            )
+            user_prompt = self._user_prompt(
+                context,
+                article_context=article_context,
+                analysis_types=analysis_types,
+                variables=variables,
+                action_rows=action_rows,
+                allowed_literature_citation_keys=allowed_citations,
+                literature_design_evidence_cards=design_cards,
+                know_how_context=know_how_context,
+                planning_contract_context=resolved_planning_contract_context,
+            )
+            user_prompt_without_know_how = self._user_prompt(
+                context,
+                article_context=article_context,
+                analysis_types=analysis_types,
+                variables=variables,
+                action_rows=action_rows,
+                allowed_literature_citation_keys=allowed_citations,
+                literature_design_evidence_cards=design_cards,
+                planning_contract_context=resolved_planning_contract_context,
+            )
+            messages = [
+                LLMMessage(role="system", content=_GUIDE),
+                LLMMessage(role="user", content=user_prompt),
+            ]
+            message_bytes = sum(
+                len(item.content.encode("utf-8")) for item in messages
+            )
+            total_bytes = message_bytes + schema_bytes
+            if total_bytes <= planner_prompt_byte_limit(self.llm):
+                break
+        if total_bytes > planner_prompt_byte_limit(self.llm):
+            plan_bytes = sum(
+                int(receipt.get("projected_bytes") or 0)
+                for receipt in revision_projection
+            )
+            plan_note = (
+                f"; source-plan block={plan_bytes} bytes keeps every declared "
+                "requirement"
+                if plan_bytes
+                else ""
+            )
             raise ProgressivePlanCompileError(
                 "progressive_prompt_budget_exceeded",
-                f"initial request uses {total_bytes} bytes; limit={_MAX_REQUEST_BYTES}",
+                f"initial request uses {total_bytes} bytes; "
+                f"limit={planner_prompt_byte_limit(self.llm)}{plan_note}",
                 path="planner_request",
+                metrics={
+                    "request_bytes": total_bytes,
+                    "byte_limit": planner_prompt_byte_limit(self.llm),
+                    "message_bytes": message_bytes,
+                    "schema_bytes": schema_bytes,
+                },
             )
         current_prompt_metrics = {
+            "plan_revision_projection": revision_projection,
+            "foundation_plan_revision_projection": (
+                foundation_revision_projection
+            ),
             "message_payload_bytes": message_bytes,
             "structured_output_payload_bytes": schema_bytes,
             "structured_output_authority_sha256": (
@@ -3702,6 +4427,9 @@ class ProgressivePlannerAgent:
                     primary_exposure=context.primary_exposure,
                     target_outcome=context.target_outcome,
                     required_exact_covariates=required_exact_covariates,
+                    required_functional_form_targets=(
+                        required_functional_form_targets
+                    ),
                     context_required_method_layers=(
                         required_method_layers_for_context(context)
                     ),
@@ -3724,14 +4452,29 @@ class ProgressivePlannerAgent:
                 include_failed_response_on_retry=False,
                 progress_callback=progress_callback,
                 structured_output=outline_schema,
-                format_reminder=_outline_shape_contract(
-                    analysis_types=analysis_types,
-                    module_ids_by_analysis_type={
-                        analysis_type: progressive_module_ids_for_analysis_types(
-                            (analysis_type,)
-                        )
-                        for analysis_type in analysis_types
-                    },
+                format_reminder=retry_shape_reminder(
+                    messages,
+                    _outline_shape_contract(
+                        analysis_types=analysis_types,
+                        module_ids_by_analysis_type={
+                            analysis_type: progressive_module_ids_for_analysis_types(
+                                (analysis_type,)
+                            )
+                            for analysis_type in analysis_types
+                        },
+                        literature_design_card_keys_by_dimension={
+                            dimension: tuple(
+                                card.citation_key
+                                for card in design_cards
+                                if card.citation_key in set(allowed_citations)
+                                and any(
+                                    item.dimension == dimension
+                                    for item in card.evidence
+                                )
+                            )
+                            for dimension in LITERATURE_DESIGN_DIMENSIONS
+                        },
+                    ),
                 )
                 + "\nReturn one concise ProgressivePlanOutline only. Do not "
                 "include executable step-detail fields. Never use "
@@ -3752,6 +4495,7 @@ class ProgressivePlannerAgent:
             primary_exposure=context.primary_exposure,
             target_outcome=context.target_outcome,
             required_exact_covariates=required_exact_covariates,
+            required_functional_form_targets=required_functional_form_targets,
             context_required_method_layers=required_method_layers_for_context(context),
             require_design_selection=resume_checkpoint is None,
             literature_design_evidence_cards=design_cards,
@@ -3824,6 +4568,8 @@ class ProgressivePlannerAgent:
                 ),
                 analysis_type=outline.analysis_type,
                 require_robustness_intent=require_robustness_intent,
+                required_reader_display_label_keys=required_label_keys,
+                required_binary_display_label_scopes=required_label_scopes,
             )
         foundation_prompt = self._foundation_prompt(
             context=context,
@@ -3831,7 +4577,7 @@ class ProgressivePlannerAgent:
             outline_sha256=outline_sha256,
             variables=variables,
             know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
+            planning_contract_context=foundation_planning_contract_context,
             host_cohort=host_cohort,
             required_cohort_selection_mode=required_primary_cohort_selection_mode,
             required_cohort_name=(
@@ -3852,11 +4598,11 @@ class ProgressivePlannerAgent:
             foundation_schema.payload_bytes if foundation_schema is not None else 0
         )
         foundation_total_bytes = foundation_message_bytes + foundation_schema_bytes
-        if foundation_total_bytes > _MAX_REQUEST_BYTES:
+        if foundation_total_bytes > planner_prompt_byte_limit(self.llm):
             raise ProgressivePlanCompileError(
                 "progressive_foundation_prompt_budget_exceeded",
                 f"foundation request uses {foundation_total_bytes} bytes; "
-                f"limit={_MAX_REQUEST_BYTES}",
+                f"limit={planner_prompt_byte_limit(self.llm)}",
                 path="planner_request",
             )
         current_foundation_authority = (
@@ -4077,27 +4823,29 @@ class ProgressivePlannerAgent:
             allowed_literature_citation_keys=allowed_citations,
             allowed_know_how_decisions=allowed_know_how_decisions,
             reporting_method_source_keys=reporting_source_keys,
-            planning_contract_context=resolved_planning_contract_context,
+            planning_contract_context=sealed_planning_contract_context,
             progress_callback=progress_callback,
             checkpoint_emitter=checkpoint_emitter,
             resumed=resume_checkpoint is not None,
+            acceptance_observation=(
+                (resume_checkpoint.prompt_metrics.get("final_acceptance_repairs") or [None])[-1]
+                if resume_checkpoint is not None and resume_checkpoint.revision_offset is not None
+                else None
+            ),
         )
 
         if prefix_state.plan is None or prefix_state.receipt is None:
             raise RuntimeError("progressive outline produced no materialized steps")
-        skeleton = assemble_progressive_skeleton(
-            outline=outline,
-            foundation=foundation,
-            steps=prefix_state.steps,
-        )
-        plan, receipt = self._compile_and_accept(
-            skeleton,
-            agent_context=context,
-            article_context=article_context,
+        plan, receipt, skeleton = self._accept_materialized_plan(
+            prefix_state, context=context, article_context=article_context,
+            outline=outline, foundation_materialization=foundation_materialization,
             allowed_literature_citation_keys=allowed_citations,
             direct_comparator_literature_keys=direct_keys,
             allowed_know_how_decisions=allowed_know_how_decisions,
             enforce_article_contract=enforce_article_contract,
+            planning_contract_context=sealed_planning_contract_context,
+            progress_callback=progress_callback, checkpoint_emitter=checkpoint_emitter,
+            resumed=resume_checkpoint is not None,
         )
         self._attempt.skeleton = skeleton
         self._attempt.compile_receipt = receipt

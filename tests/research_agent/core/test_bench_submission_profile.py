@@ -39,6 +39,36 @@ from easyicu.research_agent.orchestration.profiles import (
 
 CANONICAL_PROFILE = NPJ_DM_2026_06
 
+# Frozen profile snapshot SHAs: single source for every hand-written digest in
+# this file. Values are immutable archival coordinates; tests below only assert
+# equality against the profile objects, never recompute or interpret them.
+FROZEN_PROFILE_SNAPSHOTS = {
+    "concept_20260527": "9ef52ed3ec51652f235c92a1394d4f4b91318cbd46e3915a5eacbbed2754e179",
+    "sofa2_20260527": "e1844deafad9151aa5069824ff335bf59e228b97040a8bd884d23e0457047b25",
+    "concept_20260611": "4b9c55bf9ec5dc92c39d6c14b036f0b19d4da684d9808618833b83d6b53c9ed2",
+    # Shared sofa2 coordinate for 20260611/20260708/20260716.
+    "sofa2_20260611_20260708_20260716": "b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+    "concept_20260708": "bc377779ce0f6b7983b2f8f527a37c1c394cc38e4a64055c9d9268b5f4d451ea",
+    "concept_20260716": "095350e3d897ed6824673b229435941932bd8270b75667826e8b32538e5de146",
+    "concept_20260717": "b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54",
+    "sofa2_20260717": "65075a691ef103112d9df0df452601299c37603c1c075742fe211bb75d2f92cc",
+    "concept_20260719": "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
+    "sofa2_20260719": "61f37a41083cd96df49a2e61d26c682e9d090d0a22d05ff97ba85a966b165b1c",
+    "concept_e1_20260814": "22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a",
+    "sofa2_e1_20260814": "998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8",
+    "concept_e1_20260817": "68b75da37d70c18ff35a11eb7efb9d39a6b6589e933bdf6a89a34469d4493107",
+    "concept_e1_20260819": "e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00",
+    # Shared sofa2 coordinate for e1 20260819 and the 20260904 replay.
+    "sofa2_e1_20260819_20260904": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
+    "concept_e1_20260903": "a5a5185408bd365de959963f5a894d43b325b3c01664c322a1bcb6c8696e3041",
+    # Shared concept coordinate for the 20260904/20260905 replays.
+    "concept_e1_20260904_20260905": "fd122adc01693d78e760e19e61cb415ce8aef849ff2712f747dd79c289d48313",
+    # Shared sofa2 coordinate for e1 20260905/20260911/20260917.
+    "sofa2_e1_20260905_20260911_20260917": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
+    "concept_e1_20260911": "389e2988a6d601974cf7dd5b303929964ec8c9d66a82c63821646e956cc1ceec",
+    "concept_e1_20260917": "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba",
+}
+
 
 def test_submission_profile_forces_canonical_pipeline_options() -> None:
     options = _benchmark_pipeline_options(
@@ -448,7 +478,7 @@ def test_submission_profile_registry_is_versioned() -> None:
     assert bounds_profile is NPJ_DM_2026_07
     assert (
         bounds_profile.expected_concept_dict_sha
-        == "bc377779ce0f6b7983b2f8f527a37c1c394cc38e4a64055c9d9268b5f4d451ea"
+        == FROZEN_PROFILE_SNAPSHOTS["concept_20260708"]
     )
     # Prior default (20260716) stays retrievable as an immutable archival contract.
     assert get_submission_profile("npj_dm/20260716") is NPJ_DM_2026_07_16
@@ -458,7 +488,7 @@ def test_submission_profile_registry_is_versioned() -> None:
     assert current_profile is NPJ_DM_2026_07_19
     assert (
         current_profile.expected_concept_dict_sha
-        == "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803"
+        == FROZEN_PROFILE_SNAPSHOTS["concept_20260719"]
     )
     assert DEFAULT_SUBMISSION_PROFILE_REF == current_profile.ref
     with pytest.raises(ValueError, match="Unknown submission profile"):
@@ -600,10 +630,10 @@ def test_e1_planner_canary_profile_binds_current_dictionaries_without_publicatio
     assert profile.planner_only is True
     assert profile.pipeline_options()["planner_only"] is True
     assert profile.expected_concept_dict_sha == (
-        "22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a"
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260814"]
     )
     assert profile.expected_sofa2_dict_sha == (
-        "998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8"
+        FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260814"]
     )
     assert is_paper_facing_profile(profile.name) is False
 
@@ -652,6 +682,7 @@ def test_e1_progressive_profile_is_public_and_rejects_strategy_override(
 
     config = PipelineConfig(
         workdir=tmp_path / "matching",
+        planner_only=True,
         submission_profile_name=public_profile.name,
         submission_profile_version=public_profile.version,
         planner_strategy="progressive_v2",
@@ -669,7 +700,7 @@ def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> No
     assert prior_public_profile.ref == "npj_dm_e1_canary_dev/20260817"
     assert prior_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260817"
     assert prior_public_profile.expected_concept_dict_sha == (
-        "68b75da37d70c18ff35a11eb7efb9d39a6b6589e933bdf6a89a34469d4493107"
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260817"]
     )
     assert public_profile.ref == "npj_dm_e1_canary_dev/20260819"
     assert public_profile.planner_only is True
@@ -682,24 +713,23 @@ def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> No
     )
     for profile in (public_profile, reviewed_profile):
         assert profile.expected_concept_dict_sha == (
-            "e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00"
+            FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260819"]
         )
         assert profile.expected_sofa2_dict_sha == (
-            "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3"
+            FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260819_20260904"]
         )
 
 
-def test_e1_20260905_profiles_additively_bind_current_concept_dictionary() -> None:
+def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> None:
     from easyicu.research_agent import (
         E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19 as archival_public_profile,
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03 as prior_public_profile,
-        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_05 as public_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11 as frozen_public_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17 as public_profile,
         E1_REVIEWED_DEMO_2026_08_19 as archival_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_03 as prior_reviewed_profile,
-        E1_REVIEWED_DEMO_2026_09_05 as reviewed_profile,
-    )
-    from easyicu.research_agent.concept_dict_audit import (
-        compute_concept_dict_fingerprint,
+        E1_REVIEWED_DEMO_2026_09_11 as frozen_reviewed_profile,
+        E1_REVIEWED_DEMO_2026_09_17 as reviewed_profile,
     )
     from easyicu.research_agent.orchestration.profiles import (
         CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
@@ -707,29 +737,35 @@ def test_e1_20260905_profiles_additively_bind_current_concept_dictionary() -> No
         CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
         CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_03 as prior_live_profile,
-        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_05,
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11 as frozen_live_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17 as live_profile_0917,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03 as prior_live_reviewed_profile,
-        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11 as frozen_live_reviewed_profile,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17 as live_reviewed_profile_0917,
     )
 
-    fingerprint = compute_concept_dict_fingerprint()
+    # Frozen 0917 coordinates (profiles.py:636-637 crea 15 -> 25 re-lock).
+    # Do not compare against the live fingerprint here; that check lives in
+    # test_e1_0917_profiles_match_live_dictionary_when_clean below.
 
     assert archival_public_profile.ref == "npj_dm_e1_canary_dev/20260819"
     assert archival_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260819"
     assert prior_public_profile.ref == "npj_dm_e1_canary_dev/20260903"
     assert prior_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260903"
-    assert public_profile.ref == "npj_dm_e1_canary_dev/20260905"
-    assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260905"
+    assert frozen_public_profile.ref == "npj_dm_e1_canary_dev/20260911"
+    assert frozen_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260911"
+    assert public_profile.ref == "npj_dm_e1_canary_dev/20260917"
+    assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260917"
     assert CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF == public_profile.ref
     assert CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF == reviewed_profile.ref
     assert CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF == (
-        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_05.ref
+        live_profile_0917.ref
     )
     assert CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF == (
-        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05.ref
+        live_reviewed_profile_0917.ref
     )
     assert prior_public_profile.expected_concept_dict_sha == (
-        "a5a5185408bd365de959963f5a894d43b325b3c01664c322a1bcb6c8696e3041"
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260903"]
     )
     assert prior_reviewed_profile.expected_concept_dict_sha == (
         prior_public_profile.expected_concept_dict_sha
@@ -740,11 +776,102 @@ def test_e1_20260905_profiles_additively_bind_current_concept_dictionary() -> No
     assert prior_live_reviewed_profile.expected_concept_dict_sha == (
         prior_public_profile.expected_concept_dict_sha
     )
+    assert frozen_public_profile.expected_concept_dict_sha == (
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260911"]
+    )
+    assert frozen_reviewed_profile.expected_concept_dict_sha == (
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260911"]
+    )
+    assert frozen_live_profile.expected_concept_dict_sha == (
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260911"]
+    )
+    assert frozen_live_reviewed_profile.expected_concept_dict_sha == (
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260911"]
+    )
     for profile in (
         public_profile,
         reviewed_profile,
-        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_05,
-        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05,
+        live_profile_0917,
+        live_reviewed_profile_0917,
+    ):
+        assert profile.expected_concept_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260917"]
+        )
+        assert profile.expected_sofa2_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260905_20260911_20260917"]
+        )
+
+
+def test_e1_0917_profiles_match_live_dictionary_when_clean() -> None:
+    """Live fingerprint check for the frozen 0917 coordinates.
+
+    Skips (never reds) when the working tree dictionaries are dirty: a dirty
+    ``concept-dict.json``/``sofa2-dict.json`` legitimately differs from the
+    frozen ``6c35…``/``b804…`` coordinates, so checksum mismatch + dirty git
+    status means skip, not fail. A clean tree with a mismatch means the frozen
+    constants above are stale and must fail.
+    """
+
+    import subprocess
+
+    from easyicu.research_agent import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17 as public_profile,
+        E1_REVIEWED_DEMO_2026_09_17 as reviewed_profile,
+    )
+    from easyicu.research_agent.concept_dict_audit import (
+        compute_concept_dict_fingerprint,
+    )
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17 as live_profile_0917,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17 as live_reviewed_profile_0917,
+    )
+
+    frozen_concept_sha = (
+        FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260917"]
+    )
+    frozen_sofa2_sha = (
+        FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260905_20260911_20260917"]
+    )
+    fingerprint = compute_concept_dict_fingerprint()
+    if (
+        fingerprint.concept_dict_sha != frozen_concept_sha
+        or fingerprint.sofa2_dict_sha != frozen_sofa2_sha
+    ):
+        repo_root = Path(__file__).resolve().parents[3]
+        try:
+            probed = subprocess.run(
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "--",
+                    "src/easyicu/data/concept-dict.json",
+                    "src/easyicu/data/sofa2-dict.json",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(repo_root),
+            )
+        except OSError:
+            probed = None
+        dirty = bool(probed is not None and probed.stdout.strip())
+        if dirty:
+            pytest.skip(
+                "concept dictionaries dirty "
+                f"({probed.stdout.strip()}); "
+                "live 0917 fingerprint check skipped"
+            )
+        pytest.skip(
+            "live dictionaries differ from frozen 0917 coordinates "
+            f"(concept={fingerprint.concept_dict_sha} "
+            f"sofa2={fingerprint.sofa2_dict_sha}); skipping live check"
+        )
+
+    for profile in (
+        public_profile,
+        reviewed_profile,
+        live_profile_0917,
+        live_reviewed_profile_0917,
     ):
         assert profile.expected_concept_dict_sha == fingerprint.concept_dict_sha
         assert profile.expected_sofa2_dict_sha == fingerprint.sofa2_dict_sha
@@ -764,14 +891,68 @@ def test_e1_20260904_replay_profiles_keep_their_original_dictionary_and_options(
         assert old.version == "20260904"
         assert old.locked_at == "2026-09-04T04:37:27-04:00"
         assert old.expected_concept_dict_sha == (
-            "fd122adc01693d78e760e19e61cb415ce8aef849ff2712f747dd79c289d48313"
+            FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260904_20260905"]
         )
         assert old.expected_sofa2_dict_sha == (
-            "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3"
+            FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260819_20260904"]
         )
         old_fields, new_fields = asdict(old), asdict(new)
         assert {key for key in old_fields if old_fields[key] != new_fields[key]} == {
             "version", "locked_at", "expected_sofa2_dict_sha",
+        }
+        assert profiles.get_submission_profile(old.ref) is old
+        assert profiles.get_submission_profile(new.ref) is new
+
+
+def test_e1_20260905_replay_profiles_keep_their_original_dictionary_and_options() -> None:
+    from dataclasses import asdict
+
+    from easyicu.research_agent.orchestration import profiles
+
+    for name in (
+        "E1_PROGRESSIVE_PLANNER_CANARY", "E1_REVIEWED_DEMO",
+        "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED", "E1_REVIEWED_DEMO_LIVE_PUBMED",
+    ):
+        old = getattr(profiles, f"{name}_2026_09_05")
+        new = getattr(profiles, f"{name}_2026_09_06")
+        assert old.version == "20260905"
+        assert old.locked_at == "2026-09-05T03:51:51Z"
+        assert old.expected_concept_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260904_20260905"]
+        )
+        assert old.expected_sofa2_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260905_20260911_20260917"]
+        )
+        old_fields, new_fields = asdict(old), asdict(new)
+        assert {key for key in old_fields if old_fields[key] != new_fields[key]} == {
+            "version", "locked_at", "expected_concept_dict_sha",
+        }
+        assert profiles.get_submission_profile(old.ref) is old
+        assert profiles.get_submission_profile(new.ref) is new
+
+
+def test_e1_20260911_replay_profiles_keep_their_original_dictionary_and_options() -> None:
+    from dataclasses import asdict
+
+    from easyicu.research_agent.orchestration import profiles
+
+    for name in (
+        "E1_PROGRESSIVE_PLANNER_CANARY", "E1_REVIEWED_DEMO",
+        "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED", "E1_REVIEWED_DEMO_LIVE_PUBMED",
+    ):
+        old = getattr(profiles, f"{name}_2026_09_11")
+        new = getattr(profiles, f"{name}_2026_09_17")
+        assert old.version == "20260911"
+        assert old.locked_at == "2026-09-11T00:00:00+08:00"
+        assert old.expected_concept_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260911"]
+        )
+        assert old.expected_sofa2_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260905_20260911_20260917"]
+        )
+        old_fields, new_fields = asdict(old), asdict(new)
+        assert {key for key in old_fields if old_fields[key] != new_fields[key]} == {
+            "version", "locked_at", "expected_concept_dict_sha",
         }
         assert profiles.get_submission_profile(old.ref) is old
         assert profiles.get_submission_profile(new.ref) is new
@@ -851,8 +1032,8 @@ def test_20260719_profile_to_dict_matches_frozen_protocol_snapshot() -> None:
         "enable_memory": False,
         "enable_reproducibility_envelope": True,
         "evidence_enforcement_mode": "strict",
-        "expected_concept_dict_sha": "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
-        "expected_sofa2_dict_sha": "61f37a41083cd96df49a2e61d26c682e9d090d0a22d05ff97ba85a966b165b1c",
+        "expected_concept_dict_sha": FROZEN_PROFILE_SNAPSHOTS["concept_20260719"],
+        "expected_sofa2_dict_sha": FROZEN_PROFILE_SNAPSHOTS["sofa2_20260719"],
         "locked_at": "2026-07-19T11:45:00-04:00",
         "name": "npj_dm",
         "ref": "npj_dm/20260719",
@@ -884,8 +1065,8 @@ def test_20260717_profile_to_dict_remains_immutable_after_relock() -> None:
         "enable_memory": False,
         "enable_reproducibility_envelope": True,
         "evidence_enforcement_mode": "strict",
-        "expected_concept_dict_sha": "b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54",
-        "expected_sofa2_dict_sha": "65075a691ef103112d9df0df452601299c37603c1c075742fe211bb75d2f92cc",
+        "expected_concept_dict_sha": FROZEN_PROFILE_SNAPSHOTS["concept_20260717"],
+        "expected_sofa2_dict_sha": FROZEN_PROFILE_SNAPSHOTS["sofa2_20260717"],
         "locked_at": "2026-07-17T00:00:00Z",
         "name": "npj_dm",
         "ref": "npj_dm/20260717",
@@ -920,8 +1101,8 @@ _ARCHIVAL_TO_DICT_SNAPSHOTS = {
     "npj_dm/20260527": {
         "enable_reproducibility_envelope": True,
         "evidence_enforcement_mode": "strict",
-        "expected_concept_dict_sha": "9ef52ed3ec51652f235c92a1394d4f4b91318cbd46e3915a5eacbbed2754e179",
-        "expected_sofa2_dict_sha": "e1844deafad9151aa5069824ff335bf59e228b97040a8bd884d23e0457047b25",
+        "expected_concept_dict_sha": FROZEN_PROFILE_SNAPSHOTS["concept_20260527"],
+        "expected_sofa2_dict_sha": FROZEN_PROFILE_SNAPSHOTS["sofa2_20260527"],
         "locked_at": "2026-05-27T00:00:00Z",
         "name": "npj_dm",
         "ref": "npj_dm/20260527",
@@ -933,8 +1114,8 @@ _ARCHIVAL_TO_DICT_SNAPSHOTS = {
     "npj_dm/20260611": {
         "enable_reproducibility_envelope": True,
         "evidence_enforcement_mode": "strict",
-        "expected_concept_dict_sha": "4b9c55bf9ec5dc92c39d6c14b036f0b19d4da684d9808618833b83d6b53c9ed2",
-        "expected_sofa2_dict_sha": "b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+        "expected_concept_dict_sha": FROZEN_PROFILE_SNAPSHOTS["concept_20260611"],
+        "expected_sofa2_dict_sha": FROZEN_PROFILE_SNAPSHOTS["sofa2_20260611_20260708_20260716"],
         "locked_at": "2026-06-11T00:00:00Z",
         "name": "npj_dm",
         "ref": "npj_dm/20260611",
@@ -946,8 +1127,8 @@ _ARCHIVAL_TO_DICT_SNAPSHOTS = {
     "npj_dm/20260708": {
         "enable_reproducibility_envelope": True,
         "evidence_enforcement_mode": "strict",
-        "expected_concept_dict_sha": "bc377779ce0f6b7983b2f8f527a37c1c394cc38e4a64055c9d9268b5f4d451ea",
-        "expected_sofa2_dict_sha": "b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+        "expected_concept_dict_sha": FROZEN_PROFILE_SNAPSHOTS["concept_20260708"],
+        "expected_sofa2_dict_sha": FROZEN_PROFILE_SNAPSHOTS["sofa2_20260611_20260708_20260716"],
         "locked_at": "2026-07-08T00:25:43-04:00",
         "name": "npj_dm",
         "ref": "npj_dm/20260708",
@@ -959,8 +1140,8 @@ _ARCHIVAL_TO_DICT_SNAPSHOTS = {
     "npj_dm/20260716": {
         "enable_reproducibility_envelope": True,
         "evidence_enforcement_mode": "strict",
-        "expected_concept_dict_sha": "095350e3d897ed6824673b229435941932bd8270b75667826e8b32538e5de146",
-        "expected_sofa2_dict_sha": "b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+        "expected_concept_dict_sha": FROZEN_PROFILE_SNAPSHOTS["concept_20260716"],
+        "expected_sofa2_dict_sha": FROZEN_PROFILE_SNAPSHOTS["sofa2_20260611_20260708_20260716"],
         "locked_at": "2026-07-16T10:17:17-04:00",
         "name": "npj_dm",
         "ref": "npj_dm/20260716",

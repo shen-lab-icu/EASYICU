@@ -47,6 +47,7 @@ from ...trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
     load_trajectory_scientific_runtime_authority,
 )
+from ._shared import write_json as _write_json
 
 __all__ = [
     "STABILITY_EXECUTOR_INPUTS",
@@ -363,13 +364,6 @@ def _require_artifact_digest_link(
         field=legacy_evidence_field,
         inputs=inputs,
         input_key=input_key,
-    )
-
-
-def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
     )
 
 

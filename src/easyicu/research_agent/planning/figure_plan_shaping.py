@@ -11,7 +11,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ..authority.current_case_scientific_runtime import CurrentCaseScientificRuntimeAuthority
 from ..contracts.declared_product import typed_product
+from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
 from ..contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
     ASSOCIATION_SUMMARY_COMPOSITE_INPUTS,
@@ -20,6 +22,8 @@ from ..contracts.figure_plan import (
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_FLOW_FIGURE_PANELS,
     COHORT_FLOW_INPUT,
+    CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS,
+    CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS,
     DATA_QUALITY_AUDIT_ROLES,
     DATA_QUALITY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
@@ -41,6 +45,7 @@ from ..contracts.figure_plan import (
     landmark_association_composite_panels,
     measurement_availability_figure_panels,
     robustness_figure_panels,
+    separable_display_panel_ids,
 )
 from ..schema import (
     AnalysisPlan,
@@ -194,6 +199,7 @@ def dedicated_renderer_consumes_typed_source(
     steps: Sequence[AnalysisStep],
     *,
     source: str,
+    compatible_companions: frozenset[str] = frozenset(),
 ) -> bool:
     """Return whether one explicit renderer already owns a typed source."""
 
@@ -214,9 +220,14 @@ def dedicated_renderer_consumes_typed_source(
             if contract.mode == "all_rows"
         }
         if (
-            inputs == {source}
-            and all_row_inputs == {source}
+            source in inputs
+            and inputs <= {source, *compatible_companions}
+            and all_row_inputs == {
+                item for item in inputs
+                if (product := typed_product(item)) is not None and product[0] == "table"
+            }
             and len(figure_products) == 1
+            and len(step.expected_outputs) == 1
         ):
             return True
     return False
@@ -440,6 +451,33 @@ def ensure_landmark_association_composite_figure_step(
         if output.partition(":")[2]
         in {"measurement_process", "measurement_process_audit"}
     )
+    sensitivity_candidates = sorted(
+        output
+        for output in produced
+        if output.startswith("table:")
+        and output.partition(":")[2].endswith("_exposure_contrasts")
+        and (
+            "robustness" in output.partition(":")[2]
+            or "sensitivity" in output.partition(":")[2]
+        )
+    )
+    sensitivity = None
+    if len(sensitivity_candidates) == 1:
+        sensitivity = sensitivity_candidates[0]
+        sensitivity_owner = next(
+            (
+                step
+                for step in plan.steps
+                if sensitivity in {str(output) for output in step.expected_outputs}
+            ),
+            None,
+        )
+        if (
+            sensitivity_owner is None
+            or sensitivity_owner.planned_analysis_role != "sensitivity"
+            or sensitivity_owner.method not in RCS_LINEAR_SENSITIVITY_METHODS
+        ):
+            sensitivity = None
     if (
         len(curve_candidates) != 1
         or len(adjusted_risk_candidates) != 1
@@ -449,6 +487,7 @@ def ensure_landmark_association_composite_figure_step(
     sources = (
         curve_candidates[0],
         adjusted_risk_candidates[0],
+        *((sensitivity,) if sensitivity is not None else ()),
         "table:robustness_summary",
         measurement_candidates[0],
     )
@@ -472,30 +511,48 @@ def ensure_landmark_association_composite_figure_step(
         or _method_head(str(curve_owner.method or ""))
         != "signed_landmark_restricted_cubic_spline"
         or _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources)
+        or (
+            sensitivity is None
+            and _dedicated_renderer_consumes_exact_sources(
+                plan.steps, sources=sources[:2]
+            )
+        )
     ):
         return plan, []
 
     steps = list(plan.steps)
-    reusable_index = next(
-        (
-            index
-            for index, step in enumerate(steps)
-            if step.planned_analysis_role == "auxiliary"
-            and _method_head(str(step.method or "")) == "visualization"
-            and not step.figure_panels
-            and len(step.expected_outputs) == 1
-            and str(step.expected_outputs[0]).startswith("figure:")
-            and "article" in (f"{step.step_id} {step.expected_outputs[0]}".lower())
-            and "table:robustness_summary"
-            in {str(value) for value in step.inputs}
-            and (
-                adjusted_risk_candidates[0]
+    pair_renderer_indices = [
+        index
+        for index, step in enumerate(steps)
+        if _dedicated_renderer_consumes_exact_sources([step], sources=sources[:2])
+    ]
+    if len(pair_renderer_indices) > 1:
+        return plan, []
+    reusable_index = (
+        pair_renderer_indices[0]
+        if sensitivity is not None and pair_renderer_indices
+        else next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if step.planned_analysis_role == "auxiliary"
+                and _method_head(str(step.method or "")) == "visualization"
+                and not step.figure_panels
+                and len(step.expected_outputs) == 1
+                and str(step.expected_outputs[0]).startswith("figure:")
+                and "article"
+                in (f"{step.step_id} {step.expected_outputs[0]}".lower())
+                and "table:robustness_summary"
                 in {str(value) for value in step.inputs}
-                or "table:absolute_risk_context"
-                in {str(value) for value in step.inputs}
-            )
-        ),
-        None,
+                and (
+                    adjusted_risk_candidates[0]
+                    in {str(value) for value in step.inputs}
+                    or "table:absolute_risk_context"
+                    in {str(value) for value in step.inputs}
+                )
+            ),
+            None,
+        )
     )
     figure_output = (
         str(steps[reusable_index].expected_outputs[0])
@@ -589,8 +646,28 @@ def ensure_absolute_risk_association_composite_figure_step(
         return plan, []
 
     steps = list(plan.steps)
-    step_id = _next_step_id(steps, "absolute_risk_association_figure")
-    figure_output = _next_figure_output(steps, "figure:absolute_risk_association")
+    # A closed result-pair placeholder already declares the same display
+    # purpose. Bind it before native runtime migration rather than leaving
+    # an untyped Coder figure beside a newly appended deterministic figure.
+    reusable = [
+        index
+        for index, step in enumerate(steps)
+        if step.planned_analysis_role == "auxiliary"
+        and not step.figure_panels
+        and len(step.expected_outputs) == 1
+        and _dedicated_renderer_consumes_exact_sources([step], sources=sources[:2])
+    ]
+    reusable_index = reusable[0] if len(reusable) == 1 else None
+    step_id = (
+        str(steps[reusable_index].step_id)
+        if reusable_index is not None
+        else _next_step_id(steps, "absolute_risk_association_figure")
+    )
+    figure_output = (
+        str(steps[reusable_index].expected_outputs[0])
+        if reusable_index is not None
+        else _next_figure_output(steps, "figure:absolute_risk_association")
+    )
     figure_step = AnalysisStep(
         step_id=step_id,
         planned_analysis_role="auxiliary",
@@ -613,7 +690,22 @@ def ensure_absolute_risk_association_composite_figure_step(
             for panel in absolute_risk_association_composite_panels(sources)
         ],
     )
-    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+    if reusable_index is None:
+        steps.append(figure_step)
+    else:
+        original = steps[reusable_index]
+        steps[reusable_index] = original.model_copy(
+            update={
+                "intent": figure_step.intent,
+                "inputs": figure_step.inputs,
+                "input_consumption_contracts": figure_step.input_consumption_contracts,
+                "figure_panels": figure_step.figure_panels,
+                "icu_rule_refs": list(
+                    dict.fromkeys([*original.icu_rule_refs, "visualization_rule"])
+                ),
+            }
+        )
+    return plan.model_copy(update={"steps": steps}), [
         ValidationFinding(
             validator="absolute_risk_association_figure_contract",
             severity="warning",
@@ -622,14 +714,75 @@ def ensure_absolute_risk_association_composite_figure_step(
                 "absolute-risk and robustness article figure."
             ),
             detail={
-                "reason_code": "absolute_risk_association_composite_figure_bound",
-                "appended_step_id": step_id,
+                "reason_code": (
+                    "absolute_risk_association_composite_figure_rebound"
+                    if reusable_index is not None
+                    else "absolute_risk_association_composite_figure_bound"
+                ),
+                "rebound_step_id"
+                if reusable_index is not None
+                else "appended_step_id": step_id,
                 "inputs": list(sources),
                 "producer_step_ids": owners,
                 "figure_output": figure_output,
             },
         )
     ]
+
+
+def ensure_cross_sectional_phenotyping_figure_step(
+    *, plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Select the native display only for uniquely owned native result products."""
+
+    sources = CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS
+    owners = {
+        source: [step for step in plan.steps if source in step.expected_outputs]
+        for source in sources
+    }
+    if any(len(steps) != 1 for steps in owners.values()):
+        return plan, []
+    primary = owners[sources[0]][0]
+    stability = owners[sources[2]][0]
+    if (
+        primary.planned_analysis_role != "primary"
+        or primary.scientific_action_id != "phenotyping.cluster_solution"
+        or tuple(primary.expected_outputs) != sources[:2]
+        or owners[sources[1]][0].step_id != primary.step_id
+        or stability.scientific_action_id != "phenotyping.cluster_stability"
+        or tuple(stability.expected_outputs) != (sources[2],)
+        or sources[1] not in stability.inputs
+        or _dedicated_renderer_consumes_exact_sources(
+            [step for step in plan.steps if step.planned_analysis_role == "auxiliary"],
+            sources=sources,
+        )
+    ):
+        return plan, []
+    output = _next_figure_output(plan.steps, "figure:cross_sectional_phenotyping")
+    figure = AnalysisStep(
+        step_id=_next_step_id(plan.steps, "cross_sectional_phenotyping_figure"),
+        planned_analysis_role="auxiliary", method="visualization",
+        intent=(
+            "Display existing candidate clusters using a full-SVD two-component "
+            "PCA of the sealed standardized matrix, clinical profile heatmap, "
+            "and conditional subsample/GMM agreement. Preserve all rows and "
+            "negative agreement; do not refit clusters or infer clinical validity."
+        ),
+        inputs=list(sources), expected_outputs=[output],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source, mode="all_rows")
+            for source in sources
+        ],
+        figure_panels=[panel.bind(figure_output=output) for panel in CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS],
+        icu_rule_refs=["visualization_rule"],
+    )
+    return plan.model_copy(update={"steps": [*plan.steps, figure]}), [ValidationFinding(
+        validator="cross_sectional_phenotyping_figure_contract", severity="warning",
+        message="Bound a source-traceable native candidate-cluster display before generic figure fallback.",
+        detail={"reason_code": "cross_sectional_phenotyping_figure_bound", "step_id": figure.step_id,
+                "inputs": list(sources), "figure_output": output,
+                "producer_step_ids": {key: value[0].step_id for key, value in owners.items()}},
+    )]
 
 
 def select_deterministic_result_renderers(
@@ -651,6 +804,7 @@ def select_deterministic_result_renderers(
         ensure_primary_result_figure_step,
         ensure_absolute_risk_association_composite_figure_step,
         ensure_landmark_association_composite_figure_step,
+        ensure_cross_sectional_phenotyping_figure_step,
     ):
         plan, pass_findings = select(plan=plan)
         findings.extend(pass_findings)
@@ -751,6 +905,59 @@ def ensure_cohort_accounting_figure_step(
         source=source,
     ):
         return plan, []
+    # A runtime adapter may expose the primary population only after the
+    # generic cohort renderer was selected. Rebind that one closed draft
+    # renderer instead of retaining the broad denominator or adding a duplicate.
+    generic_renderers = [
+        index
+        for index, step in enumerate(steps)
+        if step.planned_analysis_role == "auxiliary"
+        and len(step.expected_outputs) == 1
+        and _dedicated_renderer_consumes_exact_sources(
+            [step], sources=[COHORT_FLOW_INPUT]
+        )
+    ]
+    if (
+        len(primary_population_sources) == 1
+        and len(generic_sources) == 1
+        and len(generic_renderers) == 1
+        and source != COHORT_FLOW_INPUT
+    ):
+        index = generic_renderers[0]
+        old = steps[index]
+        rebound = migrate_render_step_contract(
+            old,
+            [source],
+            intent=(
+                "Render the primary analysis population's recorded selection "
+                "stages and denominators. Preserve the broader cohort ledger "
+                "as a separate table; do not infer exclusions or recount patients."
+            ),
+        )
+        steps[index] = rebound.model_copy(
+            update={
+                "figure_panels": [
+                    panel.model_copy(update={"source_products": (source,)}).bind(
+                        figure_output=str(old.expected_outputs[0])
+                    )
+                    for panel in COHORT_FLOW_FIGURE_PANELS
+                ],
+            }
+        )
+        return plan.model_copy(update={"steps": steps}), [
+            ValidationFinding(
+                validator="cohort_accounting_figure_contract",
+                severity="warning",
+                message="Bound the existing cohort figure to the final primary population ledger.",
+                detail={
+                    "reason_code": "cohort_figure_primary_population_rebound",
+                    "step_id": old.step_id,
+                    "source_product": source,
+                    "producer_step_id": owner,
+                    "preserved_table": COHORT_FLOW_INPUT,
+                },
+            )
+        ]
     step_id = _next_step_id(steps, "cohort_accounting_figure")
     figure_output = _next_figure_output(steps, "figure:cohort_flow")
     figure_step = AnalysisStep(
@@ -975,6 +1182,7 @@ def bind_deterministic_figure_panels(
     """
 
     templates_by_inputs = {
+        frozenset(CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS): CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS,
         frozenset({COHORT_FLOW_INPUT}): COHORT_FLOW_FIGURE_PANELS,
         frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}): (
             EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS
@@ -1246,6 +1454,105 @@ def apply_deterministic_figure_panels(
     return shaped
 
 
+def omit_redundant_composite_audits(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Keep audit displays with their closed dedicated owners before review.
+
+    The primary curve pair can stand alone only when both former audit
+    sources remain consumed by explicit deterministic displays elsewhere.
+    No table, analysis, population, or historical reviewed plan is changed.
+    """
+    sources, _owners, missing, ambiguous = _closed_data_quality_sources(plan.steps)
+    if sources is None or missing or ambiguous:
+        return plan, []
+    if not _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources):
+        return plan, []
+    if not any(
+        ROBUSTNESS_FIGURE_INPUT in candidate.inputs
+        and dedicated_renderer_consumes_typed_source(
+            [candidate],
+            source="table:robustness_summary",
+            compatible_companions=ROBUSTNESS_FIGURE_KNOWN_INPUTS
+            - {"table:robustness_summary"},
+        )
+        for candidate in plan.steps
+    ):
+        return plan, []
+    findings = []
+    steps = []
+    for step in plan.steps:
+        if (
+            step.planned_analysis_role != "auxiliary"
+            or _method_head(str(step.method or "")) != "visualization"
+            or len(step.inputs) not in {4, 5}
+            or len(step.expected_outputs) != 1
+            or not str(step.expected_outputs[0]).startswith("figure:")
+        ):
+            steps.append(step)
+            continue
+        try:
+            panels = landmark_association_composite_panels(step.inputs)
+        except ValueError:
+            steps.append(step)
+            continue
+        audit_inputs = {
+            source
+            for panel in panels
+            if panel.panel_id in {"robustness_summary", "measurement_process"}
+            for source in panel.source_products
+        }
+        if not audit_inputs <= {*sources, "table:robustness_summary"}:
+            steps.append(step)
+            continue
+        all_rows = {
+            c.input_key
+            for c in step.input_consumption_contracts
+            if c.mode == "all_rows"
+        }
+        if all_rows != set(step.inputs) or any(
+            sum(source in candidate.expected_outputs for candidate in plan.steps) != 1
+            for source in step.inputs
+        ):
+            steps.append(step)
+            continue
+        primary_inputs = [
+            source for source in step.inputs if source not in audit_inputs
+        ]
+        revised = migrate_render_step_contract(
+            step,
+            primary_inputs,
+            intent=(
+                "Render the aligned primary association and absolute-risk curves. "
+                "The exact audit tables remain in their dedicated diagnostic displays; "
+                "do not refit models or duplicate those displays."
+            ),
+        )
+        revised = revised.model_copy(
+            update={
+                "figure_panels": [
+                    panel.bind(figure_output=str(step.expected_outputs[0]))
+                    for panel in landmark_association_composite_panels(primary_inputs)
+                ]
+            }
+        )
+        steps.append(revised)
+        findings.append(
+            ValidationFinding(
+                validator="deterministic_figure_plan_binding",
+                severity="warning",
+                message="Kept composite audits in their existing dedicated source-bound displays.",
+                detail={
+                    "reason": "composite_audits_have_dedicated_displays",
+                    "step_id": step.step_id,
+                    "preserved_audit_sources": sorted(audit_inputs),
+                },
+            )
+        )
+    return (plan.model_copy(update={"steps": steps}) if findings else plan), findings
+
+
 def apply_runtime_bound_figure_contracts(
     plan: AnalysisPlan,
     findings: list[ValidationFinding],
@@ -1259,7 +1566,57 @@ def apply_runtime_bound_figure_contracts(
 
     revised, renderer_findings = select_deterministic_result_renderers(plan=plan)
     findings.extend(renderer_findings)
+    revised, cohort_findings = ensure_cohort_accounting_figure_step(plan=revised)
+    findings.extend(cohort_findings)
+    revised, audit_findings = omit_redundant_composite_audits(plan=revised)
+    findings.extend(audit_findings)
     return apply_deterministic_figure_panels(revised, findings)
+
+
+def _resolve_unseparable_placement_splits(
+    *, step: AnalysisStep, panels: Sequence[Any]
+) -> list[Any]:
+    """Give one exported surface exactly one placement.
+
+    A composite shipped as a single image has one display surface, so a panel
+    that must leave the main article takes the whole surface with it.  Only a
+    renderer that declares it exports a panel on its own supplementary artifact
+    can keep siblings on a different placement.
+
+    This bound matters because the runtime figure-binding gate groups planned
+    panels by placement and then looks for an artifact per group.  A split the
+    renderer cannot produce is therefore not a cosmetic plan disagreement: it
+    fails the whole run closed at the end of execution, on a step whose figure
+    rendered correctly, after every scientific step already spent its budget.
+    """
+
+    resolved = list(panels)
+    indexes_by_output: dict[str, list[int]] = {}
+    for index, panel in enumerate(panels):
+        indexes_by_output.setdefault(str(panel.figure_output), []).append(index)
+    for figure_output, indexes in indexes_by_output.items():
+        if len(indexes) < 2:
+            continue
+        declared = {str(panels[index].placement) for index in indexes}
+        if len(declared) < 2:
+            continue
+        separable = separable_display_panel_ids(
+            source_products=tuple(str(value) for value in step.inputs),
+            panel_ids=[str(panels[index].panel_id) for index in indexes],
+        )
+        stuck = [
+            index
+            for index in indexes
+            if str(panels[index].placement) == "supplementary"
+            and str(panels[index].panel_id) not in separable
+        ]
+        if not stuck:
+            continue
+        for index in indexes:
+            resolved[index] = panels[index].model_copy(
+                update={"placement": "supplementary"}
+            )
+    return resolved
 
 
 def apply_article_figure_strategy_placements(
@@ -1271,6 +1628,8 @@ def apply_article_figure_strategy_placements(
     supplementary placement belongs to the Planner-final article strategy.
     Compile the latter once before the plan digest is sealed so renderers do
     not infer publication hierarchy from variable names or benchmark cases.
+    A projection is still bounded by what the selected renderer can export: see
+    :func:`_resolve_unseparable_placement_splits`.
     """
 
     placements = {
@@ -1288,15 +1647,24 @@ def apply_article_figure_strategy_placements(
         "sensitivity_coverage_matrix",
         "status_matrix",
     }
+    audit_only_source_products = {
+        "table:robustness_summary",
+        "table:measurement_process",
+        "table:measurement_process_audit",
+    }
     changed = False
     steps: list[AnalysisStep] = []
     for step in plan.steps:
         panels = []
         for panel in step.figure_panels:
             placement = placements.get(panel.article_role, panel.placement)
-            if str(panel.chart_type) in audit_only_chart_types:
+            if (
+                str(panel.chart_type) in audit_only_chart_types
+                or set(panel.source_products) & audit_only_source_products
+            ):
                 placement = "supplementary"
             panels.append(panel.model_copy(update={"placement": placement}))
+        panels = _resolve_unseparable_placement_splits(step=step, panels=panels)
         if panels != step.figure_panels:
             changed = True
             step = step.model_copy(update={"figure_panels": panels})
@@ -1308,12 +1676,15 @@ def apply_required_plan_obligations(
     plan: AnalysisPlan,
     context: ResearchContext,
     findings: list[ValidationFinding],
+    *,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> AnalysisPlan:
     """Close paired typed sensitivity and descriptive-context obligations."""
 
     shaped, sensitivity_findings = ensure_prespecified_sensitivity_steps(
         plan=plan,
         context=context,
+        runtime_authority=runtime_authority,
     )
     shaped, figure_findings = ensure_descriptive_context_figure_step(plan=shaped)
     findings.extend([*sensitivity_findings, *figure_findings])
@@ -1367,7 +1738,7 @@ def close_empty_deterministic_figure_contracts(
             templates = _data_quality_panel_templates(data_quality_sources)
         elif (
             LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= input_set
-            and len(input_set) == 4
+            and len(input_set) in {4, 5}
             and any(
                 value.startswith("table:")
                 and value.partition(":")[2].endswith("landmark_rcs_curve")
@@ -1392,11 +1763,16 @@ def close_empty_deterministic_figure_contracts(
                 for value in input_set
             )
         ):
-            templates = landmark_association_composite_panels(inputs)
+            try:
+                templates = landmark_association_composite_panels(inputs)
+            except ValueError:
+                templates = None
         elif input_set == frozenset(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS):
             templates = cohort_balance_association_composite_panels(inputs)
         elif input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):
             templates = absolute_risk_association_composite_panels(inputs)
+        elif input_set == frozenset(CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS):
+            templates = CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS
         if (
             templates is None
             or (eligible is not None and step_id not in eligible)
@@ -1455,6 +1831,7 @@ def close_empty_deterministic_figure_contracts(
 
 
 __all__ = [
+    "ensure_cross_sectional_phenotyping_figure_step",
     "apply_article_figure_strategy_placements",
     "apply_deterministic_figure_panels",
     "apply_runtime_bound_figure_contracts",

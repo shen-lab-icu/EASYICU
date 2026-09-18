@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .capability_ids import PHENOTYPING_ANALYSIS_KIND
+
+logger = logging.getLogger(__name__)
 
 _SELECTION_RULE = "maximum_silhouette_then_lower_k"
 
@@ -197,7 +200,11 @@ def phenotyping_runtime_receipt_valid(summary: Any) -> bool:
         PhenotypingRuntimeReceipt.model_validate(
             summary.get("scientific_runtime_receipt")
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "phenotyping_runtime_receipt_valid closed: error_type=%s",
+            type(exc).__name__,
+        )
         return False
     return True
 

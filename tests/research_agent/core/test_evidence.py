@@ -803,10 +803,13 @@ def test_enforce_evidence_bound_scaffold_does_not_exempt_list_or_quote_claims(
     assert "> Context for the analysis is described here." in filtered
     assert "- **Results:** Mortality was lower {evidence:primary_result}." not in filtered
     assert "- **Results:**" in filtered
+    # 57246d71b made the neutral structured-abstract labels part of the
+    # preserved Markdown structure, so the removal record names the rejected
+    # claim itself; the empty label survives in ``filtered`` (asserted above).
     assert removed == [
-        "**Results:** Mortality was lower in the intervention arm.",
+        "Mortality was lower in the intervention arm.",
         "Mortality was higher after adjustment.",
-        "**Results:** Mortality was lower {evidence:primary_result}.",
+        "Mortality was lower {evidence:primary_result}.",
     ]
 
 

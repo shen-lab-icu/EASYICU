@@ -81,11 +81,125 @@ assert.ok(!readerLayer.includes('statistic_1'));
 assert.ok(!readerLayer.includes('d'.repeat(64)));
 assert.ok(!readerLayer.includes('evidence/statistic_1__&lt;bad&gt;.json'));
 
+const selectedPayload = {
+  renderer: 'json', previewable: true, kind: 'statistic', evidence_id: 'primary_summary',
+  sha256: 'd'.repeat(64), display_name: 'step_summary.json',
+  value: { estimates: [{ rate: 23.45678 }, { rate: 0 }], 'escaped/key~': 8 },
+};
+const selected = renderer.render(selectedPayload, {
+  pointer: '/estimates/0/rate', value: '23.45678', display: '23.46%',
+});
+const selectedReader = selected.slice(0, selected.indexOf('Full file audit'));
+assert.ok(selectedReader.includes('Selected number source'));
+assert.ok(selectedReader.includes('23.46%'));
+assert.ok(selectedReader.includes('23.45678'));
+assert.ok(selectedReader.includes('Source field and value match'));
+assert.ok(!selectedReader.includes('/estimates/0/rate'), 'raw pointers remain in the audit layer');
+const zero = renderer.render(selectedPayload, { pointer: '/estimates/1/rate', value: '0', display: '0%' });
+assert.ok(zero.includes('Source field and value match'));
+assert.ok(zero.includes('<strong>0</strong>'));
+const escapedPointer = renderer.render(selectedPayload, { pointer: '/escaped~1key~0', value: '8' });
+assert.ok(escapedPointer.includes('Source field and value match'));
+for (const locator of [
+  { pointer: '/estimates/0/rate', value: '999' },
+  { pointer: '/estimates/1/rate', value: '23.45678' },
+  { pointer: '/estimates/9/rate', value: '23.45678' },
+  { pointer: '/estimates/0', value: '[object Object]' },
+  { pointer: '/constructor', value: '8' },
+  { pointer: '/escaped~2key~', value: '8' },
+]) {
+  const mismatch = renderer.render(selectedPayload, locator);
+  assert.ok(mismatch.includes('Selected number could not be matched'));
+  assert.ok(!mismatch.includes('Source field and value match'));
+}
+const selectedXss = renderer.render(selectedPayload, {
+  pointer: '/estimates/0/rate', value: '23.45678', display: '<img src=x onerror="bad()">',
+});
+assert.ok(!selectedXss.includes('<img src=x'));
+assert.ok(selectedXss.includes('&lt;img src=x'));
+
+const distribution = {
+  ...selectedPayload,
+  value: {
+    exposure: 'event_status', outcome: 'hospital_endpoint',
+    descriptive_estimates: {
+      schema_version: 'easyicu.exposure_outcome_descriptive_estimates/1',
+      exposure_prevalence: [
+        { level: 0, n: 60, denominator: 100, estimate_pct: 60 },
+        { level: 1, n: 40, denominator: 100, estimate_pct: 40 },
+      ],
+      outcome_absolute_risks: [
+        { level: 0, events: 6, denominator: 60, estimate_pct: 10 },
+        { level: 1, events: 8, denominator: 40, estimate_pct: 20 },
+      ],
+    },
+  },
+};
+const originalDistribution = JSON.stringify(distribution);
+function selectionOnly(payload, pointer, value) {
+  const rendered = renderer.render(payload, { pointer, value: String(value), display: String(value) });
+  return rendered.slice(0, rendered.indexOf('</section>') + '</section>'.length);
+}
+const prevalenceSelection = selectionOnly(distribution, '/descriptive_estimates/exposure_prevalence/1/estimate_pct', 40);
+assert.ok(prevalenceSelection.includes('Group share of the cohort'));
+assert.ok(prevalenceSelection.includes('40 / 100'));
+assert.ok(prevalenceSelection.includes('Recorded group value'));
+assert.ok(!prevalenceSelection.includes('hospital_endpoint'));
+assert.ok(!prevalenceSelection.includes('8 / 40'));
+const outcomeSelection = selectionOnly(distribution, '/descriptive_estimates/outcome_absolute_risks/1/estimate_pct', 20);
+assert.ok(outcomeSelection.includes('Observed outcome proportion within the group'));
+assert.ok(outcomeSelection.includes('8 / 40'));
+assert.ok(outcomeSelection.includes('hospital_endpoint'));
+assert.ok(!outcomeSelection.includes('40 / 100'));
+for (const [family, metric, field, count] of [
+  ['exposure_prevalence', 'Records in this group', 'n', 40],
+  ['exposure_prevalence', 'Cohort denominator', 'denominator', 100],
+  ['outcome_absolute_risks', 'Outcome events in this group', 'events', 8],
+  ['outcome_absolute_risks', 'Outcome denominator in this group', 'denominator', 40],
+]) {
+  assert.ok(selectionOnly(distribution, `/descriptive_estimates/${family}/1/${field}`, count).includes(metric));
+}
+const wrongSelectedValue = renderer.render(distribution, {pointer:'/descriptive_estimates/exposure_prevalence/0/estimate_pct',value:'40'});
+assert.ok(wrongSelectedValue.includes('Selected number could not be matched'));
+assert.ok(!wrongSelectedValue.includes('Selected metric'));
+const unsupported = JSON.parse(originalDistribution);
+unsupported.value.descriptive_estimates.schema_version = 'unknown';
+assert.ok(!selectionOnly(unsupported, '/descriptive_estimates/exposure_prevalence/1/estimate_pct', 40).includes('Selected metric'));
+const invalidDenominator = JSON.parse(originalDistribution);
+invalidDenominator.value.descriptive_estimates.exposure_prevalence[1].denominator = -1;
+assert.ok(!selectionOnly(invalidDenominator, '/descriptive_estimates/exposure_prevalence/1/estimate_pct', 40).includes('Group records / cohort records'));
+const dangerousGroup = JSON.parse(originalDistribution);
+dangerousGroup.value.descriptive_estimates.exposure_prevalence[1].level = '<img src=x onerror=bad()>';
+const escapedGroup = selectionOnly(dangerousGroup, '/descriptive_estimates/exposure_prevalence/1/estimate_pct', 40);
+assert.ok(escapedGroup.includes('&lt;img src=x'));
+assert.ok(!escapedGroup.includes('<img src=x'));
+assert.equal(JSON.stringify(distribution), originalDistribution, 'source JSON remains unchanged');
+const selectedWithContext = renderer.render(distribution, {pointer:'/descriptive_estimates/exposure_prevalence/1/estimate_pct',value:'40'});
+assert.ok(selectedWithContext.includes('<summary>Whole-file context (not the selected metric)</summary>'));
+
+for (const [confidence, label] of [[0.90, '90% CI'], [null, 'Confidence interval'], [95, 'Confidence interval']]) {
+  const html = renderer.render({...selectedPayload, value:{estimate:1.2,ci:[1,1.4],confidence_level:confidence}});
+  assert.ok(html.includes(`<span>${label}</span>`));
+  assert.ok(!html.includes('95% CI'), 'never infer a confidence level from two endpoints');
+  const grouped = renderer.render({...selectedPayload, value:{
+    reportable_descriptive_results:{exposures:[{exposure:'event_status',groups:[{
+      label:'recorded',outcome_risk_ci_low_pct:10,outcome_risk_ci_high_pct:30,confidence_level:confidence,
+    }]}]},
+  }});
+  assert.ok(grouped.includes('<th>Confidence interval</th>'));
+  assert.ok(!grouped.includes('95% CI'));
+  if (confidence === 0.90) assert.ok(grouped.includes('(90% CI)'));
+}
+const declared95 = renderer.render({...selectedPayload, value:{estimate:1.2,ci:[1,1.4],confidence_level:0.95}});
+assert.ok(declared95.includes('<span>95% CI</span>'), 'retain explicitly recorded confidence levels');
+
 const withheld = renderer.render({
   renderer: 'metadata', previewable: false, kind: 'table', evidence_id: 'cohort_1',
   sha256: 'c'.repeat(64), withheld_reason: 'patient_level_rows_withheld', bytes: 1024,
-}, {});
+}, { pointer: '/estimates/0/rate', value: '23.45678', display: '23.46%' });
 assert.ok(withheld.includes('Patient-level cohort rows are withheld'));
 assert.ok(!withheld.includes('<table'));
+assert.ok(!withheld.includes('Source field and value match'));
+assert.ok(!withheld.includes('23.46%'));
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 4 }));
+process.stdout.write(JSON.stringify({ ok: true, suites: ['safe_preview', 'exact_source_selection', 'typed_metric_context', 'confidence_level_metadata'] }));

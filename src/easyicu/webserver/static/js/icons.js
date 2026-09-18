@@ -1,3 +1,4 @@
+/* Owner: inline SVG icon widget. */
 /* Lucide-style line icons → inline SVG strings.
    icon(name, size, stroke) */
 (function () {

@@ -475,6 +475,7 @@ def figure_contract_text(raw: Mapping[str, Any]) -> str:
         str(raw.get("title") or ""),
         str(raw.get("core_claim") or ""),
         str(raw.get("statistics_note") or ""),
+        str(raw.get("reader_caption") or ""),
     ]
     panels = raw.get("panels")
     if isinstance(panels, list):

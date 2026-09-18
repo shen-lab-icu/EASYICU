@@ -216,6 +216,27 @@ class ExtensionRegistry:
             "mcp_servers": [],
         }
 
+    def _require_activation_unlocked(
+        self, state: Mapping[str, Any], expected_activation_sha256: str | None
+    ) -> None:
+        """Compare-and-swap guard: must run inside :meth:`_locked`.
+
+        The expected digest is compared against the activation computed from
+        the just-read state while the exclusive lock is held, so two
+        concurrent mutations carrying the same stale digest cannot both land.
+        A mismatch fails closed; callers re-read GET /api/extensions.
+        """
+
+        if expected_activation_sha256 is None:
+            return
+        current = self._snapshot_from_state(state).activation_sha256
+        if current != expected_activation_sha256:
+            raise ExtensionRegistryError(
+                "extension_revision_mismatch",
+                "Read GET /api/extensions again and confirm the current activation before retrying.",
+                details={"activation_sha256": current},
+            )
+
     def _read_state_unlocked(self) -> Dict[str, Any]:
         try:
             size = self.state_path.stat().st_size
@@ -298,6 +319,7 @@ class ExtensionRegistry:
         *,
         stages: Sequence[str] = ("conversation",),
         enabled: bool = True,
+        expected_activation_sha256: str | None = None,
     ) -> Dict[str, Any]:
         parsed = parse_skill_markdown(skill_markdown)
         clean_stages = _normalise_stages(stages)
@@ -309,6 +331,7 @@ class ExtensionRegistry:
         now = _utc_now()
         with self._locked():
             state = self._read_state_unlocked()
+            self._require_activation_unlocked(state, expected_activation_sha256)
             existing = next(
                 (
                     row
@@ -342,6 +365,7 @@ class ExtensionRegistry:
         url: str,
         allowed_tools: Sequence[str],
         enabled: bool = False,
+        expected_activation_sha256: str | None = None,
     ) -> Dict[str, Any]:
         clean_name = _clean_name(name, code="extension_mcp_name_invalid")
         clean_tools = _normalise_tools(allowed_tools)
@@ -356,6 +380,7 @@ class ExtensionRegistry:
         now = _utc_now()
         with self._locked():
             state = self._read_state_unlocked()
+            self._require_activation_unlocked(state, expected_activation_sha256)
             existing = next(
                 (
                     row
@@ -380,11 +405,19 @@ class ExtensionRegistry:
             self._write_state_unlocked(state)
         return self._public_mcp(row)
 
-    def set_enabled(self, *, kind: str, name: str, enabled: bool) -> Dict[str, Any]:
+    def set_enabled(
+        self,
+        *,
+        kind: str,
+        name: str,
+        enabled: bool,
+        expected_activation_sha256: str | None = None,
+    ) -> Dict[str, Any]:
         collection = self._collection_name(kind)
         clean_name = _clean_name(name, code="extension_name_invalid")
         with self._locked():
             state = self._read_state_unlocked()
+            self._require_activation_unlocked(state, expected_activation_sha256)
             row = next(
                 (item for item in state[collection] if item.get("name") == clean_name),
                 None,
@@ -409,11 +442,18 @@ class ExtensionRegistry:
             self._write_state_unlocked(state)
             return self._public_skill(row) if collection == "skills" else self._public_mcp(row)
 
-    def remove(self, *, kind: str, name: str) -> Dict[str, Any]:
+    def remove(
+        self,
+        *,
+        kind: str,
+        name: str,
+        expected_activation_sha256: str | None = None,
+    ) -> Dict[str, Any]:
         collection = self._collection_name(kind)
         clean_name = _clean_name(name, code="extension_name_invalid")
         with self._locked():
             state = self._read_state_unlocked()
+            self._require_activation_unlocked(state, expected_activation_sha256)
             before = len(state[collection])
             state[collection] = [
                 item for item in state[collection] if item.get("name") != clean_name

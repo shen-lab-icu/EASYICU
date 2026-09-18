@@ -581,10 +581,76 @@ E1_REVIEWED_DEMO_2026_09_05 = replace(
     ),
 )
 
-CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
-    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_05.ref
+E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_05,
+    version="20260906",
+    locked_at="2026-09-06T07:53:25Z",
+    # Admission-level mortality status is now bound to its clinical owner.
+    # Keep all prior dictionary coordinates immutable for historical replay.
+    expected_concept_dict_sha=(
+        "063ef9fd3314bd43514cb20b52cf15e8633929027ae69efcabb12d14a10988ed"
+    ),
 )
-CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_09_05.ref
+
+E1_REVIEWED_DEMO_2026_09_06 = replace(
+    E1_REVIEWED_DEMO_2026_09_05,
+    version="20260906",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06.expected_concept_dict_sha
+    ),
+)
+
+E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06,
+    version="20260911",
+    locked_at="2026-09-11T00:00:00+08:00",
+    # MIMIC-IV services.curr_service includes EYE (Ophthalmology, 54 source
+    # rows). The admission-type map previously left it unmapped, so a two-row
+    # zero-event level could separately split the 24-hour landmark model.
+    # This profile binds the corrected dictionary; the 20260906 coordinate
+    # stays byte-frozen for historical replay.
+    expected_concept_dict_sha=(
+        "389e2988a6d601974cf7dd5b303929964ec8c9d66a82c63821646e956cc1ceec"
+    ),
+)
+
+E1_REVIEWED_DEMO_2026_09_11 = replace(
+    E1_REVIEWED_DEMO_2026_09_06,
+    version="20260911",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11.expected_concept_dict_sha
+    ),
+)
+
+E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11,
+    version="20260917",
+    locked_at="2026-09-17T00:00:00+08:00",
+    # crea ceiling 15 -> 25 mg/dL: the ricu-inherited cap silently dropped
+    # real severe-AKI peaks before KDIGO aggregation. Cross-database export
+    # measurement shows genuine (15,25] peaks in eICU/SICdb stays while
+    # unit-error tails above 25 stay excluded; the 20260911 coordinate stays
+    # byte-frozen for historical replay.
+    expected_concept_dict_sha=(
+        "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba"
+    ),
+)
+
+E1_REVIEWED_DEMO_2026_09_17 = replace(
+    E1_REVIEWED_DEMO_2026_09_11,
+    version="20260917",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.expected_concept_dict_sha
+    ),
+)
+
+CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.ref
+)
+CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_09_17.ref
 
 # Web Copilot may request live prior-art retrieval only after an explicit turn
 # grant. Keep that evidence-changing option out of the default E1 profiles and
@@ -693,11 +759,67 @@ E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05 = replace(
     ),
 )
 
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_06 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_05,
+    version="20260906",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06.expected_concept_dict_sha
+    ),
+)
+
+E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_06 = replace(
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05,
+    version="20260906",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06.expected_concept_dict_sha
+    ),
+)
+
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_06,
+    version="20260911",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11.expected_concept_dict_sha
+    ),
+)
+
+E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11 = replace(
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_06,
+    version="20260911",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11.expected_concept_dict_sha
+    ),
+)
+
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11,
+    version="20260917",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.locked_at,
+    # Same crea 15 -> 25 re-lock as the 20260917 canary pair; the 20260911
+    # live-pubmed coordinate stays byte-frozen for historical replay.
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.expected_concept_dict_sha
+    ),
+)
+
+E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17 = replace(
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11,
+    version="20260917",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.locked_at,
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.expected_concept_dict_sha
+    ),
+)
+
 CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF = (
-    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_05.ref
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17.ref
 )
 CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF = (
-    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05.ref
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17.ref
 )
 
 DEV9_AI_REVIEWED_DEMO_2026_08_22 = SubmissionProfile(
@@ -934,12 +1056,24 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_PROGRESSIVE_PLANNER_CANARY_2026_09_05.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_05
     ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06
+    ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11
+    ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17
+    ),
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
     E1_REVIEWED_DEMO_2026_08_19.ref: E1_REVIEWED_DEMO_2026_08_19,
     E1_REVIEWED_DEMO_2026_09_03.ref: E1_REVIEWED_DEMO_2026_09_03,
     E1_REVIEWED_DEMO_2026_09_04.ref: E1_REVIEWED_DEMO_2026_09_04,
     E1_REVIEWED_DEMO_2026_09_05.ref: E1_REVIEWED_DEMO_2026_09_05,
+    E1_REVIEWED_DEMO_2026_09_06.ref: E1_REVIEWED_DEMO_2026_09_06,
+    E1_REVIEWED_DEMO_2026_09_11.ref: E1_REVIEWED_DEMO_2026_09_11,
+    E1_REVIEWED_DEMO_2026_09_17.ref: E1_REVIEWED_DEMO_2026_09_17,
     E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24
     ),
@@ -963,6 +1097,24 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     ),
     E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05.ref: (
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05
+    ),
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_06.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_06
+    ),
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_06.ref: (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_06
+    ),
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11
+    ),
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17
+    ),
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11.ref: (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11
+    ),
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17.ref: (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17
     ),
     DEV9_AI_REVIEWED_DEMO_2026_08_22.ref: DEV9_AI_REVIEWED_DEMO_2026_08_22,
     DEV9_AI_REVIEWED_DEMO_2026_08_24.ref: DEV9_AI_REVIEWED_DEMO_2026_08_24,
@@ -1211,12 +1363,18 @@ __all__ = [
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_03",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_04",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_05",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_06",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17",
     "E1_REVIEWED_DEMO_2026_08_15",
     "E1_REVIEWED_DEMO_2026_08_17",
     "E1_REVIEWED_DEMO_2026_08_19",
     "E1_REVIEWED_DEMO_2026_09_03",
     "E1_REVIEWED_DEMO_2026_09_04",
     "E1_REVIEWED_DEMO_2026_09_05",
+    "E1_REVIEWED_DEMO_2026_09_06",
+    "E1_REVIEWED_DEMO_2026_09_11",
+    "E1_REVIEWED_DEMO_2026_09_17",
     "CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF",
     "CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF",
     "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24",
@@ -1227,6 +1385,12 @@ __all__ = [
     "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_04",
     "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_05",
     "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_05",
+    "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_06",
+    "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_06",
+    "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11",
+    "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17",
+    "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11",
+    "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17",
     "CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF",
     "CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF",
     "DEV9_AI_REVIEWED_DEMO_2026_08_22",

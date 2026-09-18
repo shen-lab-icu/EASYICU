@@ -379,8 +379,11 @@ def repair_missing_context_section_citations(
     The repair makes no claim about a paper's findings.  It only records which
     exact source the run retained for clinical context, preferring a screened
     direct comparator and otherwise using the first non-method contextual
-    record in the immutable bundle.  Unknown or absent authority leaves the
-    manuscript unchanged and the existing literature audit stays fail-closed.
+    record in the immutable bundle.  A section that already cites other work
+    still receives the screened direct comparator when the audit requires it,
+    because the comparator is the run's only source-bound clinical reference.
+    Unknown or absent authority leaves the manuscript unchanged and the
+    existing literature audit stays fail-closed.
     """
 
     audit = audit_manuscript_literature(manuscript, literature)
@@ -388,25 +391,38 @@ def repair_missing_context_section_citations(
         "introduction",
         "discussion",
     }
-    if not missing:
+    direct_missing = set(audit.direct_comparator_sections_missing) & {
+        "introduction",
+        "discussion",
+    }
+    if not missing and not direct_missing:
         return manuscript, []
-    citation_key = _run_bound_context_source(literature)
-    if citation_key is None:
-        return manuscript, []
+    context_key = _run_bound_context_source(literature)
+    direct_key = (
+        audit.direct_comparator_keys_available[0]
+        if audit.direct_comparator_keys_available
+        else None
+    )
     templates = {
         "introduction": (
             "The declared clinical framework was contextualized using an exact "
-            f"source retained in the run literature bundle [@{citation_key}]."
+            "source retained in the run literature bundle [@{key}]."
         ),
         "discussion": (
             "Interpretation was considered alongside the exact run-bound "
-            f"clinical-context source [@{citation_key}]."
+            "clinical-context source [@{key}]."
         ),
     }
     repaired = manuscript
     repairs: list[dict[str, str]] = []
     for section in ("introduction", "discussion"):
-        if section not in missing:
+        if section in missing:
+            citation_key = context_key
+        elif section in direct_missing:
+            citation_key = direct_key
+        else:
+            continue
+        if citation_key is None:
             continue
         heading = next(
             (
@@ -418,7 +434,7 @@ def repair_missing_context_section_citations(
         )
         if heading is None:
             continue
-        sentence = templates[section]
+        sentence = templates[section].format(key=citation_key)
         repaired = (
             repaired[: heading.end()]
             + "\n\n"

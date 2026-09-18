@@ -44,10 +44,65 @@ def test_explicit_extraction_confirmation_grants_one_turn(message: str) -> None:
         "已启用 provider_run 授权，重新生成干净分析计划",
         "在 EasyICU 中重新授予并传递一次性 provider_run 授权",
         "Please regenerate the Research Agent analysis plan and pause for review.",
+        "请自行核查候选计划是否完整回答原问题；发现冲突时修订整份计划并说明依据。不要改变原问题或数据来源。",
+        "请自行核查候选计划是否完整回答原问题，特别是研究人群与比较组的对应关系；发现冲突时修订整份计划并说明依据。不要改变原问题或数据来源。",
+        "请根据以下审阅意见修订整份研究计划，保留原始问题与数据来源，并说明修改依据。不要开始分析：人群与比较组需要对应。",
+        "请根据审阅意见修改当前研究计划，但不要开始正式分析。",
+        "请对当前已保存、待人工审阅的完整候选计划做有来源的修订，再生成一份新候选计划。",
+        "Please revise the complete candidate plan and explain the changes.",
+        "Revise the analysis plan for review before analysis.",
+        "请调整后重新生成计划。",
+        "请重新生成计划。",
+        "生成一份新的分析计划，先供我审阅。",
+        "重新生成完整研究方案，暂不开始分析。",
     ],
 )
 def test_explicit_replan_request_grants_one_provider_turn(message: str) -> None:
     assert infer_explicit_turn_actions(message) == frozenset({"provider_run"})
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "请修订当前完整研究方案，保留问题和来源，先供我审阅，暂不开始分析。",
+        "请修改当前分析方案，先呈现完整方案供审阅。",
+        "请生成完整研究方案，先供我审阅。",
+        "请重新生成完整分析方案，暂不开始分析。",
+        "授权本轮重新生成完整修订方案先供我审阅暂不开始分析。",
+        "请重新生成修订方案，审阅后再开展分析。",
+        "请重做分析方案，保持已定人群、结局与来源。",
+    ],
+)
+def test_research_scheme_synonyms_grant_only_planning(message: str) -> None:
+    # This is a one-turn Provider grant, never a plan decision or analysis approval.
+    assert infer_explicit_turn_actions(message) == frozenset({"provider_run"})
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "请不要修订当前完整研究方案。",
+        "暂不重新生成完整分析方案。",
+        "无需重做分析方案。",
+        "不授权本轮重新生成完整修订方案。",
+        "请解释如何修订当前完整研究方案。",
+        "请讨论如何生成完整研究方案。",
+        "请讨论修订当前完整研究方案的利弊。",
+        "请说明重新生成完整修订方案的流程。",
+        "能否重新生成完整分析方案？",
+        "授权本轮重新生成完整修订方案是否必要？",
+        "请审阅当前完整研究方案，只报告问题。",
+        "请对当前候选计划不要修订，只说明缺口。",
+        "请问能否对当前候选计划做修订？",
+        "请修改报告，保留原研究方案。",
+        "请重新生成当前报告，暂不修订研究方案。",
+    ],
+)
+def test_scheme_discussion_denial_and_report_only_do_not_grant_planning(
+    message: str,
+) -> None:
+    expected = {"report_revision"} if message.startswith(("请修改报告", "请重新生成当前报告")) else set()
+    assert infer_explicit_turn_actions(message) == frozenset(expected)
 
 
 @pytest.mark.parametrize(
@@ -61,6 +116,20 @@ def test_explicit_replan_request_grants_one_provider_turn(message: str) -> None:
         "Please extract the data when ready.",
         "选择 MIMIC-IV Clinical Database Demo（v2.2）。",
         "使用本地 MIMIC-IV v3.1。",
+        "请审阅当前计划，只报告问题。",
+        "请解释如何修订整份计划。",
+        "请审阅计划，暂不修改研究计划。",
+        "请对计划的样本量调整给出建议。",
+        "请对计划的样本量调整给出你的意见。",
+        "请对计划中年龄的调整方式做敏感性分析。",
+        "请对计划的样本量调整做敏感性分析。",
+        "请给出生成计划的建议。",
+        "不要修订整份计划。",
+        "不要重新生成分析计划。",
+        "How should I revise the analysis plan?",
+        "Please explain how to revise the candidate plan.",
+        "Do not revise the complete candidate plan.",
+        "Don't regenerate the analysis plan.",
         "",
     ],
 )
@@ -68,6 +137,39 @@ def test_ambiguous_unrelated_or_negated_text_stays_fail_closed(
     message: str,
 ) -> None:
     assert infer_explicit_turn_actions(message) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "生成计划的建议",
+        "重新生成计划请给建议",
+        "请提供生成研究计划的分析",
+        "请提出重新生成分析计划的意见",
+        "Please give advice about regenerating the analysis plan.",
+        "Please provide a suggestion about the analysis plan revision.",
+        "Please offer recommendations about generating the analysis plan.",
+    ],
+)
+def test_advisory_plan_framing_does_not_grant_provider_run(
+    message: str,
+) -> None:
+    # D-P1-2: advisory tails guard every Chinese generation/revision pattern;
+    # English advice/suggestion/recommendation about the plan is not authority.
+    assert infer_explicit_turn_actions(message) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "请重新生成研究计划",
+        "请重新生成研究计划，先供我审阅。",
+    ],
+)
+def test_explicit_regenerate_research_plan_grants_provider_run(
+    message: str,
+) -> None:
+    assert infer_explicit_turn_actions(message) == frozenset({"provider_run"})
 
 
 @pytest.mark.parametrize(
@@ -113,6 +215,16 @@ def test_database_mention_or_local_choice_does_not_confirm_prepared_source(
         ("我目前还没有具体研究方向", "idea_discovery_entry"),
         ("我不知道做什么研究", "idea_discovery_entry"),
         ("液体平衡会不会影响撤机？", "implement_scientific_question"),
+        (
+            "我想用 MIMIC-IV 看一下 Sepsis-3 脓毒症有多常见，并比较脓毒症和非脓毒症的院内死亡情况，最后给我完整的研究报告和图表。",
+            "implement_scientific_question",
+        ),
+        ("比较 AKI 与非 AKI 患者的住院时长", "implement_scientific_question"),
+        ("Compare mortality in treated and untreated groups", "implement_scientific_question"),
+        ("描述 ICU 患者谵妄的患病率", "implement_scientific_question"),
+        ("我想了解 ICU 中谵妄有多常见", "implement_scientific_question"),
+        ("请比较几个研究方向", "idea_mining_entry"),
+        ("患病率", "clarify_research_entry"),
         (
             "研究成人 ICU 早期液体平衡与拔管失败的关系",
             "implement_scientific_question",

@@ -1,3 +1,4 @@
+/* Owner: Guided project picker widget. */
 /* Guided Copilot project/folder picker rendering.
    Owns HTML for local study-folder selection; screens-guided.js owns state
    and event handlers, passing a small context object into this module. */
@@ -66,9 +67,20 @@
     };
   }
 
+  // D-P2-1: defensive label projection. The owner loads first (see
+  // index.html), but a truncated bundle or a static preview without it must
+  // not throw here — fall back to bounded raw text instead.
   function projectTitle(value, fallback) {
-    return window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
+    return window.EU_PRODUCT_LABELS?.projectTitle?.(value, fallback)
+      ?? String(value ?? fallback ?? '').slice(0, 200);
   }
+
+  // D-P2-1: one shared row-title fallback. 'Guided study' is kept (not
+  // 'Guided project') so the rail, the known-folder picker and the removal
+  // dialog project the same fallback shape the run-files owner uses
+  // (stored question, else a single shared default). Do not invent new
+  // per-callsite defaults — extend PROJECT_DEFAULT_TITLES instead.
+  const GUIDED_ROW_FALLBACK = ['Guided study', '研究项目'];
 
   function projectMeta(row, t) {
     // A Guided draft remains metadata-only storage even after Copilot binds a real
@@ -157,7 +169,7 @@
             const selectable = !active;
             const configurationMissing = row.configuration_health
               && row.configuration_health.status === 'configuration_missing';
-            const title = projectTitle(row.title, row.question || t('Guided study', '研究项目'));
+            const title = projectTitle(row.title, row.question || t(...GUIDED_ROW_FALLBACK));
             const meta = projectMeta(row, t);
             const time = fmtRunTime(row.updated_at || row.created_at);
             return `
@@ -228,7 +240,7 @@
         ${rows.length ? `<div class="gds-known-list">${rows.map((row, i) => `
           <button class="gds-known-row" type="button" data-known-project="${i}">
             <span class="gds-known-kind">${row.kind === 'run' ? icon('history', 13) : icon('file', 13)}</span>
-            <span><strong>${esc(projectTitle(row.title, row.question))}</strong><small>${esc(row.subtitle)}</small><code>${esc(compactPath(row.project_dir))}</code></span>
+            <span><strong>${esc(projectTitle(row.title, row.question || t(...GUIDED_ROW_FALLBACK)))}</strong><small>${esc(row.subtitle)}</small><code>${esc(compactPath(row.project_dir))}</code></span>
             <span class="gds-known-open">${icon('arrow', 13)}</span>
           </button>`).join('')}</div>` : ''}
       </div>`;
@@ -350,7 +362,7 @@
       host.innerHTML = '';
       return;
     }
-    const title = projectTitle(row.title, row.question || t('Guided project', '研究项目'));
+    const title = projectTitle(row.title, row.question || t(...GUIDED_ROW_FALLBACK));
     const multiple = rows.length > 1;
     const trashProjectFolder = !!state.trashProjectFolder;
     const busy = !!state.busy;

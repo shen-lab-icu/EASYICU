@@ -1,3 +1,4 @@
+/* Owner: Guided Pi Idea source widget. */
 /* Copilot Idea source owner.
    Reuses the existing local PDF/URL adapters and exposes only bounded source
    metadata to one conversational Idea Mining turn. Full PDF bytes are never

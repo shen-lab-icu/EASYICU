@@ -13,8 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from ..authority.current_case_scientific_runtime import (
+    CurrentCaseScientificRuntimeAuthority,
+)
 from ..authority.evidence_store import EvidenceStore
-from ..contracts.runtime import _PlanPhaseResult
+from ..contracts.runtime import PlanPhaseResult
 from ..literature import LiteratureBundle
 from ..planning.figure_strategy import ArticleFigureStrategy
 from ..planning.scientific_review import (
@@ -63,7 +66,7 @@ class PreplanAbortContext:
     llm: Any
     resume_state: Any
 
-    def finish(self, pipeline: Any, *, reason: str) -> _PlanPhaseResult:
+    def finish(self, pipeline: Any, *, reason: str) -> PlanPhaseResult:
         aborted = pipeline._finalise_aborted(
             run_id=self.run_id,
             run_dir=self.run_dir,
@@ -73,7 +76,7 @@ class PreplanAbortContext:
             findings=self.findings,
             reason=reason,
         )
-        return _PlanPhaseResult(
+        return PlanPhaseResult(
             context=self.context,
             agent_context=self.agent_context,
             context_path=self.context_path,
@@ -229,6 +232,7 @@ def persist_or_validate_scientific_plan_review(
         ) from exc
     if reuse_existing_review:
         binding_fields = (
+            "schema_version",
             "context_sha256",
             "plan_sha256",
             "literature_sha256",
@@ -317,6 +321,7 @@ def prepare_scientific_plan_review_gate(
     evidence: EvidenceStore,
     require_reportable_capability: bool = False,
     reuse_existing_review: bool = False,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> ScientificPlanReviewGate:
     """Build, bind, and project the exact review offered to a human."""
 
@@ -326,6 +331,7 @@ def prepare_scientific_plan_review_gate(
         literature=literature,
         figure_strategy=figure_strategy,
         require_reportable_capability=require_reportable_capability,
+        runtime_authority=runtime_authority,
     )
     review, artifact_path = persist_or_validate_scientific_plan_review(
         run_dir=run_dir,

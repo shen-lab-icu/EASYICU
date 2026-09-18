@@ -1,8 +1,14 @@
 """Deprecated table helpers (was: 表工具函数 - 对应 R ricu 的 tbl-utils.R).
 
-**This module is deprecated and nothing inside EasyICU imports it.** It exists
-only because its names were exported from the top-level package, so removing it
-outright would break an external caller we cannot see. It will go in 2.0.
+.. deprecated::
+    DO NOT USE IN NEW CODE (禁新用). Nothing inside EasyICU imports this
+    module. It exists only because its names were exported from the top-level
+    package, so removing it outright would break an external caller we cannot
+    see.
+
+    Removal plan: remove in EasyICU 2.0 (code kept until then; call sites warn
+    via DeprecationWarning). Migrate to :mod:`easyicu.table` /
+    :func:`easyicu.table.change_id`.
 
 Use :mod:`easyicu.table` instead. The ID-conversion functions here are the
 dangerous part, and they are *not* redirected: this module's ``upgrade_id`` and
@@ -390,7 +396,7 @@ def change_interval(
         return df
     
     # 将时间舍入到新间隔
-    from .ts_utils import round_to_interval
+    from ..io.ts_utils import round_to_interval
     df[time_col] = round_to_interval(df[time_col], new_interval)
     
     return df
@@ -664,7 +670,7 @@ def id_map_helper(
     创建 ID 映射表辅助函数 - 对应 R ricu id_map
     
     Args:
-        src_config: 数据源配置
+        src_config: 可读取 ID 表的 ICUDataSource 实例（仅配置对象不足以加载数据）
         from_id: 源 ID 列名
         to_id: 目标 ID 列名
         time_offset_col: 时间偏移列名
@@ -673,25 +679,15 @@ def id_map_helper(
     Returns:
         ID 映射 DataFrame
     """
-    # 这里需要从数据源加载相关表
-    # 简化实现，实际应该从配置中获取正确的表
-    from .data_env import load_table
-    
-    # 通常 ID 映射存储在特定的表中（如 icustays, admissions 等）
-    # 这里简化处理
-    try:
-        # 尝试加载包含两个 ID 的表
-        id_table = load_table(src_config, from_id, to_id)
-        
-        cols = [from_id, to_id]
-        if time_offset_col and time_offset_col in id_table.columns:
-            cols.append(time_offset_col)
-        if index_col and index_col in id_table.columns:
-            cols.append(index_col)
-        
-        return id_table[cols].drop_duplicates()
-    except Exception as e:
-        raise ValueError(f"Cannot create ID map from {from_id} to {to_id}: {e}")
+    from ..datasource import ICUDataSource
+    from ..io.data_load import load_id_map
+
+    if not isinstance(src_config, ICUDataSource):
+        raise TypeError("id_map_helper requires an ICUDataSource with readable ID tables")
+    return load_id_map(
+        src_config, src_config.config, from_id, to_id,
+        extra_columns=[col for col in (time_offset_col, index_col) if col],
+    )
 
 # ============================================================================
 # Time adjustment functions for ID changes

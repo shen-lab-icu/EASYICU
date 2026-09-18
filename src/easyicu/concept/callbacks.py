@@ -10,8 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from ..scores.urine_windows import assess_urine_windows, urine_evidence_columns
+
 import logging
 import os
+import weakref
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -63,6 +67,28 @@ logger = logging.getLogger(__name__)
 _SUSP_INF_UNSUPPORTED_WARNED: set[str] = set()
 
 from ..utils.unit_conversion import convert_vaso_rate
+from .errors import ConceptTableReadError
+
+
+def _callback_source_name(data_source: object) -> str:
+    config = getattr(data_source, "config", None)
+    name = getattr(config, "name", None)
+    if name:
+        return str(name)
+    name = getattr(data_source, "name", None)
+    return str(name) if name else "unknown"
+
+
+def _raise_table_read_error(
+    data_source: object, table: str, stage: str, exc: BaseException
+) -> "ConceptTableReadError":
+    return ConceptTableReadError(
+        database=_callback_source_name(data_source),
+        table=table,
+        stage=stage,
+        detail=f"{type(exc).__name__}: {exc}",
+        cause=exc,
+    )
 
 
 def _callback_timedelta(value: object, default_hours: int) -> pd.Timedelta:
@@ -266,7 +292,64 @@ def _coerce_duration_hours(value) -> float:
     except (TypeError, ValueError):
         return np.nan
 
-_STAY_LIMIT_CACHE: Dict[int, pd.DataFrame] = {}
+# Stay-window limits cache keyed by data_source identity. The previous
+# `id(data_source)` key could collide after garbage collection (id reuse)
+# and grew without bound. Prefer a WeakKeyDictionary so entries vanish with
+# their owner; objects that cannot be weak-referenced fall back to a bounded
+# FIFO dict (capacity 512). Use invalidate_stay_limit_cache() for explicit
+# invalidation. `_STAY_LIMIT_CACHE` is retained as the bounded fallback for
+# backward compatibility.
+_STAY_LIMIT_CACHE: "OrderedDict[int, pd.DataFrame]" = OrderedDict()
+_STAY_LIMIT_CACHE_MAX = 512
+_STAY_LIMIT_CACHE_WEAK: "weakref.WeakKeyDictionary[object, pd.DataFrame]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _get_cached_stay_limits(data_source: object) -> Optional[pd.DataFrame]:
+    try:
+        cached = _STAY_LIMIT_CACHE_WEAK.get(data_source)  # type: ignore[arg-type]
+    except TypeError:
+        cached = None
+    if cached is not None:
+        return cached
+    try:
+        return _STAY_LIMIT_CACHE.get(id(data_source))
+    except Exception:
+        return None
+
+
+def _set_cached_stay_limits(data_source: object, limits: pd.DataFrame) -> None:
+    try:
+        _STAY_LIMIT_CACHE_WEAK[data_source] = limits  # type: ignore[index]
+        return
+    except TypeError:
+        pass
+    # Fallback for non-weak-referenceable / unhashable owners: bounded FIFO.
+    _STAY_LIMIT_CACHE[id(data_source)] = limits
+    while len(_STAY_LIMIT_CACHE) > _STAY_LIMIT_CACHE_MAX:
+        _STAY_LIMIT_CACHE.popitem(last=False)
+
+
+def invalidate_stay_limit_cache(data_source: object | None = None) -> None:
+    """Explicitly invalidate cached stay-window limits.
+
+    Args:
+        data_source: When given, drop only that owner's entry; otherwise
+            clear the entire cache (both weak and fallback stores).
+    """
+    if data_source is None:
+        _STAY_LIMIT_CACHE_WEAK.clear()
+        _STAY_LIMIT_CACHE.clear()
+        return
+    try:
+        _STAY_LIMIT_CACHE_WEAK.pop(data_source, None)  # type: ignore[arg-type]
+    except TypeError:
+        pass
+    try:
+        _STAY_LIMIT_CACHE.pop(id(data_source), None)
+    except Exception:
+        pass
 
 def _normalize_patient_ids(patient_ids, column: str) -> Optional[List[object]]:
     """Resolve the list of patient ids matching the requested id column."""
@@ -303,8 +386,7 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
     data_source = getattr(ctx, "data_source", None)
     if data_source is None:
         return None
-    cache_key = id(data_source)
-    cached = _STAY_LIMIT_CACHE.get(cache_key)
+    cached = _get_cached_stay_limits(data_source)
     if cached is not None:
         return cached
     try:
@@ -313,8 +395,12 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
             columns=["stay_id", "hadm_id", "subject_id", "intime", "outtime"],
             verbose=False,
         )
-    except Exception:
+    except (FileNotFoundError, KeyError):
         return None
+    except Exception as exc:
+        raise _raise_table_read_error(
+            data_source, "icustays", "stay_window_limits", exc
+        ) from exc
     icu_df = getattr(icu_tbl, "data", icu_tbl)
     if icu_df is None or icu_df.empty or "hadm_id" not in icu_df.columns:
         return None
@@ -324,8 +410,12 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
             columns=["hadm_id", "admittime", "dischtime", "deathtime"],
             verbose=False,
         )
-    except Exception:
+    except (FileNotFoundError, KeyError):
         return None
+    except Exception as exc:
+        raise _raise_table_read_error(
+            data_source, "admissions", "stay_window_limits", exc
+        ) from exc
     adm_df = getattr(adm_tbl, "data", adm_tbl)
     if adm_df is None or adm_df.empty:
         return None
@@ -333,8 +423,12 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
         pat_tbl = data_source.load_table(
             "patients", columns=["subject_id", "dod", "anchor_age", "anchor_year"], verbose=False
         )
-    except Exception:
+    except (FileNotFoundError, KeyError):
         pat_tbl = None
+    except Exception as exc:
+        raise _raise_table_read_error(
+            data_source, "patients", "stay_window_limits", exc
+        ) from exc
     pat_df = getattr(pat_tbl, "data", pat_tbl) if pat_tbl is not None else None
     icu = icu_df
     patient_filter = _normalize_patient_ids(ctx.patient_ids, primary_id)
@@ -397,7 +491,7 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
     limits["start"] = start_hours
     limits["end"] = end_hours
     limits = limits.replace([np.inf, -np.inf], np.nan).dropna(subset=["start", "end"])
-    _STAY_LIMIT_CACHE[cache_key] = limits
+    _set_cached_stay_limits(data_source, limits)
     return limits
 
 def _compose_fill_limits(
@@ -720,13 +814,18 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
         else:
             if os.environ.get('DEBUG'):
                 logger.warning("icustays 表为空或未加载")
+    except (FileNotFoundError, KeyError):
+        return None
     except Exception as e:
-        # Mapping table not available - this is OK, not all concepts need it
-        # Only print error in debug mode to avoid spam
+        # Read failure (not absence): fail loudly with source identity so a
+        # corrupt/unreadable mapping table never masquerades as "no mapping".
         if os.environ.get('DEBUG'):
             import traceback
             logger.warning(f"无法加载 icustays 进行 ID 转换 ({from_col} → {to_col}): {e}")
             traceback.print_exc()
+        raise _raise_table_read_error(
+            ctx.data_source, "icustays", "id_mapping", e
+        ) from e
     return None
 
 def _convert_id_column(
@@ -1905,44 +2004,13 @@ def _callback_blood_cell_ratio(
                 data_time_col = index_column
             
             if data_time_col and wbc_time_col:
-                # Normalize time columns to numeric for merge_asof
-                data_sorted = data.copy()
-                wbc_sorted = wbc_df.copy()
-                
-                # Convert to numeric if needed
-                data_sorted['_time_numeric'] = pd.to_numeric(data_sorted[data_time_col], errors='coerce')
-                wbc_sorted['_time_numeric'] = pd.to_numeric(wbc_sorted[wbc_time_col], errors='coerce')
-                
-                # Drop rows with invalid times
-                data_sorted = data_sorted.dropna(subset=['_time_numeric'])
-                wbc_sorted = wbc_sorted.dropna(subset=['_time_numeric'])
-                
-                if not data_sorted.empty and not wbc_sorted.empty:
-                    # Sort by patient ID and time
-                    id_col = id_columns[0]
-                    data_sorted = data_sorted.sort_values([id_col, '_time_numeric'])
-                    wbc_sorted = wbc_sorted.sort_values([id_col, '_time_numeric'])
-                    
-                    # Use merge_asof to match WBC within 24 hours (1440 minutes)
-                    merged = pd.merge_asof(
-                        data_sorted,
-                        wbc_sorted[[id_col, '_time_numeric', 'wbc']].rename(columns={'_time_numeric': '_wbc_time'}),
-                        by=id_col,
-                        left_on='_time_numeric',
-                        right_on='_wbc_time',
-                        direction='nearest',
-                        tolerance=1440  # 24 hours in minutes
-                    )
-                    
-                    # Calculate ratio: 100 * cell_count / wbc
-                    if 'wbc' in merged.columns:
-                        valid_wbc = merged['wbc'].notna() & (merged['wbc'] > 0)
-                        merged.loc[valid_wbc, value_column] = 100 * merged.loc[valid_wbc, value_column] / merged.loc[valid_wbc, 'wbc']
-                        merged.loc[valid_wbc, assessment_column] = "ratio_computed"
-                        merged.loc[~valid_wbc, value_column] = np.nan
-                        merged.loc[~valid_wbc, assessment_column] = "missing_wbc_measurement"
-                        merged = merged.drop(columns=['wbc', '_time_numeric', '_wbc_time'], errors='ignore')
-                        data = merged
+                from ..utils.callback_utils import blood_cell_ratio_at_hour
+                data = blood_cell_ratio_at_hour(
+                    data, wbc_df, id_columns=list(id_columns), value_column=value_column,
+                    time_column=data_time_col, wbc_time_column=wbc_time_col,
+                    reason_column=assessment_column, unit_column=input_table.unit_column,
+                )
+                data[assessment_column] = data[assessment_column].replace({"calculated_from_wbc": "ratio_computed"})
             else:
                 # A patient-level "latest WBC" is not a valid time-aligned
                 # denominator. Preserve the row for audit, but fail closed.
@@ -2562,7 +2630,12 @@ def _callback_sofa_component(
                 data = data.rename(columns={value_col: sub_name})
         else:
             # Multiple concepts: merge with outer join
-            data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+            data, id_columns, index_column = _merge_tables(
+                tables, ctx=ctx, how="outer",
+                sidecar_columns={name: [col for col in urine_evidence_columns(name) if col in table.data]
+                                 for name, table in tables.items() if name in {"uo_6h", "uo_12h", "uo_24h"}}
+                if ctx.concept_name == "sofa2_renal" else None,
+            )
         
         if data.empty:
             cols = id_columns + ([index_column] if index_column else []) + [
@@ -2699,6 +2772,15 @@ def _callback_sofa_component(
                     # Required parameters - create Series with NaN to preserve time points
                     kwargs[name] = pd.Series(np.nan, index=data.index, dtype=float)
         
+        if ctx.concept_name == "sofa2_renal":
+            # Assessment values and their complete-window evidence travel together.
+            # Legacy descriptive rolling averages are never sufficient evidence.
+            for name in ("uo_6h", "uo_12h", "uo_24h"):
+                if name in kwargs:
+                    kwargs[name] = data.get(f"{name}_assessment_rate", pd.Series(np.nan, index=data.index))
+                kwargs[f"{name}_covered_h"] = data.get(f"{name}_covered_h")
+            kwargs["oliguria_gt6h"] = data.get("uo_6h_oliguria_gt6h")
+
         # Call function with kwargs - add special handling for functions that require positional args
         try:
             # Special handling for sofa_renal and sofa2_renal which require 'crea' as positional arg
@@ -5235,7 +5317,7 @@ def _callback_urine24(
         "",
     )
     if source_name == "hirid":
-        from ..callbacks import _urine_rate_window_avg_multi
+        from ..callbacks import urine_rate_window_avg_multi
 
         if not id_cols or not time_col:
             cols = id_cols + ([time_col] if time_col else []) + ["urine24"]
@@ -5250,7 +5332,7 @@ def _callback_urine24(
             columns={urine_col: "urine"}
         )
         unit_weight = rate[id_cols].drop_duplicates().assign(weight=1.0)
-        result_df = _urine_rate_window_avg_multi(
+        result_df = urine_rate_window_avg_multi(
             rate,
             unit_weight,
             windows=[(24, 12)],
@@ -7023,9 +7105,19 @@ def _callback_rrt_criteria(
                 interval=ctx.interval,
                 source_is_rate=source_is_rate,
             )
+            assessment = assess_urine_windows(
+                urine_df, weight_df, id_columns=urine_tbl.id_columns,
+                time_column=urine_tbl.index_column,
+                interval=ctx.interval or pd.Timedelta(hours=1), source_is_rate=source_is_rate,
+            )
+            keys = list(urine_tbl.id_columns) + [urine_tbl.index_column]
             for uo_name in missing_uo:
                 if uo_name in uo_results:
-                    tables[uo_name] = _as_icutbl(uo_results[uo_name], id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column=uo_name)
+                    enriched = uo_results[uo_name].merge(
+                        assessment[keys + urine_evidence_columns(uo_name)],
+                        on=keys, how="left", validate="many_to_one",
+                    )
+                    tables[uo_name] = _as_icutbl(enriched, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column=uo_name)
     
     # 🔧 FIX: 如果所有依赖都加载失败，返回空表而不是报错
     if not tables:
@@ -7051,15 +7143,18 @@ def _callback_rrt_criteria(
         )
     
     # Merge all tables
-    data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+    data, id_columns, index_column = _merge_tables(
+        tables, ctx=ctx, how="outer",
+        sidecar_columns={"uo_6h": [col for col in urine_evidence_columns("uo_6h")
+                                    if "uo_6h" in tables and col in tables["uo_6h"].data]},
+    )
     
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["rrt_criteria"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="rrt_criteria")
     
-    # Extract columns - use uo_6h for oliguria check (proxy for >6h duration)
+    # The shared interval assessment supplies strictly >6 h oliguria evidence.
     crea = pd.to_numeric(data.get("crea", pd.Series(np.nan, index=data.index)), errors="coerce")
-    uo_6h = pd.to_numeric(data.get("uo_6h", pd.Series(np.nan, index=data.index)), errors="coerce")
     potassium = pd.to_numeric(data.get("potassium", pd.Series(np.nan, index=data.index)), errors="coerce")
     ph = pd.to_numeric(data.get("ph", pd.Series(np.nan, index=data.index)), errors="coerce")
     hco3 = pd.to_numeric(data.get("bicarb", pd.Series(np.nan, index=data.index)), errors="coerce")
@@ -7079,9 +7174,9 @@ def _callback_rrt_criteria(
     else:
         rrt_active = pd.Series(False, index=data.index, dtype=bool)
     
-    # Base kidney injury criteria (use uo_6h as proxy for oliguria >6h)
+    # Creatinine and urine are independent alternatives for base injury.
     aki_crea = (crea > 1.2).fillna(False)
-    aki_oligo = (uo_6h < 0.3).fillna(False)
+    aki_oligo = data.get("uo_6h_oliguria_gt6h", pd.Series(False, index=data.index)).eq(True).fillna(False)
     base_injury = aki_crea | aki_oligo
     
     # Electrolyte/acid-base crisis
@@ -7242,6 +7337,18 @@ def _callback_uo_window(
         source_is_rate=source_is_rate,
     )
     
+    if not result_df.empty and window_hours in (6, 12, 24):
+        assessment = assess_urine_windows(
+            urine_tbl.data, weight_tbl.data if weight_tbl else pd.DataFrame(),
+            id_columns=urine_tbl.id_columns, time_column=urine_tbl.index_column,
+            interval=ctx.interval or pd.Timedelta(hours=1), source_is_rate=source_is_rate,
+        )
+        keys = list(urine_tbl.id_columns) + [urine_tbl.index_column]
+        result_df = result_df.merge(
+            assessment[keys + urine_evidence_columns(output_col)],
+            on=keys, how="left", validate="many_to_one",
+        )
+
     if result_df.empty:
         return _as_icutbl(
             result_df,
@@ -7556,7 +7663,7 @@ def _callback_kdigo_aki(
 ) -> ICUTable:
     """Build public-reference and source-native AKI layers for renal export."""
     from easyicu.scores.aki_profiles import build_renal_aki_bundle
-    from easyicu.scores.kdigo_aki import _detect_id_col, _detect_time_col
+    from easyicu.scores.kdigo_aki import detect_id_col, detect_time_col
     
     # Extract DataFrames from tables
     crea_tbl = tables.get('kdigo_creatinine_input')
@@ -7613,8 +7720,8 @@ def _callback_kdigo_aki(
         for frame in component_frames
         if isinstance(frame, pd.DataFrame) and not frame.empty
     )
-    id_col = _detect_id_col(anchor) or 'stay_id'
-    time_col = _detect_time_col(anchor) or 'charttime'
+    id_col = detect_id_col(anchor) or 'stay_id'
+    time_col = detect_time_col(anchor) or 'charttime'
     database = getattr(
         getattr(ctx.data_source, "config", None), "name", ""
     )

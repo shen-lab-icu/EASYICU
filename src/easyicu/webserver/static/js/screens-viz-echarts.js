@@ -1,3 +1,4 @@
+/* Owner: Visualization ECharts shell widget. */
 /* ============================================================
    screens-viz-echarts.js — shared visualization-shell owner.
    Owns the local ECharts theme, SVG renderer lifecycle, resize

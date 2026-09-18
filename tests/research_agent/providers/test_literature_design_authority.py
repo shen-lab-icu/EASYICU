@@ -192,6 +192,36 @@ def test_selected_design_must_resolve_all_dimensions() -> None:
     assert exc_info.value.reason_code == "selected_design_dimensions_incomplete"
 
 
+def test_selected_design_decision_must_cite_a_card_supporting_its_dimension() -> None:
+    population_only = _card(dimensions=("study_population",))
+    selection = _selection().model_copy(
+        update={
+            "candidates": [
+                candidate.model_copy(
+                    update={
+                        "literature_design_decisions": [
+                            decision.model_copy(update={"citation_keys": ["comparator_2025"]})
+                            for decision in candidate.literature_design_decisions
+                        ]
+                    }
+                )
+                for candidate in _selection().candidates
+            ]
+        }
+    )
+
+    with pytest.raises(LiteratureDesignAuthorityError) as exc_info:
+        validate_selected_design_against_literature(
+            selection,
+            design_evidence_cards=[population_only],
+            comparison_keys=["comparator_2025"],
+        )
+
+    assert exc_info.value.reason_code == (
+        "selected_design_decision_dimension_unsupported"
+    )
+
+
 def test_prompt_contains_bounded_design_cards_not_article_body() -> None:
     blueprint = HypothesisBlueprint(
         research_question="Does exposure predict outcome in ICU patients?",

@@ -33,6 +33,7 @@ texts from drifting into opposite instructions again, which is what happened.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 import pytest
@@ -40,7 +41,11 @@ import pytest
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
 from easyicu.research_agent.providers.prompts import load_prompt_pack
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = pathlib.Path(
+    os.environ.get(
+        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+    )
+)
 
 
 def _auditor_prompt() -> str:
@@ -117,6 +122,7 @@ def test_the_carve_out_is_case_neutral():
         assert forbidden not in carve_out.lower(), forbidden
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_script_really_did_declare_its_coding():
     """Anchors the whole file in the artifact, not in a reconstruction.
 
@@ -147,6 +153,7 @@ def test_the_recorded_script_really_did_declare_its_coding():
     assert "rank-preserving numeric representation" in source
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_block_is_the_one_this_repairs():
     if not _CORPUS.exists():
         pytest.skip("recorded run corpus is not mounted")

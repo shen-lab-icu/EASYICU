@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Literal, Mapping, Optional, Sequence
 
 from easyicu.research_agent.literature import LiteratureBundle
 from easyicu.research_agent.planning.progressive_artifacts import (
@@ -145,6 +145,87 @@ def _development_progressive_resume_binding(
             details={"reason_code": exc.reason_code},
         ) from exc
     return terminal, artifact_sha256
+
+
+@dataclass(frozen=True)
+class _DevelopmentResumeLaunchScope:
+    budget_mode: Literal["planner_canary", "full_reviewed"]
+    plan_contract: str | None
+
+
+def _development_resume_launch_scope(
+    *, project_root: str, study: Mapping[str, Any], source_job_id: str
+) -> _DevelopmentResumeLaunchScope:
+    """Restore a selected continuation's sealed input scope, not plan approval.
+
+    A prepared-input Planner checkpoint must not be replayed as a zero-row
+    catalog. Conversely, the presence of an older export never promotes a
+    fresh candidate. Only the selected, integrity-checked source can supply
+    this mode; source/package and plan-review gates still run at launch.
+    """
+    from easyicu.webserver import agent_review_recovery, study_contexts
+
+    checkpoint, _ = _development_progressive_resume_binding(
+        project_root=project_root,
+        study_id=str(study.get("id") or ""),
+        source_job_id=source_job_id,
+        # This lookup validates owned coordinates and hashes, not execution.
+        budget_mode="planner_canary",
+    )
+    try:
+        seed = agent_review_recovery.load_recovery_seed(checkpoint.parents[2])
+    except agent_review_recovery.WebReviewRecoveryError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_invalid",
+            "The prior Planner launch scope did not pass integrity validation.",
+        ) from exc
+    if (
+        seed is None
+        # Version 1 did not hash budget_mode; it is not restoration authority.
+        or seed.schema_version == "easyicu.web-review-recovery-seed/1"
+        or (
+            seed.budget_mode == "full_reviewed"
+            and (
+                seed.schema_version == "easyicu.web-review-recovery-seed/2"
+                or not seed.prepared_package_binding
+            )
+        )
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_invalid",
+            "The prior Planner has no digest-bound launch scope.",
+        )
+    digest = study_contexts.scientific_configuration_sha256(study)
+    if (
+        str(seed.study.get("id") or "") != str(study.get("id") or "")
+        or seed.scientific_configuration_sha256 != digest
+        or study_contexts.scientific_configuration_sha256(seed.study) != digest
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_mismatch",
+            "The prior Planner launch scope belongs to another study configuration.",
+        )
+    contract = seed.pipeline_config.get("bound_plan_revision_contract")
+    if contract is not None and (
+        not isinstance(contract, str) or len(contract.encode("utf-8")) > _MAX_JSON_BYTES
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_invalid",
+            "The prior Planner launch scope has an invalid plan contract.",
+        )
+    return _DevelopmentResumeLaunchScope(seed.budget_mode, contract)
+
+
+def _development_resume_plan_contract(
+    *, scope: _DevelopmentResumeLaunchScope, current_contract: str | None
+) -> str | None:
+    """Keep the sealed planning constraint without changing review authority."""
+    if current_contract and current_contract != scope.plan_contract:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_plan_contract_mismatch",
+            "A Planner continuation cannot change the sealed plan contract.",
+        )
+    return scope.plan_contract
 
 
 def _development_resume_literature_bundle(*, checkpoint_path: Path) -> Dict[str, Any]:

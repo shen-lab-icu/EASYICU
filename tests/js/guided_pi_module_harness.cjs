@@ -18,6 +18,7 @@ const LEGACY_NAMES = {
   EU_GUIDED_PI_DATA_CONSENT: 'dataConsent',
   EU_GUIDED_PI_DATA_PREVIEW: 'dataPreview',
   EU_GUIDED_PI_DEMO: 'demo',
+  EU_GUIDED_PI_ERROR_TEXT: 'errorText',
   EU_GUIDED_PI_EVENTS: 'events',
   EU_GUIDED_PI_EVIDENCE_PREVIEW: 'evidencePreview',
   EU_GUIDED_PI_HEADER: 'header',

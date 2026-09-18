@@ -441,6 +441,8 @@ def render_patient_report(
     database: str = 'miiv',
     output_format: str = 'html',
     output_path: Optional[str] = None,
+    *,
+    include_identifiers: bool = False,
 ) -> Union['go.Figure', str]:
     """生成单患者综合报告。
     
@@ -452,13 +454,25 @@ def render_patient_report(
         database: 数据库名称
         output_format: 输出格式 ('html', 'png', 'figure')
         output_path: 输出文件路径
+        include_identifiers: 显式保留患者标识符；默认导出隐藏标识符
         
     Returns:
         如果 output_format='figure'，返回 Figure 对象
         否则返回输出文件路径
     """
     dashboard = PatientDashboard(patient_id=patient_id, database=database)
+    if output_format not in {"html", "png", "pdf", "figure"}:
+        raise ValueError(f"Unsupported patient report format: {output_format}")
     dashboard.load_data(data)
+    if not include_identifiers:
+        # Select the requested patient before removing identifiers. Rebuild the
+        # export dashboard so none of its text/trace builders sees the real ID.
+        identifier_columns = {"subject_id", "hadm_id", "stay_id", "icustay_id",
+                              "patientunitstayid", "admissionid", "patientid", "CaseID"}
+        selected = {name: dashboard.get_patient_data(name).drop(columns=list(identifier_columns), errors="ignore")
+                    for name in data}
+        dashboard = PatientDashboard(patient_id="Selected patient", database=database)
+        dashboard.load_data(selected)
     
     fig = dashboard.render_full_dashboard()
     
@@ -466,7 +480,9 @@ def render_patient_report(
         return fig
     
     if output_path is None:
-        output_path = f'patient_{patient_id}_report.{output_format}'
+        from uuid import uuid4
+        label = str(patient_id) if include_identifiers else uuid4().hex[:12]
+        output_path = f'patient_{label}_report.{output_format}'
     
     if output_format == 'html':
         fig.write_html(output_path)

@@ -160,8 +160,8 @@ def test_outbound_context_preserves_exact_empty_as_positive_decision() -> None:
     payload = outbound_safe_context_payload(
         _context(selection="exact", covariates=[])
     )
-    assert payload["explicit_user_choices"]["covariate_selection"] == "exact"
-    assert payload["explicit_user_choices"]["covariates"] == []
+    assert payload["study_preferences"]["covariate_selection"] == "exact"
+    assert payload["study_preferences"]["covariates"] == []
 
 
 def test_exact_adjustment_decision_projects_rationale_and_temporal_role() -> None:
@@ -169,9 +169,27 @@ def test_exact_adjustment_decision_projects_rationale_and_temporal_role() -> Non
         _context(selection="exact", covariates=["age", "sex"])
     )
 
-    choices = payload["explicit_user_choices"]
+    choices = payload["study_preferences"]
     assert choices["covariate_rationales"]["age"].startswith("age is")
     assert choices["covariate_temporal_roles"] == {
         "age": "baseline_static",
         "sex": "baseline_static",
     }
+
+
+@pytest.mark.parametrize("origin", ["user", "agent_plan", None])
+def test_outbound_adjustment_origin_does_not_invent_user_authorship(origin: str | None) -> None:
+    context = _context(selection="exact", covariates=["age"])
+    context.user_preferences.covariate_authority = origin
+    before = context.model_dump(mode="json")
+    payload = outbound_safe_context_payload(context)
+    assert payload["schema"] == "easyicu.outbound_safe_context/2"
+    assert "explicit_user_choices" not in payload
+    assert payload["study_preferences"]["covariates"] == ["age"]
+    authority = payload["adjustment_authority"]
+    assert authority["authority"] == (origin or "unrecorded")
+    assert authority["scientific_covariates"] == ["age"]
+    assert "approval" in authority["authorship_boundary"]
+    if origin == "agent_plan":
+        assert "not user-specified" in authority["authorship_boundary"]
+    assert context.model_dump(mode="json") == before

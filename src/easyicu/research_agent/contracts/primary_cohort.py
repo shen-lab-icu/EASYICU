@@ -64,6 +64,18 @@ def _is_primary_analysis_cohort_method(value: object) -> bool:
     )
 
 
+def is_primary_analysis_cohort_method(value: object) -> bool:
+    """Recognise a case-neutral primary cohort construction method family.
+
+    Public cross-owner entrypoint for
+    :func:`_is_primary_analysis_cohort_method`. The cohort-method vocabulary
+    is owned here; step-family and integrity callers must use this name
+    instead of the private one.
+    """
+
+    return _is_primary_analysis_cohort_method(value)
+
+
 def _is_primary_analysis_cohort_flow_product(name: object) -> bool:
     """Recognise a case-neutral cohort attrition/flow product.
 
@@ -381,6 +393,7 @@ def primary_analysis_cohort_plan_findings(*, plan: Any) -> list[ValidationFindin
     return findings
 
 __all__ = [
+    "is_primary_analysis_cohort_method",
     "locked_primary_cohort_product",
     "primary_analysis_cohort_plan_findings",
     "primary_analysis_cohort_producer_uses_universe",

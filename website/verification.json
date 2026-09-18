@@ -1,0 +1,102 @@
+{
+  "checked_at": "2026-09-17T14:32:39+00:00",
+  "level": "focused static-site verification",
+  "checkout": ".",
+  "head": "1802174b13faeccd41f336f8bedbf5cdfb603e33",
+  "branch": "codex/dev9-web-acceptance-20260906",
+  "scope": "Final website batch after the reviewed repair commits: static generation and syntax/local-anchor checks were re-run; dist/ bytes remain unchanged (all 10 SHA-256 match the 2026-09-16 record), so the browser flows below are carried over, not re-run.",
+  "rebind": {
+    "prior_head": "fe6ac51f3253b99672685878b6904f867f4971db",
+    "dist_sha_unchanged": true,
+    "link_check": "re-ran 2026-09-17: 10/10 public URLs HTTP 200, guide.html#data anchor present; see link-check.json binding header"
+  },
+  "preview": "http://127.0.0.1:54591/",
+  "publication": "Local only; no upload or deployment; team details omitted per user.",
+  "static": {
+    "html_pages": 5,
+    "local_assets": 2,
+    "duplicate_ids": 0,
+    "broken_local_links_or_anchors": 0,
+    "page_http_status": 200,
+    "javascript_syntax": "passed",
+    "progress_lint": "6 CURRENT.md passed; web/CURRENT.md has an advisory size warning (40,068 bytes > 40,000)."
+  },
+  "browser": {
+    "viewports_checked": [
+      375,
+      390,
+      1280,
+      1552
+    ],
+    "all_five_pages_geometry_checked_at": [
+      375,
+      1280
+    ],
+    "horizontal_overflow": false,
+    "console_errors": 0,
+    "console_warnings": 0,
+    "flows_passed": [
+      "main navigation and mobile menu",
+      "mobile menu Escape and focus return",
+      "homepage screenshot switch",
+      "demo screenshot tabs including arrow key",
+      "image preview and Escape close",
+      "two-step screenshot guide and auto-stop at final step",
+      "concept Chinese search and combined module/source filters",
+      "empty search result and filter reset",
+      "concept next/previous pagination",
+      "method family filtering",
+      "OS installation tabs",
+      "command copy verified against browser clipboard",
+      "FAQ disclosure",
+      "software citation copy verified against browser clipboard"
+    ],
+    "visual_checks": [
+      "desktop home and catalog",
+      "desktop workspace preview and screenshot tour",
+      "mobile home, catalog filters, installation block and about page"
+    ],
+    "image_loading_note": "Both current-product screenshots are local assets; viewed screenshots loaded successfully."
+  },
+  "research_boundary": "No unpublished research-result figures or aggregate result values are included; the reader screenshot's three aggregate values were pixelated on 2026-09-17. No analysis, external LLM call, or scientific authority change.",
+  "file_sha256": {
+    "dist/about.html": "1037cba056de09c687f11ffc6cb34d03ea79063abc847bcc76488c2b00d90615",
+    "dist/assets/reader-current.jpg": "10a03ff30d3eac21fbf7d46a06a92ecd6a30c3c6816f80d5246c83eda21715fa",
+    "dist/assets/workspace-current.jpg": "ec6eb84a80586b5639131d7219e47ca5deef572b079d8f9a7ca38cd2fb9d7ed2",
+    "dist/catalog-data.js": "2670878824d7e2f57137f1a566234bccd6d84a7cc2505ffe47ca94f1084c98e2",
+    "dist/catalog.html": "f01ab6974e43dc545d3790ad466cea3063e2188b1eba19e098eb69b0a6683bcb",
+    "dist/demos.html": "cb2a955fd34cb58128c5c57cbeabfbf6c4ead98f929c612283af261fcbdf5eb2",
+    "dist/guide.html": "3d2122b6de481f4665822ffe6bf2d3db7e529495e09a27d12780f4ed73c95f73",
+    "dist/index.html": "7e349143669b5778dea81621ca53bcb6bc501c94511e40c77c82b765ec544253",
+    "dist/site.js": "33863777da7668866c19341087c81c8bcd241d48f52a73628210bb86a982b081",
+    "dist/styles.css": "0a4eab66d9789cc5c86ed838184febbd5ca0d2751dd8e27e633fdd5c08c121dd"
+  },
+  "latest_change": {
+    "reason": "User chose to keep unpublished analysis-only figures out of Git history.",
+    "removed_from_website": [
+      "dist/assets/e2-association.png",
+      "dist/assets/e2-sensitivity.png",
+      "dist/assets/e2-cohort.png",
+      "dist/assets/e2-missingness.png",
+      "homepage research-result preview",
+      "demos research-result case section",
+      "third tour step containing a research-result figure"
+    ],
+    "replacement_sources": [
+      "07-workspace-refined-chrome.png",
+      "10-reader-refined-chrome.png"
+    ],
+    "live_comparison": "Current product screenshots were inspected against the local workbench.",
+    "checks": [
+      "all five pages HTTP 200 and local links/anchors valid",
+      "both image assets match source SHA-256",
+      "unpublished result assets and references absent from build template and dist",
+      "two tour steps and restart work; automatic playback stops on step 2",
+      "demo has two current UI tabs and arrow-key switching",
+      "homepage screenshot switch and lightbox use current UI images",
+      "no browser error or warning",
+      "JPEG screenshot assets use .jpg filenames matching their bytes"
+    ],
+    "scope_note": "The public site now demonstrates product UI without publishing research results."
+  }
+}

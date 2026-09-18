@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Mapping, Optional, Sequence
+import re
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
@@ -11,11 +12,14 @@ from ..research_context.prompt_scope import (
     scoped_coder_context,
     scoped_reporting_context,
 )
+from ..research_context.outbound import format_outbound_safe_context
 from ..authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
+from ..authority.manuscript_claim_policy import SCIENTIFIC_CLAIM_WRITER_RULES
 from ..schema import (
+    AnalysisPlan,
     AnalysisStep,
     ResearchContext,
 )
@@ -43,6 +47,39 @@ from . import writer_display_labels as _writer_display
 
 _ANALYZER_PROMPT_BYTE_LIMIT = 48_000
 _WRITER_PROMPT_BYTE_LIMIT = 64_000
+# Repair feedback has its own transport allowance; evidence keeps its original
+# ceiling and the provider's governed token/call limits still apply unchanged.
+_WRITER_REPAIR_FEEDBACK_BYTE_LIMIT = 8_000
+
+
+def _group_writer_numeric_citations(digest: str) -> str:
+    """Factor consecutive identical owners without dropping any numeric fact."""
+
+    lines = digest.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    pattern = re.compile(r"^  (\S[^\n]*); cite=(\{evidence:[^{}\s]+\})(\n?)$")
+    while index < len(lines):
+        match = pattern.fullmatch(lines[index])
+        if match is None:
+            output.append(lines[index])
+            index += 1
+            continue
+        end = index + 1
+        rows = [match]
+        while end < len(lines):
+            following = pattern.fullmatch(lines[end])
+            if following is None or following[2] != match[2]:
+                break
+            rows.append(following)
+            end += 1
+        if len(rows) > 1:
+            output.append(f"  Citation for every value in this block: {match[2]}\n")
+            output.extend(f"    {row[1]}{row[3]}" for row in rows)
+        else:
+            output.append(lines[index])
+        index = end
+    return "".join(output)
 
 
 def _project_writer_evidence_digest(
@@ -52,22 +89,39 @@ def _project_writer_evidence_digest(
     """Project the lossless evidence subset required by one manuscript role."""
 
     digest = str(evidence_digest or "")
+    execution_marker = "## EXECUTED METHOD BOUNDARY"
+    execution_start = digest.find(execution_marker)
+    if execution_start >= 0:
+        # The digest preamble repeats the separately supplied reporting context
+        # and carries no evidence citations.  Start at the host-issued execution
+        # boundary so every method, claim, and numeric owner remains available
+        # without paying twice for the same study coordinates.
+        digest = digest[execution_start:]
+    digest = "".join(
+        line
+        for line in digest.splitlines(keepends=True)
+        if not line.startswith("Writer instruction:")
+    )
     if str(section_name).strip().casefold() in {"abstract", "results"}:
-        methods_marker = "\n## EXECUTED METHOD BOUNDARY"
-        numeric_marker = "\n## numeric citation authority"
-        if methods_marker in digest and numeric_marker in digest:
-            before_methods, methods_and_after = digest.split(methods_marker, 1)
-            _, numeric_and_after = methods_and_after.split(numeric_marker, 1)
-            return (
-                before_methods.rstrip()
-                + numeric_marker
-                + numeric_and_after
-            )
-        return digest
+        # Abstract methods and result interpretation need the same execution
+        # boundary and owner-issued claims as Methods. Repetition of citation
+        # owners can be factored; the methods themselves must not be removed.
+        return _group_writer_numeric_citations(digest)
     marker = "\n## secondary numbers"
     if marker not in digest:
         return digest
     return digest.split(marker, 1)[0].rstrip() + "\n"
+
+
+def _project_writer_literature_digest(
+    section_name: str,
+    literature_digest: Optional[str],
+) -> str:
+    """Keep prior-study material out of the current-study Results section."""
+
+    if str(section_name).strip().casefold() == "results":
+        return ""
+    return str(literature_digest or "")
 
 
 class ReportingPromptBudgetError(RuntimeError):
@@ -151,13 +205,16 @@ class AnalyzerAgent:
             role="Analyzer",
             limit_bytes=_ANALYZER_PROMPT_BYTE_LIMIT,
         )
-        return complete_with_provider_budget(
+        interpretation = complete_with_provider_budget(
             budget=provider_budget,
             category="analyzer",
             call=lambda: authorized_complete(
                 self.llm, messages, max_tokens=512, temperature=0.2
             ),
         ).strip()
+        if not interpretation or interpretation.lower().startswith("(analyzer failed:"):
+            raise ValueError("Analyzer returned an empty or failed interpretation")
+        return interpretation
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +263,8 @@ class WriterAgent:
         reader_display_labels: Optional[Mapping[str, str]] = None,
         language: Optional[str] = None,
         max_tokens: int = 2048,
+        analysis_plan: AnalysisPlan | None = None,
+        repair_feedback: str = "",
     ) -> str:
         lang_inst = _writer_display.writer_language_instruction(language or self.language)
         evidence_list = ", ".join(str(eid) for eid in evidence_ids) or "(none)"
@@ -214,8 +273,18 @@ class WriterAgent:
             section_name,
             evidence_digest,
         )
+        section_literature_digest = _project_writer_literature_digest(
+            section_name,
+            literature_digest,
+        )
         display_labels = _writer_display.normalise_reader_display_labels(
             reader_display_labels
+        )
+        from ..reporting.manuscript_baseline import baseline_naming_instruction, baseline_reporting_mentions
+
+        baseline_instruction = (
+            baseline_naming_instruction(baseline_reporting_mentions(context, reader_display_labels))
+            if str(section_name).strip().casefold() == "methods" else ""
         )
         messages = [
             LLMMessage(
@@ -237,6 +306,7 @@ class WriterAgent:
                     "manuscript in markdown. Do NOT write any other section.\n\n"
                     f"{instruction}\n\n"
                     f"{lang_inst}\n\n"
+                    + baseline_instruction
                     + (
                         self.user_writing_advisory + "\n\n"
                         if self.user_writing_advisory
@@ -248,6 +318,9 @@ class WriterAgent:
                     "`mortality was 12% {evidence:outcome_rate}`.\n"
                     "- Use exactly single braces: `{evidence:<id>}`, not "
                     "`{{evidence:<id>}}`.\n"
+                    "- For multiple sources, repeat separate tokens, for example "
+                    "`{evidence:first_id} {evidence:second_id}`; never put a "
+                    "semicolon or a list of ids inside one token.\n"
                     "- Every current-study empirical sentence about cohort composition, "
                     "exposure prevalence, outcome frequency, model estimates, "
                     "sensitivity/robustness, missingness, or data quality must include "
@@ -297,18 +370,8 @@ class WriterAgent:
                     "never promote planned prose into a completed-method claim.\n"
                     "- Do not claim that an LLM generated analysis code unless the "
                     "machine digest explicitly records that generation mode.\n\n"
-                    "SCIENTIFIC CLAIM RULE:\n"
-                    "- The machine digest may contain a `host-authorized scientific "
-                    "claims` block. For any current-study direction, comparison, or "
-                    "qualitative interpretation covered by that block, output the exact "
-                    "`{claim:<step>.<claim>}` token as the complete standalone sentence.\n"
-                    "- Do not paraphrase a host claim and do not replace `{claim:...}` "
-                    "with `{evidence:...}`. Evidence citations authorize numeric facts; "
-                    "they do not authorize independently worded scientific conclusions.\n"
-                    "- A claim token cannot be attached to a heading, label, or other "
-                    "prose. If no exact host claim applies, omit the qualitative "
-                    "assertion.\n\n"
-                    "LITERATURE RULE:\n"
+                    + SCIENTIFIC_CLAIM_WRITER_RULES
+                    + "LITERATURE RULE:\n"
                     "- Cite prior work only with an exact `[@key]` from the "
                     "run-bound literature digest below.\n"
                     "- Claims about prior studies or plausible clinical mechanisms "
@@ -356,11 +419,12 @@ class WriterAgent:
                     "MACHINE EVIDENCE DIGEST:\n"
                     + (section_evidence_digest or "(none)")
                     + "\n\nRUN-BOUND LITERATURE DIGEST:\n"
-                    + (literature_digest or "(none)")
+                    + (section_literature_digest or "(none required for this section)")
                     + "\n\nRESEARCH CONTEXT:\n"
-                    + _format_context(
+                    + format_outbound_safe_context(
                         reporting_context,
-                        include_method_constraints=False,
+                        include_exploratory_profiles=False,
+                        compact_variables=True,
                     )
                 ),
             ),
@@ -370,6 +434,17 @@ class WriterAgent:
             role="Writer",
             limit_bytes=_WRITER_PROMPT_BYTE_LIMIT,
         )
+        if repair_feedback:
+            feedback = LLMMessage(role="user", content=repair_feedback)
+            _enforce_reporting_prompt_budget(
+                [feedback], role="Writer repair feedback",
+                limit_bytes=_WRITER_REPAIR_FEEDBACK_BYTE_LIMIT,
+            )
+            messages.append(feedback)
+            _enforce_reporting_prompt_budget(
+                messages, role="Writer repair",
+                limit_bytes=_WRITER_PROMPT_BYTE_LIMIT + _WRITER_REPAIR_FEEDBACK_BYTE_LIMIT,
+            )
         raw = authorized_complete(
             self.llm, messages, max_tokens=max_tokens, temperature=0.3
         ).strip()
@@ -384,11 +459,15 @@ class WriterAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> str:
         return render_manuscript_sections(
+            checkpoint=checkpoint,
             call_section=self._call_section,
             common={
                 "context": context,
+                "analysis_plan": analysis_plan,
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
@@ -408,12 +487,16 @@ class WriterAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return repair_existing_manuscript_sections(
             manuscript,
+            checkpoint=checkpoint,
             call_section=self._call_section,
             common={
                 "context": context,
+                "analysis_plan": analysis_plan,
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
@@ -434,6 +517,7 @@ class WriterAgent:
         literature_digest: Optional[str] = None,
         reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+        analysis_plan: AnalysisPlan | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         """Repair section owners rejected by an adjacent deterministic gate."""
 
@@ -443,6 +527,7 @@ class WriterAgent:
             call_section=self._call_section,
             common={
                 "context": context,
+                "analysis_plan": analysis_plan,
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,

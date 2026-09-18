@@ -159,9 +159,63 @@ def _preserve_figure_steps_after_replan(
     return preserved, findings
 
 
+def output_declares_figure(output: str) -> bool:
+    """Return whether one declared output names a figure-like artifact.
+
+    Public cross-owner entrypoint for :func:`_output_declares_figure`. The
+    figure-step identity vocabulary is owned here; authority, contract, and
+    planning callers must use this name instead of the private one so the
+    ownership boundary stays greppable.
+    """
+
+    return _output_declares_figure(output)
+
+
+def parent_step_id_for_figure_step(step: AnalysisStep) -> Optional[str]:
+    """Return the analysis parent of a split figure step, if recognisable.
+
+    Public cross-owner entrypoint for
+    :func:`_parent_step_id_for_figure_step`. Name-token inference stays inside
+    this owner; callers only consume the result.
+    """
+
+    return _parent_step_id_for_figure_step(step)
+
+
+def step_produces_figure(step: AnalysisStep) -> bool:
+    """Return whether a step's expected outputs declare a figure-like artifact.
+
+    Public cross-owner entrypoint for :func:`_step_produces_figure`.
+    """
+
+    return _step_produces_figure(step)
+
+
+def preserve_figure_steps_after_replan(
+    *,
+    current: AnalysisPlan,
+    revised: AnalysisPlan,
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Restore dropped render steps and only their exact prior parent edges.
+
+    Public cross-owner entrypoint for
+    :func:`_preserve_figure_steps_after_replan`. The replan-preservation
+    policy is owned here; the plan authority only applies it.
+    """
+
+    return _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+
 __all__ = [
     "_output_declares_figure",
     "_parent_step_id_for_figure_step",
     "_preserve_figure_steps_after_replan",
     "_step_produces_figure",
+    "output_declares_figure",
+    "parent_step_id_for_figure_step",
+    "preserve_figure_steps_after_replan",
+    "step_produces_figure",
 ]

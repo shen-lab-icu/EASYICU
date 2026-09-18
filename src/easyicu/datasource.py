@@ -6,6 +6,7 @@ import enum
 from dataclasses import dataclass, field
 from pathlib import Path
 import logging
+import re
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 from threading import RLock
 
@@ -181,8 +182,18 @@ def _enumerate_bucket_parquet_files(directory) -> List[str]:
                             files.append(_duckdb_path(base / rel))
                 files.sort()
                 return files
-        except Exception:
-            pass  # manifest unreadable → live scan below
+        except Exception as exc:
+            # Fallback kept: unreadable/stale manifest → live scan below.
+            # Count the degradation so silent manifest rot is observable.
+            global _BUCKET_MANIFEST_DEGRADED_COUNT
+            _BUCKET_MANIFEST_DEGRADED_COUNT += 1
+            logger.warning(
+                "bucket manifest degraded, falling back to live scan: dir=%s "
+                "failure=%s degraded_count=%d",
+                str(base),
+                type(exc).__name__,
+                _BUCKET_MANIFEST_DEGRADED_COUNT,
+            )
 
     # bucket layout first (cheap glob)
     bucket_dirs = [d for d in base.glob('bucket_id=*') if d.is_dir()]
@@ -384,6 +395,12 @@ def _close_duckdb_connections():
 # 🚀 大表预过滤：只加载概念字典声明过的 itemids/variableids。
 # 原始表很大，过滤后性能提升明显。白名单必须跟随 concept-dict.json /
 # sofa2-dict.json 自动变化，避免字典新增 id 后被底层大表预过滤丢掉。
+#
+# Degraded-fallback counter (A-P2-13): incremented each time the bucket
+# manifest fast path is unreadable/stale and enumeration falls back to a live
+# scan. Kept as a plain module counter + LOGGER.warning at the fallback site
+# so manifest rot stays observable without changing the fallback behaviour.
+_BUCKET_MANIFEST_DEGRADED_COUNT: int = 0
 AUMC_NUMERICITEMS_EXTRA_ITEMIDS: set[int] = set()
 MIIV_CHARTEVENTS_EXTRA_ITEMIDS: set[int] = set()
 MIIV_LABEVENTS_EXTRA_ITEMIDS: set[int] = set()
@@ -654,6 +671,35 @@ class ICUDataSource:
     def register_table_source(self, table: str, source: Any) -> None:
         """Register a callable/file path used to load ``table``."""
         self._table_sources[table] = source
+
+    def cache_source_identity(self, cache_dir: Path) -> Optional[str]:
+        """Bind reusable concept results to current input content and config.
+
+        Callable loaders have no immutable content identity: their results may
+        change without their Python identity changing, so disk reuse is disabled.
+        """
+        import hashlib
+        from .content_identity import data_path_fingerprint
+
+        digest = hashlib.sha256(self.config.model_dump_json().encode())
+        paths = [self.base_path] if self.base_path is not None else []
+        for dataset in self._dataset_sources.values():
+            if dataset.path:
+                path = Path(dataset.path)
+                paths.append(path if path.is_absolute() else (self.base_path or Path.cwd()) / path)
+        for name, source in sorted(self._table_sources.items()):
+            digest.update(name.encode())
+            if isinstance(source, (str, Path)):
+                paths.append(Path(source))
+            else:
+                return None
+        if not paths and not self._table_sources:
+            return None
+        for path in sorted(set(Path(p).resolve() for p in paths)):
+            if not path.exists():
+                return None
+            digest.update(data_path_fingerprint(path, exclude_dir=cache_dir).encode())
+        return digest.hexdigest()
     
     def clear_cache(self) -> None:
         """清除表缓存,释放内存。"""
@@ -2335,17 +2381,22 @@ class ICUDataSource:
             values = patient_ids_filter.value
             if isinstance(values, (list, tuple, set)):
                 value_list = list(values)
+            elif isinstance(values, (str, bytes)):
+                value_list = [values]
             elif isinstance(values, pd.Series):
                 value_list = values.tolist()
             else:
                 value_list = [values]
             
             if value_list:
+                escaped_id_col = str(id_col).replace('"', '""')
                 if len(value_list) == 1:
-                    where_conditions.append(f"{id_col} = {value_list[0]}")
+                    where_conditions.append(
+                        f'"{escaped_id_col}" = {_duckdb_sql_literal(value_list[0])}'
+                    )
                 else:
-                    values_str = ", ".join(map(str, value_list))
-                    where_conditions.append(f"{id_col} IN ({values_str})")
+                    values_str = ", ".join(_duckdb_sql_literal(v) for v in value_list)
+                    where_conditions.append(f'"{escaped_id_col}" IN ({values_str})')
         
         # Build WHERE clause
         where_clause = ""
@@ -2493,6 +2544,8 @@ class ICUDataSource:
             
             if isinstance(values, (list, tuple, set)):
                 value_list = list(values)
+            elif isinstance(values, (str, bytes)):
+                value_list = [values]
             elif isinstance(values, pd.Series):
                 value_list = values.tolist()
             else:
@@ -2503,10 +2556,14 @@ class ICUDataSource:
             
             if value_list:
                 if len(value_list) == 1:
-                    where_conditions.append(f"{id_col} = {value_list[0]}")
+                    escaped_id_col = str(id_col).replace('"', '""')
+                    where_conditions.append(
+                        f'"{escaped_id_col}" = {_duckdb_sql_literal(value_list[0])}'
+                    )
                 else:
-                    values_str = ", ".join(map(str, value_list))
-                    where_conditions.append(f"{id_col} IN ({values_str})")
+                    escaped_id_col = str(id_col).replace('"', '""')
+                    values_str = ", ".join(_duckdb_sql_literal(v) for v in value_list)
+                    where_conditions.append(f'"{escaped_id_col}" IN ({values_str})')
         
         # 🚀 大表 itemid 预过滤优化
         if itemid_filter_config:
@@ -2565,8 +2622,17 @@ class ICUDataSource:
                     sort_keys.append(table_cfg.defaults.index_var)
                 
                 if sort_keys:
-                    order_by_clause = f" ORDER BY {', '.join(sort_keys)}"
+                    for _key in sort_keys:
+                        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(_key)):
+                            raise ValueError(
+                                f"Refusing to ORDER BY non-identifier column {_key!r} "
+                                f"for table {table_name!r}"
+                            )
+                    _quoted = [f'"{str(_key).replace(chr(34), chr(34)*2)}"' for _key in sort_keys]
+                    order_by_clause = f" ORDER BY {', '.join(_quoted)}"
                     logger.debug(f"🚀 宽表预排序: {table_name} ORDER BY {sort_keys}")
+            except ValueError:
+                raise
             except Exception as e:
                 logger.debug(f"无法获取表配置进行预排序: {e}")
         
@@ -4563,3 +4629,14 @@ def load_wide_table_aggregated(
             df[c] = df[c].astype(np.float32)
     logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df
+
+
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+enumerate_bucket_parquet_files = _enumerate_bucket_parquet_files
+
+
+__all__ = [
+    "enumerate_bucket_parquet_files",
+]

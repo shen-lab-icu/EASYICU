@@ -178,6 +178,7 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         "publication_figure_skill_summary",
         "publication_figure_svg",
         "manuscript_critique",
+        "retry_policy_receipt",
     } <= evidence_ids
     assert (run_dir / "hypothesis_blueprint.json").exists()
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
@@ -205,6 +206,16 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
     )
     assert partial["runtime_state"]["analysis_family"]
+    retry_record = next(
+        record
+        for record in manifest["evidence"]
+        if record["evidence_id"] == "retry_policy_receipt"
+    )
+    retry_receipt = json.loads(
+        (run_dir / retry_record["relative_path"]).read_text(encoding="utf-8")
+    )
+    assert retry_receipt["attempt_denominator"] >= 1
+    assert len(retry_receipt["policy_sha256"]) == 64
     ok_step_records = [
         record
         for record in manifest["per_step_records"]
@@ -458,6 +469,36 @@ def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
 
     result = asyncio.run(_run())
     assert Path(result.manifest_path).exists()
+
+
+def test_host_cancellation_never_enters_deterministic_planner_fallback(
+    ra, synthetic_cohort, tmp_path: Path, monkeypatch,
+):
+    import easyicu.research_agent.pipeline as pipeline_module
+    from easyicu.research_agent.contracts.control_signals import ProgressControlSignal
+
+    signal = ProgressControlSignal("host requested cancellation")
+    calls = []
+
+    def cancel_planner(*_args, **_kwargs):
+        calls.append("planner")
+        raise signal
+
+    monkeypatch.setattr(pipeline_module.PlannerAgent, "run", cancel_planner)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path, llm=ra.MockLLMClient(),
+        enable_literature=False, enable_deterministic_planner_fallback=True,
+    )
+
+    with pytest.raises(ProgressControlSignal) as raised:
+        pipeline.run(
+            question="Is admission SOFA-2 associated with ICU mortality?",
+            cohort=synthetic_cohort, cohort_name="cancelled_planner",
+            database="synthetic", target_outcome="death",
+        )
+
+    assert raised.value is signal
+    assert calls == ["planner"]
 
 
 def test_pipeline_falls_back_when_planner_returns_empty(
@@ -4293,7 +4334,7 @@ def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
             "skipped": "No valid lactate_max_24h data",
         },
     )
-    assert findings
+    assert len(findings) >= 1, "expected at least one step_contract finding"
     assert findings[0].validator == "step_contract"
     assert findings[0].severity == "error"
     assert "primary association estimate" in findings[0].message
@@ -4432,7 +4473,7 @@ def test_step_contract_findings_rejects_nested_ci_without_effect_value(ra):
         },
     )
 
-    assert findings
+    assert len(findings) >= 1, "expected at least one step_contract finding"
     assert findings[0].validator == "step_contract"
     assert findings[0].severity == "error"
 
@@ -5279,7 +5320,8 @@ def test_split_effect_figure_when_exact_bound_table_proves_figure_scale(ra):
         "04_primary_association_figure",
     ]
     assert revised.steps[1].inputs == ["table:primary_or"]
-    assert findings
+    assert len(findings) >= 1, "expected at least one plan-split finding"
+    assert findings[0].message, "split finding must carry a message"
 
 
 def test_split_generic_primary_adjusted_effect_from_planner_model_roster(ra):
@@ -5325,7 +5367,8 @@ def test_split_generic_primary_adjusted_effect_from_planner_model_roster(ra):
     assert revised.steps[1].inputs == [
         "table:adjusted_association_estimates",
     ]
-    assert findings
+    assert len(findings) >= 1, "expected at least one plan-split finding"
+    assert findings[0].message, "split finding must carry a message"
 
 
 @pytest.mark.parametrize(
@@ -5599,7 +5642,7 @@ def test_plan_cap_drops_figure_when_its_typed_source_closure_exceeds_cap(ra):
         "table:t3",
         "table:t4",
     }
-    assert findings
+    assert len(findings) >= 1, "expected at least one cap finding"
     assert findings[0].detail["dependency_displaced_figure_step_ids"]
 
 
@@ -5668,7 +5711,7 @@ def test_plan_cap_preserves_figure_source_parent_pair(ra):
         "05_sensitivity_comparison_figure"
     )
     assert "03_missingness" not in step_ids
-    assert findings
+    assert len(findings) >= 1, "expected at least one cap finding"
     assert findings[0].detail["preserved_figure_step_ids"] == [
         "05_sensitivity_comparison_figure"
     ]
@@ -5772,7 +5815,7 @@ def test_plan_cap_makes_room_for_late_primary_anchor_without_exceeding_cap(ra):
 
     assert len(step_ids) == 4
     assert "05_primary_adjusted_model" in step_ids
-    assert findings
+    assert len(findings) >= 1, "expected at least one cap finding"
     assert "05_primary_adjusted_model" in findings[0].detail["protected_step_ids"]
 
 
@@ -9565,9 +9608,49 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
         evidence_digest=None,
         **_kwargs,
     ):
+        # The section-based writer contract rejects an unsectioned draft before
+        # filtering can run; every required subsection must carry prose, and
+        # the unsupported first sentence must still be removed by filtering.
         return (
-            "The model's performance was consistent across folds, indicating robustness.\n\n"
-            "The analysis materials are available in the run evidence record "
+            "# Title\n\n**Keywords:** ICU, cohort, association\n\n"
+            "## Abstract\n\n"
+            "**Background:** SOFA-2 severity may relate to ICU mortality; the "
+            "registered baseline display is summarized in the evidence record "
+            "{evidence:table_one}.\n\n"
+            "**Methods:** Adults were followed from admission; the analysis "
+            "materials are described in the registered evidence record "
+            "{evidence:table_one}.\n\n"
+            "**Results:** The model's performance was consistent across folds, "
+            "indicating robustness. The prespecified analysis was performed "
+            "{evidence:table_one}.\n\n"
+            "**Conclusions:** This study describes baseline characteristics "
+            "{evidence:table_one}.\n\n"
+            "## Introduction\n\nThe analysis materials are recorded in the "
+            "registered evidence record {evidence:table_one}.\n\n"
+            "## Methods\n\n"
+            "### Study design and cohort\n\nThe cohort design follows the "
+            "registered analysis materials {evidence:table_one}.\n\n"
+            "### Variables\n\nThe variable roster is summarized in the "
+            "registered baseline display {evidence:table_one}.\n\n"
+            "### Statistical analysis\n\nThe statistical analysis plan is "
+            "summarized in the registered evidence record {evidence:table_one}.\n\n"
+            "### Software and reproducibility\n\nThe software and "
+            "reproducibility materials are recorded in the registered evidence "
+            "record {evidence:table_one}.\n\n"
+            "## Results\n\n"
+            "### Cohort characteristics\n\nThis study describes baseline "
+            "characteristics.\n\n"
+            "### Primary outcome\n\nThe prespecified analysis was "
+            "performed.\n\n"
+            "### Primary association\n\nThis section explains the "
+            "prespecified study design.\n\n"
+            "### Sensitivity and subgroup analyses\n\nIndependent validation "
+            "is required.\n\n"
+            "## Discussion\n\nThe discussion follows the registered analysis "
+            "materials {evidence:table_one}.\n\n"
+            "## Limitations\n\nThe limitations follow from the registered "
+            "analysis materials {evidence:table_one}.\n\n"
+            "## Conclusion\n\nContext for the analysis is described here "
             "{evidence:table_one}.\n"
         )
 
@@ -9594,14 +9677,20 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     assert critique["unsupported_claims"] == []
     assert critique["suggested_repairs"]
     assert "performance was consistent" not in filtered
-    # Filtering the unsupported result sentence succeeds, but a deliberately
-    # citation-free mock manuscript must still fail the independent literature
-    # authority gate introduced for article-grade outputs.
+    # Filtering the unsupported result sentence succeeds, but the mock draft is
+    # still not publishable: the host binds the sealed literature bundle into
+    # the draft (its independent audit passes), while the deterministic quality
+    # audit blocks a scaffold that never supplied host-owned administrative
+    # sections or a complete structured abstract.
     assert run_status["gates"]["evidence_complete"] is False
     assert any(
-        "Manuscript literature authority is incomplete" in error
+        "Deterministic manuscript quality audit requires changes" in error
         for error in run_status["gates"]["evidence_errors"]
     )
+    literature_audit = json.loads(
+        (run_dir / "manuscript_literature_audit.json").read_text(encoding="utf-8")
+    )
+    assert literature_audit["status"] == "pass"
     assert any(
         finding["validator"] == "manuscript_quality"
         for finding in manifest["findings"]

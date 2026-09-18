@@ -1,3 +1,4 @@
+/* Owner: Workspace States catalogue route. */
 /* Screen: Workspace States
    A high-fidelity, clickable catalogue of the app's global states —
    loading / empty / no-data / error / blocked / success — shown in a real

@@ -551,6 +551,15 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
         "data_quality",
         "data_quality",
     ]
+    assert "percentage of the whole cohort" in contract["reader_caption"]
+    assert "Source completeness is not event prevalence" in contract["reader_caption"]
+    assert "Unknown denotes unestablished" in contract["reader_caption"]
+    svg = (out_dir / f"{PRODUCT}.svg").read_text(encoding="utf-8")
+    assert "Source completeness is not event prevalence" not in svg
+    assert "Repeated records are not independent measurements" not in svg
+    assert "N/A: event or event-time field" not in svg
+    # Cell status labels remain visible; only the prose footer moves out.
+    assert "Unknown" in svg
     assert [panel["metadata"]["chart_type"] for panel in contract["panels"]] == [
         "availability_panel",
         "coverage_heatmap",
@@ -612,6 +621,65 @@ def test_all_zero_missingness_renders_explicit_completeness_instead_of_blank_bar
     assert panel["metadata"]["zero_missing_completeness_display"] is True
     assert panel["metadata"]["source_products"] == [MISSINGNESS_MEASUREMENT_AUDIT_INPUT]
     assert "zero missing source values" in panel["claim"]
+    assert "Bars show completeness among eligible stays" in contract["reader_caption"]
+    assert "no eligible stays remains N/A, not 100% complete" in contract["reader_caption"]
+
+
+def test_nonzero_missingness_never_rounds_to_apparent_zero(tmp_path: Path) -> None:
+    audit = _audit_frame()
+    audit.loc[0, ["n_total", "eligible_n", "measured_one_n", "value_missing_n"]] = [
+        10000, 10000, 9999, 1,
+    ]
+    audit.loc[0, ["measured_one_pct", "value_missing_pct"]] = [99.99, 0.01]
+    process = _process_frame()
+    process.loc[0, ["n_total", "eligible_n", "measured_one_n"]] = [10000, 10000, 9999]
+    run_dir, manifest = _binding(tmp_path, audit=audit, process=process)
+
+    out_dir, _summary = _run(run_dir, manifest)
+
+    svg = (out_dir / f"{PRODUCT}.svg").read_text(encoding="utf-8")
+    assert "&lt;0.1%  n=1" in svg
+    assert "0.0%  n=1" not in svg
+
+
+def test_process_projection_distinguishes_status_from_record_repetition(
+    tmp_path: Path,
+) -> None:
+    process = _process_frame()
+    process["indicator_semantics"] = [
+        "measurement_availability", "binary_event_presence", "conditional_event_time",
+    ]
+    process["measurement_count_column"] = ["lact_n", "event_n", None]
+    cells = _validate_process_rows(process)
+
+    repeated = {cell["variable"]: cell for cell in cells
+                if cell["process_measure"] == "repeat_measured_n"}
+    assert repeated["lact_first"]["display_status"] == "available"
+    assert repeated["sep3_sofa2_max"]["display_status"] == "not_applicable"
+    assert repeated["death_time"]["display_status"] == "not_applicable"
+    assert repeated["sep3_sofa2_max"]["count"] == 0  # Original count is not rewritten.
+    run_dir, manifest = _binding(tmp_path, process=process)
+    out_dir, summary = _run(run_dir, manifest)
+    svg = (out_dir / f"{PRODUCT}.svg").read_text(encoding="utf-8")
+    assert "Value/status present" in svg
+    assert "Repeated records" in svg
+    assert "Measured &gt;=1" not in svg
+    assert "N/A" in svg
+    assert summary["measurement_process_masked_cell_count"] == 2
+    contract = json.loads((out_dir / f"{PRODUCT}.figure_contract.json").read_text())
+    assert "not event prevalence" in contract["statistics_note"]
+    assert "not independent measurements" in contract["statistics_note"]
+
+
+@pytest.mark.parametrize("semantics", [None, "measurement_availability"])
+def test_undeclared_count_source_is_unknown_not_zero(semantics: str | None) -> None:
+    process = _process_frame()
+    process["indicator_semantics"] = semantics
+
+    repeated = [cell for cell in _validate_process_rows(process)
+                if cell["process_measure"] == "repeat_measured_n"]
+
+    assert all(cell["display_status"] == "not_established" for cell in repeated)
 
 
 # The long-format schema these tests were written against (metric / level /

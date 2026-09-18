@@ -41,6 +41,7 @@ from .concept_availability import (
     hypothesis_cross_database_feasibility,
     normalize_concept_name,
 )
+from .bibliographic_metadata import complete_missing_authors
 from .gates.data_answerability import analysis_answerability_findings
 from .literature_concepts import literature_concept_identity
 from .literature_excerpt import select_source_backed_excerpt
@@ -104,6 +105,13 @@ class CitationRecord(BaseModel):
     key: str = Field(..., description="Stable citation key, e.g. 'vincent_sofa_1996'.")
     title: str
     year: str
+    authors: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Author display names retained in source order from bibliographic "
+            "metadata. Missing names must not be inferred from the citation key."
+        ),
+    )
     venue: Optional[str] = None
     relevance: Optional[str] = Field(
         default=None,
@@ -540,7 +548,7 @@ _CURATED: List[CitationRecord] = [
         title="The SOFA (Sepsis-related Organ Failure Assessment) score to describe organ dysfunction/failure.",
         year="1996",
         venue="Intensive Care Medicine",
-        relevance="Defines SOFA components (0-4 ordinal); foundational for any SOFA-based analysis.",
+        relevance="Defines the original SOFA components (0-4 ordinal); historical background, not the SOFA-2 definition.",
         doi="10.1007/BF01709751",
         url="https://pubmed.ncbi.nlm.nih.gov/8844239/",
         pmid="8844239",
@@ -604,6 +612,16 @@ _CURATED: List[CitationRecord] = [
         venue="Nature Medicine",
         relevance="Source paper for HiRID and circEWS-style circulatory-failure definitions.",
     ),
+    CitationRecord(
+        key="ranzani_sofa2_2025",
+        title="Development and Validation of the Sequential Organ Failure Assessment (SOFA)-2 Score.",
+        year="2025",
+        venue="JAMA",
+        relevance="Defines and validates the updated SOFA-2 score; use this version-specific source for SOFA-2 components, not the original 1996 definition.",
+        doi="10.1001/jama.2025.20516",
+        url="https://pubmed.ncbi.nlm.nih.gov/41159833/",
+        pmid="41159833",
+    ),
 ]
 
 
@@ -611,15 +629,20 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
     """Filter the curated list by which concepts appear in the context.
 
     Matching is *prefix-aware* — ``kdigo_stage`` triggers the KDIGO
-    citation, ``sofa2_resp`` triggers the Vincent SOFA citation, and
-    so on. This sidesteps the previous fragility where renaming a
-    column from ``kdigo`` to ``kdigo_stage`` silently dropped the
-    canonical reference.
+    citation, and ``sofa2_resp`` retains its version-specific definition.
+    Both physical column names and their declared source concepts participate,
+    so a renamed representation does not drop the canonical reference.
     """
-    names = {v.name.lower() for v in ctx.variables}
+    names = {
+        str(value).lower()
+        for variable in ctx.variables
+        for value in (variable.name, variable.source_concept)
+        if value
+    }
     out: List[CitationRecord] = []
 
     def _add(c: CitationRecord) -> None:
+        c = CitationRecord.model_validate(complete_missing_authors(c.model_dump(mode="json"))[0])
         if c not in out:
             out.append(c)
 
@@ -630,6 +653,8 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
 
     if _matches_prefix(("sofa", "sofa2")):
         _add(_CURATED[0])  # Vincent 1996
+    if _matches_prefix(("sofa2",)):
+        _add(_CURATED[7])  # Ranzani 2025: SOFA-2, not the original score
     # Lactate is a general ICU biomarker, not a Sepsis-3 definition trigger.
     # Keeping ``lact`` here made every lactate study inherit the Sepsis-3
     # consensus paper even when the cohort/question never mentioned sepsis.
@@ -1077,6 +1102,38 @@ _ICU_TITLE_FILTER = (
     'OR "critically ill"[Title])'
 )
 
+# Source-database aliases are retrieval hints only. They help an exact
+# same-database comparator survive a bounded relevance-ranked PubMed stratum;
+# they never grant eligibility. The downstream source-backed screen still has
+# to establish population, exposure role, outcome, and publication type.
+_DATABASE_RETRIEVAL_ALIASES = {
+    "aumc": ("AmsterdamUMCdb", "Amsterdam University Medical Centers database"),
+    "eicu": ("eICU", "eICU Collaborative Research Database"),
+    "eicu_demo": ("eICU", "eICU Collaborative Research Database"),
+    "hirid": ("HiRID",),
+    "miiv": (
+        "MIMIC-III",
+        "MIMIC-IV",
+        "MIMIC",
+        "Medical Information Mart for Intensive Care",
+    ),
+    "mimic": (
+        "MIMIC-III",
+        "MIMIC-IV",
+        "MIMIC",
+        "Medical Information Mart for Intensive Care",
+    ),
+    "mimic_demo": (
+        "MIMIC-III",
+        "MIMIC-IV",
+        "MIMIC",
+        "Medical Information Mart for Intensive Care",
+    ),
+    "mimic_iii": ("MIMIC-III", "MIMIC", "Medical Information Mart for Intensive Care"),
+    "mimic_iv": ("MIMIC-IV", "MIMIC", "Medical Information Mart for Intensive Care"),
+    "sic": ("SICdb", "Salzburg Intensive Care database"),
+}
+
 # Variables in these roles are good PubMed query terms; ids/timestamps are not.
 _QUERY_ROLES = {
     VariableRole.COMPOSITE_SCORE,
@@ -1269,9 +1326,7 @@ def _screen_source_backed_design_analogue(
         for token in (" intensive care ", " critical care ", " icu ")
     )
     adult_required = _adult_population_required(context)
-    adult_match = (not adult_required) or any(
-        token in padded_blob for token in (" adult ", " adults ")
-    )
+    adult_match = (not adult_required) or _adult_study_population_matches(record)
     population_match = icu_match and adult_match
     design_excerpt = source_excerpt.startswith(
         ("Study-design excerpt:", "Source excerpt:")
@@ -1347,10 +1402,7 @@ def screen_source_backed_direct_comparator(
     )
     outcome_match = _clinical_axis_matches(outcome, blob, axis="outcome")
     icu_match = _icu_population_matches(record.title, source_excerpt)
-    padded_blob = f" {blob} "
-    adult_match = (not adult_required) or any(
-        token in padded_blob for token in (" adult ", " adults ")
-    )
+    adult_match = (not adult_required) or _adult_study_population_matches(record)
     population_match = icu_match and adult_match
     design_excerpt = str(record.relevance or "").startswith(
         ("Study-design excerpt:", "Source excerpt:")
@@ -1495,7 +1547,12 @@ def _normalise_clinical_text(value: str) -> str:
 
 
 def _adult_population_required(context: ResearchContext) -> bool:
-    """Return whether the owner-issued cohort explicitly restricts to adults."""
+    """Recognize declared adult scope or a fully age-observed adult cohort.
+
+    Observed ages constrain comparison to this bound cohort, not eligibility
+    for a future cohort. A sample, empty catalog, partial age coverage, or the
+    dictionary's physiological range cannot establish that population.
+    """
 
     cohort = context.cohort
     provenance = cohort.provenance if isinstance(cohort.provenance, dict) else {}
@@ -1504,8 +1561,9 @@ def _adult_population_required(context: ResearchContext) -> bool:
         *cohort.inclusion_criteria,
         *[str(value) for value in list(provenance.get("inclusion_criteria") or [])],
     ]
-    text = _normalise_clinical_text(" ".join(values))
-    return any(
+    raw_text = " ".join(values)
+    text = _normalise_clinical_text(raw_text)
+    if any(marker in raw_text for marker in ("成人", "成年")) or any(
         marker in f" {text} "
         for marker in (
             " adult ",
@@ -1514,7 +1572,144 @@ def _adult_population_required(context: ResearchContext) -> bool:
             " age 18 years ",
             " age 18 or older ",
         )
+    ):
+        return True
+    for variable in context.variables:
+        if (
+            (variable.source_concept or variable.name) != "age"
+            or variable.unit != "years"
+            or not cohort.n_stays
+            or variable.missingness is None
+            or variable.missingness.n_total != cohort.n_stays
+            or variable.missingness.n_missing != 0
+        ):
+            continue
+        minimum = (variable.observed_domain or {}).get("min")
+        if isinstance(minimum, (int, float)) and minimum >= 18:
+            return True
+    return False
+
+
+def _excludes_adult_population(statement: str) -> bool:
+    """Recognize exclusion of the whole adult group, not a qualified subgroup."""
+
+    adult_group = r"(?:adults|adult\s+(?:ICU\s+)?patients)"
+    return bool(re.search(
+        rf"\b{adult_group}\s+(?:was|were|are)\s+excluded\b|"
+        rf"\b(?:excluded|did not include)\s+(?:all\s+)?{adult_group}"
+        r"(?=\s*(?:[,.;!?]|$)|\s+(?:and|but|whereas)\b)",
+        statement, flags=re.I,
+    ))
+
+
+def _study_population_statements(excerpt: str) -> List[str]:
+    """Keep explicit population statements from the retained source excerpt.
+
+    The excerpt selector retains background and result sentences as well as
+    design sentences. Its transport prefix is not itself population evidence.
+    Unknown prose stays unknown; this bounded lexical screen does not infer an
+    age population from a database or attempt to reconstruct missing full text.
+    """
+
+    text = re.sub(r"^(?:Study-design excerpt|Source excerpt):\s*", "", excerpt)
+    statements: List[str] = []
+    for sentence in re.split(
+        r"(?<=[.;!?])\s+|\n+|(?=\b(?:background|methods|results|conclusions?):)",
+        text, flags=re.I,
+    ):
+        normalized = _normalise_clinical_text(sentence)
+        if re.match(
+            r"(?:background|introduction|objectives?|conclusions?|discussion)\b",
+            normalized,
+        ) or re.search(
+            r"\b(?:previous|prior|earlier|other|published)\b.{0,35}"
+            r"\b(?:studies|study|cohorts?|research|reports?)\b",
+            normalized,
+        ):
+            continue
+        # Retain explicit contrary scope before removing ordinary exclusions.
+        # Otherwise an adult title can override "Adults were excluded".
+        if _excludes_adult_population(sentence):
+            statements.append(sentence)
+            continue
+        sentence = re.split(
+            r"(?:,\s*(?:(?:and|whereas)\s+)?|\s+(?:and|whereas)\s+)"
+            r"(?=[^.;,]{0,80}\b(?:was|were)\s+excluded\b)",
+            sentence, maxsplit=1, flags=re.I,
+        )[0]
+        normalized = _normalise_clinical_text(sentence)
+        if re.search(r"\b(?:was|were) excluded\b", normalized):
+            continue
+        sentence = re.split(
+            r"\b(?:excluding|excluded|but not|did not include)\b",
+            sentence, maxsplit=1, flags=re.I,
+        )[0]
+        normalized = _normalise_clinical_text(sentence)
+        if any(re.search(pattern, normalized) for pattern in (
+            r"\bwe (?:studied|included|enrolled|recruited|analy[sz]ed|evaluated)\b",
+            r"\b(?:study|cohort|population|analysis)\b.{0,60}"
+            r"\b(?:included|comprised|consisted|enrolled|studied)\b",
+            r"\b(?:patients?|participants?|subjects?|adults?|children|neonates)\b"
+            r".{0,100}\b(?:(?:were|was) (?:included|enrolled|studied|analy[sz]ed|"
+            r"evaluated|associated)|had|underwent|received)\b",
+            r"\b(?:retrospective|prospective|observational)\b.{0,60}"
+            r"\b(?:study|cohort|analysis)\b",
+            r"^methods\b",
+        )):
+            statements.append(sentence)
+    return statements
+
+
+def _adult_scope_in_population(statement: str) -> bool | None:
+    """Classify explicit age evidence in one study-population statement."""
+
+    normalized = _normalise_clinical_text(statement)
+    if _excludes_adult_population(statement):
+        return False
+    if re.search(
+        r"\b(?:paediatric|pediatric|child|children|neonatal|neonates?|infants?|"
+        r"newborns?|adolescents?|all ages|all age groups|mixed age)\b",
+        normalized,
+    ):
+        return False
+    # A reported range describes the enrolled population, unlike a mean age.
+    age_ranges = re.findall(
+        r"\b(?:aged?|ages?)\s+(?:between\s+)?(\d+(?:\.\d+)?)\s*"
+        r"(?:years?\s*)?(?:[-–]|to|and)\s*(\d+(?:\.\d+)?)\s*years?\b",
+        statement, flags=re.I,
     )
+    if any(float(low) < 18 or float(high) < float(low) for low, high in age_ranges):
+        return False
+    if re.search(r"\b(?:under|younger than|less than)\s+18\s+years?\b", normalized):
+        return False
+    if re.search(r"\b(?:aged?|ages?)\s*<\s*18\s*years?\b", statement, flags=re.I):
+        return False
+    lower_bounds = re.findall(
+        r"\b(?:aged?|ages?)\s*(?:>=|≥|>|over|at least)\s*(\d+(?:\.\d+)?)\s*years?\b|"
+        r"\b(\d+(?:\.\d+)?)\s*years?\s+(?:or older|and older|or above)\b",
+        statement, flags=re.I,
+    )
+    if any(float(first or second) < 18 for first, second in lower_bounds):
+        return False
+    adult_population = re.search(
+        r"\badults\b|\badult(?:\s+(?:icu|critically|ill|intensive|critical|"
+        r"care|unit|hospital|hospitali[sz]ed|medical|surgical)){0,5}\s+"
+        r"(?:patients?|participants?|subjects?|cohort|population|stays?|admissions?)\b",
+        normalized,
+    )
+    if age_ranges or lower_bounds or adult_population:
+        return True
+    return None
+
+
+def _adult_study_population_matches(record: CitationRecord) -> bool:
+    """Require age evidence about the study, with contrary scope taking priority."""
+
+    scopes = [
+        _adult_scope_in_population(statement)
+        for statement in (record.title, *_study_population_statements(record.relevance or ""))
+    ]
+    return False not in scopes and True in scopes
 
 
 _EXPOSURE_ROLE_MARKERS = (
@@ -1566,6 +1761,11 @@ def _clinical_exposure_role_matches(
         if _normalise_clinical_text(term)
     ):
         return False
+    if _text_uses_exposure_as_secondary_predictor(
+        normalized_exposure,
+        normalized_title,
+    ):
+        return False
     if _text_assigns_studied_exposure(normalized_exposure, normalized_title):
         return True
 
@@ -1574,6 +1774,31 @@ def _clinical_exposure_role_matches(
         if not normalized:
             continue
         if _text_assigns_studied_exposure(normalized_exposure, normalized):
+            return True
+    return False
+
+
+def _text_uses_exposure_as_secondary_predictor(exposure: str, text: str) -> bool:
+    """Reject titles where another marker is explicitly studied against exposure.
+
+    A study such as "Renin Kinetics Are Superior to Lactate Kinetics for
+    Predicting Mortality" reports lactate as a performance comparator, not as
+    the primary exposure. The downstream abstract may still contain a lactate
+    discrimination result, so title-level precedence must be applied before a
+    sentence-level analytic relation can promote the record.
+    """
+
+    if not exposure:
+        return False
+    escaped = re.escape(exposure)
+    pattern = re.compile(
+        rf"\b(?:superior|inferior|better|worse|more accurate|less accurate|"
+        rf"outperform(?:s|ed|ing)?)\b.{{0,24}}\b(?:to|than)\b\s+"
+        rf"(?:the\s+)?{escaped}\b"
+    )
+    for match in pattern.finditer(text):
+        clause = re.split(r"[.;]", text[: match.start()])[-1]
+        if not _clinical_axis_matches(exposure, clause, axis="exposure"):
             return True
     return False
 
@@ -1599,6 +1824,15 @@ def _text_assigns_studied_exposure(exposure: str, text: str) -> bool:
         rf"\b(?:patients?|participants?|subjects?|cohort)\b.{{0,40}}\b(?:meeting|met|fulfilling|satisfying)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
         rf"\b(?:defined|diagnosed|classified)\b.{{0,30}}\b(?:according\s+to|using|by)\b\s+(?:the\s+)?{escaped}(?:\s+(?:criteria|definition))?",
         rf"\b(?:(?:adult|critically\s+ill|icu|intensive\s+care)\s+)*patients?\s+(?:(?:who|that)\s+(?:were\s+)?)?(?:with|diagnosed\s+with|having)\s+(?:the\s+)?{escaped}\b(?!\s+(?:versus|vs|compared\s+(?:with|to)|and\s+without))",
+        # A disease may modify the population noun ("AKI patients" or
+        # "cohorts of AKI patients") instead of following "patients with".
+        # Model validation within that population does not study the disease
+        # contrast. Retain an explicit comparison immediately after the noun.
+        rf"\b{escaped}\s+(?:patients?|participants?|subjects?|cohorts?|populations?)\b(?!\s+(?:versus|vs|compared\s+(?:with|to)|and\s+without))",
+        # Mentioning an exposure as an adjustment variable does not study its
+        # association with the outcome.  For example, a urine-output model may
+        # adjust for AKI while studying urine output itself.
+        rf"\b(?:adjust(?:ed|ing)?|controll(?:ed|ing)?)\s+for\b[^.;:]{{0,100}}\b{escaped}\b",
     )
     for pattern in eligibility_patterns:
         analytic_text = re.sub(pattern, " ", analytic_text)
@@ -1636,8 +1870,10 @@ def _clinical_axis_matches(term: str, blob: str, *, axis: str) -> bool:
             aliases.update(
                 {
                     "in hospital mortality",
+                    "inhospital mortality",
                     "hospital mortality",
                     "in hospital death",
+                    "inhospital death",
                     "hospital death",
                 }
             )
@@ -1668,7 +1904,10 @@ def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> st
             return (
                 '("in-hospital mortality"[Title/Abstract] OR '
                 '"in hospital mortality"[Title/Abstract] OR '
+                '"inhospital mortality"[Title/Abstract] OR '
                 '"hospital mortality"[Title/Abstract] OR '
+                '"in-hospital death"[Title/Abstract] OR '
+                '"inhospital death"[Title/Abstract] OR '
                 '"hospital death"[Title/Abstract])'
             )
         if declared == "icu mortality":
@@ -1704,6 +1943,114 @@ def _pubmed_identity_alternatives_clause(identity: Any) -> str:
         alternatives[0]
         if len(alternatives) == 1
         else "(" + " OR ".join(alternatives) + ")"
+    )
+
+
+def _database_retrieval_terms(context: ResearchContext) -> tuple[str, ...]:
+    """Return conservative publication aliases for declared source databases."""
+
+    terms: List[str] = []
+    for database in (
+        context.cohort.database,
+        *list(context.cross_database_validation or []),
+    ):
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(database or "").casefold()).strip(
+            "_"
+        )
+        for alias in _DATABASE_RETRIEVAL_ALIASES.get(normalized, ()):
+            if alias not in terms:
+                terms.append(alias)
+    return tuple(terms)
+
+
+def _database_retrieval_clause(context: ResearchContext) -> str:
+    terms = _database_retrieval_terms(context)
+    if not terms:
+        return ""
+    return "(" + " OR ".join(
+        f'"{term.replace(chr(34), "")}"[Title/Abstract]' for term in terms
+    ) + ")"
+
+
+def _declared_exposure_horizon_hours(context: ResearchContext) -> Optional[int]:
+    """Return one bounded hour horizon declared for the primary exposure window."""
+
+    values: List[float] = []
+    for window in context.time_windows:
+        if float(window.start_hours) == 0.0 and 0.0 < float(window.end_hours) <= 72.0:
+            values.append(float(window.end_hours))
+    variable = context.variable(context.primary_exposure or "")
+    if variable is not None:
+        window_text = " ".join(
+            (
+                str(variable.analysis_window or ""),
+                str(variable.description or ""),
+            )
+        )
+        for match in re.finditer(
+            r"\[\s*0(?:\.0+)?\s*,\s*(\d+(?:\.\d+)?)\s*\]\s*h",
+            window_text,
+            flags=re.IGNORECASE,
+        ):
+            value = float(match.group(1))
+            if 0.0 < value <= 72.0:
+                values.append(value)
+    if not values:
+        return None
+    hours = min(values)
+    return int(hours) if hours.is_integer() else None
+
+
+def _time_horizon_retrieval_clause(
+    context: ResearchContext,
+) -> tuple[str, tuple[str, ...]]:
+    """Return a bounded exposure-window clause and normalized match terms."""
+
+    hours = _declared_exposure_horizon_hours(context)
+    if hours is None:
+        return "", ()
+    terms = (
+        f"{hours}-hour",
+        f"{hours}-h",
+        f"{hours} hour",
+        f"{hours} hours",
+        f"{hours} h",
+        f"{hours}h",
+        f"first {hours}",
+    )
+    return (
+        "("
+        + " OR ".join(f'"{term}"[Title/Abstract]' for term in terms)
+        + ")",
+        tuple(_normalise_clinical_text(term) for term in terms),
+    )
+
+
+def _time_horizon_outcome_clause(
+    context: ResearchContext,
+    outcome_clause: str,
+) -> str:
+    """Broaden only mortality wording inside the database/window stratum."""
+
+    variable = context.variable(context.target_outcome or "")
+    declared = " ".join(
+        str(value or "")
+        for value in (
+            (variable.source_concept if variable is not None else None),
+            (variable.name if variable is not None else None),
+            (variable.description if variable is not None else None),
+            context.target_outcome,
+        )
+    )
+    normalized = _normalise_clinical_text(declared)
+    if not outcome_clause or not any(
+        f" {marker} " in f" {normalized} "
+        for marker in ("mortality", "death", "survival")
+    ):
+        return outcome_clause
+    return (
+        f"({outcome_clause} OR mortality[Title/Abstract] OR "
+        'death[Title/Abstract])'
     )
 
 
@@ -1945,6 +2292,26 @@ def build_pubmed_protocol_queries_for_context(
         queries.append(
             " AND ".join((exposure_or_topic, _ICU_FILTER, _OBSERVATIONAL_FILTER))
         )
+    database_clause = _database_retrieval_clause(context)
+    time_clause, _ = _time_horizon_retrieval_clause(context)
+    if exposure_or_topic and outcome_clause and database_clause and time_clause:
+        # A bounded relevance search can push an exact same-database,
+        # same-window comparator below the retained depth. This complementary
+        # stratum recovers it without relaxing the source-backed screen.
+        horizon_outcome_clause = _time_horizon_outcome_clause(
+            context,
+            outcome_clause,
+        )
+        queries.append(
+            " AND ".join(
+                (
+                    exposure_or_topic,
+                    time_clause,
+                    horizon_outcome_clause,
+                    database_clause,
+                )
+            )
+        )
     intent = _study_intent_clause(context.research_question)
     if exposure_or_topic and intent:
         queries.append(" AND ".join((exposure_or_topic, intent, _ICU_FILTER)))
@@ -2010,9 +2377,16 @@ def _rank_protocol_search_results(
     topic = _question_topic_term(context.research_question).casefold()
     intent_terms = _study_intent_focus_terms(context.research_question)
     adult_required = _adult_population_required(context)
+    database_terms = tuple(
+        _normalise_clinical_text(term) for term in _database_retrieval_terms(context)
+    )
+    _, time_terms = _time_horizon_retrieval_clause(context)
 
     def score(record: CitationRecord) -> tuple[int, int]:
         title = _normalise_clinical_text(record.title)
+        source_blob = _normalise_clinical_text(
+            " ".join((record.title, str(record.relevance or "")))
+        )
         value = 0
         if exposure and _clinical_axis_matches(exposure, title, axis="exposure"):
             value += 6
@@ -2042,6 +2416,14 @@ def _rank_protocol_search_results(
             )
         ):
             value -= 12
+        if database_terms and any(
+            f" {term} " in f" {source_blob} " for term in database_terms
+        ):
+            value += 5
+        if time_terms and any(
+            f" {term} " in f" {source_blob} " for term in time_terms
+        ):
+            value += 3
         if adult_required and any(
             marker in f" {title} "
             for marker in (" child ", " children ", " pediatric ", " paediatric ")
@@ -2090,6 +2472,19 @@ def _surname_from_authors(authors: Any) -> str:
         first = name.split()[0]
         return re.sub(r"[^A-Za-z]", "", first).lower()
     return ""
+
+
+def _source_author_names(authors: Any) -> List[str]:
+    if not isinstance(authors, list):
+        return []
+    return [
+        item["name"].strip()
+        for item in authors
+        if isinstance(item, dict)
+        and item.get("authtype") in (None, "Author", "CollectiveName")
+        and isinstance(item.get("name"), str)
+        and item["name"].strip()
+    ]
 
 
 def _doi_from_articleids(articleids: Any) -> Optional[str]:
@@ -2189,6 +2584,7 @@ def parse_pubmed_esummary(payload: Dict[str, Any]) -> List[CitationRecord]:
                 key=key,
                 title=title or f"PMID {uid}",
                 year=year,
+                authors=_source_author_names(rec.get("authors")),
                 venue=venue,
                 doi=doi,
                 pmid=str(uid),

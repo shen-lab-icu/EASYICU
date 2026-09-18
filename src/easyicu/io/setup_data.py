@@ -50,12 +50,13 @@ def setup_data(
     """
     data_dir = Path(data_dir)
     registry = load_data_sources()
-    
+
     try:
         config = registry.get(source_name)
-    except KeyError:
-        LOGGER.error(f"Data source '{source_name}' not found in registry")
-        return
+    except KeyError as exc:
+        raise KeyError(f"Unknown data source '{source_name}'") from exc
+    if config is None:
+        raise KeyError(f"Unknown data source '{source_name}'")
 
     LOGGER.info(f"Setting up data source '{source_name}' in {data_dir}")
 
@@ -80,8 +81,9 @@ def setup_data(
                     password=password
                 )
         except Exception as e:
-            LOGGER.error(f"Download failed: {e}")
-            # Continue to import step as data might already exist
+            raise RuntimeError(
+                f"setup_data[download] failed for source '{source_name}': {e}"
+            ) from e
     
     # 2. Import
     if import_data:
@@ -89,8 +91,9 @@ def setup_data(
         try:
             import_src(config, data_dir, force=force_import)
         except Exception as e:
-            LOGGER.error(f"Import failed: {e}")
-            return
+            raise RuntimeError(
+                f"setup_data[import] failed for source '{source_name}': {e}"
+            ) from e
 
     # 3. Attach
     if attach:
@@ -99,6 +102,8 @@ def setup_data(
             attach_src(source_name, registry, data_dir)
             LOGGER.info(f"Successfully attached {source_name}")
         except Exception as e:
-            LOGGER.error(f"Attach failed: {e}")
+            raise RuntimeError(
+                f"setup_data[attach] failed for source '{source_name}': {e}"
+            ) from e
 
     LOGGER.info(f"Setup for '{source_name}' completed.")

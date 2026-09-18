@@ -13,67 +13,23 @@ into the shared schema or prompt.
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Mapping, Optional, Sequence, get_args
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..canonical_json import canonical_sha256
 from ..contracts.product_identity import is_canonical_typed_product_token
+from ..contracts.functional_form import FunctionalFormSpec
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .design_selection import ResearchDesignSelection
 
 
-ProgressiveModuleId = Literal[
-    "cohort_definition",
-    "table_one",
-    "exposure_outcome_distribution",
-    "measurement_audit",
-    "adjusted_association",
-    "absolute_risk_context",
-    "robustness_replay",
-    "custom_analysis",
-    "visualization",
-    "report",
-]
+from .progressive_module_ids import (
+    ProgressiveModuleId,
+    progressive_module_ids_for_analysis_types,
+)
 
 
-def progressive_module_ids_for_analysis_types(
-    analysis_types: Sequence[str],
-) -> tuple[str, ...]:
-    """Return the union of modules the selected analysis families can execute.
-
-    Descriptive epidemiology has no fitted primary effect or uncertainty
-    interval. Its outline must therefore not advertise the adjusted-model or
-    locked-effect replay owners that require those quantities. Publication
-    figures and manuscript text are also host-owned for this family: the host
-    binds deterministic renderers to the exact typed result/audit products and
-    the evidence-bound Writer runs after execution. The registered measurement
-    audit already owns observation-process and timing diagnostics, so an
-    arbitrary custom-analysis fallback would duplicate that owner and bypass
-    its typed outputs. Asking the Planner to add any of those parallel steps
-    would widen source-lineage obligations without adding a scientific decision.
-    """
-
-    normalized = {
-        str(value or "").strip().casefold()
-        for value in analysis_types
-        if str(value or "").strip()
-    }
-    modules = list(get_args(ProgressiveModuleId))
-    if normalized and normalized <= {"descriptive_epidemiology"}:
-        modules = [
-            module
-            for module in modules
-            if module
-            not in {
-                "adjusted_association",
-                "absolute_risk_context",
-                "robustness_replay",
-                "custom_analysis",
-                "visualization",
-                "report",
-            }
-        ]
-    return tuple(modules)
 ProgressiveOutputRole = Literal[
     "analysis_cohort",
     "cohort_flow",
@@ -131,6 +87,13 @@ PROGRESSIVE_ARTICLE_ROLES: Mapping[str, frozenset[str]] = {
     "adjusted_association": frozenset({"primary_estimand"}),
     "absolute_risk_context": frozenset({"descriptive_result"}),
     "robustness_replay": frozenset({"robustness"}),
+}
+# These modules compile a fixed estimator/product, not the action named by the
+# model. A null action retains that estimator; it is not a custom-method escape.
+PROGRESSIVE_FIXED_MODULE_ACTION_IDS: Mapping[str, tuple[str, ...]] = {
+    "adjusted_association": ("association.adjusted_association",),
+    "absolute_risk_context": (),
+    "robustness_replay": (),
 }
 TableOneMode = Literal["independent_inference", "descriptive_smd_only"]
 OutcomeType = Literal["binary", "continuous"]
@@ -428,6 +391,28 @@ class ProgressiveOutlineStep(BaseModel):
         default=None,
         pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
     )
+    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Absolute-risk population chosen with the complete study design; executable detail must preserve it.",
+    )
+    population_scope_change_reason: Optional[str] = Field(
+        default=None, min_length=12, max_length=1200, exclude_if=lambda value: value is None,
+        description="Explain an intentional amendment of a source-bound population for complete-plan review; this is not execution approval.",
+    )
+
+    @field_validator("population_scope_change_reason", mode="before")
+    @classmethod
+    def _strip_population_scope_change_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _population_owner(self):
+        if self.population_scope is not None or self.population_scope_change_reason is not None:
+            if self.module_id != "absolute_risk_context":
+                raise ValueError("population_scope belongs only to absolute_risk_context")
+            if self.population_scope is None:
+                raise ValueError("population_scope_change_reason requires a population_scope")
+        return self
 
     @field_validator("depends_on", "variable_names", "literature_citation_keys")
     @classmethod
@@ -544,7 +529,24 @@ class ProgressiveSkeletonStep(BaseModel):
         ]
     ] = None
     confidence_level: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
+    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Explicit population for absolute-risk context; primary_model reuses the preceding primary model's exact eligibility and complete cases.",
+    )
+    population_scope_change_reason: Optional[str] = Field(
+        default=None, min_length=12, max_length=1200, exclude_if=lambda value: value is None,
+        description="Required only for an intentional change from a source-bound descriptive population; disclose why the scientific scope changes for fresh complete-plan review.",
+    )
+
+    @field_validator("population_scope_change_reason", mode="before")
+    @classmethod
+    def _strip_population_scope_change_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
     sensitivity_spec_ids: list[str] = Field(default_factory=list)
+    functional_form_spec: Optional[FunctionalFormSpec] = Field(default=None, exclude_if=lambda value: value is None)
+    phenotyping_feature_columns: Optional[list[str]] = Field(default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None)
+    phenotyping_comparison_variables: Optional[list[ProgressiveTableOneVariable]] = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
     literature_bindings: list[ProgressiveLiteratureBinding] = Field(
         default_factory=list
     )
@@ -587,6 +589,8 @@ class ProgressiveSkeletonStep(BaseModel):
             self.primary_exposure and self.outcome
         ):
             raise ValueError("absolute_risk_context requires exposure and outcome")
+        if (self.population_scope is not None or self.population_scope_change_reason is not None) and self.module_id != "absolute_risk_context":
+            raise ValueError("population_scope belongs only to absolute_risk_context")
         if self.module_id == "exposure_outcome_distribution":
             required = (
                 self.primary_exposure,
@@ -608,6 +612,20 @@ class ProgressiveSkeletonStep(BaseModel):
             raise ValueError("custom_analysis requires custom_method")
         if self.module_id != "custom_analysis" and self.custom_method is not None:
             raise ValueError("custom_method belongs only to custom_analysis")
+        if self.functional_form_spec is not None and (
+            self.module_id != "custom_analysis" or self.planned_analysis_role != "sensitivity"
+        ):
+            raise ValueError("functional_form_spec belongs only to a custom sensitivity")
+        if self.phenotyping_feature_columns is not None:
+            if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
+                raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
+            require_phenotyping_features(self.phenotyping_feature_columns, inputs=self.raw_inputs)
+        if self.phenotyping_comparison_variables is not None:
+            if self.scientific_action_id != "phenotyping.outcome_by_cluster" or self.planned_analysis_role != "secondary":
+                raise ValueError("phenotyping_comparison_variables belongs only to a secondary outcome-by-cluster step")
+            names = [v.name for v in self.phenotyping_comparison_variables]
+            if len(names) != len(set(names)) or not set(names).issubset(self.raw_inputs):
+                raise ValueError("phenotype_comparison_roster_invalid")
         if self.module_id == "visualization" and not (
             self.product_inputs or self.depends_on
         ):
@@ -635,6 +653,16 @@ class ProgressivePlanFoundation(BaseModel):
     display_labels: list[ProgressiveDisplayLabel] = Field(default_factory=list)
     robustness_intents: list[ProgressiveRobustnessIntent] = Field(default_factory=list)
     know_how_decisions: list[ProgressiveKnowHowDecision] = Field(default_factory=list)
+
+    @field_validator("display_labels", mode="before")
+    @classmethod
+    def _keyed_label_transport(cls, value):
+        # Run-bound structured transport owns the exact keys. The model only
+        # writes their reader-facing meanings; sealed artifacts keep the same
+        # canonical list representation used by the compiler and replay.
+        if isinstance(value, dict):
+            return [{"key": key, "value": label} for key, label in value.items()]
+        return value
 
     @model_validator(mode="after")
     def _unique_rosters(self) -> "ProgressivePlanFoundation":
@@ -687,9 +715,13 @@ class ProgressivePlannerCheckpoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.progressive_planner_checkpoint/1"] = (
+    schema_version: Literal[
+        "easyicu.progressive_planner_checkpoint/1", "easyicu.progressive_planner_checkpoint/2",
+    ] = (
         "easyicu.progressive_planner_checkpoint/1"
     )
+    revision_offset: Optional[int] = Field(default=None, gt=0, exclude_if=lambda v: v is None)
+    repair_start_index: Optional[int] = Field(default=None, ge=0, exclude_if=lambda v: v is None)
     sequence: int = Field(ge=0)
     stage: Literal["outline", "foundation", "step"]
     request_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -705,6 +737,14 @@ class ProgressivePlannerCheckpoint(BaseModel):
 
     @model_validator(mode="after")
     def _closed_checkpoint_chain(self) -> "ProgressivePlannerCheckpoint":
+        if self.schema_version.endswith("/1"):
+            if self.revision_offset is not None or self.repair_start_index is not None:
+                raise ValueError("legacy checkpoint cannot declare a suffix revision")
+        elif (
+            self.stage != "step" or self.revision_offset is None
+            or self.repair_start_index is None
+        ):
+            raise ValueError("revised checkpoint requires a typed suffix coordinate")
         if self.stage == "outline":
             if self.sequence != 0 or self.foundation is not None or self.materializations:
                 raise ValueError("outline checkpoint must be sequence 0 without suffix")
@@ -718,8 +758,24 @@ class ProgressivePlannerCheckpoint(BaseModel):
         else:
             if self.foundation is None or not self.materializations:
                 raise ValueError("step checkpoint requires foundation and prefix")
-            if self.sequence != len(self.materializations) + 1:
+            if self.sequence != len(self.materializations) + 1 + (self.revision_offset or 0):
                 raise ValueError("step checkpoint sequence must follow prefix length")
+            if self.repair_start_index is not None:
+                repairs = self.prompt_metrics.get("final_acceptance_repairs") or []
+                if not repairs or self.repair_start_index >= len(self.materializations):
+                    raise ValueError("revised checkpoint lacks its final acceptance finding")
+                schemas = self.prompt_metrics.get("active_step_materialization_schema_sha256")
+                if not isinstance(schemas, list) or len(schemas) != len(self.materializations):
+                    raise ValueError("revised checkpoint lacks active prefix schema authorities")
+                repair = repairs[-1]
+                retained = self.materializations[:self.repair_start_index]
+                if (
+                    repair.get("retained_step_count") != self.repair_start_index
+                    or repair.get("retained_materializations_sha256") != canonical_sha256(
+                        [m.model_dump(mode="json") for m in retained]
+                    )
+                ):
+                    raise ValueError("revised checkpoint changed the retained prefix")
         outline_sha256 = canonical_sha256(self.outline.model_dump(mode="json"))
         if self.prompt_metrics.get("outline_sha256") != outline_sha256:
             raise ValueError("checkpoint prompt metrics identify another outline")
@@ -862,6 +918,7 @@ class ProgressivePlanCompileError(ValueError):
         step_index: Optional[int] = None,
         path: Optional[str] = None,
         findings: Sequence[Mapping[str, Any]] = (),
+        metrics: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             raise ValueError(
@@ -890,12 +947,78 @@ class ProgressivePlanCompileError(ValueError):
             "step_index": step_index,
             "path": path,
         }
+        # A boundary finding whose own measurement is discarded cannot be acted
+        # on: ``progressive_prompt_budget_exceeded`` says "too large" while
+        # dropping both numbers, so every retry had to rediscover the size by
+        # failing again. Host-authored non-negative integers under a canonical
+        # key are safe to publish, and nothing else about the request is.
+        safe_metrics = {
+            str(key): int(value)
+            for key, value in dict(metrics or {}).items()
+            if re.fullmatch(r"[a-z][a-z0-9_]{2,63}", str(key))
+            and type(value) is int
+            and 0 <= value <= 10**12
+        }
+        if safe_metrics:
+            self.easyicu_safe_diagnostic["metrics"] = safe_metrics
+            self.details["metrics"] = safe_metrics
         if findings:
             self.details["findings"] = [dict(item) for item in findings]
         coordinate = f" step={step_id!r}" if step_id else ""
         if path:
             coordinate += f" path={path}"
         super().__init__(f"{reason_code}:{coordinate} {message}".strip())
+
+
+def validate_progressive_module_action_compatibility(
+    step: ProgressiveOutlineStep | ProgressiveSkeletonStep,
+    *,
+    available_action_ids: Sequence[str],
+    step_index: int,
+    phase: Literal["outline", "compile"],
+) -> None:
+    """Use the same fixed-estimator boundary before and after materialization."""
+
+    compatible = PROGRESSIVE_FIXED_MODULE_ACTION_IDS.get(step.module_id)
+    if compatible is None:
+        return
+    prefix = "progressive_outline" if phase == "outline" else "progressive"
+    action = step.scientific_action_id
+    if action is not None and action not in compatible:
+        raise ProgressivePlanCompileError(
+            f"{prefix}_action_module_mismatch",
+            f"host module {step.module_id!r} cannot execute action {action!r}; "
+            "select that action's executable custom_analysis contract instead "
+            "of relabelling a fixed host estimator or replay",
+            step_id=step.step_id,
+            step_index=step_index,
+            path="scientific_action_id",
+            findings=({
+                "module_id": step.module_id,
+                "scientific_action_id": action,
+                "compatible_action_ids": list(compatible),
+            },),
+        )
+    if (
+        step.planned_analysis_role == "primary"
+        and compatible
+        and not set(compatible).intersection(available_action_ids)
+    ):
+        raise ProgressivePlanCompileError(
+            f"{prefix}_primary_module_family_mismatch",
+            f"host module {step.module_id!r} implements a primary estimator "
+            "outside the selected analysis family; scientific_action_id=null "
+            "does not change that estimator. Bind an available family action "
+            "to its own executable contract",
+            step_id=step.step_id,
+            step_index=step_index,
+            path="module_id",
+            findings=({
+                "module_id": step.module_id,
+                "compatible_action_ids": list(compatible),
+                "available_family_action_ids": list(available_action_ids),
+            },),
+        )
 
 
 __all__ = [
@@ -915,6 +1038,7 @@ __all__ = [
     "ProgressivePlannerCheckpoint",
     "ProgressivePlanSkeleton",
     "PROGRESSIVE_ARTICLE_ROLES",
+    "PROGRESSIVE_FIXED_MODULE_ACTION_IDS",
     "PROGRESSIVE_HOST_COMPILED_OUTPUTS",
     "ProgressiveProductRef",
     "ProgressiveRobustnessIntent",
@@ -923,4 +1047,5 @@ __all__ = [
     "ProgressiveSuffixRevision",
     "ProgressiveTableOneVariable",
     "progressive_module_ids_for_analysis_types",
+    "validate_progressive_module_action_compatibility",
 ]

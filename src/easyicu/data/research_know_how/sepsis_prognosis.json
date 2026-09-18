@@ -7,7 +7,7 @@
   "clinical_topics": ["sepsis", "septic shock", "prognosis", "organ dysfunction", "mortality"],
   "topic_aliases": ["sepsis", "septic shock", "sepsis prognosis", "sepsis mortality", "脓毒症", "感染性休克", "脓毒症预后"],
   "study_families": ["descriptive", "association", "time_to_event", "prediction"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "ICU patients meeting a reproducible, data-observable sepsis definition; distinguish general sepsis from septic shock when the question requires it.",
     "time_zero": "First qualifying sepsis landmark or ICU admission, chosen before exposure assessment and outcomes.",

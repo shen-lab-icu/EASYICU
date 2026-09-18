@@ -20,8 +20,8 @@ from typing import Any, Dict, Mapping, Optional
 
 from ..research_context.typed import parse_research_context
 from ..gates.step_result_evidence import (
-    _finite_float,
-    _primary_effect_from_summary,
+    finite_float as _finite_float,
+    primary_effect_from_summary as _primary_effect_from_summary,
 )
 from ..authority.runtime_artifacts import (
     current_successful_step_records,
@@ -117,6 +117,7 @@ def _extract_primary_effect_row(
         "primary_or": None,
         "primary_ci_low": None,
         "primary_ci_high": None,
+        "ci_source": None,
         "effect_measure": None,
         "status": "missing_primary_association",
     }
@@ -342,6 +343,15 @@ def _extract_primary_effect_payload_from_summary(
     if ci_pair is not None and len(ci_pair) >= 2:
         ci_low = _finite_float(ci_pair[0])
         ci_high = _finite_float(ci_pair[1])
+    # Bounds read off the step summary are model-reported.  Bounds synthesized
+    # below from the point estimate and a standard error are a host-side Wald
+    # reconstruction — label the interval so cross-database comparison and
+    # figure surfaces cannot present it as a model-reported CI.
+    ci_source = (
+        "model_reported"
+        if ci_low is not None or ci_high is not None
+        else None
+    )
     if primary_or is not None and (ci_low is None or ci_high is None):
         se = _finite_float(
             _first_direct_scalar(
@@ -358,6 +368,7 @@ def _extract_primary_effect_payload_from_summary(
         if se is not None and primary_or > 0:
             ci_low = math.exp(math.log(primary_or) - 1.96 * se)
             ci_high = math.exp(math.log(primary_or) + 1.96 * se)
+            ci_source = "reconstructed_wald"
     sample_size = _finite_float(
         _first_direct_scalar(
             summary,
@@ -426,6 +437,7 @@ def _extract_primary_effect_payload_from_summary(
         "primary_or": primary_or,
         "primary_ci_low": ci_low,
         "primary_ci_high": ci_high,
+        "ci_source": ci_source,
         "effect_measure": effect_measure,
         "sample_size": int(sample_size) if sample_size is not None else None,
         "status": ("ok" if primary_or is not None else "summary_missing_primary_or"),

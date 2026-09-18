@@ -54,6 +54,7 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
+from .docker_locality import resolve_docker_executable
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
@@ -1913,11 +1914,14 @@ class DockerRunner:
         self._cached_runtime_provenance: Optional[Dict[str, object]] = None
         self._cached_runtime_requirements: Optional[str] = None
         # Resolve the docker binary up front so we can produce a
-        # readable error before the pipeline gets too far.
-        resolved = shutil.which(self.docker_executable)
+        # readable error before the pipeline gets too far. A service process
+        # (launchd, GUI launcher) has a short PATH that excludes the standard
+        # Docker install locations, so PATH alone is not the last word here.
+        resolved = resolve_docker_executable(self.docker_executable)
         if resolved is None:
             raise FileNotFoundError(
-                f"Docker executable {self.docker_executable!r} not found on PATH. "
+                f"Docker executable {self.docker_executable!r} was not found on PATH "
+                "or in the standard local install locations. "
                 "Either install Docker, set EASYICU_DOCKER_EXECUTABLE to the binary, "
                 "or fall back to the subprocess CodeRunner "
                 "(``runner_kind='subprocess'`` in ResearchAgentPipeline)."
@@ -2367,6 +2371,8 @@ class DockerRunner:
                             str(inspect_proc.stderr or ""),
                             str(inspect_proc.stdout or ""),
                         ),
+                        probe_phase="image_inspect",
+                        exit_code=inspect_proc.returncode,
                     )
                 )
             try:
@@ -3283,6 +3289,7 @@ RUNNER_UNAVAILABLE_REASON_CODES = frozenset(
         "docker_executable_missing",
         "docker_image_missing",
         "docker_probe_failed",
+        "docker_workspace_unavailable",
         "host_sandbox_missing",
     }
 )
@@ -3293,14 +3300,21 @@ _RUNNER_UNAVAILABLE_REMEDIATION = {
         "'colima start', ...) and retry."
     ),
     "docker_executable_missing": (
-        "No 'docker' executable was found on PATH. Install Docker and retry."
+        "No 'docker' executable was found on PATH or in the standard local "
+        "install locations. Install Docker, or set EASYICU_DOCKER_EXECUTABLE to "
+        "the binary if it lives somewhere non-standard."
     ),
     "docker_image_missing": (
         "The pinned execution image is not present locally. Build or pull it "
         "with a live Docker daemon and retry."
     ),
     "docker_probe_failed": (
-        "The Docker probe did not complete within its bounded timeout."
+        "The Docker probe failed or returned an invalid response. Check the "
+        "Docker context, permissions and runtime health; image absence was not established."
+    ),
+    "docker_workspace_unavailable": (
+        "The execution workspace is not readable and writable inside Docker. "
+        "Check Docker or Colima file sharing and workspace permissions, then retry."
     ),
     "host_sandbox_missing": (
         "macOS 'sandbox-exec' was not found, so no filesystem-isolating host "
@@ -3335,7 +3349,9 @@ def _classify_docker_failure(stderr: str, stdout: str) -> str:
     text = f"{stderr}\n{stdout}".strip().lower()
     if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
         return "docker_daemon_unreachable"
-    return "docker_image_missing"
+    if "no such image:" in text or "no such object:" in text:
+        return "docker_image_missing"
+    return "docker_probe_failed"
 
 
 @dataclass(frozen=True)
@@ -3346,6 +3362,8 @@ class RunnerAvailability:
     available: bool
     image: str
     reason_code: str = ""
+    probe_phase: str = ""
+    exit_code: Optional[int] = None
 
 
 class ExecutionRuntimeUnavailableError(SafeRunnerUnavailableError):
@@ -3369,6 +3387,10 @@ class ExecutionRuntimeUnavailableError(SafeRunnerUnavailableError):
             "reason_code": availability.reason_code,
             "runner_kind": availability.kind,
         }
+        if availability.probe_phase == "image_inspect":
+            self.easyicu_safe_diagnostic["probe_phase"] = availability.probe_phase
+        if isinstance(availability.exit_code, int) and not isinstance(availability.exit_code, bool) and -128 <= availability.exit_code <= 255:
+            self.easyicu_safe_diagnostic["exit_code"] = availability.exit_code
 
 
 def probe_runner_availability(
@@ -3377,6 +3399,7 @@ def probe_runner_availability(
     image: Optional[str] = None,
     docker_executable: Optional[str] = None,
     probe_timeout_seconds: float = 5.0,
+    workdir: Optional[Path] = None,
 ) -> RunnerAvailability:
     """Answer whether ``kind`` can run generated code, without running any.
 
@@ -3405,7 +3428,10 @@ def probe_runner_availability(
     requested_executable = (
         docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
     )
-    resolved_docker = shutil.which(requested_executable)
+    # Same short-PATH reason as DockerRunner.__init__: this preflight is what
+    # rejects a submission, and answering "docker_executable_missing" for an
+    # installed binary sends the user to install something they already have.
+    resolved_docker = resolve_docker_executable(requested_executable)
     if resolved_docker is None:
         return RunnerAvailability(
             kind=kind,
@@ -3435,6 +3461,12 @@ def probe_runner_availability(
         )
     image_id = str(probe.stdout or "").strip()
     if probe.returncode == 0 and image_id.startswith("sha256:"):
+        if workdir is not None:
+            return _probe_docker_workspace(
+                executable=resolved_docker, image_id=image_id,
+                image=runtime_image, workdir=workdir,
+                timeout=max(0.1, float(probe_timeout_seconds)),
+            )
         return RunnerAvailability(kind=kind, available=True, image=runtime_image)
     return RunnerAvailability(
         kind=kind,
@@ -3443,6 +3475,69 @@ def probe_runner_availability(
         reason_code=_classify_docker_failure(
             str(probe.stderr or ""), str(probe.stdout or "")
         ),
+        probe_phase="image_inspect",
+        exit_code=probe.returncode,
+    )
+
+
+def _probe_docker_workspace(
+    *, executable: str, image_id: str, image: str, workdir: Path, timeout: float,
+) -> RunnerAvailability:
+    """Round-trip a synthetic marker through the actual workspace mount.
+
+    Only the temporary probe directory is shared; patient files and existing
+    artifacts are never exposed. Inspecting an image alone cannot detect an
+    unshared Colima directory or a read-only bind mount.
+    """
+
+    name = f"easyicu-workspace-probe-{uuid.uuid4().hex}"
+    available = False
+    try:
+        root = Path(workdir).expanduser().resolve(strict=True)
+        _reject_docker_mount_field(str(root), label="workspace")
+        with tempfile.TemporaryDirectory(prefix=".easyicu-runtime-probe-", dir=root) as tmp:
+            directory = Path(tmp)
+            token = uuid.uuid4().hex
+            (directory / "input").write_text(token, encoding="ascii")
+            command = [
+                executable, "run", "--rm", f"--name={name}", "--pull=never",
+                "--network=none", "--read-only", "--cap-drop=ALL",
+                "--security-opt=no-new-privileges", "--memory=128m",
+                "--memory-swap=128m", "--cpus=1", "--pids-limit=32",
+            ]
+            if os.name == "posix":
+                command.append(f"--user={os.getuid()}:{os.getgid()}")
+            command.extend([
+                "--mount", f"type=bind,src={directory},dst=/probe",
+                "--entrypoint=python", image_id, "-I", "-S", "-c",
+                "from pathlib import Path; "
+                "Path('/probe/output').write_bytes(Path('/probe/input').read_bytes())",
+            ])
+            try:
+                result = _run_with_bounded_output(
+                    command, text=True, timeout=timeout, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                # A timed-out CLI may leave a running container. Remove only
+                # this probe's unique name, never a research container.
+                try:
+                    _run_with_bounded_output(
+                        [executable, "rm", "--force", name],
+                        text=True, timeout=timeout, check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                raise
+            output = directory / "output"
+            available = (
+                result.returncode == 0 and not output.is_symlink()
+                and output.is_file() and output.read_bytes() == token.encode("ascii")
+            )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        available = False
+    return RunnerAvailability(
+        kind="docker", available=available, image=image,
+        reason_code="" if available else "docker_workspace_unavailable",
     )
 
 

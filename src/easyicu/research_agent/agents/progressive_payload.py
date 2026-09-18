@@ -114,7 +114,17 @@ def parse_progressive_model(raw: str, model: type[Any]) -> Any:
         raise ValueError("progressive Planner response root must be an object")
     if model is ProgressivePlanOutline:
         payload = _canonicalize_outline_coordinates(payload)
-    return model.model_validate(payload)
+    parsed = model.model_validate(payload)
+    if model is ProgressivePlanOutline:
+        for step in parsed.steps:
+            if step.module_id == "absolute_risk_context" and step.population_scope is None:
+                raise ValueError(
+                    "absolute_risk_context outline requires an explicit population_scope: "
+                    "analysis_cohort or primary_model. Choose it from the current requested "
+                    "study design, align the objective, and explain an intentional source "
+                    "population amendment in population_scope_change_reason."
+                )
+    return parsed
 
 
 def parse_progressive_foundation_materialization(
@@ -281,7 +291,10 @@ def parse_progressive_step_materialization(
         # Host-compiled modules advertise outputs.maxItems=0. Provider output
         # aliases cannot extend that exact owner roster.
         payload = {**payload, "step": {**step, "outputs": []}}
-    return ProgressiveStepMaterialization.model_validate(payload)
+    materialization = ProgressiveStepMaterialization.model_validate(payload)
+    if materialization.step.module_id == "absolute_risk_context" and materialization.step.population_scope is None:
+        raise ValueError("absolute_risk_context requires an explicit population_scope: analysis_cohort or primary_model")
+    return materialization
 
 
 def _closed_object(properties: Mapping[str, Any]) -> dict[str, Any]:
@@ -350,6 +363,13 @@ def _bind_step_module_shape(
             "progressive skeleton step definition is unavailable"
         )
     properties = step["properties"]
+    form = definitions.get("FunctionalFormSpec")
+    if isinstance(form, dict):
+        # This closed comparison's version and method are host constants, not
+        # model choices. Pydantic fills their identical declared defaults.
+        for field in ("schema_version", "comparison"):
+            form["properties"].pop(field, None)
+        form["required"] = ["target_column", "knot_quantiles"]
     output_intent = definitions.get("ProgressiveOutputIntent")
     if not isinstance(output_intent, dict) or not isinstance(
         output_intent.get("properties"), dict
@@ -390,6 +410,7 @@ def _bind_step_module_shape(
             required_non_null = (
                 "primary_exposure",
                 "outcome",
+                "population_scope",
             )
         elif locked_module_id == "exposure_outcome_distribution":
             required_non_null = (
@@ -450,6 +471,16 @@ def _bind_step_module_shape(
         else _string_enum(standard_ids)
     )
     standard["properties"]["custom_method"] = {"type": "null"}
+    if locked_module_id is not None and locked_module_id != "absolute_risk_context":
+        standard["properties"].pop("population_scope_change_reason", None)
+        standard["required"] = [name for name in standard["required"] if name != "population_scope_change_reason"]
+        standard["properties"].pop("population_scope", None)
+        standard["required"] = [name for name in standard["required"] if name != "population_scope"]
+    # These contracts belong only to custom actions. Omit the irrelevant
+    # fields entirely; the host fills their identical None defaults.
+    for custom_field in ("functional_form_spec", "phenotyping_feature_columns", "phenotyping_comparison_variables"):
+        standard["properties"].pop(custom_field, None)
+        standard["required"] = [name for name in standard["required"] if name != custom_field]
 
     custom_fields = (
         "step_id",
@@ -461,10 +492,14 @@ def _bind_step_module_shape(
         "outputs",
         "scientific_action_id",
         "sensitivity_spec_ids",
+        "functional_form_spec",
+        "phenotyping_feature_columns",
+        "phenotyping_comparison_variables",
         "literature_bindings",
     )
     custom_properties = {
         field: copy.deepcopy(properties[field]) for field in custom_fields
+        if not (field in {"functional_form_spec", "phenotyping_comparison_variables"} and properties[field].get("type") == "null")
     }
     custom_properties["module_id"] = {
         "type": "string",
@@ -720,6 +755,10 @@ def _bind_foundation_authorities(
     decisions = foundation_properties["know_how_decisions"]
     if not know_how_authority:
         decisions["maxItems"] = 0
+        # An empty sealed roster has no item choices. Avoid transporting the
+        # unreachable decision schema while keeping nonempty arrays forbidden.
+        decisions["items"] = {"type": "null"}
+        definitions.pop("ProgressiveKnowHowDecision", None)
         return
     definition = definitions.get("ProgressiveKnowHowDecision")
     if not isinstance(definition, dict) or not isinstance(
@@ -789,6 +828,16 @@ def _bind_materialization_coordinate(
         "const": outline_step.objective,
     }
     step_properties["depends_on"] = _exact_string_array(outline_step.depends_on)
+    if outline_step.population_scope is not None:
+        for field in ("population_scope", "population_scope_change_reason"):
+            value = getattr(outline_step, field)
+            step_properties[field] = (
+                {"type": "string", "const": value}
+                if value is not None else {"type": "null"}
+            )
+            if field == "population_scope":
+                # Module binding below removes null from required choices.
+                step_properties[field] = {"anyOf": [step_properties[field], {"type": "null"}]}
     step_properties["scientific_action_id"] = (
         {
             "type": "string",
@@ -866,6 +915,20 @@ def _bind_step_rosters(
     else:
         action_schema = {"type": "null"}
     step_properties["scientific_action_id"] = action_schema
+    # Phenotyping actions cannot consume an association-model functional-form
+    # contract (the compiler refuses that family mismatch). Do not carry its
+    # schema into an exclusively phenotyping request.
+    if scientific_action_ids and all(action.startswith("phenotyping.") for action in scientific_action_ids):
+        step_properties["functional_form_spec"] = {"type": "null"}
+        definitions.pop("FunctionalFormSpec", None)
+    if "phenotyping.cluster_solution" not in scientific_action_ids:
+        step_properties["phenotyping_feature_columns"] = {"type": "null"}
+    else:
+        feature_array = _non_null(step_properties["phenotyping_feature_columns"], field="phenotyping_feature_columns")
+        feature_array["items"] = copy.deepcopy(executable_variable)
+        step_properties["phenotyping_feature_columns"] = _nullable(feature_array)
+    if "phenotyping.outcome_by_cluster" not in scientific_action_ids:
+        step_properties["phenotyping_comparison_variables"] = {"type": "null"}
 
     bindings = step_properties["literature_bindings"]
     if not allowed_citation_keys:
@@ -940,6 +1003,8 @@ def _bind_initial_authorities(
     decisions = properties["know_how_decisions"]
     if not know_how_authority:
         decisions["maxItems"] = 0
+        decisions["items"] = {"type": "null"}
+        definitions.pop("ProgressiveKnowHowDecision", None)
         return
     definition = definitions.get("ProgressiveKnowHowDecision")
     if not isinstance(definition, dict) or not isinstance(
@@ -1087,6 +1152,8 @@ def progressive_foundation_structured_output_request(
     required_cohort_name: str | None = None,
     analysis_type: str | None = None,
     require_robustness_intent: bool = False,
+    required_reader_display_label_keys: Sequence[str] = (),
+    required_binary_display_label_scopes: Sequence[str] = (),
 ) -> StructuredOutputRequest:
     """Return the run-bound plan-wide contract without any step fields."""
 
@@ -1143,6 +1210,17 @@ def progressive_foundation_structured_output_request(
         "type": "string",
         "const": str(outline_sha256),
     }
+    label_keys = list(dict.fromkeys([
+        *required_reader_display_label_keys,
+        *(f"{scope}={level}" for scope in required_binary_display_label_scopes for level in (0, 1)),
+    ]))
+    if label_keys:
+        definitions["ProgressivePlanFoundation"]["properties"]["display_labels"] = {
+            "type": "object",
+            "properties": {key: {"type": "string", "minLength": 1} for key in label_keys},
+            "required": label_keys,
+            "additionalProperties": False,
+        }
     _bind_foundation_authorities(
         definitions,
         variable_names=normalized_variables,

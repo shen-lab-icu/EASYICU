@@ -68,6 +68,7 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
 
     assert profile == {
         "allowed_modules": ("demographics", "outcome"),
+        "available_concepts": ("age", "sex", "los_icu", "death"),
         "static_concepts": ("age", "sex", "los_icu"),
         "outcome_concepts": (),
         "required_feature_concepts": (),
@@ -76,8 +77,10 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
     }
 
 
+@pytest.mark.parametrize("question_owned", [False, True])
 def test_web_data_foundation_profile_keeps_all_candidate_plan_outcomes(
     monkeypatch: pytest.MonkeyPatch,
+    question_owned: bool,
 ) -> None:
     from easyicu.research_agent.acquisition import catalog as catalog_module
 
@@ -111,9 +114,11 @@ def test_web_data_foundation_profile_keeps_all_candidate_plan_outcomes(
 
     profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
-        study={"modules": ["demographics", "outcome"]},
+        study={"modules": ["demographics", "outcome"], "question": (
+            "研究死亡及 ICU 住院时长" if question_owned else ""
+        )},
         target="death",
-        additional_outcomes=("los_icu", "death"),
+        additional_outcomes=() if question_owned else ("los_icu", "death"),
     )
 
     assert profile["static_concepts"] == ("age", "los_icu")
@@ -247,6 +252,7 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
 
     assert profile == {
         "allowed_modules": ("demographics", "outcome", "sepsis3_sofa2"),
+        "available_concepts": ("age", "sex", "death", "sep3_sofa2"),
         "static_concepts": ("age", "sex"),
         "outcome_concepts": ("death",),
         "required_feature_concepts": ("sep3_sofa2",),
@@ -509,6 +515,7 @@ def test_web_study_context_drops_legacy_primary_cluster_duplicate() -> None:
 def test_descriptive_timing_choice_declines_landmark_in_typed_preferences() -> None:
     study = {
         **_complete_study(),
+        "analysis_design": {},
         "confirmations": {
             **_complete_study()["confirmations"],
             "plan_timing_descriptive_only": True,
@@ -876,8 +883,7 @@ def test_web_descriptive_timing_choice_compiles_closed_analysis_family() -> None
         "analysis_goal": "描述暴露与结局分布，不估计时间对齐后的关联",
         "analysis_design": {
             "analysis_unit": "icu_stay",
-            "variance_estimator": "cluster_robust",
-            "cluster_unit": "patient",
+            "variance_estimator": "none_counts_only",
         },
         "confirmations": {
             "extraction_completed": True,

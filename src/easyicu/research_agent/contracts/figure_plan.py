@@ -68,7 +68,14 @@ class PlannedFigurePanelSpec(BaseModel):
 
 
 class DeterministicFigurePanelTemplate(BaseModel):
-    """Panel contract shared by a deterministic renderer and plan shaping."""
+    """Panel contract shared by a deterministic renderer and plan shaping.
+
+    ``separable_display`` states that the renderer exports this panel on its own
+    physical surface, so a sibling panel of the same product slot can stay in
+    the main article while this one goes to the supplement. One exported image
+    is one surface: a template that does not declare the flag cannot be moved
+    away from its siblings, and the plan shaper must not promise it there.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -76,6 +83,7 @@ class DeterministicFigurePanelTemplate(BaseModel):
     article_role: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     chart_type: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     placement: Literal["main", "supplementary"] = "main"
+    separable_display: bool = False
     source_products: Tuple[str, ...] = Field(min_length=1, max_length=16)
 
     @field_validator("source_products")
@@ -104,6 +112,25 @@ class DeterministicFigurePanelTemplate(BaseModel):
 
 
 EXPOSURE_OUTCOME_DISTRIBUTION_INPUT = "table:exposure_outcome_distribution"
+CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS = (
+    "table:phenotype_profiles",
+    "table:phenotype_assignments",
+    "table:cluster_stability",
+)
+CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="a", article_role="phenotype_structure", chart_type="embedding_plot",
+        source_products=("table:phenotype_assignments",),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="b", article_role="phenotype_profile", chart_type="profile_heatmap",
+        source_products=("table:phenotype_profiles",),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="c", article_role="stability", chart_type="subsampling_ari",
+        source_products=("table:cluster_stability",),
+    ),
+)
 GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT = "table:distribution_prevalence"
 MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
 MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
@@ -360,8 +387,10 @@ def association_sensitivity_composite_panels(
 
 
 def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
+    sensitivity = _landmark_sensitivity_contrast_product(source_products)
     reserved = {
         "table:robustness_summary",
+        sensitivity,
     }
     adjusted_risk = _landmark_adjusted_risk_product(source_products)
     matches = [
@@ -370,6 +399,13 @@ def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
         if value.startswith("table:")
         and value not in reserved
         and value != adjusted_risk
+        and not (
+            (
+                "robustness" in value.partition(":")[2]
+                or "sensitivity" in value.partition(":")[2]
+            )
+            and value.partition(":")[2].endswith("_exposure_curve")
+        )
         and value.partition(":")[2]
         not in {"measurement_process", "measurement_process_audit"}
     ]
@@ -413,6 +449,22 @@ def _measurement_process_product(source_products: Sequence[str]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def _landmark_sensitivity_contrast_product(
+    source_products: Sequence[str],
+) -> str | None:
+    matches = [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and value.partition(":")[2].endswith("_exposure_contrasts")
+        and (
+            "robustness" in value.partition(":")[2]
+            or "sensitivity" in value.partition(":")[2]
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def landmark_association_composite_panels(
     source_products: Sequence[str],
 ) -> Tuple[DeterministicFigurePanelTemplate, ...]:
@@ -421,17 +473,36 @@ def landmark_association_composite_panels(
     cleaned = tuple(str(value or "").strip() for value in source_products)
     curve = _landmark_curve_product(cleaned)
     adjusted_risk = _landmark_adjusted_risk_product(cleaned)
+    sensitivity = _landmark_sensitivity_contrast_product(cleaned)
     measurement = _measurement_process_product(cleaned)
     if (
         curve is None
         or adjusted_risk is None
-        or measurement is None
-        or len(cleaned) != 4
+        or len(cleaned) not in {2, 3, 4, 5}
         or len(cleaned) != len(set(cleaned))
-        or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
+        or (
+            len(cleaned) == 3
+            and (
+                sensitivity is None
+                or measurement is not None
+                or "table:robustness_summary" in cleaned
+            )
+        )
+        or (
+            len(cleaned) in {4, 5}
+            and (
+                measurement is None
+                or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
+            )
+        )
+        or (len(cleaned) == 4 and sensitivity is not None)
+        or (len(cleaned) == 5 and sensitivity is None)
     ):
-        raise ValueError("landmark composite requires its four exact typed tables")
-    return (
+        raise ValueError(
+            "landmark composite requires two curves, an optional comparable "
+            "sensitivity table, or the complete audit profile"
+        )
+    panels = (
         DeterministicFigurePanelTemplate(
             panel_id="association_curve",
             article_role="primary_estimand",
@@ -444,11 +515,28 @@ def landmark_association_composite_panels(
             chart_type="absolute_risk_curve",
             source_products=(adjusted_risk,),
         ),
+    )
+    if sensitivity is not None:
+        panels = (
+            *panels,
+            DeterministicFigurePanelTemplate(
+                panel_id="sensitivity_contrasts",
+                article_role="robustness",
+                chart_type="sensitivity_forest",
+                source_products=(sensitivity,),
+            ),
+        )
+    if len(cleaned) in {2, 3}:
+        return panels
+    assert measurement is not None
+    return (
+        *panels,
         DeterministicFigurePanelTemplate(
             panel_id="robustness_summary",
             article_role="robustness",
             chart_type="sensitivity_coverage_matrix",
             placement="supplementary",
+            separable_display=True,
             source_products=("table:robustness_summary",),
         ),
         DeterministicFigurePanelTemplate(
@@ -456,8 +544,40 @@ def landmark_association_composite_panels(
             article_role="data_quality",
             chart_type="availability_panel",
             placement="supplementary",
+            separable_display=True,
             source_products=(measurement,),
         ),
+    )
+
+
+def separable_display_panel_ids(
+    *,
+    source_products: Sequence[str],
+    panel_ids: Sequence[str],
+) -> frozenset[str]:
+    """Which of a step's planned panels its bound renderer can export apart.
+
+    The shaper asks this against the shared contract of the renderer that the
+    step's exact typed inputs select, so a placement split is honored only when
+    some artifact can carry it. The panel ids must be the whole contract: a
+    hand-written subset no longer proves which renderer was chosen, and the
+    conservative answer to an unproven group is that nothing is separable.
+    """
+
+    wanted = {str(value or "").strip() for value in panel_ids}
+    if not wanted:
+        return frozenset()
+    try:
+        templates = landmark_association_composite_panels(source_products)
+    except ValueError:
+        return frozenset()
+    declared = {str(template.panel_id) for template in templates}
+    if declared != wanted:
+        return frozenset()
+    return frozenset(
+        str(template.panel_id)
+        for template in templates
+        if template.separable_display
     )
 
 
@@ -615,7 +735,7 @@ def measurement_availability_figure_panels(
 def robustness_figure_panels(
     source_products: Sequence[str],
 ) -> Tuple[DeterministicFigurePanelTemplate, ...]:
-    """Bind the deterministic sensitivity forest to its exact typed parents."""
+    """Bind a specification table without presuming effect comparability."""
 
     cleaned = tuple(str(value or "").strip() for value in source_products)
     if (
@@ -631,13 +751,15 @@ def robustness_figure_panels(
         DeterministicFigurePanelTemplate(
             panel_id="robustness_grid",
             article_role="robustness",
-            chart_type="sensitivity_forest",
+            chart_type="specification_grid",
             source_products=cleaned,
         ),
     )
 
 
 __all__ = [
+    "CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS",
+    "CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS",
     "ASSOCIATION_SUMMARY_COMPOSITE_INPUTS",
     "association_summary_composite_panels",
     "ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS",
@@ -668,6 +790,7 @@ __all__ = [
     "measurement_availability_figure_panels",
     "LANDMARK_ASSOCIATION_COMPOSITE_INPUTS",
     "landmark_association_composite_panels",
+    "separable_display_panel_ids",
     "robustness_figure_panels",
     "resolve_data_quality_figure_inputs",
 ]

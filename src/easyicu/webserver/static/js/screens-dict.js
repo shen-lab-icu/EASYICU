@@ -1,3 +1,4 @@
+/* Owner: Data Dictionary route. */
 /* Screen: Data Dictionary — the real concept catalog, searchable.
    Native catalog browser with search + category
    browser over the 19 concept groups, with units and per-database coverage). */

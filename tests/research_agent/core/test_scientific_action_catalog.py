@@ -186,7 +186,8 @@ def test_survival_rmst_is_reachable_but_competing_risks_remains_unavailable():
     rmst = _action("survival", "rmst")
     cif = _action("survival", "competing_risks_cif")
 
-    assert rmst.execution_mode == "coder_generated"
+    assert rmst.execution_mode == "host_owned"
+    assert rmst.runner == "signed_rmst_contrast"
     assert rmst.kernel_imports == ("easyicu.research_agent.methods.rmst",)
     assert cif.execution_mode == "not_available"
     assert cif.runner is None

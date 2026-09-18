@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import re
+from dataclasses import asdict
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ..authority.table_one_binding import (
@@ -13,6 +14,8 @@ from ..authority.table_one_binding import (
     table_one_private_code_label_map,
 )
 from ..schema import AnalysisStep, ResearchContext
+from ..concept_availability import variable_source_unavailability
+from ..planning.adjustment_authority import AdjustmentSetAuthority
 from .prompt_variables import (
     compact_fixed_window_trajectory_prompt,
     project_observed_domain,
@@ -75,6 +78,10 @@ _SAFE_MATERIALIZED_REPRESENTATIONS = frozenset(
         "window_numeric_max",
         "window_numeric_mean",
         "window_numeric_min",
+        "window_nonnull_count",
+        "window_measurement_status",
+        "window_first_time",
+        "window_last_time",
     }
 )
 
@@ -147,7 +154,10 @@ def outbound_safe_context_payload(
             _compact(
                 {
                     "name": variable.name,
-                    "role": role if role != "meta" else None,
+                    # A count or availability flag is not the underlying
+                    # clinical value. This closed enum is safe transport, not
+                    # patient content, and must not disappear for companions.
+                    "role": role,
                     "dtype": variable.dtype,
                     "unit": variable.unit,
                     "plausibility_range": variable.valid_range,
@@ -168,6 +178,12 @@ def outbound_safe_context_payload(
                         if role != "meta"
                         else None
                     ),
+                    "source_unavailability": [
+                        asdict(receipt)
+                        for receipt in variable_source_unavailability(
+                            variable, context.cohort.database,
+                        )
+                    ],
                     "outcome_semantics": (
                         _outcome_semantics(variable) if role == "outcome" else None
                     ),
@@ -235,7 +251,7 @@ def outbound_safe_context_payload(
             )
         )
     preferences = context.user_preferences
-    explicit_user_choices = (
+    study_preferences = (
         preferences.model_dump(
             mode="json",
             exclude_none=True,
@@ -245,17 +261,17 @@ def outbound_safe_context_payload(
         else None
     )
     if (
-        isinstance(explicit_user_choices, dict)
+        isinstance(study_preferences, dict)
         and preferences is not None
         and preferences.covariate_selection == "planner_selectable"
     ):
         # Preserve the historic prompt shape when the new authority is not in
         # use. The default is host semantics, not extra Provider prose.
-        explicit_user_choices.pop("covariate_selection", None)
+        study_preferences.pop("covariate_selection", None)
 
     payload = _compact(
         {
-            "schema": "easyicu.outbound_safe_context/1",
+            "schema": "easyicu.outbound_safe_context/2",
             "research_question": context.research_question,
             "cohort": {
                 "cohort_name": context.cohort.cohort_name,
@@ -293,21 +309,28 @@ def outbound_safe_context_payload(
                 for constraint in context.temporal_constraints
             ],
             "cross_database_validation": context.cross_database_validation,
-            "explicit_user_choices": explicit_user_choices,
+            # Persisted preferences can contain Agent proposals. Calling the
+            # entire object explicit user choices fabricates their authorship.
+            "study_preferences": study_preferences,
+            "adjustment_authority": (
+                AdjustmentSetAuthority.from_context(context).prompt_projection()
+                if preferences is not None and preferences.covariate_selection == "exact"
+                else None
+            ),
             "variables": variables,
         }
     )
     # ``_compact`` normally removes empty arrays.  Under exact adjustment
-    # authority, however, [] is the user's positive decision to run an
+    # authority, however, [] is the bound positive decision to run an
     # unadjusted model, not missing information.  Preserve it in the outbound
     # Planner projection so the model sees the same typed distinction enforced
     # by the host validator.
     if (
         preferences is not None
         and preferences.covariate_selection == "exact"
-        and isinstance(payload.get("explicit_user_choices"), dict)
+        and isinstance(payload.get("study_preferences"), dict)
     ):
-        payload["explicit_user_choices"]["covariates"] = list(
+        payload["study_preferences"]["covariates"] = list(
             preferences.covariates
         )
     return payload
@@ -317,8 +340,18 @@ def format_outbound_safe_context(
     context: ResearchContext,
     *,
     variable_names: Optional[Iterable[str]] = None,
+    include_exploratory_profiles: bool = True,
+    compact_variables: bool = False,
 ) -> str:
     payload = outbound_safe_context_payload(context, variable_names=variable_names)
+    if not include_exploratory_profiles:
+        # Manuscript numbers come from the verified execution digest. Source
+        # profiling counts and planner CTAS hints are neither model-population
+        # results nor proof of an executed method. Keep definitions, windows,
+        # units, observation/missingness semantics and every selected variable.
+        for row in payload.get("variables", []):
+            for key in ("observed_shape", "missingness", "aggregation_hint"):
+                row.pop(key, None)
     selected = (
         None
         if variable_names is None
@@ -344,12 +377,45 @@ def format_outbound_safe_context(
         payload["fixed_window_trajectory_columns"] = list(
             compact_projection.variable_lines
         )
+    if compact_variables:
+        payload = compact_variable_field_names(payload)
     return json.dumps(
         payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def compact_variable_field_names(payload: dict) -> dict:
+    """Factor repeated keys, retaining every variable value and its position.
+
+    This transport representation is for Writer only. It does not alter the
+    ResearchContext or give absent fields the meaning of explicit JSON nulls.
+    Small contexts keep their original representation when it is shorter.
+    """
+
+    variables = payload.get("variables")
+    if "variables_table" in payload or not isinstance(variables, list) or not variables or not all(
+        isinstance(row, dict) for row in variables
+    ):
+        return payload
+    field_sets: list[list[str]] = []
+    rows = []
+    for variable in variables:
+        fields = sorted(variable)
+        if fields not in field_sets:
+            field_sets.append(fields)
+        rows.append([field_sets.index(fields), [variable[field] for field in fields]])
+    candidate = {key: value for key, value in payload.items() if key != "variables"}
+    candidate["variables_table"] = {
+        "encoding": "Each row is [column_set_index, values]. Pair values in order with that column set to recover one variable. All fields are binding; absent fields remain absent.",
+        "column_sets": field_sets,
+        "rows": rows,
+    }
+    def size(value: dict) -> int:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+    return candidate if size(candidate) < size(payload) else payload
 
 
 _SAFE_RECORD_KEYS = frozenset(

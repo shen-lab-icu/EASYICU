@@ -109,6 +109,28 @@ def _codes(text: str) -> set[str]:
     return {finding.code for finding in audit_manuscript_quality(text).findings}
 
 
+def test_variables_with_removed_definition_cannot_pass_quality():
+    source = _valid_manuscript().replace(
+        "The exposure was Sepsis-3 status and the outcome was in-hospital death.",
+        "The clinical definition followed the registered framework. "
+        "The maximum representation was retained as supplied.",
+    )
+    assert "MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING" in _codes(source)
+
+
+def test_named_variable_definition_is_not_a_dependent_opener():
+    assert "MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING" not in _codes(_valid_manuscript())
+
+
+def test_possessive_variable_paragraph_requires_an_antecedent():
+    for opener in ("Its levels", "Their values"):
+        text = _valid_manuscript().replace(
+            "The exposure was Sepsis-3 status and the outcome was in-hospital death.",
+            f"{opener} were retained as materialized.",
+        )
+        assert "MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING" in _codes(text)
+
+
 def test_reader_title_uses_host_packet_and_fails_to_draft_label(tmp_path) -> None:
     assert _load_reader_title(tmp_path) == "EasyICU analysis-only manuscript draft"
     (tmp_path / "manuscript_packet.json").write_text(
@@ -138,7 +160,7 @@ def test_complete_reader_facing_manuscript_passes() -> None:
     audit = audit_manuscript_quality(_valid_manuscript())
 
     assert audit.status == "pass"
-    assert audit.schema_version == "manuscript-quality-audit-v3"
+    assert audit.schema_version == "manuscript-quality-audit-v4"
     assert audit.adjustment_sets == {
         "Methods": ("age", "sex"),
         "Results": ("age", "sex"),
@@ -210,7 +232,7 @@ def test_english_reader_does_not_inject_cjk_ui_labels() -> None:
     )
 
 
-def test_post_binding_language_repair_removes_foreign_ui_labels() -> None:
+def test_post_binding_language_repair_preserves_verified_clinical_labels() -> None:
     source = (
         "In-hospital 院内死亡 was 10% for 达到 Sepsis-3 判定标准 "
         "{evidence:result}."
@@ -225,11 +247,26 @@ def test_post_binding_language_repair_removes_foreign_ui_labels() -> None:
         manuscript_language="en",
     )
 
-    assert repaired == (
-        "In-hospital death was 10% for exposure category 1 "
-        "{evidence:result}."
-    )
+    assert repaired == source
+    assert "exposure category 1" not in repaired
     assert len(repairs) == 2
+
+
+def test_abstract_caveat_can_reuse_existing_conclusion_claims_not_numeric_prose():
+    from easyicu.research_agent.reporting.manuscript_quality import repair_reader_structure_from_existing_prose
+
+    claims = "{claim:distribution.group_zero}\n\n{claim:distribution.group_one}"
+    source = (
+        "## Abstract\n\n**Background:** Clinical context.\n\n**Methods:** Descriptive study.\n\n"
+        "**Results:** Observed counts.\n\n**Conclusions:** Independent validation is required.\n\n"
+        "## Conclusion\n\n" + claims
+    )
+    repaired, _ = repair_reader_structure_from_existing_prose(source)
+    assert all(token in repaired.split("## Conclusion")[0] for token in claims.split("\n\n"))
+    assert "Independent validation is required." in repaired
+    unowned = source.replace(claims, "Mortality was 12% {evidence:outcome}.")
+    unchanged, _ = repair_reader_structure_from_existing_prose(unowned)
+    assert "Mortality was 12%" not in unchanged.split("## Conclusion")[0]
 
 
 def test_claim_placeholders_are_audit_syntax_not_reader_internal_terms() -> None:
@@ -294,8 +331,8 @@ def test_registered_display_callouts_are_restored_without_inventing_results() ->
         expected_display_labels=("Table 1", "Figure 1", "Figure 2"),
     )
 
-    assert "Cohort characteristics are summarized in Table 1" in repaired
-    assert "The principal study results are presented in Figure 1" in repaired
+    assert "See Table 1 {evidence:table_one}." in repaired
+    assert "See Figure 1 {evidence:publication_figure_contract}." in repaired
     assert "Figure 2" not in repaired
     assert [item["label"] for item in repairs] == ["Table 1", "Figure 1"]
 
@@ -405,6 +442,84 @@ def test_adjustment_aliases_and_materialisation_suffixes_are_equivalent() -> Non
     assert audit.adjustment_sets == {
         "Methods": ("age", "charlson"),
         "Results": ("age", "charlson"),
+    }
+
+
+def test_display_labels_resolve_adjustment_sets_without_hiding_real_conflicts() -> None:
+    labels = {
+        "age": "Patient age",
+        "sex": "Patient sex",
+        "adm": "Patient admission type",
+    }
+    text = _valid_manuscript().replace(
+        "The adjustment set comprised age and sex.",
+        "The adjustment set comprised patient age, patient sex, and "
+        "patient admission type, with no additional covariates substituted "
+        "or added.",
+    ).replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        "After adjustment for age, sex, and adm, Sepsis-3 status was associated "
+        "with mortality.",
+    )
+
+    without_labels = audit_manuscript_quality(text)
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in _codes(text)
+    assert without_labels.adjustment_sets == {
+        "Methods": ("admission type", "age", "sex"),
+        "Results": ("adm", "age", "sex"),
+    }
+
+    with_labels = audit_manuscript_quality(
+        text,
+        reader_display_labels=labels,
+    )
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in with_labels.findings
+    }
+    assert with_labels.adjustment_sets == {
+        "Methods": ("adm", "age", "sex"),
+        "Results": ("adm", "age", "sex"),
+    }
+
+    different_roster = text.replace("age, sex, and adm", "age, sex, and charlson_max")
+    conflicting = audit_manuscript_quality(
+        different_roster,
+        reader_display_labels=labels,
+    )
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in {
+        finding.code for finding in conflicting.findings
+    }
+
+
+def test_adjustment_parser_stops_before_model_execution_clauses() -> None:
+    labels = {
+        "age": "Patient age",
+        "sex": "Patient sex",
+        "adm": "Patient admission type",
+    }
+    text = _valid_manuscript().replace(
+        "The adjustment set comprised age and sex.",
+        (
+            "The adjustment set comprised patient age, patient sex, and "
+            "patient admission type, used patient-cluster-robust variance "
+            "estimation, and began at the 24-hour landmark."
+        ),
+    ).replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        (
+            "After adjustment for age, sex, and adm, Sepsis-3 status was "
+            "associated with mortality."
+        ),
+    )
+
+    audit = audit_manuscript_quality(text, reader_display_labels=labels)
+
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in audit.findings
+    }
+    assert audit.adjustment_sets == {
+        "Methods": ("adm", "age", "sex"),
+        "Results": ("adm", "age", "sex"),
     }
 
 
@@ -535,6 +650,18 @@ def test_truncated_section_ending_is_rejected() -> None:
         if item.code == "MANUSCRIPT_SECTION_TRUNCATED"
     )
     assert finding.section == "Methods"
+
+
+def test_complete_claim_token_is_not_a_truncated_section_ending() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        "{claim:primary.adjusted_association}",
+        1,
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_SECTION_TRUNCATED" not in _codes(text)
 
 
 def test_machine_precision_is_rejected_in_reader_facing_sections() -> None:
@@ -700,7 +827,7 @@ def test_structure_repair_restores_existing_results_prose_slots() -> None:
     ]
 
 
-def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
+def test_structure_repair_does_not_copy_results_evidence_to_empty_conclusion() -> None:
     manuscript = _valid_manuscript().replace(
         "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
         "After adjustment for age and sex, Sepsis-3 status was associated with mortality "
@@ -714,8 +841,45 @@ def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
     repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
 
     conclusion = repaired.split("## Conclusion", 1)[1]
-    assert "{evidence:primary}" in conclusion
-    assert [item["code"] for item in repairs] == ["MANUSCRIPT_CONCLUSION_RESTORED"]
+    assert "{evidence:primary}" not in conclusion
+    assert repairs == ()
+
+
+def test_citations_alone_do_not_make_a_conclusion_complete() -> None:
+    for content in ("{evidence:primary}", "[@Singer2016]", "<!-- hidden prose -->"):
+        manuscript = _valid_manuscript().replace(
+            "Sepsis status was associated with in-hospital mortality and requires external validation.",
+            content,
+        )
+        audit = audit_manuscript_quality(manuscript)
+        assert any(f.section == "Conclusion" and "EMPTY" in f.code for f in audit.findings)
+
+
+def test_generic_caveat_and_copied_results_are_not_interpretation() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "**Conclusions:** Independent validation is required. [@Singer2016]",
+    ).replace(
+        "Sepsis status was associated with in-hospital mortality and requires external validation.",
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+    )
+    audit = audit_manuscript_quality(manuscript)
+    assert {f.section for f in audit.findings if f.code == "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION"} == {
+        "Abstract", "Conclusion",
+    }
+    from easyicu.research_agent.reporting.manuscript_sections import quality_repair_section_errors
+    errors = quality_repair_section_errors(manuscript)
+    assert "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION" in str(errors["abstract"])
+    assert "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION" in str(errors["conclusion"])
+
+
+def test_reader_gate_rejects_repeated_long_paragraphs_within_conclusion():
+    paragraph = "The observed comparison is descriptive and unadjusted; independent clinical validation remains necessary."
+    manuscript = _valid_manuscript().replace(
+        "## Conclusion\n", "## Conclusion\n\n" + paragraph + "\n\n" + paragraph + "\n",
+    )
+    assert any(f.code == "MANUSCRIPT_REPEATED_PARAGRAPH" and f.section == "Conclusion"
+               for f in audit_manuscript_quality(manuscript).findings)
 
 
 def test_structure_repair_populates_empty_abstract_conclusions_from_claim() -> None:
@@ -834,8 +998,11 @@ def test_write_phase_persists_quality_gate_and_non_authoritative_reader(
         def get(self, evidence_id: str):
             return self.records.get(evidence_id)
 
-        def register_file(self, **kwargs: object) -> None:
+        def register_file(self, **kwargs: object):
+            from types import SimpleNamespace
+
             self.records[str(kwargs["evidence_id"])] = dict(kwargs)
+            return SimpleNamespace(evidence_id=str(kwargs["evidence_id"]))
 
     evidence = EvidenceStub()
     findings = []
@@ -863,3 +1030,13 @@ def test_write_phase_persists_quality_gate_and_non_authoritative_reader(
         "source_sha256": audit_manuscript_quality(invalid).source_sha256,
     }
     assert "manuscript_quality" in _MANUSCRIPT_ERROR_VALIDATORS
+
+
+def test_section_connector_repair_does_not_change_scientific_statements_or_interior_logic():
+    from easyicu.research_agent.reporting.manuscript_quality import repair_section_opening_connectors
+    text = '## Introduction\n\nA definition is therefore important [@definition].\n\nThe later paragraph therefore retains its context.\n\n## Results\n\nThe estimate therefore remains unchanged.\n\n## Discussion\n\nThe findings therefore provide context [@study].\n'
+    result = repair_section_opening_connectors(text)
+    assert 'A definition is important [@definition].' in result
+    assert 'The findings provide context [@study].' in result
+    assert result.count('therefore') == 2
+    assert repair_section_opening_connectors(result) == result

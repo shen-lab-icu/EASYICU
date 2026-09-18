@@ -1,3 +1,4 @@
+/* Owner: Help/Get Started route. */
 /* Screens: Get Started (tutorial) + AI Assistant.
    Get Started orients new users to the workflow; Assistant is the
    evidence-bound sidebar AI. Assistant messages give workflow guidance and
@@ -74,7 +75,7 @@
             'Plan, run, and review an auditable pipeline with the Research Agent. The manuscript draft stays locked until every evidence check passes and you confirm.',
             '使用 Research Agent 规划、运行并审阅可审计流程。只有证据检查全部通过并由你确认后，手稿草稿才会进入下一步。',
           ),
-          [[t('Open Project Monitor', '打开项目监控'), 'agent'], [t('Start Guided Copilot', '开始研究引导'), 'guided']],
+          [[t('Open conversation', '打开研究对话'), 'agent'], [t('Start Guided Copilot', '开始研究引导'), 'guided']],
           false,
         ],
       ];

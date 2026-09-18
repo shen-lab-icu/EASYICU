@@ -2,11 +2,11 @@
 
 Owner
 -----
-This module owns the Web-to-Research-Agent projection for a closed landmark
-restricted-cubic-spline association.  StudyContext owns the user's scientific
-choices; the current-case runtime authority owns deterministic execution.  The
-public contract below only joins those two typed boundaries after every
-required coordinate is explicit.
+This module owns the Web-to-Research-Agent projection for closed landmark
+associations, including categorical exposures and their prespecified model
+grids. StudyContext owns the user's scientific choices; current-case runtime
+authority owns deterministic execution. The public contract joins those two
+typed boundaries only after every required coordinate is explicit.
 
 Allowed dependencies are the dependency-neutral sensitivity contract, the
 current-case authority builder, a parquet *schema* reader, and canonical
@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -49,11 +50,37 @@ class WebScientificRuntimeProjection:
     analysis_only_execution: bool = False
 
 
+_LEGACY_KDIGO_EXPOSURE_NAMES = frozenset(
+    {"aki_stage", "aki_stage_max", "kdigo_aki", "kdigo_stage"}
+)
+
+
+def kdigo_observability_authority_missing(*names: str | None) -> bool:
+    """Identify legacy KDIGO bindings that can collapse missing evidence to zero."""
+
+    normalized = {
+        str(name or "").strip().lower()
+        for name in names
+        if str(name or "").strip()
+    }
+    if any(
+        "aki_stage_strict" in name or "kdigo_strict" in name
+        for name in normalized
+    ):
+        return False
+    return any(name in _LEGACY_KDIGO_EXPOSURE_NAMES for name in normalized)
+
+
 def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientificRuntimeProjection | None:
     """Route only explicit typed specifications to their execution owner."""
     from .time_varying_runtime_projection import compile_time_varying_runtime_projection
 
     projection = compile_time_varying_runtime_projection(**coordinates)
+    if projection is not None:
+        return projection
+    from .rmst_runtime_projection import compile_rmst_runtime_projection
+
+    projection = compile_rmst_runtime_projection(**coordinates)
     if projection is not None:
         return projection
     landmark_coordinates = dict(coordinates)
@@ -74,14 +101,23 @@ def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientif
         VariableKind.CATEGORICAL,
         VariableKind.BINARY,
     }:
-        if _one_spec(
-            landmark_coordinates["sensitivity_specs"],
-            strategy="restricted_cubic_spline",
-        ) is not None:
+        exposure_names = {
+            landmark_coordinates.get("primary_exposure"),
+            landmark_coordinates.get("primary_exposure_source"),
+        }
+        exposure_splines = [
+            spec for spec in landmark_coordinates["sensitivity_specs"]
+            if spec.strategy == "restricted_cubic_spline"
+            and bool(set(spec.execution_variables) & exposure_names)
+        ]
+        if exposure_splines:
             raise WebScientificRuntimeProjectionError(
                 "web_landmark_exposure_model_incompatible",
                 "A categorical or ordinal landmark exposure cannot use the continuous spline runtime.",
-                details={"exposure_kind": exposure_kind.value},
+                details={
+                    "exposure_kind": exposure_kind.value,
+                    "spec_ids": [spec.spec_id for spec in exposure_splines],
+                },
             )
         return compile_landmark_categorical_runtime_projection(
             **landmark_coordinates
@@ -231,6 +267,95 @@ def _operational_covariates(
     return resolved
 
 
+def _categorical_model_grid(
+    *,
+    sensitivity_specs: Sequence[PrespecifiedSensitivitySpec],
+    primary_exposure: str,
+    exposure_kind: VariableKind,
+    exposure_levels: tuple[str, ...],
+    universe_path: Path,
+    covariates: tuple[str, ...],
+    categorical_covariates: tuple[str, ...],
+    declared_covariates: Sequence[str],
+    scientific_configuration_sha256: str,
+) -> dict[str, Any] | None:
+    """Bind only typed alternate exposures and covariate forms to one grid."""
+
+    specs = [
+        spec for spec in sensitivity_specs
+        if spec.strategy in {"alternate_exposure", "restricted_cubic_spline"}
+    ]
+    if not specs:
+        return None
+    variants: list[dict[str, Any]] = [
+        {"analysis_id": "reference", "metadata": {"axis": "primary", "source_spec_id": "primary"}}
+    ]
+    used_ids = {"reference"}
+    for spec in specs:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", spec.spec_id) or spec.spec_id in used_ids:
+            raise WebScientificRuntimeProjectionError(
+                "web_model_grid_spec_id_invalid",
+                "A model-grid sensitivity needs a unique stable analysis id.",
+                details={"spec_id": spec.spec_id},
+            )
+        used_ids.add(spec.spec_id)
+        if len(spec.execution_variables) != 1:
+            raise WebScientificRuntimeProjectionError(
+                "web_model_grid_source_ambiguous",
+                "A model-grid variant requires one exact materialized source column.",
+                details={"spec_id": spec.spec_id},
+            )
+        source = spec.execution_variables[0]
+        variant: dict[str, Any] = {
+            "analysis_id": spec.spec_id,
+            "metadata": {"axis": spec.axis, "source_spec_id": spec.spec_id},
+        }
+        if spec.strategy == "alternate_exposure":
+            kind, levels = _primary_exposure_kind(
+                universe_path=universe_path,
+                primary_exposure=source,
+                primary_exposure_source=source,
+            )
+            if source == primary_exposure or kind != exposure_kind or levels != exposure_levels:
+                raise WebScientificRuntimeProjectionError(
+                    "web_model_grid_exposure_definition_incompatible",
+                    "The alternate exposure must have the primary model's closed level set.",
+                    details={"spec_id": spec.spec_id, "source": source},
+                )
+            variant["exposure_column"] = source
+        else:
+            if source not in covariates and source in declared_covariates:
+                source = covariates[list(declared_covariates).index(source)]
+            if source not in covariates or source in categorical_covariates:
+                raise WebScientificRuntimeProjectionError(
+                    "web_model_grid_functional_form_source_invalid",
+                    "The nonlinear source must be a primary continuous covariate.",
+                    details={"spec_id": spec.spec_id, "source": source},
+                )
+            variant["nonlinear_terms"] = [{
+                "source_column": source,
+                "basis": "natural_cubic_spline",
+                "degrees_of_freedom": 3,
+                "center_before_basis": True,
+            }]
+        variants.append(variant)
+    authority = build_current_case_scientific_runtime_authority({
+        "schema_version": "easyicu.association_model_grid_runtime_authority/1",
+        "authority_kind": "association_model_grid",
+        "protocol_content_sha256": scientific_configuration_sha256,
+        "plan_method": "verified_association_model_grid",
+        "plan_intent": "Compare prespecified definitions and covariate forms on the signed landmark cohort.",
+        "cohort_product": "artifact:analysis_cohort",
+        "parent_product": "table:adjusted_association_estimates",
+        "output_product": "table:association_sensitivity_grid",
+        "reference_variant_id": "reference",
+        "metadata_columns": ["axis", "source_spec_id"],
+        "output_aliases": {},
+        "variants": variants,
+    })
+    return authority.model_dump(mode="json")
+
+
 def compile_landmark_categorical_runtime_projection(
     *,
     study: Mapping[str, Any],
@@ -285,6 +410,18 @@ def compile_landmark_categorical_runtime_projection(
             "The verified categorical association adapter currently supports a 24-hour landmark.",
             details={"landmark_hours": landmark.landmark_hours},
         )
+    if kdigo_observability_authority_missing(
+        primary_exposure_source, primary_exposure
+    ):
+        raise WebScientificRuntimeProjectionError(
+            "web_kdigo_observability_authority_missing",
+            "KDIGO execution requires a strict exposure that keeps incomplete observation evidence unknown.",
+            details={
+                "primary_exposure": primary_exposure,
+                "primary_exposure_source": primary_exposure_source,
+                "required_binding": "aki_stage_strict",
+            },
+        )
 
     exposure_kind, levels = _primary_exposure_kind(
         universe_path=universe_path,
@@ -317,6 +454,17 @@ def compile_landmark_categorical_runtime_projection(
         operationalizations=covariate_operationalizations,
     )
     categorical = _categorical_adjustments(universe_path, covariates=covariates)
+    grid = _categorical_model_grid(
+        sensitivity_specs=sensitivity_specs,
+        primary_exposure=str(primary_exposure),
+        exposure_kind=exposure_kind,
+        exposure_levels=levels,
+        universe_path=universe_path,
+        covariates=covariates,
+        categorical_covariates=categorical,
+        declared_covariates=declared_covariates,
+        scientific_configuration_sha256=scientific_configuration_sha256,
+    )
     required_columns = {
         str(primary_exposure),
         str(target_outcome),
@@ -325,6 +473,12 @@ def compile_landmark_categorical_runtime_projection(
         *map(str, covariates),
         *((dependence.group_source,) if dependence is not None else ()),
     }
+    if grid is not None:
+        required_columns.update(
+            variant["exposure_column"]
+            for variant in grid["variants"]
+            if variant.get("exposure_column")
+        )
     try:
         import pyarrow.parquet as pq
 
@@ -343,44 +497,49 @@ def compile_landmark_categorical_runtime_projection(
             details={"missing_columns": absent},
         )
 
+    authority_body = {
+        "schema_version": (
+            "easyicu.landmark_categorical_association_runtime_authority/2"
+            if grid is not None
+            else "easyicu.landmark_categorical_association_runtime_authority/1"
+        ),
+        "authority_kind": "landmark_categorical_association",
+        "protocol_content_sha256": scientific_configuration_sha256,
+        "cohort_method": "signed_landmark_analysis_cohort",
+        "primary_method": "signed_landmark_categorical_association",
+        "plan_intent": (
+            "Estimate the adjusted categorical association among patients alive "
+            "and observed at the prespecified 24-hour landmark."
+        ),
+        "landmark_spec_id": landmark.spec_id,
+        "cohort_product": "artifact:analysis_cohort",
+        "cohort_flow_product": "table:cohort_flow",
+        "primary_product": "table:adjusted_association_estimates",
+        "exposure_column": primary_exposure,
+        "exposure_kind": exposure_kind.value,
+        "exposure_levels": list(levels),
+        "exposure_reference_level": levels[0],
+        "primary_contrast_level": levels[-1],
+        "outcome_column": target_outcome,
+        "event_time_column": landmark.event_time_variable,
+        "observation_duration_column": landmark.observation_duration_variable,
+        "observation_duration_unit": landmark.observation_duration_unit,
+        "landmark_hours": 24,
+        "exclude_negative_event_times": True,
+        "require_alive_at_landmark": True,
+        "required_adjustment_columns": list(covariates),
+        "categorical_adjustment_columns": list(categorical),
+        "dependence": (
+            dependence.model_dump(mode="json")
+            if dependence is not None
+            else None
+        ),
+        "interpretation": "descriptive_prognostic_association_not_causal",
+    }
+    if grid is not None:
+        authority_body["association_model_grid"] = grid
     authority = build_current_case_scientific_runtime_authority(
-        {
-            "schema_version": (
-                "easyicu.landmark_categorical_association_runtime_authority/1"
-            ),
-            "authority_kind": "landmark_categorical_association",
-            "protocol_content_sha256": scientific_configuration_sha256,
-            "cohort_method": "signed_landmark_analysis_cohort",
-            "primary_method": "signed_landmark_categorical_association",
-            "plan_intent": (
-                "Estimate the adjusted categorical association among patients alive "
-                "and observed at the prespecified 24-hour landmark."
-            ),
-            "landmark_spec_id": landmark.spec_id,
-            "cohort_product": "artifact:analysis_cohort",
-            "cohort_flow_product": "table:cohort_flow",
-            "primary_product": "table:adjusted_association_estimates",
-            "exposure_column": primary_exposure,
-            "exposure_kind": exposure_kind.value,
-            "exposure_levels": list(levels),
-            "exposure_reference_level": levels[0],
-            "primary_contrast_level": levels[-1],
-            "outcome_column": target_outcome,
-            "event_time_column": landmark.event_time_variable,
-            "observation_duration_column": landmark.observation_duration_variable,
-            "observation_duration_unit": landmark.observation_duration_unit,
-            "landmark_hours": 24,
-            "exclude_negative_event_times": True,
-            "require_alive_at_landmark": True,
-            "required_adjustment_columns": list(covariates),
-            "categorical_adjustment_columns": list(categorical),
-            "dependence": (
-                dependence.model_dump(mode="json")
-                if dependence is not None
-                else None
-            ),
-            "interpretation": "descriptive_prognostic_association_not_causal",
-        }
+        authority_body
     ).model_dump(mode="json")
     projection_body = {
         "schema_version": "easyicu.web_scientific_runtime_projection/1",
@@ -505,7 +664,7 @@ def compile_landmark_spline_runtime_projection(
     authority = build_current_case_scientific_runtime_authority(
         {
             "schema_version": (
-                "easyicu.landmark_spline_runtime_authority/3"
+                "easyicu.landmark_spline_runtime_authority/4"
                 if dependence is not None
                 else "easyicu.landmark_spline_runtime_authority/2"
             ),
@@ -570,4 +729,6 @@ __all__ = [
     "WebScientificRuntimeProjectionError",
     "compile_landmark_categorical_runtime_projection",
     "compile_landmark_spline_runtime_projection",
+    "compile_web_scientific_runtime_projection",
+    "kdigo_observability_authority_missing",
 ]

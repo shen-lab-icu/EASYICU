@@ -23,6 +23,21 @@ def _values(result):
 
 
 # ---------------------------------------------------------------- reading ---
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("KDIGO AKI 分级与 ICU 住院时长及院内死亡的关系", ("death", "los_icu")),
+        ("28-day mortality", ("mort_28d",)),
+        ("28天死亡和院内死亡", ("death", "mort_28d")),
+        ("不是研究死亡；研究 ICU 住院时长", ("los_icu",)),
+        ("脓毒症和非脓毒症患者的院内死亡", ("death",)),
+        ("乳酸和急性肾损伤的关系", ()),
+    ],
+)
+def test_explicit_outcome_roster_preserves_question_specificity(question, expected):
+    assert study_intent.explicit_outcome_concepts(question) == expected
+
+
 def test_aki_question_is_not_turned_into_a_mortality_question():
     result = study_intent.deterministic_intent(
         "在 ICU 患者中,早期液体正平衡与急性肾损伤(AKI)的发生风险是否相关?"
@@ -47,6 +62,43 @@ def test_sepsis3_is_the_cohort_not_the_outcome():
     readings = {concept for concept, _phrase in study_intent._match_concept(result["question"])}
     assert "sep3" in readings
     assert "sep3_sofa2" not in readings
+
+
+def test_definition_dependency_does_not_replace_the_named_exposure():
+    values = _values(study_intent.deterministic_intent(
+        "描述 ICU 患者中 Sepsis-3 患病率及其与院内死亡的关系；"
+        "Sepsis-3 使用 SOFA 和疑似感染定义。"
+    ))
+    assert values["exposure"] == "sep3"
+
+
+@pytest.mark.parametrize("population", ["非脓毒症患者", "非机械通气患者", "非 AKI 人群"])
+def test_negated_population_does_not_negate_its_mortality_outcome(population):
+    values = _values(study_intent.deterministic_intent(
+        f"描述 {population} 的院内死亡情况。"
+    ))
+    assert values["outcome"] == "death"
+
+
+def test_explicit_outcome_negation_survives_a_negated_population():
+    values = _values(study_intent.deterministic_intent(
+        "在非脓毒症患者中，不研究院内死亡；只研究 AKI。"
+    ))
+    assert values["outcome"] == "aki"
+
+
+def test_later_method_acronym_does_not_replace_the_named_exposure():
+    values = _values(study_intent.deterministic_intent(
+        "评估机械通气与28天死亡的关联，做比例风险检验；PH 不成立时不报告恒定 HR。"
+    ))
+    assert values["exposure"] == "vent_ind"
+
+
+def test_background_population_does_not_win_over_the_studied_marker():
+    values = _values(study_intent.deterministic_intent(
+        "Among Sepsis-3 patients, is early bilirubin associated with hospital mortality?"
+    ))
+    assert values["exposure"] == "bili"
 
 
 def test_sofa2_sepsis_sensitivity_requires_an_explicit_sofa2_phrase():

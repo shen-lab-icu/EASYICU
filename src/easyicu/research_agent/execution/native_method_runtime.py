@@ -9,8 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import os
-import shutil
 import subprocess
+
+from .docker_locality import resolve_docker_executable
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ def _probe_survival(docker: str, image_id: str) -> NativeMethodRuntime:
 
 
 def probe_time_varying_native_runtime(image: str) -> NativeMethodRuntime:
-    docker = shutil.which(os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker")
+    docker = resolve_docker_executable(os.environ.get("EASYICU_DOCKER_EXECUTABLE"))
     if docker is None:
         return NativeMethodRuntime(False, "docker_executable_missing")
     try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Mapping, Sequence
 
 from ..planning.progressive_contract import (
@@ -10,29 +11,88 @@ from ..planning.progressive_contract import (
     ProgressiveOutlineStep,
     ProgressivePlanOutline,
 )
+from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
 
 
-_COUNTS_ONLY_INFERENCE_TOKENS = (
-    "confidence interval",
-    "confidence intervals",
-    "uncertainty",
-    "standard error",
-    "p-value",
-    "p value",
-    "置信区间",
-    "不确定性",
-    "标准误",
-    "p值",
-    "p 值",
+# This is a review-copy consistency check, not execution authority. Only mask
+# an explicit, locally scoped refusal of a known output. A negative elsewhere
+# in the sentence must not license that output (or a later affirmative clause).
+_INFERENCE_TERM = (
+    r"(?:confidence intervals?|uncertainty|standard errors?|p[- ]?values?"
+    r"|置信区间|不确定性|标准误|p\s*值)"
 )
+_INFERENCE_OUTPUT = re.compile(_INFERENCE_TERM)
+_OUTPUT_MODIFIER = r"(?:(?:any|inferential|sampling)\s+|\d{1,2}%\s*|推断性|抽样)?"
+_INFERENCE_LIST = (
+    _OUTPUT_MODIFIER + _INFERENCE_TERM
+    + r"(?:\s*(?:,\s*(?:(?:and|or)\s+)?|(?:and|or)\s+|、|，|和|及|或)\s*"
+    + _OUTPUT_MODIFIER + _INFERENCE_TERM + r")*"
+)
+_EXPLICIT_OUTPUT_DISCLAIMER = re.compile(
+    r"(?:\b(?:no|without)\s+"
+    r"|\b(?:do|does|will|shall|must)\s+not\s+"
+    r"(?:report|provide|calculate|estimate|show|include)\s+"
+    r"|(?:不(?:应|会)?|未|无需|不需要|不能|无)"
+    r"(?:报告|提供|计算|估计|展示|包含)?\s*)"
+    + _INFERENCE_LIST,
+)
+_NEGATED_DISCLAIMER_PREFIX = re.compile(
+    r"(?:\bnot|\bnever|\bcannot|\bcan't|并非|不是|不能|未能|无法)\s*$",
+)
+_INVERTED_DISCLAIMER_SUFFIX = re.compile(
+    r"\s+(?:is|are|was|were|will be|can be|should be|must be)\s+"
+    r"(?:not\b|omitted\b|excluded\b|withheld\b|suppressed\b|unavailable\b|missing\b)",
+)
+
+
+def _without_explicit_output_disclaimers(text: str) -> str:
+    def retain_or_mask(match: re.Match[str]) -> str:
+        if _NEGATED_DISCLAIMER_PREFIX.search(text[:match.start()]):
+            return match.group()
+        if _INVERTED_DISCLAIMER_SUFFIX.match(text[match.end():]):
+            return match.group()
+        return " " * len(match.group())
+
+    return _EXPLICIT_OUTPUT_DISCLAIMER.sub(retain_or_mask, text)
 
 
 def outline_shape_contract(
     *,
     analysis_types: Sequence[str],
     module_ids_by_analysis_type: Mapping[str, Sequence[str]],
+    literature_design_card_keys_by_dimension: Mapping[str, Sequence[str]] | None = None,
 ) -> str:
     """Render the exact small outline shape for schema-imperfect transports."""
+
+    design_card_keys_by_dimension = {
+        dimension: list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (
+                    literature_design_card_keys_by_dimension or {}
+                ).get(dimension, ())
+                if str(value).strip()
+            )
+        )
+        for dimension in LITERATURE_DESIGN_DIMENSIONS
+    }
+    complete_design_authority = all(
+        design_card_keys_by_dimension[dimension]
+        for dimension in LITERATURE_DESIGN_DIMENSIONS
+    )
+    literature_design_decisions = (
+        [
+            {
+                "dimension": dimension,
+                "citation_keys": [design_card_keys_by_dimension[dimension][0]],
+                "disposition": "<adopt|adapt|diverge|not_applicable>",
+                "rationale": "<12-800 question-specific characters>",
+            }
+            for dimension in LITERATURE_DESIGN_DIMENSIONS
+        ]
+        if complete_design_authority
+        else []
+    )
 
     template = {
         "schema_version": "easyicu.progressive_plan_outline/1",
@@ -52,7 +112,7 @@ def outline_shape_contract(
                     "required_variables": ["<copy a sealed variable name>"],
                     "assumptions": ["<one prespecified assumption>"],
                     "literature_citation_keys": ["<copy a sealed citation key>"],
-                    "literature_design_decisions": [],
+                    "literature_design_decisions": literature_design_decisions,
                     "novelty_positioning": "<8-600 characters>",
                     "figure_role": "<8-400 characters>",
                     "supports": "<8-500 characters>",
@@ -78,7 +138,7 @@ def outline_shape_contract(
                     "required_variables": ["<copy a sealed variable name>"],
                     "assumptions": ["<one prespecified assumption>"],
                     "literature_citation_keys": ["<copy a sealed citation key>"],
-                    "literature_design_decisions": [],
+                    "literature_design_decisions": literature_design_decisions,
                     "novelty_positioning": "<8-600 characters>",
                     "figure_role": "<8-400 characters>",
                     "supports": "<8-500 characters>",
@@ -101,6 +161,8 @@ def outline_shape_contract(
                     "<sealed method key for every primary/secondary/sensitivity step>"
                 ],
                 "scientific_action_id": None,
+                "population_scope": None,
+                "population_scope_change_reason": None,
             }
         ],
         "rationale": "<8-1200 characters>",
@@ -125,7 +187,36 @@ def outline_shape_contract(
         "literature_citation_keys must always be JSON arrays. Every primary, "
         "secondary, or sensitivity step must bind at least one sealed method "
         "key; only auxiliary steps may use an empty array. "
-        "scientific_action_id must be a retrieved action id or null."
+        "scientific_action_id must be a retrieved action id or null. "
+        "For absolute_risk_context, choose population_scope now: analysis_cohort "
+        "means the broader eligible cohort; primary_model means the preceding "
+        "primary model's exact eligibility and complete-case population. Align "
+        "the objective with this choice. Treat the current amendment request as "
+        "a proposed correction, not just prose to repeat: if it calls for changing "
+        "the source population, select the corrected scope and disclose why in "
+        "population_scope_change_reason for fresh complete-plan review. Otherwise "
+        "preserve the source-bound choice and leave the reason null. Both fields "
+        "are null for other modules. These choices will be immutable during "
+        "step materialization; they do not grant execution approval. "
+        "If a phenotyping.cluster_solution question requests clinical outcome comparisons, plan one separate secondary "
+        "phenotyping.outcome_by_cluster step, directly dependent on the cluster solution. Its variable_names must include "
+        "all requested outcomes and the selected clinical descriptions; inputs to fitting, profiles or figures do not substitute for that analysis."
+        + (
+            " Every candidate literature_design_decisions array must preserve "
+            "the seven exact dimension strings shown in the template, use only "
+            "these reviewed design-card citation keys: "
+            + json.dumps(
+                design_card_keys_by_dimension,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + ". Each decision may cite only keys listed for its own dimension, "
+            "and must include dimension, citation_keys, disposition, and rationale."
+            if complete_design_authority
+            else " literature_design_decisions must be the exact empty array "
+            "shown because complete dimension-specific reviewed design authority "
+            "is not available."
+        )
     )
 
 
@@ -140,28 +231,29 @@ def foundation_shape_contract(
 ) -> str:
     """Project the exact foundation envelope without adding case science."""
 
+    predicate_shape = {
+        "concept_id": "<copy an allowed cohort concept id>",
+        "anchor": "<copy an allowed anchor>",
+        "start_offset_hours": "<number>",
+        "end_offset_hours": "<greater number>",
+        "aggregation": "<max|min|mean|median|last|first|any|all|count|sum>",
+        "op": "<==|!=|<|<=|>|>=|in|not_in|missing|not_missing>",
+        "value": {
+            "mode": "<none|string|number|boolean|string_list|number_list>",
+            "string_value": None,
+            "number_value": None,
+            "boolean_value": None,
+            "string_list": [],
+            "number_list": [],
+        },
+    }
     if host_cohort is not None:
         cohort = host_cohort.model_dump(mode="json")
     elif required_cohort_selection_mode == "predicate_filtered":
         cohort = {
             "name": required_cohort_name or "<1-128 characters>",
             "selection_mode": "predicate_filtered",
-            "inclusion": [{
-                "concept_id": "<copy an allowed cohort concept id>",
-                "anchor": "<copy an allowed anchor>",
-                "start_offset_hours": "<number>",
-                "end_offset_hours": "<greater number>",
-                "aggregation": "<max|min|mean|median|last|first|any|all|count|sum>",
-                "op": "<==|!=|<|<=|>|>=|in|not_in|missing|not_missing>",
-                "value": {
-                    "mode": "<none|string|number|boolean|string_list|number_list>",
-                    "string_value": None,
-                    "number_value": None,
-                    "boolean_value": None,
-                    "string_list": [],
-                    "number_list": [],
-                },
-            }],
+            "inclusion": [predicate_shape],
             "exclusion": [],
         }
     else:
@@ -186,7 +278,10 @@ def foundation_shape_contract(
         "outline_sha256": outline_sha256,
         "foundation": {
             "cohort": cohort,
-            "display_labels": required_labels,
+            "display_labels": (
+                {item["key"]: item["value"] for item in required_labels}
+                if required_labels else []
+            ),
             "robustness_intents": [],
             "know_how_decisions": [],
         },
@@ -202,9 +297,21 @@ def foundation_shape_contract(
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
         + "\nCopy schema_version and outline_sha256 exactly. "
         + cohort_instruction
-        + " display_labels, robustness_intents, and know_how_decisions must always be JSON arrays, including when empty.\n"
-        "If display_labels is nonempty, each item has exactly "
-        '{"key":"<1-256 characters>","value":"<1-256 characters>"}. '
+        + (
+            "\nIf the candidate chooses predicate_filtered, every item in "
+            "inclusion or exclusion must have this exact JSON shape:\n"
+            + json.dumps(predicate_shape, ensure_ascii=False, separators=(",", ":"))
+            + "\nThis shape does not require adding a cohort restriction; "
+            "all_input_rows keeps both lists empty."
+            if host_cohort is None and required_cohort_selection_mode is None
+            else ""
+        )
+        + (
+            " display_labels must be the displayed keyed object; write only the reader-facing meanings (1-256 characters), keeping every required key. "
+            if required_labels else
+            ' display_labels must be a JSON array; each nonempty item has exactly {"key":"<1-256 characters>","value":"<1-256 characters>"}. '
+        )
+        + "robustness_intents and know_how_decisions must always be JSON arrays, including when empty.\n"
         "If robustness_intents is nonempty, each item has exactly "
         '{"spec_id":"<lowercase id>","axis":"<cohort|missing|outcome>",'
         '"description":"<8-600 characters>","missing_strategy":"<none|complete_case>",'
@@ -242,7 +349,8 @@ def selected_counts_only_inference_coordinate(
     )
     for field, value in fields:
         normalized = " ".join(str(value or "").casefold().split())
-        if any(token in normalized for token in _COUNTS_ONLY_INFERENCE_TOKENS):
+        promised_outputs = _without_explicit_output_disclaimers(normalized)
+        if _INFERENCE_OUTPUT.search(promised_outputs):
             return field
     return None
 
@@ -269,9 +377,16 @@ def step_materialization_shape_contract(
         "comparison_exposure_level_index": None,
         "primary_contrast_level_index": None, "denominator_policy": None,
         "missing_exposure_policy": None, "missing_outcome_policy": None,
-        "confidence_level": None, "sensitivity_spec_ids": [],
+        "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
+        "phenotyping_feature_columns": None,
+        "phenotyping_comparison_variables": None,
         "literature_bindings": [],
     }
+    # JSON-mode providers use this same template on initial and repair calls.
+    # Do not advertise a population choice to modules that cannot own it.
+    if outline_step.module_id == "absolute_risk_context":
+        step["population_scope"] = outline_step.population_scope
+        step["population_scope_change_reason"] = outline_step.population_scope_change_reason
     template = {
         "schema_version": "easyicu.progressive_step_materialization/1",
         "outline_step_sha256": outline_step_sha256,
@@ -279,14 +394,27 @@ def step_materialization_shape_contract(
         "step": step,
     }
     return (
-        "Exact ProgressiveStepMaterialization JSON shape (preserve this root wrapper and every step key; add no other keys):\n"
+        "ProgressiveStepMaterialization shape template (preserve this root wrapper; emit only the step keys permitted by the current structured schema):\n"
         + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
-        + "\nCopy schema_version, outline_step_sha256, foundation=null, and the six outline-owned step coordinates exactly. Replace only the module-specific executable null/empty defaults required by the current method card. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
+        + "\nCopy schema_version, outline_step_sha256, foundation=null, and the outline-owned step coordinates exactly, including an explicit outline population_scope and its population_scope_change_reason. Do not re-decide or erase these scientific choices. Replace only the module-specific executable null/empty defaults required by the current method card. Inapplicable keys omitted from the current structured schema retain their host defaults; do not add them back from this template. Never return variable_names, literature_citation_keys, literature_design_bindings, cohort, or expected_outputs inside step. raw_inputs may contain only sealed variable names, never kind:product tokens; governed products belong only in product_inputs.\n"
+        "population_scope belongs exclusively to absolute_risk_context: that module must choose analysis_cohort or primary_model. Omit this field for every other module; primary-model eligibility is governed by its cohort and method contracts, not this descriptive-table selector.\n"
         "Nested item shapes, when used: product_inputs items are exactly "
         '{"producer_step_id":"<preceding step id>","product_id":"<kind:product>"}; outputs items are exactly '
         '{"product_id":"<kind:product>","semantic_role":"<allowed role>"}; table_one_variables items are exactly '
         '{"name":"<sealed variable>","summary":"<mean_sd|median_iqr|both|count_percent>"}; model_terms items are exactly '
-        '{"name":"<sealed variable>","role":"<exposure|covariate>","coding":"<continuous|binary|categorical|ordinal_linear>","reference_level_index":null}; literature_bindings items are exactly '
+        '{"name":"<sealed variable>","role":"<exposure|covariate>","coding":"<continuous|binary|categorical|ordinal_linear>","reference_level_index":null,"clinical_rationale":null}; '
+        "clinical_rationale must be 16-500 characters explaining the clinical "
+        "confounding rationale for a covariate, and null for the exposure. "
+        "reference_level_index must be a sealed level index for binary/categorical "
+        "terms and null for continuous/ordinal_linear terms. An RCS-versus-linear sensitivity must set functional_form_spec to "
+        '{"target_column":"<exact continuous primary model term>","knot_quantiles":[0.1,0.5,0.9]}; '
+        "choose and declare the three ordered quantiles before execution. This contract is null for other analyses, including timing checks. "
+        "For phenotyping.cluster_solution set phenotyping_feature_columns to the exact fit roster from raw_inputs; "
+        "profile-only variables, identifiers and outcomes must not enter that roster. Other actions use null. "
+        "When outcomes are requested after phenotyping.cluster_solution, include a separate secondary phenotyping.outcome_by_cluster step. "
+        "Set phenotyping_comparison_variables using the same name/summary item shape as table_one_variables, including the requested outcomes and selected clinical descriptions. "
+        "This action joins the exact source cohort to frozen assignments, never refits, reports observed-variable denominators and missing counts, and performs no inferential tests. Other actions use null. "
+        "literature_bindings items are exactly "
         '{"citation_key":"<sealed key>","design_elements":["<allowed element>"],"application":"<8-1200 characters>","divergence":null}.'
     )
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 from contextvars import ContextVar
 from types import SimpleNamespace
+from functools import partial
+from threading import RLock
 
 import pytest
 
@@ -11,6 +13,33 @@ from easyicu.research_agent.schema import AnalysisStep
 
 def _step(step_id: str) -> AnalysisStep:
     return AnalysisStep(step_id=step_id, intent=f"execute {step_id}")
+
+
+def test_parallel_exception_seals_identity_and_flushes_terminal_record():
+    from easyicu.research_agent.execution.run_coordination import RunCoordinator
+    from easyicu.research_agent.execution.phase import _step_record_step_exception
+    records, findings, flushes = [], [], []
+
+    def execute(step):
+        if step.step_id == "bad":
+            raise RuntimeError("synthetic crash")
+        return {"step_id": step.step_id, "status": "ok"}
+
+    RunCoordinator().run_parallel(
+        steps=[_step("bad"), _step("good")], max_workers=2,
+        execute_step=execute, submit_step=lambda pool, fn, step: pool.submit(fn, step),
+        on_worker_error=partial(
+            _step_record_step_exception, shared_lock=RLock(), findings=findings,
+            per_step_records=records, _append_terminal_step_record=lambda rows, row: rows.append(row),
+            _flush_partial_manifest=lambda payload: flushes.append((payload, list(records))),
+            parallel=True,
+        ),
+    )
+    assert len(records) == 1
+    assert records[0]["step_id"] == "bad"
+    assert records[0]["status"] == "execution_raised"
+    assert "synthetic crash" in records[0]["traceback"]
+    assert flushes[0][1] == records
 
 
 def test_sequential_stop_is_resolved_after_step_execution() -> None:
@@ -46,35 +75,274 @@ def test_sequential_stop_is_resolved_after_step_execution() -> None:
     assert state.stop_reason == "requested_stop"
 
 
-def test_sequential_fail_stop_suppresses_later_steps_and_transitions() -> None:
+def test_sequential_auxiliary_failure_keeps_independent_tail() -> None:
+    """A submission-profile auxiliary failure must not swallow the tail.
+
+    Real consumers are marked ``skipped_dependency_failed`` by the
+    execution-time dependency gate; steps with no declared edge to the failure
+    keep their slot in the queue and the failure denominator. The failed step
+    itself is never used as a replan anchor.
+    """
+
+    from easyicu.research_agent.execution.run_coordination import (
+        RunCoordinator,
+        RunExecutionState,
+        RunTransition,
+    )
+
+    calls: list[str] = []
+    transitions: list[str] = []
+    failed = {
+        "step_id": "04",
+        "status": "coder_failed",
+        "planned_analysis_role": "auxiliary",
+        "expected_outputs": ["table:04_result"],
+    }
+    state = RunExecutionState(
+        remaining_steps=[
+            AnalysisStep(
+                step_id="04",
+                intent="auxiliary analysis",
+                planned_analysis_role="auxiliary",
+                expected_outputs=["table:04_result"],
+            ),
+            AnalysisStep(step_id="05", intent="independent tail renderer"),
+        ],
+        executed_step_ids=set(),
+        stop_on_failure=True,
+    )
+
+    def execute(step: AnalysisStep):
+        calls.append(step.step_id)
+        if step.step_id == "04":
+            return failed
+        return {"step_id": step.step_id, "status": "ok"}
+
+    result = RunCoordinator().run_sequential(
+        state=state,
+        execute_step=execute,
+        resolve_transition=lambda step, record, has_remaining: (
+            transitions.append(step.step_id) or RunTransition.continue_run()
+        ),
+        resolve_run_halt=lambda step, record: None,
+        apply_revised_plan=lambda plan, executed: [],
+    )
+
+    assert calls == ["04", "05"]
+    assert transitions == ["05"]
+    assert result.failed_step_ids == ["04"]
+    assert result.stop_reason is None
+    assert "remaining_steps_suppressed" not in failed
+
+
+def test_auxiliary_failure_never_skips_a_run_level_halt() -> None:
+    """Input-authority corruption halts even when an auxiliary step failed.
+
+    Codex counterexample (2026-09-12): the continuation branch must not skip
+    the host halt check. The real halt resolver runs after every executed
+    step, so the independent tail is never scheduled once input authority is
+    reported corrupt.
+    """
+
+    from easyicu.research_agent.execution.phase import _step_resolve_run_halt
+    from easyicu.research_agent.execution.run_coordination import (
+        RunCoordinator,
+        RunExecutionState,
+    )
+
+    corruption = SimpleNamespace(corrupted=False, step_id=None)
+    calls: list[str] = []
+    failed = {
+        "step_id": "aux",
+        "status": "blocked_input_authority_mutation",
+        "planned_analysis_role": "auxiliary",
+    }
+
+    def execute(step: AnalysisStep):
+        calls.append(step.step_id)
+        if step.step_id == "aux":
+            corruption.corrupted = True
+            corruption.step_id = "aux"
+            return failed
+        return {"step_id": step.step_id, "status": "ok", "planned_analysis_role": "auxiliary"}
+
+    halt = partial(
+        _step_resolve_run_halt,
+        run_input_authority_state=corruption,
+        emit_progress=lambda *args, **kwargs: None,
+        run_id="synthetic",
+        requested_stop_after_step_id=None,
+        _replan_state={},
+    )
+    state = RunCoordinator().run_sequential(
+        state=RunExecutionState(
+            remaining_steps=[_step("aux"), _step("tail")],
+            executed_step_ids=set(),
+            stop_on_failure=True,
+            stop_failure_roles=frozenset({"primary"}),
+        ),
+        execute_step=execute,
+        resolve_transition=lambda step, record, has_remaining: pytest.fail(
+            "a failed auxiliary step must not reach the replan transition"
+        ),
+        resolve_run_halt=halt,
+        apply_revised_plan=lambda plan, executed: [],
+    )
+
+    assert calls == ["aux"]
+    assert state.stop_reason == "input_authority_corrupted"
+
+
+def test_failed_auxiliary_step_without_halt_resolver_only_asks_for_a_halt() -> None:
+    """Compatibility path: one transition call, halt answers honoured only."""
+
+    from easyicu.research_agent.execution.run_coordination import (
+        RunCoordinator,
+        RunExecutionState,
+        RunTransition,
+    )
+
+    calls: list[str] = []
+    asked: list[str] = []
+    failed = {
+        "step_id": "aux",
+        "status": "execution_failed",
+        "planned_analysis_role": "auxiliary",
+    }
+
+    def transition(step: AnalysisStep, record: dict, has_remaining: bool):
+        asked.append(step.step_id)
+        if record.get("status") != "ok":
+            return RunTransition.replan(object())
+        return RunTransition.continue_run()
+
+    state = RunCoordinator().run_sequential(
+        state=RunExecutionState(
+            remaining_steps=[_step("aux"), _step("tail")],
+            executed_step_ids=set(),
+            stop_on_failure=True,
+        ),
+        execute_step=lambda step: calls.append(step.step_id) or (
+            failed if step.step_id == "aux" else {"step_id": step.step_id, "status": "ok"}
+        ),
+        resolve_transition=transition,
+        apply_revised_plan=lambda plan, executed: pytest.fail(
+            "a discarded replan answer must not rebuild the queue"
+        ),
+    )
+
+    assert calls == ["aux", "tail"]
+    assert asked == ["aux", "tail"]
+    assert state.failed_step_ids == ["aux"]
+    assert state.stop_reason is None
+
+
+def test_failed_auxiliary_step_without_halt_resolver_honours_a_halt() -> None:
+    from easyicu.research_agent.execution.run_coordination import (
+        RunCoordinator,
+        RunExecutionState,
+        RunTransition,
+    )
+
+    calls: list[str] = []
+    failed = {
+        "step_id": "aux",
+        "status": "execution_failed",
+        "planned_analysis_role": "auxiliary",
+    }
+    state = RunCoordinator().run_sequential(
+        state=RunExecutionState(
+            remaining_steps=[_step("aux"), _step("tail")],
+            executed_step_ids=set(),
+            stop_on_failure=True,
+        ),
+        execute_step=lambda step: calls.append(step.step_id) or failed,
+        resolve_transition=lambda step, record, has_remaining: RunTransition.stop(
+            "input_authority_corrupted"
+        ),
+        apply_revised_plan=lambda plan, executed: [],
+    )
+
+    assert calls == ["aux"]
+    assert state.stop_reason == "input_authority_corrupted"
+
+
+def test_sequential_primary_failure_still_suppresses_tail() -> None:
     from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
         RunExecutionState,
     )
 
     calls: list[str] = []
-    record = {"status": "coder_failed"}
+    failed = {
+        "step_id": "03",
+        "status": "execution_failed",
+        "planned_analysis_role": "primary",
+    }
+    state = RunExecutionState(
+        remaining_steps=[
+            AnalysisStep(
+                step_id="03",
+                intent="primary model",
+                planned_analysis_role="primary",
+            ),
+            AnalysisStep(step_id="04", intent="tail renderer"),
+        ],
+        executed_step_ids=set(),
+        stop_on_failure=True,
+        stop_failure_roles=frozenset({"primary"}),
+    )
+
+    result = RunCoordinator().run_sequential(
+        state=state,
+        execute_step=lambda step: calls.append(step.step_id) or failed,
+        resolve_transition=lambda step, record, has_remaining: pytest.fail(
+            "a failed required role must not transition"
+        ),
+        apply_revised_plan=lambda plan, executed: pytest.fail(
+            "a failed required role must not replan"
+        ),
+    )
+
+    assert calls == ["03"]
+    assert result.stop_reason == "required_step_failed:execution_failed"
+    assert failed["remaining_steps_suppressed"] is True
+
+
+def test_requested_stop_still_holds_when_that_step_fails() -> None:
+    """A user-requested stop point is a queue command, not a replan anchor."""
+
+    from easyicu.research_agent.execution.run_coordination import (
+        RunCoordinator,
+        RunExecutionState,
+    )
+
+    calls: list[str] = []
+    failed = {
+        "step_id": "04",
+        "status": "execution_failed",
+        "planned_analysis_role": "auxiliary",
+    }
     state = RunExecutionState(
         remaining_steps=[_step("04"), _step("05")],
         executed_step_ids=set(),
         stop_on_failure=True,
+        stop_after_step_id="04",
     )
 
-    RunCoordinator().run_sequential(
+    result = RunCoordinator().run_sequential(
         state=state,
-        execute_step=lambda step: calls.append(step.step_id) or record,
-        resolve_transition=lambda step, result, has_remaining: pytest.fail(
-            "a terminal failed required step must not transition"
+        execute_step=lambda step: calls.append(step.step_id) or failed,
+        resolve_transition=lambda step, record, has_remaining: pytest.fail(
+            "a failed requested stop must not transition"
         ),
         apply_revised_plan=lambda plan, executed: pytest.fail(
-            "a terminal failed required step must not replan"
+            "a failed requested stop must not replan"
         ),
     )
 
     assert calls == ["04"]
-    assert state.executed_step_ids == {"04"}
-    assert state.stop_reason == "required_step_failed:coder_failed"
-    assert record["remaining_steps_suppressed"] is True
+    assert result.stop_reason == "requested_stop_after_step"
 
 
 def test_sequential_fail_stop_can_target_declared_step_roles() -> None:
@@ -275,7 +543,7 @@ def test_parallel_workers_use_supplied_context_submitter_and_report_errors() -> 
         max_workers=2,
         execute_step=execute,
         submit_step=_submit_in_current_context,
-        on_worker_error=errors.append,
+        on_worker_error=lambda step, error: errors.append(error),
     )
 
     assert sorted(observed) == ["01:bound", "02:bound"]
@@ -300,12 +568,15 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
 
     phase_source = (
         inspect.getsource(pipeline_execute.run_execute_phase)
+        + inspect.getsource(pipeline_execute._step_resolve_run_halt)
         + inspect.getsource(pipeline_execute._step_resolve_run_transition)
         + inspect.getsource(pipeline_execute._step_audit_final_figures)
     )
     assert "while remaining_steps:" not in phase_source
     assert phase_source.count("run_coordinator.run_sequential(") == 1
     assert phase_source.count("run_coordinator.run_parallel(") == 1
+    assert "_resolve_run_halt = functools.partial(" in phase_source
+    assert "resolve_run_halt=_resolve_run_halt," in phase_source
     corruption = phase_source.index("if run_input_authority_state.corrupted:")
     requested_stop = phase_source.index(
         "if step.step_id == requested_stop_after_step_id:", corruption
@@ -350,10 +621,6 @@ def test_execute_transition_reads_the_live_replanned_plan() -> None:
         _step("01"),
         {"status": "ok", "generation_mode": "llm"},
         True,
-        run_input_authority_state=SimpleNamespace(corrupted=False),
-        emit_progress=lambda *args, **kwargs: None,
-        run_id="run",
-        requested_stop_after_step_id=None,
         _maybe_directed_model_replan=lambda **kwargs: None,
         _replan_state={},
         pipeline=SimpleNamespace(

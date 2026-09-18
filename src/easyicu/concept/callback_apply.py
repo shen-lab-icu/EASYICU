@@ -67,7 +67,7 @@ from .expr_parser import (
     _split_arguments,
     _strip_quotes,
 )
-from ..datasource import _duckdb_path, _enumerate_bucket_parquet_files
+from ..datasource import _duckdb_path, enumerate_bucket_parquet_files
 
 if TYPE_CHECKING:
     from ..datasource import ICUDataSource
@@ -95,7 +95,7 @@ def hirid_observation_read_exprs(
     """
     for directory_name in ("observations_bucket", "observations"):
         directory = base_path / directory_name
-        files = _enumerate_bucket_parquet_files(directory)
+        files = enumerate_bucket_parquet_files(directory)
         if not files:
             continue
         files_sql = (
@@ -1132,8 +1132,49 @@ def _apply_callback(
         death_values = pd.Series(index=df.index, dtype=object)
         death_values[died] = True  # survivors/unknown -> NA (ricu convention)
         df[concept_name] = death_values
-        if offset_secs is not None:
-            df['charttime'] = (offset_secs / 3600.0).where(died)
+        if offset_secs is not None and bool(died.any()):
+            # Official SICdb semantics: OffsetOfDeath counts seconds from the
+            # primary admission, so the ICU clock requires subtracting
+            # cases.ICUOffset — the same origin the event tables use.  Without
+            # it the death time is shifted by the pre-ICU hospital stay.
+            icu_offset = None
+            for c in ['ICUOffset', 'icuoffset']:
+                if c in df.columns:
+                    icu_offset = pd.to_numeric(df[c], errors='coerce')
+                    break
+            if icu_offset is None and data_source is not None:
+                id_col = next(
+                    (c for c in ('CaseID', 'caseid') if c in df.columns), None
+                )
+                if id_col is not None:
+                    try:
+                        cases = data_source.load_table(
+                            "cases", columns=[id_col, "ICUOffset"], verbose=False
+                        )
+                        cases_df = cases.data if hasattr(cases, "data") else cases
+                        origins = cases_df[[id_col, "ICUOffset"]].drop_duplicates(
+                            subset=[id_col], keep="last"
+                        )
+                        icu_offset = pd.to_numeric(
+                            df[id_col].map(
+                                origins.set_index(id_col)["ICUOffset"]
+                            ),
+                            errors="coerce",
+                        )
+                    except Exception:
+                        icu_offset = None
+            if icu_offset is None or icu_offset.notna().sum() == 0:
+                raise ValueError(
+                    "sic_death requires cases.ICUOffset to express the death "
+                    "time on the ICU clock"
+                )
+            missing_origin = died & icu_offset.isna()
+            if bool(missing_origin.any()):
+                raise ValueError(
+                    "sic_death found in-hospital death(s) without a usable "
+                    "cases.ICUOffset"
+                )
+            df['charttime'] = ((offset_secs - icu_offset) / 3600.0).where(died)
         return df
 
     # 🔧 HiRID death callback — matches R ricu hirid_death (callback-itm.R:197)
@@ -2560,7 +2601,7 @@ def _apply_callback(
                                 conn = duckdb.connect()
                                 conn.execute("SET memory_limit = '2GB'")
                                 # 显式文件列表，过滤 AppleDouble
-                                _wh_files = _enumerate_bucket_parquet_files(bucket_dir)
+                                _wh_files = enumerate_bucket_parquet_files(bucket_dir)
                                 if _wh_files:
                                     _wh_files_sql = "[" + ", ".join(f"'{f}'" for f in _wh_files) + "]"
                                     _wh_read_expr = f"read_parquet({_wh_files_sql}, hive_partitioning=true, union_by_name=true)"
@@ -3631,186 +3672,27 @@ def _apply_callback(
             if id_col in frame.columns and id_col in wbc_df.columns:
                 wbc_df[id_col] = wbc_df[id_col].astype(frame[id_col].dtype)
             
-            # For each row in frame, find the closest WBC measurement
-            # This is a time-based merge (asof merge)
-            if index_col and index_col in frame.columns and index_col in wbc_df.columns:
-                # CRITICAL FIX: For AUMC, frame's measuredat is in MINUTES (raw from datasource),
-                # but wbc_df's measuredat is in HOURS (after load_concepts processing).
-                # We need to convert frame's time to HOURS before merge.
-                frame_time_max = frame[index_col].abs().max()
-                wbc_time_max = wbc_df[index_col].abs().max() if not wbc_df.empty else 0
-                
-                # Create copies to avoid modifying original
-                frame_work = frame.copy()
-                wbc_work = wbc_df.copy()
-                
-                # CRITICAL: Filter WBC to frame patients BEFORE time unit detection.
-                # Otherwise, long-stay patients not in the frame can push wbc_time_max
-                # past the 1000-hour threshold, breaking the minutes-vs-hours heuristic.
-                _unique_pids = frame_work[id_col].unique()
-                wbc_work = wbc_work[wbc_work[id_col].isin(set(_unique_pids))].copy()
-                
-                # Recalculate time maxes after filtering
-                frame_time_max = frame_work[index_col].abs().max()
-                wbc_time_max = wbc_work[index_col].abs().max() if not wbc_work.empty else 0
-                
-                # Improved time unit detection:
-                # 1. Large absolute threshold (>1000) clearly indicates minutes
-                # 2. Relative comparison: if frame_time >> wbc_time (e.g., 5x+), convert
-                # 3. For AUMC with measuredat, frame comes from raw table (minutes) while
-                #    wbc comes from load_concepts (hours)
-                need_frame_to_hours = False
-                need_wbc_to_hours = False
-                
-                if frame_time_max > 1000 and wbc_time_max < 1000 and wbc_time_max > 0:
-                    # Clear case: frame is in minutes (>1000), wbc is in hours
-                    need_frame_to_hours = True
-                elif frame_time_max < 1000 and wbc_time_max > 1000:
-                    # Opposite: wbc is in minutes, frame is in hours
-                    need_wbc_to_hours = True
-                elif frame_time_max > 0 and wbc_time_max > 0:
-                    # Both are < 1000, but may still have different units
-                    # If ratio is significantly different (5x+), assume different units
-                    ratio = frame_time_max / wbc_time_max if wbc_time_max > 0 else 0
-                    if ratio > 5:
-                        # frame is much larger, likely in minutes vs hours
-                        need_frame_to_hours = True
-                        if DEBUG_CALLBACK:
-                            print("    [TIME FIX] 基于比率检测时间单位不匹配:")
-                            print(f"      ratio = {ratio:.2f}")
-                    elif ratio < 0.2 and ratio > 0:
-                        # wbc is much larger
-                        need_wbc_to_hours = True
-                
-                if need_frame_to_hours:
-                    if DEBUG_CALLBACK:
-                        print("    [TIME FIX] 检测到时间单位不匹配:")
-                        print(f"      frame max time: {frame_time_max} (分钟)")
-                        print(f"      wbc max time: {wbc_time_max} (小时)")
-                        print("      -> 将 frame 时间从分钟转换为小时")
-                    frame_work[index_col] = frame_work[index_col] / 60.0
-                elif need_wbc_to_hours:
-                    if DEBUG_CALLBACK:
-                        print("    [TIME FIX] 检测到时间单位不匹配（反向）:")
-                        print(f"      frame max time: {frame_time_max}")
-                        print(f"      wbc max time: {wbc_time_max}")
-                        print("      -> 将 wbc 时间从分钟转换为小时")
-                    wbc_work[index_col] = wbc_work[index_col] / 60.0
-                
-                # Ensure matching dtypes for index column
-                wbc_work[index_col] = wbc_work[index_col].astype(frame_work[index_col].dtype)
-                
-                # CRITICAL: merge_asof requires the 'on' column to be sorted globally.
-                # With multiple patients, their time ranges may overlap.
-                # Solution: Add per-patient offset to make times globally monotonic,
-                # then do a single merge_asof call instead of per-patient loops.
-                _max_time = max(
-                    frame_work[index_col].abs().max() if len(frame_work) > 0 else 0,
-                    wbc_work[index_col].abs().max() if len(wbc_work) > 0 else 0,
-                ) + 1000  # generous padding
+            if not index_col or index_col not in frame or index_col not in wbc_df:
+                return unavailable("missing_wbc_time_alignment")
+            # Raw source times are normalized by the same admission/unit owner
+            # used by the concept loader. Magnitudes cannot establish units.
+            raw = frame.copy()
+            raw["_wbc_row_position"] = np.arange(len(raw))
+            aligned = resolver._align_time_to_admission(
+                raw.copy(), data_source, [id_col], index_col,
+            )
+            aligned_times = aligned[["_wbc_row_position", index_col]].rename(
+                columns={index_col: "_wbc_aligned_hour"}
+            )
+            raw = raw.merge(aligned_times, on="_wbc_row_position", how="left", validate="one_to_one")
+            from ..utils.callback_utils import blood_cell_ratio_at_hour
+            result = blood_cell_ratio_at_hour(
+                raw, wbc_df, id_columns=[id_col], value_column=concept_name,
+                time_column="_wbc_aligned_hour", wbc_time_column=index_col,
+                unit_column=unit_column, reason_column=assessment_column,
+            )
+            return result.drop(columns=["_wbc_row_position", "_wbc_aligned_hour"])
 
-                # Build offset map: each patient gets a non-overlapping time range
-                _pid_offset = {pid: i * _max_time * 2 for i, pid in enumerate(_unique_pids)}
-
-                # Add offset to make global time monotonic
-                frame_work['_gtime'] = frame_work[id_col].map(_pid_offset) + frame_work[index_col]
-                wbc_work['_gtime'] = wbc_work[id_col].map(_pid_offset) + wbc_work[index_col]
-
-                # Sort by global time for merge_asof
-                frame_work = frame_work.sort_values('_gtime')
-                wbc_work = wbc_work.sort_values('_gtime')
-
-                try:
-                    frame_merged = pd.merge_asof(
-                        frame_work,
-                        wbc_work[[id_col, '_gtime', 'wbc']],
-                        on='_gtime',
-                        by=id_col,
-                        direction='nearest',
-                    )
-                except Exception:
-                    # Fallback: per-patient merge_asof
-                    merged_parts = []
-                    for patient_id in _unique_pids:
-                        fp = frame_work[frame_work[id_col] == patient_id].sort_values(index_col)
-                        wp = wbc_work[wbc_work[id_col] == patient_id].sort_values(index_col)
-                        if wp.empty:
-                            merged_parts.append(fp)
-                        else:
-                            try:
-                                mp = pd.merge_asof(fp, wp[[id_col, index_col, 'wbc']],
-                                                   on=index_col, by=id_col, direction='nearest')
-                                merged_parts.append(mp)
-                            except Exception:
-                                merged_parts.append(fp)
-                    frame_merged = pd.concat(merged_parts, ignore_index=True) if merged_parts else frame_work.copy()
-
-                # Clean up temp column
-                frame_merged = frame_merged.drop(columns=['_gtime'], errors='ignore')
-                
-                if DEBUG_CALLBACK:
-                    print(f"    Frame before merge:\n{frame_work[[id_col, index_col, concept_name]]}")
-                    print(f"    After merge_asof:\n{frame_merged[[id_col, index_col, concept_name] + (['wbc'] if 'wbc' in frame_merged.columns else [])]}")
-                
-                # Calculate ratio: 100 * value / wbc
-                if 'wbc' in frame_merged.columns:
-                    valid_mask = (frame_merged['wbc'].notna()) & (frame_merged['wbc'] != 0)
-                    if DEBUG_CALLBACK:
-                        print(f"    valid_mask: {valid_mask.values}, sum={valid_mask.sum()}")
-                    frame_merged.loc[valid_mask, concept_name] = (
-                        100 * frame_merged.loc[valid_mask, concept_name] / 
-                        frame_merged.loc[valid_mask, 'wbc']
-                    )
-                    frame_merged.loc[~valid_mask, concept_name] = np.nan
-                    frame_merged[assessment_column] = np.where(
-                        valid_mask, "calculated_from_wbc", "missing_wbc_measurement"
-                    )
-                    if DEBUG_CALLBACK:
-                        print(f"    计算后值: {frame_merged[concept_name].values}")
-                    # Set unit to %
-                    if unit_column and unit_column in frame_merged.columns:
-                        frame_merged.loc[valid_mask, unit_column] = '%'
-                    # Drop WBC column
-                    frame_merged = frame_merged.drop(columns=['wbc'])
-                else:
-                    if DEBUG_CALLBACK:
-                        print("    [WARNING] 'wbc' not in frame_merged.columns!")
-                    frame_merged[concept_name] = np.nan
-                    frame_merged[assessment_column] = "missing_wbc_measurement"
-                
-                # CRITICAL: Convert time back to original format (minutes) for AUMC
-                # The subsequent processing will apply the minutes->hours conversion again
-                if need_frame_to_hours:
-                    # We converted frame from minutes to hours, now convert back
-                    frame_merged[index_col] = frame_merged[index_col] * 60.0
-                    if DEBUG_CALLBACK:
-                        print("    [TIME RESTORE] 将时间从小时转换回分钟")
-                
-                if DEBUG_CALLBACK:
-                    print(f"    返回 frame_merged, shape={frame_merged.shape}")
-                return frame_merged
-            else:
-                if DEBUG_CALLBACK:
-                    print("    [FALLBACK] index_col 不在两个 frame 中, 使用平均 WBC")
-                # No index column, use simple merge on ID (average WBC per patient)
-                wbc_grouped = wbc_df.groupby(id_col)['wbc'].mean().reset_index()
-                frame = frame.merge(wbc_grouped, on=id_col, how='left')
-                
-                valid_mask = (frame['wbc'].notna()) & (frame['wbc'] != 0)
-                frame.loc[valid_mask, concept_name] = (
-                    100 * frame.loc[valid_mask, concept_name] / 
-                    frame.loc[valid_mask, 'wbc']
-                )
-                frame.loc[~valid_mask, concept_name] = np.nan
-                frame[assessment_column] = np.where(
-                    valid_mask, "calculated_from_wbc", "missing_wbc_measurement"
-                )
-                if unit_column and unit_column in frame.columns:
-                    frame.loc[valid_mask, unit_column] = '%'
-                frame = frame.drop(columns=['wbc'])
-                
-                return frame
-                
         except Exception as e:
             if DEBUG_CALLBACK:
                 print(f"    [EXCEPTION] {type(e).__name__}: {e}")
@@ -3822,4 +3704,15 @@ def _apply_callback(
         f"Callback '{callback}' is not yet supported."
     )
 
-__all__ = ["_apply_callback", "_normalize_eicu_tidal_volume_frame"]
+
+# --- Public cross-package alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-package callers must
+# use the public name below.
+apply_callback = _apply_callback
+
+
+__all__ = [
+    "_apply_callback",
+    "_normalize_eicu_tidal_volume_frame",
+    "apply_callback",
+]

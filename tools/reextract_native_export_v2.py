@@ -64,6 +64,7 @@ MODULE_ORDER = (
 )
 RUN_SCHEMA_VERSION = "easyicu_full6_extraction_run_v2"
 NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
+PRIVATE_DERIVATION_CONTEXT_DIRECTORY = ".derivation-context"
 
 TIMING_FIELDS = (
     "database",
@@ -366,6 +367,34 @@ def _resolve_batch_overrides(values: Sequence[str]) -> dict[str, int]:
     return result
 
 
+def _resolve_module_batch_overrides(
+    values: Sequence[str],
+) -> dict[str, dict[str, int]]:
+    allowed = tuple(
+        f"{database}/{module}"
+        for database in DATABASE_ORDER
+        for module in MODULE_ORDER
+    )
+    parsed = _parse_key_value(
+        values,
+        option="--module-batch-size",
+        allowed_keys=allowed,
+    )
+    result: dict[str, dict[str, int]] = {}
+    for target, raw in parsed.items():
+        database, module = target.split("/", 1)
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ExtractionRunError(
+                f"batch size for {target} must be an integer, got {raw!r}"
+            ) from exc
+        if value <= 0:
+            raise ExtractionRunError(f"batch size for {target} must be positive")
+        result.setdefault(database, {})[module] = value
+    return result
+
+
 def _load_psutil(resource_policy: str):
     try:
         import psutil
@@ -576,8 +605,12 @@ def _safe_remove_attempt_payload(path: Path, attempt_root: Path) -> None:
 
     if not path.exists():
         return
+    # E-P2-10: rmtree guard — resolved path must stay under the attempt root
+    # and never be a symlink (keeps the pre-existing parent-equality check).
     if path.is_symlink() or not path.is_dir() or path.parent.resolve() != attempt_root.resolve():
         raise ExtractionRunError(f"refusing unsafe attempt cleanup: {path}")
+    assert path.resolve().is_relative_to(attempt_root.resolve()), path
+    assert not path.resolve().is_symlink(), path
     shutil.rmtree(path)
 
 
@@ -688,6 +721,27 @@ def _validate_nonnegative_number(value: Any, *, label: str) -> float:
     return float(value)
 
 
+def _public_parquet_paths(export_root: Path) -> set[str]:
+    """Return public dataset Parquets while retaining private replay evidence.
+
+    Native exports intentionally store patient-level derivation replay shards
+    under ``.derivation-context``.  They are bound through the root manifest,
+    but they are not public module tables and must not be counted in the
+    19-file dataset contract.  Parquets in every other nested directory remain
+    visible here and therefore fail the flat-layout check below.
+    """
+
+    public: set[str] = set()
+    for path in export_root.rglob("*.parquet"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(export_root)
+        if relative.parts and relative.parts[0] == PRIVATE_DERIVATION_CONTEXT_DIRECTORY:
+            continue
+        public.add(relative.as_posix())
+    return public
+
+
 def _validate_export_package(
     export_root: Path,
     expected_commit: str,
@@ -735,11 +789,7 @@ def _validate_export_package(
     by_module = {entry.get("module"): entry for entry in entries}
     if len(by_module) != len(entries) or set(by_module) != set(MODULE_ORDER):
         raise ExtractionRunError("native manifest module set is not the 19-module contract")
-    actual_parquets = {
-        path.relative_to(export_root).as_posix()
-        for path in export_root.rglob("*.parquet")
-        if path.is_file()
-    }
+    actual_parquets = _public_parquet_paths(export_root)
     expected_parquets = {f"{module}.parquet" for module in MODULE_ORDER}
     if actual_parquets != expected_parquets:
         raise ExtractionRunError(
@@ -855,6 +905,61 @@ def _batch_label(
     )
 
 
+def _nested_worker_memory_failure(failures: object) -> bool:
+    if not isinstance(failures, list):
+        return False
+    for item in failures:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            exit_code = int(item.get("worker_exit_code") or 0)
+        except (TypeError, ValueError):
+            exit_code = 0
+        detail = " ".join(
+            str(item.get(field) or "")
+            for field in ("failure_kind", "exception_type", "traceback")
+        )
+        if _looks_like_memory_failure(exit_code, detail):
+            return True
+    return False
+
+
+def _recover_nested_worker_failures(output_root: Path) -> list[dict[str, Any]]:
+    """Recover durable module-worker summaries when extraction raises early."""
+
+    failure_root = output_root / ".easyicu-failures"
+    if not failure_root.is_dir() or failure_root.is_symlink():
+        return []
+    recovered: list[dict[str, Any]] = []
+    for path in sorted(failure_root.glob("worker-failure-*.json")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()
+            record = json.loads(raw)
+            if not isinstance(record, Mapping):
+                continue
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        recovered.append(
+            {
+                "failure_id": record.get("failure_id"),
+                "phase": record.get("phase"),
+                "modules": record.get("modules", []),
+                "special_modules": record.get("special_modules", []),
+                "worker_exit_code": record.get("worker_exit_code"),
+                "failure_kind": record.get("failure_kind"),
+                "exception_type": record.get("exception_type"),
+                "traceback_sha256": record.get("traceback_sha256"),
+                "partial_outputs_sha256": record.get("partial_outputs_sha256"),
+                "file": path.relative_to(output_root).as_posix(),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+        )
+    return recovered
+
+
 def _worker_main(spec_path: Path) -> int:
     """Internal clean-interpreter database worker."""
 
@@ -863,6 +968,7 @@ def _worker_main(spec_path: Path) -> int:
     result_path = attempt_root / "worker_result.json"
     plan_path = attempt_root / "worker_plan.json"
     output_root = attempt_root / "export"
+    nested_worker_failures: list[dict[str, Any]] = []
     try:
         identity = _git_identity()
         _require_clean_identity(identity)
@@ -904,6 +1010,12 @@ def _worker_main(spec_path: Path) -> int:
             raise ExtractionRunError(f"no ICU stays found for {database}")
         num_stays = len(patient_ids)
         requested_batch_size = spec.get("requested_batch_size")
+        requested_module_batch_sizes = {
+            str(module): int(value)
+            for module, value in dict(
+                spec.get("requested_module_batch_sizes") or {}
+            ).items()
+        }
         planning_memory_mb = float(
             spec.get("planning_memory_mb", spec["assigned_memory_mb"])
         )
@@ -924,6 +1036,7 @@ def _worker_main(spec_path: Path) -> int:
             for module, item in plan_module_extraction_resources(
                 database, MODULE_ORDER, num_stays, requested_batch_size,
                 available_memory_mb=effective_budget_mb,
+                module_batch_sizes=requested_module_batch_sizes,
             ).items()
         }
         plan = {
@@ -931,6 +1044,7 @@ def _worker_main(spec_path: Path) -> int:
             "num_stays": num_stays,
             "id_column": id_column,
             "requested_batch_size": requested_batch_size,
+            "requested_module_batch_sizes": requested_module_batch_sizes,
             "planned_initial_batch_size": planned_batch_size,
             "planned_batch_count": math.ceil(num_stays / planned_batch_size),
             "adaptive_core": adaptive_core,
@@ -959,7 +1073,13 @@ def _worker_main(spec_path: Path) -> int:
             verbose=True,
             adaptive_stream_batches=adaptive_core,
             resource_budget_mb=effective_budget_mb,
+            module_batch_sizes=requested_module_batch_sizes,
         )
+        nested_worker_failures = [
+            dict(item)
+            for item in (extraction.get("worker_failures") or [])
+            if isinstance(item, Mapping)
+        ]
         errors = {
             module: list((extraction["modules"].get(module) or {}).get("errors") or [])
             for module in MODULE_ORDER
@@ -989,6 +1109,10 @@ def _worker_main(spec_path: Path) -> int:
                 "stream_retry_history": retries,
                 "resource_plan": resource_plan.to_dict(),
                 "module_resource_plans": extraction.get("module_resource_plans", module_plans),
+                "module_batch_size_overrides": extraction.get(
+                    "module_batch_size_overrides",
+                    requested_module_batch_sizes,
+                ),
                 "aggregate_plan_is_summary": requested_batch_size is None,
             },
             "runtime_limits": runtime,
@@ -997,11 +1121,17 @@ def _worker_main(spec_path: Path) -> int:
         _atomic_write_json(result_path, payload)
         return 0
     except BaseException as exc:
+        if not nested_worker_failures:
+            nested_worker_failures = _recover_nested_worker_failures(output_root)
         payload = {
             "status": "failed",
             "database": spec.get("database"),
             "error": f"{type(exc).__name__}: {exc}",
             "traceback": traceback.format_exc(),
+            "worker_failures": nested_worker_failures,
+            "nested_memory_failure": _nested_worker_memory_failure(
+                nested_worker_failures
+            ),
         }
         try:
             _atomic_write_json(result_path, payload)
@@ -1085,6 +1215,7 @@ def _execute_database(
     monitoring: Mapping[str, Any],
     prior_source: Mapping[str, Any] | None,
     planning_memory_mb: float | None = None,
+    requested_module_batch_sizes: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     final_export = run_root / "exports" / database
     if final_export.exists() or final_export.is_symlink():
@@ -1121,6 +1252,9 @@ def _execute_database(
             ),
             "adaptive_core": adaptive_core and retry_index == 0,
             "requested_batch_size": next_batch_size,
+            "requested_module_batch_sizes": dict(
+                requested_module_batch_sizes or {}
+            ),
         }
         spec_path = attempt_root / "worker_spec.json"
         _atomic_write_json(spec_path, spec)
@@ -1235,7 +1369,13 @@ def _execute_database(
             final_error = "strict process-tree RSS/PSS evidence was not captured"
             retryable = False
         else:
-            retryable = _looks_like_memory_failure(final_exit_code, final_error)
+            retryable = (
+                _looks_like_memory_failure(final_exit_code, final_error)
+                or worker_result.get("nested_memory_failure") is True
+                or _nested_worker_memory_failure(
+                    worker_result.get("worker_failures")
+                )
+            )
         planned = worker_plan.get("planned_initial_batch_size")
         can_downbatch = (
             retryable
@@ -1337,6 +1477,8 @@ def _new_run_manifest(
     monitoring: Mapping[str, Any],
     memory: Mapping[str, Any],
     args: argparse.Namespace,
+    batch_overrides: Mapping[str, int] | None = None,
+    module_batch_overrides: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": RUN_SCHEMA_VERSION,
@@ -1354,6 +1496,11 @@ def _new_run_manifest(
             "launcher": str(SCRIPT_PATH.relative_to(REPOSITORY_ROOT)),
             "launcher_sha256": _sha256(SCRIPT_PATH),
         },
+        "publication_checkout": {
+            "easyicu_git_commit": identity["commit"],
+            "easyicu_git_dirty": False,
+            "scope": "fresh_full_extraction",
+        },
         "data_paths": dict(data_paths),
         "resource_policy": args.resource_policy,
         "resource_monitoring": dict(monitoring),
@@ -1365,6 +1512,13 @@ def _new_run_manifest(
             "portable_and_low_available_memory_serial": True,
             "memory_retry_limit": args.max_memory_retries,
             "sample_interval_seconds": args.sample_interval,
+            "database_batch_overrides": dict(batch_overrides or {}),
+            "module_batch_overrides": {
+                database: dict(overrides)
+                for database, overrides in dict(
+                    module_batch_overrides or {}
+                ).items()
+            },
         },
         "sources": {},
     }
@@ -1377,6 +1531,8 @@ def _load_resume_manifest(
     data_paths: Mapping[str, str],
     identity: Mapping[str, Any],
     resource_policy: str,
+    batch_overrides: Mapping[str, int] | None = None,
+    module_batch_overrides: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
     manifest = _read_json_object(run_root / "run_manifest.json", label="run manifest")
     if manifest.get("schema_version") != RUN_SCHEMA_VERSION:
@@ -1391,10 +1547,28 @@ def _load_resume_manifest(
         or checkout.get("easyicu_git_dirty") is not False
     ):
         raise ExtractionRunError("resume requires the exact original clean EasyICU commit")
+    publication_checkout = manifest.get("publication_checkout") or {}
+    if (
+        publication_checkout.get("easyicu_git_commit") != identity["commit"]
+        or publication_checkout.get("easyicu_git_dirty") is not False
+        or publication_checkout.get("scope") != "fresh_full_extraction"
+    ):
+        raise ExtractionRunError(
+            "resume publication checkout differs from the original full extraction"
+        )
     if manifest.get("data_paths") != dict(data_paths):
         raise ExtractionRunError("resume source data paths differ from the original run")
     if manifest.get("resource_policy") != resource_policy:
         raise ExtractionRunError("resume resource policy differs from the original run")
+    scheduler = manifest.get("scheduler") or {}
+    if scheduler.get("database_batch_overrides", {}) != dict(batch_overrides or {}):
+        raise ExtractionRunError("resume database batch overrides differ from original run")
+    expected_module_overrides = {
+        database: dict(overrides)
+        for database, overrides in dict(module_batch_overrides or {}).items()
+    }
+    if scheduler.get("module_batch_overrides", {}) != expected_module_overrides:
+        raise ExtractionRunError("resume module batch overrides differ from original run")
     return manifest
 
 
@@ -1474,6 +1648,7 @@ def _run_non_eicu_segment(
     manifest: dict[str, Any],
     data_paths: Mapping[str, str],
     batch_overrides: Mapping[str, int],
+    module_batch_overrides: Mapping[str, Mapping[str, int]],
     psutil_module,
 ) -> None:
     remaining = list(segment)
@@ -1502,6 +1677,9 @@ def _run_non_eicu_segment(
                     assigned_memory_mb=assigned_memory_mb,
                     adaptive_core=worker_count == 1,
                     requested_batch_size=batch_overrides.get(database),
+                    requested_module_batch_sizes=module_batch_overrides.get(
+                        database, {}
+                    ),
                     max_memory_retries=args.max_memory_retries,
                     sample_interval_seconds=args.sample_interval,
                     psutil_module=psutil_module,
@@ -1543,6 +1721,7 @@ def _run_pending(
     manifest: dict[str, Any],
     data_paths: Mapping[str, str],
     batch_overrides: Mapping[str, int],
+    module_batch_overrides: Mapping[str, Mapping[str, int]],
     psutil_module,
 ) -> None:
     segment: list[str] = []
@@ -1558,6 +1737,7 @@ def _run_pending(
                 manifest=manifest,
                 data_paths=data_paths,
                 batch_overrides=batch_overrides,
+                module_batch_overrides=module_batch_overrides,
                 psutil_module=psutil_module,
             )
             segment = []
@@ -1573,6 +1753,9 @@ def _run_pending(
                     assigned_memory_mb=assigned_memory_mb,
                     adaptive_core=True,
                     requested_batch_size=batch_overrides.get("eicu"),
+                    requested_module_batch_sizes=module_batch_overrides.get(
+                        "eicu", {}
+                    ),
                     max_memory_retries=args.max_memory_retries,
                     sample_interval_seconds=args.sample_interval,
                     psutil_module=psutil_module,
@@ -1619,10 +1802,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     memory = _detect_effective_memory(psutil_module)
     data_paths = _resolve_data_paths(args)
     batch_overrides = _resolve_batch_overrides(args.database_batch_size)
+    module_batch_overrides = _resolve_module_batch_overrides(
+        args.module_batch_size
+    )
     unused_overrides = set(batch_overrides) - set(args.databases)
     if unused_overrides:
         raise ExtractionRunError(
             f"batch overrides name databases outside this run: {sorted(unused_overrides)}"
+        )
+    unused_module_override_databases = set(module_batch_overrides) - set(
+        args.databases
+    )
+    if unused_module_override_databases:
+        raise ExtractionRunError(
+            "module batch overrides name databases outside this run: "
+            f"{sorted(unused_module_override_databases)}"
         )
 
     run_root = Path(args.output_root).expanduser().resolve()
@@ -1636,6 +1830,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             data_paths=data_paths,
             identity=identity,
             resource_policy=args.resource_policy,
+            batch_overrides=batch_overrides,
+            module_batch_overrides=module_batch_overrides,
         )
         manifest["resource_monitoring"] = monitoring
     else:
@@ -1655,6 +1851,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             monitoring=monitoring,
             memory=memory,
             args=args,
+            batch_overrides=batch_overrides,
+            module_batch_overrides=module_batch_overrides,
         )
 
     pending = _pending_databases(
@@ -1673,6 +1871,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             manifest=manifest,
             data_paths=data_paths,
             batch_overrides=batch_overrides,
+            module_batch_overrides=module_batch_overrides,
             psutil_module=psutil_module,
         )
 
@@ -1734,6 +1933,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         metavar="DATABASE=STAYS",
         help="expert per-database override; automatic memory planning is the default",
+    )
+    parser.add_argument(
+        "--module-batch-size",
+        action="append",
+        default=[],
+        metavar="DATABASE/MODULE=STAYS",
+        help=(
+            "more-specific expert module override; may be repeated and takes "
+            "precedence over --database-batch-size"
+        ),
     )
     parser.add_argument(
         "--max-database-workers",

@@ -1,18 +1,16 @@
+/* Owner: Project Monitor artifact render widget. */
 /* ============================================================
-   screens-agent-render.js — fixture data + pure renderers for
-   the Project Monitor screen (legacy route id: #agent).
+   screens-agent-render.js — fixture data + pure artifact renderers shared by
+   Guided Copilot's run-file review surfaces. It was originally extracted from
+   the retired Project Monitor screen (legacy route id: #agent).
 
-   First owner-file carve-out of the screens-agent.js monolith
-   (see the file-size budget rule in CLAUDE.md / AGENTS.md).
    Everything here is PURE: demo/fixture studies, artifact
    classifiers/label maps, and the artifact table/JSON
-   renderers. The only external dependencies are the globals
-   window.t (i18n) and window.icon (icon registry) — no closure
-   state from screens-agent.js is referenced.
+   renderers. The external dependencies are the globals window.t (i18n),
+   window.icon (icon registry), and the shared escaping owner.
 
-   Exposed via window.AGENT_RENDER; screens-agent.js rebinds the
-   names at the top of its IIFE so call sites stay unchanged.
-   This file MUST load before screens-agent.js in index.html.
+   Exposed via window.AGENT_RENDER and loaded before the active Guided run-file
+   owners in index.html.
    ============================================================ */
 (function () {
   const { esc, escAttr } = window.EU_HTML;
@@ -179,6 +177,8 @@
   function artifactTitle(name) {
     const n = String(name || '');
     const labels = {
+      'manuscript_revision.pdf': t('Current report revision (PDF)', '当前报告修订（PDF）'),
+      'manuscript_scaffold.pdf': t('Original run report (PDF)', '原运行报告（历史 PDF）'),
       'run_context.json': t('Run context', '运行上下文'),
       'cohort_summary.json': t('Cohort summary', '队列摘要'),
       'table1_summary.json': t('Table 1 summary', 'Table 1 摘要'),
@@ -291,10 +291,21 @@
     if (!value || typeof value !== 'object') return value;
     const out = {};
     Object.keys(value).forEach(key => {
-      if (key === 'data_url' || key === 'image_data_url') out[key] = '[embedded image hidden in JSON preview]';
+      if (/^(?:data_url|image_data_url)$/i.test(key)) out[key] = '[embedded image hidden in JSON preview]';
       else out[key] = scrubDataUrls(value[key]);
     });
     return out;
+  }
+  function displayAnchorId(row) {
+    const displayId = String(row && row.display_id || '').trim();
+    return /^[A-Za-z0-9 _.:-]{1,160}$/.test(displayId) ? displayId : '';
+  }
+  function displayAnchorAttributes(row) {
+    const id = displayAnchorId(row);
+    // Anchors are matched through the data attribute (dataset compare in the
+    // preview and run-files hosts); no consumer reads an element id, and
+    // registered display ids like "Table 1" legitimately contain spaces.
+    return id ? ` data-gpi-display-anchor="${escAttr(id)}"` : '';
   }
   function figureGallery(payload) {
     const figs = payload && Array.isArray(payload.figures) ? payload.figures : [];
@@ -305,9 +316,9 @@
     return `
       <div class="ag-figure-gallery">
         ${visible.map(({ row, source }, index) => `
-          <figure class="${index === 0 || row.tier === 'primary_publication' || row.status === 'canonical_main' ? 'is-primary' : 'is-supporting'}">
+          <figure${displayAnchorAttributes(row)} class="${index === 0 || row.tier === 'primary_publication' || row.status === 'canonical_main' ? 'is-primary' : 'is-supporting'}">
             <img src="${escAttr(source)}" alt="${escAttr(row.label || row.relative_path || 'figure')}" />
-            <figcaption><strong>${esc(row.label || 'figure')}</strong><span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
+            <figcaption><strong>${esc(row.label || 'figure')}</strong>${row.caption ? `<p class="ag-figure-caption">${esc(row.caption)}</p>` : ''}<span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
           </figure>`).join('')}
       </div>`;
   }
@@ -400,7 +411,7 @@
           <table class="ag-artifact-table${opts.compact ? ' is-compact' : ''}">
             <thead><tr>${labels.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
             <tbody>
-              ${safeRows.map(row => `<tr>${row.map((cell, index) => `<td>${esc(artifactScalar(cell, headers[index]))}</td>`).join('')}</tr>`).join('')}
+              ${safeRows.map(row => `<tr>${row.map((cell, index) => `<td>${esc(opts.formattedCells ? String(cell == null ? "" : cell) : artifactScalar(cell, headers[index]))}</td>`).join('')}</tr>`).join('')}
             </tbody>
           </table>
         </div>`;
@@ -479,27 +490,41 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     const claims = Array.isArray(p.claims) ? p.claims.slice(0, 240) : [];
     const blocks = Array.isArray(p.article_blocks) ? p.article_blocks.slice(0, 240) : [];
+    const references = Array.isArray(p.references) ? p.references.slice(0, 120) : [];
+    const referenceMap = new Map(references.map(row => [String(row.key || ''), row]));
     const claimMap = new Map(claims.map(row => [String(row && row.claim_id || ''), row || {}]));
     const readableText = value => {
       const source = String(value || '')
-        .replace(/\s*\[(?!@)[A-Za-z_][A-Za-z0-9_.-]*\]/g, '')
+        .replace(/\s*\[(?!@)(?:[A-Za-z_][A-Za-z0-9_.-]*|\d+_[A-Za-z0-9_.-]+)\]/g, '')
         .replace(/\s+([,.;:)])/g, '$1');
       const tokens = source.split(/(\*\*[^*]+\*\*|\[@[^\]]+\])/g).filter(Boolean);
       return tokens.map(token => {
         if (/^\*\*[^*]+\*\*$/.test(token)) return `<strong>${esc(token.slice(2, -2))}</strong>`;
         if (/^\[@[^\]]+\]$/.test(token)) {
-          const key = token.slice(2, -1);
-          return `<span class="gpi-reader-citation" title="${esc(key)}">[ref]</span>`;
+          const keys = Array.from(token.matchAll(/@([A-Za-z0-9_.:-]+)/g), match => match[1]);
+          return keys.map(key => {
+            const ref = referenceMap.get(key);
+            if (!ref || !Number.isInteger(ref.number) || ref.number < 1) return `<span class="gpi-reader-citation" title="${escAttr(key)}">[ref]</span>`;
+            return `<a class="gpi-reader-citation" data-gpi-reference="${ref.number}" href="#gpi-reference-${ref.number}" title="${escAttr(ref.title || key)}">[${ref.number}]</a>`;
+          }).join(' ');
         }
         return esc(token);
       }).join('');
     };
+    const claimSourceValue = claim => {
+      // source_value is the numeric claim's rounded lexical label. Preserve
+      // its canonical value for exact comparison with the admitted JSON field.
+      if (claim.canonical_value == null) return claim.source_value == null ? '' : claim.source_value;
+      return typeof claim.canonical_value === 'number' && Number.isFinite(claim.canonical_value)
+        ? claim.canonical_value : '';
+    };
     const claimEvidenceAttrs = claim => {
+      if (claim.status && claim.status !== 'current') return '';
       const evidence = claim && claim.evidence && typeof claim.evidence === 'object' ? claim.evidence : {};
       const evidenceId = String(evidence.evidence_id || '').trim();
       const sha256 = String(evidence.sha256 || '').trim().toLowerCase();
       if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return '';
-      return ` data-gpi-evidence-open data-evidence-id="${escAttr(evidenceId)}" data-evidence-sha256="${escAttr(sha256)}" data-evidence-kind="${escAttr(String(evidence.kind || 'statistic'))}" data-evidence-label="${escAttr(t('Exact result source', '准确结果来源'))}" data-evidence-pointer="${escAttr(String(claim.source_json_pointer || ''))}" data-evidence-source-value="${escAttr(String(claim.source_value == null ? '' : claim.source_value))}"`;
+      return ` data-gpi-evidence-open data-evidence-id="${escAttr(evidenceId)}" data-evidence-sha256="${escAttr(sha256)}" data-evidence-kind="${escAttr(String(evidence.kind || 'statistic'))}" data-evidence-label="${escAttr(t('Exact result source', '准确结果来源'))}" data-evidence-pointer="${escAttr(String(claim.source_json_pointer || ''))}" data-evidence-source-value="${escAttr(String(claimSourceValue(claim)))}"`;
     };
     const renderSegments = value => (Array.isArray(value) ? value : []).map(segment => {
       const text = readableText(segment && segment.text || '');
@@ -510,20 +535,51 @@
       return `<button type="button" class="gpi-bound-number" id="claim-${escAttr(claimId)}" data-gpi-claim="${escAttr(claimId)}"${evidenceAttrs} aria-controls="gpi-claim-detail-${escAttr(claimId)}" aria-expanded="false" title="${escAttr(evidenceAttrs ? t('Open result evidence preview', '打开结果证据预览') : t('Open evidence lineage', '查看证据链路'))}">${text}</button>`;
     }).join('');
     const reportFigures = figureGallery(p.figure_gallery || {});
+    const displayAnchorButton = row => {
+      const displayId = displayAnchorId(row);
+      if (!displayId) return '';
+      return ` <button type="button" class="gpi-display-link" data-gpi-display="${escAttr(displayId)}" title="${escAttr(t('Jump to the registered display', '跳转到对应图表'))}">${esc(t('Locate display', '定位图表'))}</button>`;
+    };
+    const tables = (Array.isArray(p.tables) ? p.tables.slice(0, 20) : []).map(table => {
+      const anchor = displayAnchorAttributes(table);
+      return `<section class="gpi-reader-table"${anchor}>${artifactTable(`${table.label || ''}. ${table.caption || ''}`, table.columns || [], table.rows || [], '', { formattedCells: true })}<details><summary>${esc(t('Table definitions and source', '表格定义与来源'))}</summary>${(Array.isArray(table.notes) ? table.notes : []).map(note => `<p>${esc(note)}</p>`).join('')}</details></section>`;
+    }).join('');
+    let displaysInserted = false;
+    const figureContext = (Array.isArray(p.figure_context) ? p.figure_context : [])
+      .map(note => `<p class="gpi-reader-context">${esc(note.text || '')}</p>`).join('');
+    const displayInsert = figureContext + tables + (reportFigures
+      ? `<section class="gpi-article-figure-insert"><div class="gpi-article-figure-head"><h2>${esc(t('Result figures', '结果图件'))}</h2><p>${esc(p.figure_gallery && p.figure_gallery.presentation_variant ? t('Re-rendered from digest-verified source tables. Original run figures remain unchanged.', '根据摘要核验后的源数据表重新排版；原始运行图件保持不变。') : t('Figures registered by this run.', '本次运行登记的图件。'))}</p></div>${reportFigures}</section>` : '');
     const article = blocks.map(block => {
+      if (block && block.kind === 'verification_notes') {
+        const notes = Array.isArray(block.notes) ? block.notes.slice(0, 24) : [];
+        if (!notes.length) return '';
+        return `<section class="gpi-verification-notes"><h2>${esc(t('Verification notes', '核验备注'))}</h2><ul>${notes.map(note => `<li><code>${esc(String(note && note.code || ''))}</code> ${esc(String(note && note.text || ''))}</li>`).join('')}</ul></section>`;
+      }
       const content = renderSegments(block && block.segments);
       const headingText = (Array.isArray(block && block.segments) ? block.segments : [])
         .map(segment => String(segment && segment.text || '')).join('').trim();
-      const figureInsert = reportFigures && block && block.kind === 'heading'
-        && Number(block.level || 2) === 2 && /^Discussion$/i.test(headingText)
-        ? `<section class="gpi-article-figure-insert"><div class="gpi-article-figure-head"><span>${esc(t('Registered result figures', '已登记结果图'))}</span><h2>${esc(t('Main visual results', '主要可视化结果'))}</h2><p>${esc(p.figure_gallery && p.figure_gallery.presentation_variant ? t('Re-rendered from digest-verified source tables. Original run figures remain unchanged.', '根据摘要核验后的源数据表重新排版；原始运行图件保持不变。') : t('Figures registered by this run.', '本次运行登记的图件。'))}</p></div>${reportFigures}</section>`
-        : '';
+      const insertHere = !displaysInserted && block && block.kind === 'heading'
+        && Number(block.level || 2) === 2 && /^(Discussion|讨论)$/i.test(headingText);
+      const figureInsert = insertHere ? displayInsert : '';
+      if (insertHere) displaysInserted = true;
       if (block && block.kind === 'heading') {
         const level = Math.max(2, Math.min(4, Number(block.level || 2)));
         return `${figureInsert}<h${level}>${content}</h${level}>`;
       }
       return `${figureInsert}<p>${content}</p>`;
     }).join('');
+    const incompleteBibliography = references.some(ref => !Array.isArray(ref.authors) || !ref.authors.length)
+      ? `<p class="gpi-reference-notice">${esc(t('Some source records have no author metadata. The bibliography requires verification.', '部分来源记录缺少作者信息，参考文献仍需核验。'))}</p>` : '';
+    const referenceList = references.length ? `<section class="gpi-reader-references"><h2>${esc(t('References', '参考文献'))}</h2>${incompleteBibliography}<ol>${references.map(ref => {
+      const authors = Array.isArray(ref.authors) ? ref.authors.join(', ') : '';
+      const url = ref.doi ? `https://doi.org/${encodeURIComponent(ref.doi)}` : (/^https:\/\//i.test(String(ref.url || '')) ? ref.url : '');
+      const title = url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener noreferrer">${esc(ref.title || '')}</a>` : esc(ref.title || '');
+      const titleStop = /[.!?。！？]$/.test(String(ref.title || '').trim()) ? '' : '.';
+      const notices = Array.isArray(ref.bibliographic_notices) ? ref.bibliographic_notices : [];
+      return `<li id="gpi-reference-${Number.isInteger(ref.number) ? ref.number : 0}">${esc(authors)}${authors ? '. ' : ''}${title}${titleStop} ${esc(ref.venue || '')}${ref.venue ? '. ' : ''}${esc(ref.year || '')}.${notices.map(note => `<p class="gpi-reference-notice">${esc(note)}</p>`).join('')}</li>`;
+    }).join('')}</ol></section>` : '';
+    const revision = p.report_revision && p.report_revision.status === 'pass'
+      ? `<p class="gpi-reader-revision">${esc(t('Report revision', '报告修订'))}: ${esc(p.report_revision.revision_id || '')} · ${esc(t('Source analysis unchanged; not publication authorization.', '源分析不变；不代表发表授权。'))}</p>` : '';
     const evidenceButton = (row, label, pointer, sourceValue) => {
       const evidenceId = String(row && row.evidence_id || '').trim();
       const sha256 = String(row && row.sha256 || '').trim().toLowerCase();
@@ -539,29 +595,37 @@
       }
       (Array.isArray(rows) ? rows : []).forEach(row => entries.push(row || {}));
       if (!entries.length) return `<p class="gpi-claim-boundary">${esc(t('No registered evidence artifacts.', '没有登记证据产物。'))}</p>`;
-      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(t('Open registered evidence', '打开已登记证据'))}</div><div class="ag-artifact-table-wrap"><table class="ag-artifact-table"><thead><tr><th>${esc(t('Role', '角色'))}</th><th>${esc(t('Type', '类型'))}</th><th>${esc(t('Preview', '预览'))}</th><th>SHA-256</th></tr></thead><tbody>${entries.map(row => `<tr><td>${esc(row.role || '')}</td><td>${esc(row.kind || '')}</td><td>${evidenceButton(row, row.evidence_id || t('Open', '打开'), pointer, sourceValue)}</td><td>${esc(row.sha256 || '')}</td></tr>`).join('')}</tbody></table></div></div>`;
+      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(t('Open registered evidence', '打开已登记证据'))}</div><div class="ag-artifact-table-wrap"><table class="ag-artifact-table"><thead><tr><th>${esc(t('Role', '角色'))}</th><th>${esc(t('Type', '类型'))}</th><th>${esc(t('Preview', '预览'))}</th><th>SHA-256</th></tr></thead><tbody>${entries.map(row => `<tr><td>${esc(row.role || '')}${row.status && row.status !== 'current' ? ` <span class="pill warn">${esc(row.status)}</span>` : ''}</td><td>${esc(row.kind || '')}</td><td>${evidenceButton(row, row.evidence_id || t('Open', '打开'), pointer, sourceValue)}${displayAnchorButton(row)}</td><td>${esc(row.sha256 || '')}</td></tr>`).join('')}</tbody></table></div></div>`;
     };
     const panels = claims.map(claim => {
       const claimId = String(claim && claim.claim_id || '');
       const evidence = claim && claim.evidence && typeof claim.evidence === 'object' ? claim.evidence : {};
       const artifacts = Array.isArray(claim && claim.related_artifacts) ? claim.related_artifacts : [];
+      const claimStatus = String(claim && claim.status || 'current').trim();
+      const statusChip = claimStatus && claimStatus !== 'current'
+        ? `<span class="pill warn">${esc(claimStatus)}</span>` : '';
+      const methodRows = claim && claim.method_summary && typeof claim.method_summary === 'object'
+        ? Object.entries(claim.method_summary).slice(0, 6).map(([key, value]) => [
+          String(key).replace(/_/g, ' '), String(value == null ? '' : value),
+        ]) : [];
       return `<section class="gpi-claim-panel" id="gpi-claim-detail-${escAttr(claimId)}" data-gpi-claim-panel="${escAttr(claimId)}" hidden>
-        <div class="gpi-claim-panel-head"><div><span>${esc(t('Bound number', '绑定数字'))}</span><strong>${esc(claim.display_value || '')}</strong></div><button type="button" data-gpi-claim-close aria-label="${escAttr(t('Close evidence detail', '关闭证据详情'))}">${esc(t('Close', '关闭'))}</button></div>
+        <div class="gpi-claim-panel-head"><div><span>${esc(t('Bound number', '绑定数字'))}</span><strong>${esc(claim.display_value || '')}</strong>${statusChip}</div><button type="button" data-gpi-claim-close aria-label="${escAttr(t('Close evidence detail', '关闭证据详情'))}">${esc(t('Close', '关闭'))}</button></div>
         ${artifactTable(t('Exact result source', '准确结果来源'), [t('Item', '项目'), t('Value', '值')], [
           [t('JSON field', 'JSON 字段'), claim.source_field || ''],
           [t('JSON pointer', 'JSON 指针'), claim.source_json_pointer || ''],
-          [t('Source value', '源数值'), claim.source_value || ''],
+          [t('Source value', '源数值'), claimSourceValue(claim)],
           [t('Analysis step', '分析步骤'), claim.step_id || ''],
           [t('Evidence ID', '证据 ID'), evidence.evidence_id || ''],
           ['SHA-256', evidence.sha256 || ''],
+          ...methodRows,
         ])}
-        ${lineageTable(evidence, artifacts, claim.source_json_pointer, claim.source_value)}
+        ${lineageTable(evidence, artifacts, claim.source_json_pointer, claimSourceValue(claim))}
         <p class="gpi-claim-boundary">${esc(t('This view exposes immutable IDs and digests, not patient rows or host file paths. Scientific authority remains analysis-only until Host gates and human review permit more.', '此视图只显示不可变 ID 与摘要，不暴露患者行或主机文件路径。除非 Host 闸门与人工审阅另行许可，科学权限仍为 analysis-only。'))}</p>
       </section>`;
     }).join('');
     return `<div class="ag-artifact-readable ag-manuscript-reader">
       <div class="ag-artifact-readable-head"><div><div class="eyebrow">${esc(t('Evidence-bound article', '证据绑定文章'))}</div><div class="ag-artifact-readable-title">${esc(t('Click a highlighted number to open its exact result evidence preview. Full lineage remains available when needed.', '点击高亮数字，直接打开对应结果证据的可视化；需要时仍可查看完整证据链。'))}</div></div><span class="pill warn">analysis-only</span></div>
-      <div class="gpi-manuscript-layout" data-gpi-manuscript-layout><article class="gpi-manuscript-article">${article || `<p>${esc(t('No reader blocks are available.', '没有可用的文章阅读内容。'))}</p>`}</article><aside class="gpi-claim-drawer" aria-live="polite"><div class="gpi-claim-empty" data-gpi-claim-empty>${esc(t('Claims without a previewable result source can still open their exact audit lineage here.', '没有可直接预览结果来源的论断，仍可在这里打开准确审计链路。'))}</div>${panels}</aside></div>
+      ${revision}<div class="gpi-manuscript-layout" data-gpi-manuscript-layout><article class="gpi-manuscript-article">${article || `<p>${esc(t('No reader blocks are available.', '没有可用的文章阅读内容。'))}</p>`}${displaysInserted ? '' : displayInsert}${referenceList}</article><aside class="gpi-claim-drawer" aria-live="polite"><div class="gpi-claim-empty" data-gpi-claim-empty>${esc(t('Claims without a previewable result source can still open their exact audit lineage here.', '没有可直接预览结果来源的论断，仍可在这里打开准确审计链路。'))}</div>${panels}</aside></div>
     </div>`;
   }
   function scientificFindingCopy(row) {
@@ -641,8 +705,9 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     const findings = Array.isArray(p.findings) ? p.findings : [];
     const decisions = findings.filter(row => row && !plannerOwnedScientificFinding(row) && (row.requires_user_authorization || row.remediation_route === 'study_authority_change'));
-    const automatic = findings.filter(row => row && (row.remediation_route === 'agent_plan_revision' || plannerOwnedScientificFinding(row)));
-    const evidence = findings.filter(row => row && (row.remediation_route === 'external_evidence' || row.remediation_route === 'independent_review'));
+    const automatic = findings.filter(row => row && !decisions.includes(row) && (row.remediation_route === 'agent_plan_revision' || plannerOwnedScientificFinding(row)));
+    const evidence = findings.filter(row => row && !decisions.includes(row) && !automatic.includes(row) && (row.remediation_route === 'external_evidence' || row.remediation_route === 'independent_review'));
+    const remainder = findings.filter(row => !decisions.includes(row) && !automatic.includes(row) && !evidence.includes(row));
     const firstDecision = decisions[0] || null;
     const firstDecisionCopy = firstDecision ? scientificFindingCopy(firstDecision) : null;
     const laterDecisions = decisions.slice(1);
@@ -674,9 +739,10 @@
         <span class="ag-science-review-state ${approvalAllowed ? 'is-ready' : 'is-waiting'}">${esc(approvalAllowed ? t('Ready', '可批准') : t('Analysis paused', '分析已暂停'))}</span>
       </header>
       ${firstDecision ? `<section class="ag-science-review-section is-current"><div class="ag-science-review-heading"><div><span>${esc(t('Do this now', '现在只做这一步'))}</span><strong>${esc(firstDecisionCopy.title)}</strong></div><em>1</em></div><div class="ag-science-current-question"><p>${esc(scientificDecisionQuestion(firstDecision))}</p><span>${esc(t('Use “Answer decision 1” in the conversation to reply.', '在左侧对话中点击「回答第 1 项」。'))}</span></div>${laterDecisions.length ? `<div class="ag-science-later"><span>${esc(t('Later', '稍后'))}</span><strong>${esc(scientificFindingCopy(laterDecisions[0]).title)}</strong><small>${esc(t('EasyICU will ask after the first answer is saved.', '第 1 项保存后，EasyICU 再询问这一项。'))}</small></div>` : ''}</section>` : ''}
-      <details class="ag-science-review-details"><summary><span>${esc(t('EasyICU will handle', 'EasyICU 会自动处理'))}</span><strong>${esc(t(`${automatic.length + evidence.length} plan and evidence items`, `${automatic.length + evidence.length} 项计划修订与补证`))}</strong><em>${esc(t('No action needed now', '现在不需你处理'))}</em></summary><div class="ag-science-lanes">
+      <details class="ag-science-review-details"><summary><span>${esc(t('EasyICU will handle', 'EasyICU 会自动处理'))}</span><strong>${esc(t(`${automatic.length + evidence.length + remainder.length} plan, evidence and runtime items`, `${automatic.length + evidence.length + remainder.length} 项计划、证据与运行问题`))}</strong><em>${esc(t('No action needed now', '现在不需你处理'))}</em></summary><div class="ag-science-lanes">
         <article><div><strong>${esc(t('Plan revision', '计划修订'))}</strong><span>${esc(t(`${automatic.length} items`, `${automatic.length} 项`))}</span></div><ul>${findingList(automatic)}</ul></article>
         <article><div><strong>${esc(t('Evidence follow-up', '证据补充'))}</strong><span>${esc(t(`${evidence.length} items`, `${evidence.length} 项`))}</span></div><ul>${findingList(evidence)}</ul></article>
+        ${remainder.length ? `<article><div><strong>${esc(t('System / runtime items', '系统与运行问题'))}</strong><span>${esc(t(`${remainder.length} items`, `${remainder.length} 项`))}</span></div><ul>${findingList(remainder)}</ul></article>` : ''}
       </div></details>
       ${citationCards ? `<details class="ag-science-review-details"><summary><span>${esc(t('Methods references', '方法学依据'))}</span><strong>${esc(t(`${citations.length} references already used`, `已使用 ${citations.length} 篇方法学文献`))}</strong><em>${esc(t('Optional', '可选查看'))}</em></summary><div class="ag-science-citations">${citationCards}</div></details>` : ''}
       <p class="ag-science-review-audit">${esc(t('Raw scores, finding codes, and digest-bound details remain available in the JSON audit view.', '原始评分、问题代码和摘要绑定细节仍保留在 JSON 审计视图中。'))}</p>
@@ -943,7 +1009,7 @@
     if (role === 'auxiliary' && (kind === 'primary' || kind === 'robustness')) return 'support';
     return kind;
   }
-  function agentPlanStepTitle(step) {
+  function agentPlanStepTitle(step, labels = {}) {
     const blob = `${String(step && step.method || '')} ${String(step && step.step_id || '')}`.toLowerCase();
     const stage = agentPlanStepMethodKind(step);
     if (stage === 'figure') {
@@ -956,7 +1022,11 @@
       return t('Result figure', '结果图件');
     }
     if (stage === 'robustness') {
-      if (/spline|functional_form/.test(blob)) return t('Sensitivity · exposure functional form', '敏感性分析 · 暴露形式设定');
+      if (/spline|functional_form/.test(blob)) {
+        const target = String(step && step.functional_form_spec && step.functional_form_spec.target_column || '').trim();
+        const title = t('Sensitivity · functional form', '敏感性分析 · 函数形式');
+        return target ? `${title} · ${agentPlanVariableLabel(target, labels)}` : title;
+      }
       if (/missing|complete_case|imputation/.test(blob)) return t('Sensitivity · missing-data handling', '敏感性分析 · 缺失处理');
       if (/landmark|immortal|time/.test(blob)) return t('Sensitivity · time definition', '敏感性分析 · 时间定义');
       return t('Robustness replay', '稳健性复核');
@@ -979,7 +1049,7 @@
   function agentPlanFlowStages(steps) {
     return AGENT_PLAN_STAGES.filter(stage => steps.some(step => agentPlanStepStage(step) === stage.key));
   }
-  function agentPlanFlowMap(steps) {
+  function agentPlanFlowMap(steps, labels = {}) {
     const stages = agentPlanFlowStages(steps);
     if (!stages.length) return '';
     return `<ol class="ag-plan-flow">${stages.map((stage, position) => {
@@ -988,7 +1058,7 @@
         .filter(row => agentPlanStepStage(row.step) === stage.key);
       return `<li class="ag-plan-flow-stage is-${stage.key}">
         <div class="ag-plan-flow-head"><span class="ag-plan-flow-mark">${position + 1}</span><div><strong>${esc(stage.label())}</strong><small>${esc(stage.hint())}</small></div></div>
-        <ul class="ag-plan-flow-steps">${rows.map(row => `<li><b>${row.index + 1}</b><span>${esc(agentPlanStepTitle(row.step))}</span></li>`).join('')}</ul>
+        <ul class="ag-plan-flow-steps">${rows.map(row => `<li><b>${row.index + 1}</b><span>${esc(agentPlanStepTitle(row.step, labels))}</span></li>`).join('')}</ul>
       </li>`;
     }).join('')}</ol>`;
   }
@@ -1045,7 +1115,7 @@
       const shown = outputs.slice(0, 4);
       const hidden = outputs.length - shown.length;
       const note = agentPlanStepIntent(step);
-      const title = agentPlanStepTitle(step);
+      const title = agentPlanStepTitle(step, labels);
       const source = agentPlanStepStatedSource(step);
       return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${source ? `<p class="ag-plan-step-source"><small>${esc(t('Plan wording', '计划原文'))}</small>${esc(source)}</p>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
     }).join('');
@@ -1069,7 +1139,7 @@
       ${agentPlanGlance(steps, flowStages.length, citations.length)}
       ${gaps.length ? `<section class="ag-plan-section is-gap"><div class="ag-plan-section-head"><span>!</span><div><small>${esc(t('EasyICU must revise', 'EasyICU 需要修订'))}</small><h3>${esc(t('Why this version is not ready for approval', '为什么这一版还不能批准'))}</h3></div></div><ul>${gaps.map(value => `<li>${esc(value)}</li>`).join('')}</ul><p>${esc(t('These are Planner responsibilities. The researcher reviews the revised complete plan instead of filling these implementation details one by one.', '这些属于 Planner 的职责。研究者应审阅修订后的完整计划，而不是逐项替系统填写实现细节。'))}</p></section>` : ''}
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>01</span><div><small>${esc(t('Chosen design · plan at a glance', '设计选择 · 先看核心设定'))}</small><h3>${esc(agentPlanAnalysisLabel(selected.analysis_type || p.analysis_type))}</h3></div></div><p class="ag-plan-lead">${esc(t('Start with the target quantity, study start, follow-up, and primary method. The full rationale remains available below.', '先看要估计什么、研究从哪里开始、随访到哪里以及主要方法；完整设计理由保留在下方。'))}</p><div class="ag-plan-design-grid"><article><small>${esc(t('Target quantity', '要估计什么'))}</small>${planField('estimand', selected.estimand)}</article><article><small>${esc(t('Study start', '研究起点'))}</small>${planField('time_zero', selected.time_zero)}</article><article><small>${esc(t('Observation window', '观察范围'))}</small>${planField('observation_window', selected.observation_window)}</article><article><small>${esc(t('Primary method', '主要方法'))}</small>${planField('primary_method', selected.primary_method)}</article></div><div class="ag-plan-boundaries"><article><strong>${esc(t('What this design can answer', '这套设计能回答'))}</strong>${planField('supports', selected.supports)}</article><article><strong>${esc(t('What it cannot prove', '这套设计不能证明'))}</strong>${planField('cannot_prove', selected.cannot_prove)}</article></div></section>
-      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>02</span><div><small>${esc(t('Analysis path · workflow', '分析路径 · 分析流程'))}</small><h3>${esc(t(`${steps.length} planned steps in ${flowStages.length} stages`, `共 ${steps.length} 个步骤 · ${flowStages.length} 个阶段`))}</h3></div></div><p class="ag-plan-lead">${esc(t('Read the map first: each stage says what the run finishes before it moves on. Open the detail list only when you need the exact wording of a step.', '先看流程图：每个阶段说明这一段要做完什么，再进入下一段；需要逐条核对时再展开详细说明。'))}</p>${agentPlanFlowMap(steps)}${stepCards ? `<details class="ag-plan-step-detail"><summary>${esc(t(`Step-by-step detail · ${steps.length} steps`, `逐步说明 · 共 ${steps.length} 步`))}</summary><ol class="ag-plan-steps">${stepCards}</ol></details>` : `<ol class="ag-plan-steps"><li><span>—</span><div><strong>${esc(t('No analysis steps are present.', '尚未形成分析步骤。'))}</strong></div></li></ol>`}</section>
+      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>02</span><div><small>${esc(t('Analysis path · workflow', '分析路径 · 分析流程'))}</small><h3>${esc(t(`${steps.length} planned steps in ${flowStages.length} stages`, `共 ${steps.length} 个步骤 · ${flowStages.length} 个阶段`))}</h3></div></div><p class="ag-plan-lead">${esc(t('Read the map first: each stage says what the run finishes before it moves on. Open the detail list only when you need the exact wording of a step.', '先看流程图：每个阶段说明这一段要做完什么，再进入下一段；需要逐条核对时再展开详细说明。'))}</p>${agentPlanFlowMap(steps, labels)}${stepCards ? `<details class="ag-plan-step-detail"><summary>${esc(t(`Step-by-step detail · ${steps.length} steps`, `逐步说明 · 共 ${steps.length} 步`))}</summary><ol class="ag-plan-steps">${stepCards}</ol></details>` : `<ol class="ag-plan-steps"><li><span>—</span><div><strong>${esc(t('No analysis steps are present.', '尚未形成分析步骤。'))}</strong></div></li></ol>`}</section>
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>03</span><div><small>${esc(t('Study ingredients', '研究要素'))}</small><h3>${esc(t('Variables named in the candidate plan', '候选计划涉及的变量'))}</h3></div></div><div class="ag-plan-chips">${variableChips || `<span>${esc(t('Not yet specified', '尚未明确'))}</span>`}</div>${endpoint ? `<p class="ag-plan-note"><strong>${esc(t('Primary outcome', '主要结局'))}：</strong>${esc(agentPlanVariableLabel(endpoint.name, labels))}</p>` : ''}</section>
       ${recommendation ? `<details class="ag-plan-recommendations"><summary><span>${esc(t('Planner recommendation for review · 6 exact settings', 'Planner 推荐方案（待审阅）· 6 项具体设定'))}</span><small>${esc(t('Open when you need to inspect or change the exact definitions.', '需要逐项核对或修改时再展开。'))}</small></summary><p class="ag-plan-lead">${esc(t('EasyICU proposes these choices first; modify or approve them after review. They are not yet treated as researcher-confirmed.', '先给方案，再由你修改或批准。以下内容由 EasyICU 先行推荐，尚未视为研究者确认。'))}</p><div class="ag-plan-design-grid">${recommendationCards}</div></details>` : ''}
       <details class="ag-plan-details"><summary>${esc(t('Why this design was chosen', '查看完整设计理由'))}</summary>${planField('decision_reason', p.rationale || selected.decision_reason)}</details>
@@ -1137,11 +1207,17 @@
     const tableCard = (entry, open) => {
       const table = entry.table || {};
       const headers = Array.isArray(table.headers) ? table.headers.slice(0, 12) : [];
+      const totalRows = Array.isArray(table.rows) ? table.rows.length : 0;
       const rows = Array.isArray(table.rows) ? table.rows.slice(0, 30) : [];
-      const meta = t(
-        `${rows.length} rows · ${headers.length} columns`,
-        `${rows.length} 行 · ${headers.length} 列`,
-      );
+      const meta = rows.length < totalRows
+        ? t(
+          `${rows.length} of ${totalRows} rows · ${headers.length} columns`,
+          `${totalRows} 行中显示前 ${rows.length} 行 · ${headers.length} 列`,
+        )
+        : t(
+          `${rows.length} rows · ${headers.length} columns`,
+          `${rows.length} 行 · ${headers.length} 列`,
+        );
       return artifactTable(
         resultTableTitle(table, entry.index),
         headers,
@@ -1170,6 +1246,9 @@
     const n = String(name || '').toLowerCase();
     const p = payload && typeof payload === 'object' ? payload : {};
     const gate = p.gate && typeof p.gate === 'object' ? p.gate : p;
+    if (n === 'manuscript_draft.json' && p.reader && p.reader.schema_version === 'easyicu.manuscript-provenance/1') {
+      return manuscriptProvenanceView(p.reader);
+    }
     if (String(p.schema_version || '') === 'easyicu.manuscript-provenance/1') {
       return manuscriptProvenanceView(p);
     }

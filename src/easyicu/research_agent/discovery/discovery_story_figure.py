@@ -284,7 +284,12 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 def _has_blocked_outcome_gate(root: Path) -> bool:
     for path in root.glob("steps/*/outputs/step_summary.json"):
-        payload = _load_json(path)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("step summary must be an object")
+        except Exception as exc:
+            raise ValueError(f"Cannot assess discovery outcome gate: {path}") from exc
         if (
             payload.get("primary_analysis_authorized") is False
             or payload.get("grouped_death_analysis_executed") is False
@@ -298,8 +303,8 @@ def _has_blocked_outcome_gate(root: Path) -> bool:
         try:
             if "blocked" in path.read_text(encoding="utf-8").lower():
                 return True
-        except Exception:
-            continue
+        except Exception as exc:
+            raise ValueError(f"Cannot assess discovery outcome gate: {path}") from exc
     return False
 
 

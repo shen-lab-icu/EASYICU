@@ -12,6 +12,7 @@ from ...authority.current_case_scientific_runtime import (
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from ...authority.rmst_runtime import RmstRuntimeAuthority
 from ...authority.time_varying_runtime import TimeVaryingRuntimeAuthority
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
@@ -49,7 +50,6 @@ from .audit_panel_executor import (
     audit_panel_executor_owns_step,
 )
 from .cohort_flow_figure_executor import (
-    COHORT_FLOW_INPUT,
     cohort_flow_figure_executor_code,
     cohort_flow_figure_executor_owns_step,
 )
@@ -61,6 +61,9 @@ from .composite_descriptive_figure_executor import (
     composite_descriptive_figure_consumed_input_keys,
     composite_descriptive_figure_executor_code,
     composite_descriptive_figure_executor_owns_step,
+)
+from .phenotype_comparison_executor import (
+    phenotype_comparison_executor_code, phenotype_comparison_executor_owns_step,
 )
 from .cross_sectional_phenotyping_executor import (
     PHENOTYPING_ANALYSIS_KIND,
@@ -146,6 +149,11 @@ from .landmark_spline_functional_form_executor import (
     landmark_spline_functional_form_executor_code,
     landmark_spline_functional_form_executor_owns_step,
 )
+from .primary_population_descriptive import (
+    PRIMARY_POPULATION_RISK,
+    primary_population_risk_code,
+    primary_population_risk_owns_step,
+)
 from .landmark_spline_robustness_executor import (
     LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
     landmark_spline_robustness_executor_code,
@@ -216,6 +224,10 @@ from .survival_primary_executor import (
     survival_primary_executor_verdict,
 )
 from .table_one_executor import table_one_executor_code, table_one_executor_owns_step
+from .rmst_executor import (
+    RMST_CONTRAST_ANALYSIS_KIND,
+    rmst_executor_code,
+)
 from .time_varying_executor import time_varying_executor_code
 from .trajectory_scientific_candidate_executor import (
     SCIENTIFIC_CANDIDATE_INPUTS,
@@ -294,6 +306,13 @@ def _build_registry() -> StepExecutorRegistry:
             applicable=lambda c: isinstance(
                 c.current_case_scientific_runtime_authority,
                 AssociationModelGridRuntimeAuthority,
+            ) or (
+                isinstance(
+                    c.current_case_scientific_runtime_authority,
+                    LandmarkCategoricalAssociationRuntimeAuthority,
+                )
+                and c.current_case_scientific_runtime_authority.association_model_grid
+                is not None
             ),
             owns=lambda c: association_model_grid_executor_owns_step(
                 c.step,
@@ -312,7 +331,14 @@ def _build_registry() -> StepExecutorRegistry:
             progress_message="Using verified adjusted-association model-grid adapter",
             consumed_input_keys=lambda c: (
                 c.current_case_scientific_runtime_authority.cohort_product,
-                c.current_case_scientific_runtime_authority.parent_product,
+                (
+                    c.current_case_scientific_runtime_authority.parent_product
+                    if isinstance(
+                        c.current_case_scientific_runtime_authority,
+                        AssociationModelGridRuntimeAuthority,
+                    )
+                    else c.current_case_scientific_runtime_authority.primary_product
+                ),
             ),
         ),
         StepExecutor(
@@ -429,6 +455,27 @@ def _build_registry() -> StepExecutorRegistry:
             consumed_input_keys=lambda c: c.typed_cohort_inputs(),
         ),
         StepExecutor(
+            key=RMST_CONTRAST_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                RmstRuntimeAuthority,
+            ),
+            owns=lambda c: (
+                c.current_case_scientific_runtime_authority.governed_step(c.plan)
+                == c.step
+            ),
+            render=lambda c: rmst_executor_code(
+                c.step,
+                authority=c.current_case_scientific_runtime_authority,
+                runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=RMST_CONTRAST_ANALYSIS_KIND,
+            selection_reason="reviewed_rmst_contrast_preflight",
+            progress_message="Using the reviewed RMST contrast executor",
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
+        ),
+        StepExecutor(
             key=LANDMARK_SPLINE_ANALYSIS_KIND,
             applicable=lambda c: isinstance(
                 c.current_case_scientific_runtime_authority,
@@ -463,6 +510,7 @@ def _build_registry() -> StepExecutorRegistry:
             ),
             render=lambda c: landmark_spline_robustness_executor_code(
                 c.step,
+                plan=c.plan,
                 authority=c.current_case_scientific_runtime_authority,
                 runtime_projection_sha256=c.scientific_runtime_projection_sha256,
             ),
@@ -491,11 +539,18 @@ def _build_registry() -> StepExecutorRegistry:
             ),
             analysis_kind=LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
             selection_reason="signed_landmark_spline_functional_form_preflight",
-            progress_message="Using signed landmark spline functional-form projection",
-            consumed_input_keys=lambda c: (
-                c.current_case_scientific_runtime_authority.downstream_parent_product,
-                c.current_case_scientific_runtime_authority.linear_sensitivity_product,
-            ),
+            progress_message="Using target-bound landmark spline functional-form comparison",
+            consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
+        ),
+        StepExecutor(
+            key=PRIMARY_POPULATION_RISK,
+            applicable=lambda c: isinstance(c.current_case_scientific_runtime_authority, (LandmarkSplineRuntimeAuthority, LandmarkCategoricalAssociationRuntimeAuthority)),
+            owns=lambda c: primary_population_risk_owns_step(c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority),
+            render=lambda c: primary_population_risk_code(c.step, authority=c.current_case_scientific_runtime_authority, runtime_projection_sha256=c.scientific_runtime_projection_sha256, plausibility_scope=c.plausibility_scope),
+            analysis_kind=PRIMARY_POPULATION_RISK,
+            selection_reason="primary_population_descriptive_preflight",
+            progress_message="Using the bound primary model population for descriptive risk",
+            consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
         ),
         StepExecutor(
             key=SOURCE_FEASIBILITY_ANALYSIS_KIND,
@@ -560,6 +615,15 @@ def _build_registry() -> StepExecutorRegistry:
             consumed_input_keys=lambda c: (
                 cross_sectional_phenotyping_consumed_input_keys(c.step)
             ),
+        ),
+        StepExecutor(
+            key="phenotype_comparison",
+            owns=lambda c: phenotype_comparison_executor_owns_step(c.step),
+            render=lambda c: phenotype_comparison_executor_code(c.step),
+            analysis_kind="phenotype_comparison",
+            selection_reason="source_bound_phenotype_comparison_contract",
+            progress_message="Describing clinical features and outcomes by frozen cluster",
+            consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
         ),
         StepExecutor(
             key="descriptive_cohort_summary",
@@ -635,7 +699,9 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind="robustness_figure",
             selection_reason="robustness_figure_contract_preflight",
             progress_message="Using planner-scoped robustness figure executor",
-            consumed_input_keys=lambda c: robustness_figure_consumed_input_keys(c.step),
+            consumed_input_keys=lambda c: robustness_figure_consumed_input_keys(
+                c.resolved_bindings
+            ),
             host_sealed_renderer=True,
             blocks_on_plausibility_receipt=True,
         ),
@@ -682,7 +748,7 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind="cohort_flow_figure",
             selection_reason="cohort_flow_figure_contract_preflight",
             progress_message="Using digest-bound cohort-flow renderer",
-            consumed_input_keys=lambda _c: (COHORT_FLOW_INPUT,),
+            consumed_input_keys=lambda c: tuple(c.step.inputs),
             host_sealed_renderer=True,
             blocks_on_plausibility_receipt=True,
         ),

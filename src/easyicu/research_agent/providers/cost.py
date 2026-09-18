@@ -584,6 +584,7 @@ class MeteredClient:
                 }
                 if structured_output is not None:
                     kwargs["structured_output"] = structured_output
+                # 内部直调由外层authorized_complete授权 (inner dispatch, not a bypass).
                 result = self._inner.complete(messages, **kwargs)
                 # A shared ``last_usage`` attribute is not call-scoped and cannot be
                 # read safely under concurrent role calls. Legacy providers use the

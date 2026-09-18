@@ -28,6 +28,7 @@ import pytest
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.providers.protocol import LLMMessage
 from easyicu.research_agent.providers.structured_retry import (
+    StructuredResponseFailure,
     call_llm_with_structured_retry,
 )
 
@@ -59,8 +60,15 @@ def _run(responses, parser):
             role="planner",
             max_retries=1,
         )
-    except Exception:
+    except (StructuredResponseFailure, ValueError):
+        # E-P2-7: narrowed from bare ``except Exception: pass`` — retry
+        # exhaustion surfaces as StructuredResponseFailure (wrapping the
+        # parser's ValueError), and the helper intentionally inspects the
+        # mock afterwards.  Anything else is a real failure, not an
+        # expected rejection.
         pass
+    except Exception as exc:  # pragma: no cover - defensive
+        pytest.fail(f"unexpected retry-exhaustion type: {type(exc).__name__}: {exc}")
     return llm
 
 

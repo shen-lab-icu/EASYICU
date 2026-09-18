@@ -16,18 +16,24 @@ from ..contracts.step_families import (
     effect_output_authorized,
 )
 from ..contracts.table_one import table_one_output_findings
-from ..planning.figure_plan_mutation import _effect_figure_source_authorized
-from ..planning.figure_step_contract import _output_declares_figure
-from ..scalar_utils import _first_numeric_scalar_with_key_fragment, _first_present_scalar, _flatten_scalar_dict
+from ..contracts.phenotype_comparison import phenotype_comparison_output_findings
+from ..planning.figure_plan_mutation import effect_figure_source_authorized
+from ..planning.figure_step_contract import output_declares_figure
+from ..scalar_utils import (
+    first_numeric_scalar_with_key_fragment,
+    first_present_scalar,
+    flatten_scalar_dict,
+)
 from ..schema import AnalysisStep, ResearchContext, ValidationFinding
 from .step_result_evidence import (
-    _cluster_count_from_summary,
-    _cluster_selection_evidence_key,
-    _clustering_evidence_from_completed_records,
-    _prediction_auroc_from_completed_records,
-    _prediction_calibration_from_completed_records,
-    _primary_effect_from_summary,
-    _problematic_metric_keys,
+    cluster_count_from_summary as _cluster_count_from_summary,
+    cluster_selection_evidence_key as _cluster_selection_evidence_key,
+    clustering_evidence_from_completed_records as _clustering_evidence_from_completed_records,
+    prediction_auroc_from_completed_records as _prediction_auroc_from_completed_records,
+    prediction_calibration_from_completed_records as _prediction_calibration_from_completed_records,
+    primary_effect_from_summary as _primary_effect_from_summary,
+    problematic_metric_keys as _problematic_metric_keys,
+    semantic_stub_injection_findings,
 )
 
 def _step_contract_findings(
@@ -39,6 +45,7 @@ def _step_contract_findings(
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     step_record: Optional[Mapping[str, Any]] = None,
     effect_output_is_authorized: Optional[bool] = None,
+    semantic_stub_injected: Optional[str] = None,
     out_dir: Optional[Path] = None,
     trajectory_role_contract_applies: bool = True,
 ) -> List[ValidationFinding]:
@@ -56,6 +63,11 @@ def _step_contract_findings(
         ]
 
     findings: List[ValidationFinding] = []
+    findings.extend(
+        semantic_stub_injection_findings(
+            step=step, semantic_stub_injected=semantic_stub_injected
+        )
+    )
     reported_status = str(step_summary.get("status") or "").strip().lower()
     if is_failed_step_status(reported_status):
         findings.append(
@@ -88,6 +100,10 @@ def _step_contract_findings(
         )
     )
     findings.extend(table_one_output_findings(step=step, out_dir=out_dir))
+    findings.extend(phenotype_comparison_output_findings(
+        step=step, step_summary=step_summary, context=context,
+        resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
+    ))
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.
     # ``04_primary_association_figure`` / ``01_model_training_figure``. Their
@@ -98,9 +114,9 @@ def _step_contract_findings(
     # render-only step that legitimately has no such fields in its summary.
     figure_only_step = (
         bool(step.expected_outputs)
-        and any(_output_declares_figure(out) for out in step.expected_outputs)
+        and any(output_declares_figure(out) for out in step.expected_outputs)
         and all(
-            _output_declares_figure(out) or _output_declares_auxiliary_log(out)
+            output_declares_figure(out) or _output_declares_auxiliary_log(out)
             for out in step.expected_outputs
         )
     )
@@ -111,7 +127,7 @@ def _step_contract_findings(
             effect_method_authorized=effect_output_authorized(
                 step, step_record=step_record
             ) if effect_output_is_authorized is None else effect_output_is_authorized,
-            effect_figure_source_authorized=_effect_figure_source_authorized(
+            effect_figure_source_authorized=effect_figure_source_authorized(
                 step=step,
                 completed_step_records=completed_step_records,
                 resolved_input_bindings=resolved_input_bindings,
@@ -232,7 +248,7 @@ def _step_contract_findings(
 
     prediction_required = not figure_only_step and _prediction_contract_applies(step)
     if prediction_required:
-        auroc_value = _first_present_scalar(
+        auroc_value = first_present_scalar(
             step_summary,
             (
                 "auroc",
@@ -251,7 +267,7 @@ def _step_contract_findings(
             ),
         )
         if auroc_value is None:
-            auroc_value = _first_numeric_scalar_with_key_fragment(
+            auroc_value = first_numeric_scalar_with_key_fragment(
                 step_summary,
                 ("auroc", "auc"),
             )
@@ -304,7 +320,7 @@ def _step_contract_findings(
                 message,
                 ("auroc", "cv_auroc", "mean_auroc", "auroc_median"),
             )
-        calibration_value = _first_present_scalar(
+        calibration_value = first_present_scalar(
             step_summary,
             (
                 "brier_score",
@@ -324,7 +340,7 @@ def _step_contract_findings(
             ),
         )
         if calibration_value is None:
-            calibration_value = _first_numeric_scalar_with_key_fragment(
+            calibration_value = first_numeric_scalar_with_key_fragment(
                 step_summary,
                 ("brier", "calibration_slope", "calibration_intercept"),
             )
@@ -482,7 +498,7 @@ def _step_contract_findings(
         if _skipped:
             return findings
         figure_value = None
-        for _key, value in _flatten_scalar_dict(step_summary).items():
+        for _key, value in flatten_scalar_dict(step_summary).items():
             lowered_value = str(value).lower()
             if (
                 lowered_value.endswith((".png", ".svg", ".pdf", ".tiff", ".tif"))
@@ -542,3 +558,20 @@ def _step_contract_findings(
             )
 
     return findings
+
+
+# --- Public cross-module alias (thin wrapper, no logic change) ---
+# Private name kept for backward compatibility; cross-owner callers must use
+# the public name below.
+
+
+def step_contract_findings(*args: object, **kwargs: object):
+    """Public alias of :func:`_step_contract_findings` (no logic change)."""
+
+    return _step_contract_findings(*args, **kwargs)  # type: ignore[arg-type]
+
+
+__all__ = [
+    "_step_contract_findings",
+    "step_contract_findings",
+]

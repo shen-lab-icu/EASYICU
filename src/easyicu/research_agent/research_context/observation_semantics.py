@@ -8,15 +8,16 @@ validators can prove from the locked frame.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import pandas as pd
 
+from ..methods.descriptive_inputs import measurement_provenance_receipt
 from ..methods.source_status import (
     reconcile_binary_event_presence,
     reconcile_conditional_event_time,
 )
-from ..schema import ConceptDescriptor, ObservationSemantics
+from ..schema import ConceptDescriptor, ObservationSemantics, VariableRole
 
 __all__ = ["compile_observation_semantics"]
 
@@ -142,9 +143,25 @@ def _positive_only_event_updates(
 def _conditional_event_time_updates(
     frame: pd.DataFrame,
     descriptors: dict[str, ConceptDescriptor],
+    event_time_bindings: Mapping[str, str],
 ) -> dict[str, ConceptDescriptor]:
+    for time_column, event_column in event_time_bindings.items():
+        if any(name not in descriptors or name not in frame.columns for name in (time_column, event_column)):
+            raise ValueError("declared conditional event-time binding has unavailable columns")
     updates: dict[str, ConceptDescriptor] = {}
     for descriptor in descriptors.values():
+        declared_event = event_time_bindings.get(descriptor.name)
+        existing = descriptor.observation_semantics
+        if declared_event and existing is not None and (
+            existing.kind != "conditional_event_time"
+            or existing.event_status_column != declared_event
+        ):
+            raise ValueError("declared event time conflicts with its verified representation")
+        observation_time = descriptor.unit_normalization in {
+            "window_first_time", "window_last_time"
+        }
+        if declared_event and observation_time:
+            raise ValueError("declared event time conflicts with an observation-time representation")
         # Native typed materialization publishes this transform explicitly.
         # Legacy export materialization predates the column sidecar but uses the
         # same closed ``<event>`` + ``<event>_time`` representation.  Accept the
@@ -165,23 +182,61 @@ def _conditional_event_time_updates(
         )
         if (
             descriptor.name not in frame.columns
-            or not (typed_event_time or legacy_event_time)
+            or not (typed_event_time or legacy_event_time or observation_time or declared_event)
         ):
             continue
         source_concept = str(descriptor.source_concept or legacy_event_base)
+        # A first/last *observation* time is conditional on observing the
+        # source, not on a clinical value happening to equal one. Both the
+        # count and availability transforms must be published and reconcile.
+        observation_status = None
+        if observation_time:
+            if not descriptor.source_concept:
+                continue
+            companions = {
+                transform: [
+                    candidate.name for candidate in descriptors.values()
+                    if candidate.source_concept == source_concept
+                    and candidate.unit_normalization == transform
+                    and candidate.name in frame.columns
+                ]
+                for transform in ("window_nonnull_count", "window_measurement_status")
+            }
+            if any(len(names) != 1 for names in companions.values()):
+                continue
+            observation_status = companions["window_measurement_status"][0]
+            try:
+                measurement_provenance_receipt(
+                    frame,
+                    measured_column=observation_status,
+                    count_column=companions["window_nonnull_count"][0],
+                )
+            except ValueError:
+                continue
         candidates = [
             candidate
             for candidate in descriptors.values()
             if candidate.name != descriptor.name
             and candidate.name in frame.columns
             and (
-                candidate.source_concept == source_concept
-                or candidate.name == legacy_event_base
+                candidate.name == declared_event
+                if declared_event
+                else candidate.name == observation_status
+                if observation_time
+                else (
+                    candidate.source_concept == source_concept
+                    or candidate.name == legacy_event_base
+                )
             )
-            and isinstance(candidate.observed_domain, dict)
-            and candidate.observed_domain.get("is_binary") is True
-            and candidate.missingness is not None
-            and candidate.missingness.n_missing == 0
+            and (
+                declared_event or observation_time
+                or (
+                    isinstance(candidate.observed_domain, dict)
+                    and candidate.observed_domain.get("is_binary") is True
+                    and candidate.missingness is not None
+                    and candidate.missingness.n_missing == 0
+                )
+            )
         ]
         candidates.sort(
             key=lambda candidate: (
@@ -190,6 +245,8 @@ def _conditional_event_time_updates(
             )
         )
         if not candidates:
+            if declared_event:
+                raise ValueError("declared event status and event time must be distinct")
             continue
         event_status_column = candidates[0].name
         try:
@@ -199,12 +256,19 @@ def _conditional_event_time_updates(
                 event_time_column=descriptor.name,
             )
         except ValueError:
+            if declared_event:
+                raise
             continue
         audit = result.audit
         raw_n_missing = int(frame[descriptor.name].isna().sum())
         note = (
             f"{descriptor.name} is applicable only when "
-            f"{event_status_column}=1; event-negative rows are not missing."
+            f"{event_status_column}=1; "
+            + (
+                "rows without a source observation are not missing observation times."
+                if observation_time
+                else "event-negative rows are not missing."
+            )
         )
         updated = _semantic_profile(
             descriptor,
@@ -232,6 +296,7 @@ def _conditional_event_time_updates(
         time_origin, separator, time_unit = relative_time.rpartition(" in ")
         updates[descriptor.name] = updated.model_copy(
             update={
+                "role": VariableRole.TIME if declared_event else updated.role,
                 "observation_semantics": ObservationSemantics(
                     kind="conditional_event_time",
                     event_status_column=event_status_column,
@@ -250,11 +315,15 @@ def compile_observation_semantics(
     *,
     frame: pd.DataFrame,
     descriptors: Sequence[ConceptDescriptor],
+    event_time_bindings: Mapping[str, str] | None = None,
 ) -> list[ConceptDescriptor]:
     """Return descriptors enriched only by mechanically verified semantics."""
 
     by_name = {descriptor.name: descriptor for descriptor in descriptors}
     updates = _positive_only_event_updates(frame, by_name)
     by_name.update(updates)
-    updates.update(_conditional_event_time_updates(frame, by_name))
+    updates.update(_conditional_event_time_updates(frame, by_name, {}))
+    if event_time_bindings:
+        by_name.update(updates)
+        updates.update(_conditional_event_time_updates(frame, by_name, event_time_bindings))
     return [updates.get(descriptor.name, descriptor) for descriptor in descriptors]

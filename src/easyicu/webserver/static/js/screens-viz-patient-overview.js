@@ -1,3 +1,4 @@
+/* Owner: Patient Review overview widget. */
 (function () {
   function fallbackEsc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({

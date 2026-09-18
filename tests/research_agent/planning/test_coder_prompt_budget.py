@@ -1213,7 +1213,7 @@ def test_initial_prompt_compacts_non_consumed_source_concept_companions(ra):
         assert f"declared_family_{family}_n" not in payload
         assert f"declared_family_{family}_measured" not in payload
         assert f'"source_concept":"declared_family_{family}"' in payload
-    assert '"schema":"easyicu.outbound_safe_context/1"' in payload
+    assert '"schema":"easyicu.outbound_safe_context/2"' in payload
 
 
 def test_initial_prompt_projection_stays_under_transport_gate_without_dropping_contracts(
@@ -1417,7 +1417,7 @@ def test_patch_prompt_uses_compact_authority_context_under_transport_gate(ra):
     assert repaired.startswith("import os\nvalue = 2")
     assert _payload_bytes(messages) <= 30_000
     assert "COMPACT STEP AUTHORITY CONTEXT" in payload
-    assert '"schema":"easyicu.outbound_safe_context/1"' in payload
+    assert '"schema":"easyicu.outbound_safe_context/2"' in payload
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in payload
     for family in range(4):
         assert f'"name":"declared_family_{family}_measured"' in payload
@@ -2394,7 +2394,7 @@ def test_scientific_semantics_repair_keeps_planner_science_authority(ra):
     assert repaired == "import os\nvalue = 2"
     assert "COMPLETE PREVIOUS SCRIPT" in rewrite_payload
     for payload in (patch_payload, rewrite_payload):
-        assert '"schema":"easyicu.outbound_safe_context/1"' in payload
+        assert '"schema":"easyicu.outbound_safe_context/2"' in payload
         assert '"inclusion_criteria"' not in payload
         assert '"exclusion_criteria"' not in payload
         assert '"inclusion_contract":["adult ICU stays"]' in payload

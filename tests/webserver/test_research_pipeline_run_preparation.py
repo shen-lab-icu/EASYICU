@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import inspect
 
 import pytest
@@ -206,6 +206,22 @@ def test_candidate_plan_projects_preconfirmed_patient_grouping_metadata(
     assert scientific.patient_grouping is grouping
 
 
+def test_candidate_plan_binds_question_operation_without_mutating_study() -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    study = {
+        "id": "study-1",
+        "question": "研究成人 ICU 患者前24小时最高乳酸与院内死亡",
+        "data_source": {"database": "miiv"},
+    }
+    request = replace(_request(), study_context=study)
+    result = preparation._prepare_scientific_launch(request)
+    assert result.metadata_only_planning is True
+    assert result.metadata_planning_coordinates["primary_exposure_aggregation"] == "max"
+    assert "lact_max" in result.metadata_operationalized_columns
+    assert "execution_concepts" not in study
+
+
 def test_preparation_compiles_three_frozen_states_in_authority_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -271,7 +287,39 @@ def test_public_preparation_interface_does_not_expose_primitive_operations() -> 
     assert tuple(signature.parameters) == ("request",)
     assert len(inspect.signature(PreparedScientificLaunch).parameters) < 22
     assert len(inspect.signature(PreparedLaunchAuthority).parameters) == 6
-    assert len(inspect.signature(PreparedLaunchExecution).parameters) == 9
+    assert len(inspect.signature(PreparedLaunchExecution).parameters) == 11
+    # Restored mode and planning constraint travel as one immutable owner value,
+    # not additional adapter-controlled primitive arguments.
+    assert "development_resume_scope" in inspect.signature(PreparedLaunchExecution).parameters
+
+
+@pytest.mark.parametrize("overrides", [
+    {"budget_mode": "full_reviewed"},
+    {"development_resume_source_job_id": "job-old"},
+    {"execution_resume_source_run_id": "run-old"},
+    {"plan_revision_source_run_id": "run-old"},
+])
+def test_direct_launch_rejects_amendments_before_runtime_or_provider(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict,
+) -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+    from easyicu.webserver.plan_change_request import PlanChangeRequest
+    from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+
+    change = PlanChangeRequest(source_run_id="run-1", user_message="Revise the plan.")
+    request = replace(_request(), plan_change_request=change, **overrides)
+    scientific = replace(_scientific(), metadata_only_planning=request.budget_mode == "planner_canary")
+    monkeypatch.setattr(
+        preparation, "_development_progressive_resume_binding",
+        lambda **_kwargs: pytest.fail("No checkpoint may be opened for new amendments"),
+    )
+    monkeypatch.setattr(
+        preparation, "_require_execution_runtime",
+        lambda **_kwargs: pytest.fail("Reject before runtime work"),
+    )
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        preparation._prepare_launch_execution(request, scientific, object())
+    assert raised.value.code == "plan_changes_require_fresh_candidate"
 
 
 def test_preparation_has_no_reverse_private_seam_into_pipeline_caller() -> None:

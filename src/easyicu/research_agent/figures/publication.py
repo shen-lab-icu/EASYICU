@@ -253,6 +253,20 @@ class FigureContract(BaseModel):
     source_data: List[str] = Field(default_factory=list)
     statistics_note: Optional[str] = None
     image_integrity_note: Optional[str] = None
+    reader_caption: Optional[str] = Field(
+        default=None, min_length=1, max_length=4000,
+        exclude_if=lambda value: value is None,
+        description="Source-bound plain-text legend, including panel marks and statistical limits.",
+    )
+
+    @field_validator("reader_caption")
+    @classmethod
+    def _reader_caption_plain_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            value = value.strip()
+            if not value or any(ord(character) < 32 for character in value):
+                raise ValueError("reader_caption must be nonempty plain text without control characters")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -315,13 +329,39 @@ PALETTE_CLINICAL: Dict[str, str] = {
     "blue": "#0F4D92",
     "blue_soft": "#B4C0E4",
     "teal": "#42949E",
+    # Every series colour carries a soft twin, because the figure rule the
+    # Coder is told is "take fills from the _soft keys". Two soft entries out
+    # of four series colours made that rule a trap: a generated four-panel
+    # article figure followed it literally and died with
+    # ``KeyError: 'orange_soft'`` at 1.7 s, which failed the step closed and
+    # suppressed every deterministic renderer behind it (measured 2026-09-12).
+    "teal_soft": "#C7DFE1",
     "orange": "#E28E2C",
+    "orange_soft": "#F7DFC0",
     "red": "#B64342",
     "red_soft": "#F6CFCB",
     "neutral": "#8F8F8F",
     "neutral_light": "#D8D8D8",
     "band": "#F3F0EA",
 }
+
+#: The colours a series may be drawn in. A fill twin is required for each.
+SERIES_PALETTE_COLOURS: tuple[str, ...] = ("blue", "orange", "teal", "red")
+
+
+class PublicationPalette(Dict[str, str]):
+    """Palette whose unknown key names the choices it was rejecting.
+
+    A bare ``KeyError: 'x'`` in a sandbox log tells the Coder only that
+    something was wrong, so it guesses again; the key list is host-authored and
+    costs nothing to show.
+    """
+
+    def __missing__(self, key: str) -> str:
+        raise KeyError(
+            f"{key!r} is not a publication palette key; use one of: "
+            + ", ".join(sorted(self))
+        )
 
 
 def _normalise_statistics_note(
@@ -514,6 +554,7 @@ def make_figure_contract(
     source_data: Optional[Sequence[str]] = None,
     statistics_note: Optional[str | Sequence[str]] = None,
     image_integrity_note: Optional[str] = None,
+    reader_caption: Optional[str] = None,
     title: Optional[str] = None,
     claim: Optional[str] = None,
     source_evidence: Optional[Sequence[str] | Mapping[str, str]] = None,
@@ -561,6 +602,7 @@ def make_figure_contract(
         "source_data": source_data,
         "statistics_note": statistics_note,
         "image_integrity_note": image_integrity_note,
+        "reader_caption": reader_caption,
         "title": title,
         "claim": claim,
         "source_evidence": source_evidence,
@@ -619,6 +661,7 @@ def make_figure_contract(
         source_data=source_data_value,
         statistics_note=stats_note_value,
         image_integrity_note=merged.get("image_integrity_note", image_integrity_note),
+        reader_caption=merged.get("reader_caption"),
     )
 
 
@@ -720,7 +763,7 @@ def apply_publication_style(
         "savefig.facecolor": "white",
     })
     _ = fig
-    return dict(palette or PALETTE_CLINICAL)
+    return PublicationPalette(palette or PALETTE_CLINICAL)
 
 
 def add_panel_label(

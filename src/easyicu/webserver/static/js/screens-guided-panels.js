@@ -1,3 +1,4 @@
+/* Owner: Guided side-panel state widget. */
 /* Guided Copilot shell side-panel state.
    Owns the right research-progress panel collapse state and controls. */
 (function () {

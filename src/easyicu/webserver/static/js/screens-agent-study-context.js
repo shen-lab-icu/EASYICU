@@ -111,8 +111,11 @@
   }
 
   function store() { return window.EU_STUDY_CONTEXT || null; }
+  // D-P2-1: defensive label projection — a bundle without product-labels.js
+  // must still render bounded raw text instead of throwing.
   function projectTitle(value, fallback) {
-    return window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
+    return window.EU_PRODUCT_LABELS?.projectTitle?.(value, fallback)
+      ?? String(value ?? fallback ?? '').slice(0, 200);
   }
   function legacyProjectFallback(context) {
     const id = String((context && context.id) || '').trim();

@@ -1,3 +1,4 @@
+/* Owner: chat composer keyboard contract widget. */
 /* Shared chat-composer keyboard contract for Guided Copilot and its fallback. */
 (function () {
   'use strict';

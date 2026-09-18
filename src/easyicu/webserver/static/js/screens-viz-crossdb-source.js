@@ -1,3 +1,4 @@
+/* Owner: Cross-DB source choice widget. */
 /* Cross-DB source choice owner: official demo pair, registered exports, or raw ICU roots. */
 (function () {
   'use strict';

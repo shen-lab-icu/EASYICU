@@ -115,12 +115,12 @@ def _render_cross_database_comparison_markdown(rows: Sequence[Dict[str, Any]]) -
     lines = [
         "# Cross-database effect comparison",
         "",
-        "| database | run_id | predictor | primary_or | ci_low | ci_high | status |",
-        "|---|---|---|---:|---:|---:|---|",
+        "| database | run_id | predictor | primary_or | ci_low | ci_high | ci_source | status |",
+        "|---|---|---|---:|---:|---:|---|---|",
     ]
     for row in rows:
         lines.append(
-            "| {database} | {run_id} | {predictor} | {primary_or} | {primary_ci_low} | {primary_ci_high} | {status} |".format(
+            "| {database} | {run_id} | {predictor} | {primary_or} | {primary_ci_low} | {primary_ci_high} | {ci_source} | {status} |".format(
                 database=row.get("database", ""),
                 run_id=row.get("run_id", ""),
                 predictor=row.get("predictor", "") or "",
@@ -139,6 +139,7 @@ def _render_cross_database_comparison_markdown(rows: Sequence[Dict[str, Any]]) -
                     if row.get("primary_ci_high") is not None
                     else ""
                 ),
+                ci_source=row.get("ci_source", "") or "",
                 status=row.get("status", ""),
             )
         )

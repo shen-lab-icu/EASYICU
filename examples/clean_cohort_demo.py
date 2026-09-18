@@ -10,7 +10,8 @@ evaluate the quality of the generated manuscript end-to-end.
 
 Usage::
 
-    export OPENROUTER_API_KEY='sk-or-v1-...'
+    # 占位 key 示例，勿提交真key到仓库；运行时从环境变量读取真 key。
+    export OPENROUTER_API_KEY='sk-or-v1-PLACEHOLDER'
     export OPENROUTER_BASE_URL='https://openrouter.ai/api/v1'
     export EASYICU_HOSTED_DEFAULT_MODEL='openai/gpt-oss-120b:free'
     export EASYICU_ALLOW_EXTERNAL_LLM=1

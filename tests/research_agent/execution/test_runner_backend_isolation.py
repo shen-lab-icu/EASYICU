@@ -24,6 +24,13 @@ def _simulate_host_backend_probe(
         return None
 
     monkeypatch.setattr(runner_module.shutil, "which", fake_which)
+    # The resolver also probes standard local install locations without going
+    # through shutil.which, so a simulated "Docker is not installed" host has to
+    # close that door too; otherwise the probe result depends on the developer
+    # machine running the suite rather than on the scenario named here.
+    from easyicu.research_agent.execution import docker_locality
+
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", ())
     monkeypatch.setattr(
         runner_module.subprocess,
         "run",

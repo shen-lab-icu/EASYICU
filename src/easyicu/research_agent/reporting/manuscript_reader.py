@@ -1,0 +1,94 @@
+"""Assemble the existing numeric reader, exact-plan tables and cited metadata.
+
+This is a display projection, not a Writer, statistical executor or literature
+review. Callers supply current evidence membership and source-bound inputs.
+"""
+
+from dataclasses import asdict
+import re
+from typing import Any, Mapping, Sequence
+
+from ..literature import LiteratureBundle, manuscript_citable_records
+from ..bibliographic_metadata import complete_missing_authors
+from ..schema import AnalysisPlan, EvidenceRecord
+from .manuscript_provenance import ManuscriptProvenanceError, build_manuscript_provenance
+from .manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
+from .manuscript_figures import ManuscriptFigureProjectionError, build_manuscript_figures
+
+
+def refresh_reader_bibliography(payload: Any) -> Any:
+    """Project verified missing author metadata without rewriting a saved reader.
+
+    Existing reference membership, manuscript digests, claims, numbers and
+    publication permissions are unchanged. This is not literature admission.
+    """
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != "easyicu.manuscript-provenance/1":
+        return payload
+    references = payload.get("references")
+    if not isinstance(references, list):
+        return payload
+    projected = []
+    for row in references:
+        if not isinstance(row, Mapping):
+            projected.append(row)
+            continue
+        reference, receipt = complete_missing_authors(row)
+        if receipt is not None:
+            reference["metadata_source"] = receipt
+        projected.append(reference)
+    return {**payload, "references": projected}
+
+
+def build_manuscript_reader(
+    *,
+    manuscript: str,
+    evidence: Any,
+    plan: AnalysisPlan | None = None,
+    literature: LiteratureBundle | None = None,
+    evidence_records: Sequence[EvidenceRecord] | None = None,
+    binding_map: Mapping | None = None,
+) -> dict[str, Any]:
+    """Keep source numbers unchanged and order references by first citation."""
+
+    payload = build_manuscript_provenance(
+        manuscript=manuscript, evidence=evidence, binding_map=binding_map,
+    )
+    try:
+        tables = build_manuscript_tables(
+            plan=plan,
+            evidence_records=evidence.records() if evidence_records is None else evidence_records,
+            run_dir=evidence.root,
+        ) if plan is not None else ()
+    except ManuscriptTableProjectionError as exc:
+        raise ManuscriptProvenanceError(str(exc)) from exc
+    payload["tables"] = [
+        {"label": f"Table {index}", **asdict(table)}
+        for index, table in enumerate(tables, 1)
+    ]
+    try:
+        gallery = build_manuscript_figures(
+            evidence_records=evidence.records() if evidence_records is None else evidence_records,
+            run_dir=evidence.root,
+        )
+    except ManuscriptFigureProjectionError as exc:
+        raise ManuscriptProvenanceError(str(exc)) from exc
+    payload["figure_context"] = list(gallery.context_notes)
+    references = []
+    if literature is not None:
+        records = manuscript_citable_records(literature)
+        by_key = {record.key: record for record in records}
+        if len(by_key) != len(records):
+            raise ManuscriptProvenanceError("Ambiguous manuscript citation identity")
+        keys = dict.fromkeys(
+            key for block in re.findall(r"\[@[^\[\]\n]+\]", manuscript)
+            for key in re.findall(r"@([A-Za-z0-9_.:-]+)", block)
+        )
+        for number, key in enumerate(keys, 1):
+            if key not in by_key:
+                raise ManuscriptProvenanceError(f"Manuscript citation is not citable: {key}")
+            reference, metadata_source = complete_missing_authors(by_key[key].model_dump(mode="json"))
+            if metadata_source is not None:
+                reference["metadata_source"] = metadata_source
+            references.append({"number": number, **reference})
+    payload["references"] = references
+    return payload

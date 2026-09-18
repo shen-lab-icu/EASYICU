@@ -229,7 +229,7 @@ def setup_src_data(
         data_dir: Directory for data storage
         force: If True, force re-download and re-import
     """
-    from .download import download_src
+    from .download import DownloadError, download_src
     from .import_data import import_src
 
     config = registry.get(source_name)
@@ -237,9 +237,13 @@ def setup_src_data(
 
     LOGGER.info(f"Setting up data source '{source_name}'")
 
-    # Download if needed
+    # Download if needed: typed download failures propagate to the caller
+    # instead of being swallowed here (import/attach would otherwise fail
+    # later with an unrelated error).
     try:
         download_src(config, data_dir, force=force)
+    except DownloadError:
+        raise
     except Exception as e:
         LOGGER.warning(f"Download failed or skipped: {e}")
 

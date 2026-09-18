@@ -1,4 +1,4 @@
-"""User-owned adjustment-set authority for analysis planning.
+"""Origin-aware adjustment-set authority for analysis planning.
 
 Owner
 -----
@@ -52,7 +52,7 @@ class AdjustmentAuthorityError(ValueError):
 
 @dataclass(frozen=True)
 class AdjustmentSetAuthority:
-    """Immutable projection of the user-owned adjustment-set decision."""
+    """Immutable projection of the exact roster and its declared author."""
 
     selection: Literal["planner_selectable", "exact"]
     covariates: tuple[str, ...]
@@ -117,6 +117,30 @@ class AdjustmentSetAuthority:
     def operational_temporal_roles(self) -> dict[str, str]:
         mapping = dict(self.operationalizations)
         return {mapping.get(name, name): value for name, value in self.temporal_roles}
+
+    def prompt_projection(self) -> dict[str, Any]:
+        """Preserve authorship wherever a bound adjustment set is described.
+
+        Exactness is a constraint on the roster, not evidence that the user
+        authored it or that a plan-review action has occurred.
+        """
+
+        if self.selection != "exact":
+            boundary = "Planner-selectable; available variables are not user-specified covariates."
+        elif self.authority == "agent_plan":
+            boundary = "Agent-selected, not user-specified; describe this as the Agent's proposed adjustment set."
+        elif self.authority == "user":
+            boundary = "User-authored adjustment set; preserve the exact roster."
+        else:
+            boundary = "Authorship is unrecorded; do not infer user or Agent authorship."
+        return {
+            "selection": self.selection,
+            "authority": self.authority or "unrecorded",
+            "scientific_covariates": list(self.covariates),
+            "operational_covariates": list(self.operational_covariates),
+            "operationalizations": dict(self.operationalizations),
+            "authorship_boundary": boundary + " This binding is not a plan-approval receipt.",
+        }
 
     def validate_plan(self, plan: Any) -> None:
         """Require every declared fitted model to honor an exact roster.

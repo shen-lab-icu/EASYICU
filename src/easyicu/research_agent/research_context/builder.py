@@ -15,11 +15,14 @@ concept dictionary.
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from ..icu_rules import (
     ICU_RULES,
@@ -363,6 +366,7 @@ def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
         "name": "little_mcar_em",
         "p_value": p_value,
         "note": f"panel={panel.shape[1]}vars/{len(panel)}rows complete_cases={len(complete)}",
+        "columns": list(panel.columns),
     }
 
 
@@ -520,6 +524,17 @@ def _apply_legacy_materialization_window(
     concept-catalog or typed-authority windows always take precedence.
     """
 
+    from easyicu.concept.metadata_projection import (
+        ConceptColumnRole,
+        describe_column_representation,
+    )
+
+    companion_representations = {
+        "_n": (ConceptColumnRole.COUNT, "window_nonnull_count"),
+        "_measured": (ConceptColumnRole.MEASUREMENT_STATUS, "window_measurement_status"),
+        "_first_time": (ConceptColumnRole.FIRST_OBSERVATION_TIME, "window_first_time"),
+        "_last_time": (ConceptColumnRole.LAST_OBSERVATION_TIME, "window_last_time"),
+    }
     window = provenance["cohort_window_hours"]
     start, end = float(window[0]), float(window[1])
     window_label = f"icu_admission[{start:g},{end:g}]h"
@@ -540,11 +555,25 @@ def _apply_legacy_materialization_window(
         if base is None or base not in feature_concepts:
             projected.append(descriptor)
             continue
+        representation_updates: Dict[str, Any] = {}
+        if suffix in companion_representations and not descriptor.unit_normalization:
+            physical_role, transform = companion_representations[suffix]
+            representation_updates = {
+                "source_concept": base,
+                "unit_normalization": transform,
+                "description": describe_column_representation(
+                    descriptor.description, source_concept=base, role=physical_role,
+                ),
+            }
         projected.append(
             descriptor.model_copy(
                 update={
                     "analysis_window": window_label,
                     "analysis_window_role": "outer_observation_window",
+                    # Only the verified feature roster plus materializer's
+                    # exact representation name grants this transform. A
+                    # count, flag or timestamp is not the source score/value.
+                    **representation_updates,
                 }
             )
         )
@@ -750,7 +779,6 @@ def build_research_context(
     # --- per-column descriptors
     descriptors: List[ConceptDescriptor] = []
     user_descriptions = dict(concept_descriptions or {})
-    missingness_test_meta = _compute_missingness_test_metadata(df)
     for col in df.columns:
         descriptors.append(
             _describe_column(
@@ -760,8 +788,18 @@ def build_research_context(
                 id_columns=episode.id_columns,
                 time_columns=episode.time_columns,
                 outcome_columns=episode.outcome_columns,
-                missingness_test_meta=missingness_test_meta,
             )
+        )
+    degraded_columns = sorted(
+        descriptor.name for descriptor in descriptors if descriptor.concept_enrichment_degraded
+    )
+    if degraded_columns:
+        # Formal path: enrichment loss is visible downstream via the per-column
+        # flag, and is also surfaced here as a warning (not silent).
+        logger.warning(
+            "concept_enrichment_degraded for %d column(s): %s",
+            len(degraded_columns),
+            ", ".join(degraded_columns[:12]),
         )
     _enrich_target_outcome_descriptor(
         descriptors=descriptors,
@@ -779,20 +817,46 @@ def build_research_context(
             provenance=legacy_materialization_provenance,
         )
     descriptors = compile_wide_representation_semantics(descriptors)
-    descriptors = compile_observation_semantics(
-        frame=df,
-        descriptors=descriptors,
-    )
-
     prefs_obj = (
         user_preferences
         if isinstance(user_preferences, UserPreferences)
-        else (
-            UserPreferences.model_validate(user_preferences)
-            if user_preferences
-            else None
-        )
+        else UserPreferences.model_validate(user_preferences) if user_preferences else None
     )
+    # A declared landmark event time belongs to the target event, irrespective
+    # of its physical column name. Validate that representation before ordinary
+    # missingness screens or downstream audit/figure generation.
+    event_time_bindings = {
+        spec.event_time_variable: target_outcome
+        for spec in (prefs_obj.sensitivity_specs if prefs_obj else ())
+        if spec.strategy == "landmark" and spec.event_time_variable and target_outcome
+    }
+    descriptors = compile_observation_semantics(
+        frame=df,
+        descriptors=descriptors,
+        event_time_bindings=event_time_bindings,
+    )
+    # Resolve structural absence before choosing a common-population MCAR
+    # panel. A conditional event/observation time has another applicable
+    # denominator and must not change the screen for ordinary measurements.
+    screen_columns = [
+        descriptor.name for descriptor in descriptors
+        if descriptor.observation_semantics is None
+        and descriptor.role not in {VariableRole.ID, VariableRole.META, VariableRole.TIME}
+    ]
+    missingness_test_meta = _compute_missingness_test_metadata(df[screen_columns])
+    tested_columns = set(missingness_test_meta.get("columns", ()))
+    descriptors = [
+        descriptor.model_copy(update={
+            "missingness": descriptor.missingness.model_copy(update={
+                "missingness_test": missingness_test_meta["name"],
+                "missingness_test_p_value": missingness_test_meta.get("p_value"),
+                "notes": missingness_test_meta.get("note"),
+            })
+        })
+        if descriptor.name in tested_columns and descriptor.missingness is not None
+        else descriptor
+        for descriptor in descriptors
+    ]
 
     # --- time windows + deterministic temporal semantics
     inferred_windows, temporal_constraints = TemporalAlignmentEngine().infer(
@@ -852,7 +916,6 @@ def _describe_column(
     id_columns: Sequence[str],
     time_columns: Sequence[str],
     outcome_columns: Sequence[str],
-    missingness_test_meta: Dict[str, Any],
 ) -> ConceptDescriptor:
     series = df[col]
     sample = series.dropna().head(50).tolist() if len(series) else []
@@ -946,12 +1009,6 @@ def _describe_column(
 
     allowed = _allowed_aggregations(role, hint.kind)
     miss = _profile_missingness(series)
-    if miss.fraction_missing > 0 and missingness_test_meta.get("name") != "not_run":
-        miss.missingness_test = str(missingness_test_meta.get("name"))
-        miss.missingness_test_p_value = missingness_test_meta.get("p_value")
-        note = missingness_test_meta.get("note")
-        if note:
-            miss.notes = str(note)
     fixed_window_trajectory = infer_fixed_window_trajectory_metadata(
         column_name=col,
         values=series,
@@ -962,6 +1019,10 @@ def _describe_column(
             f"fixed {fixed_window_trajectory.window_width_hours:g}-hour windows "
             "on a relative time axis"
         )
+    # Explicit degradation marker: the EasyICU concept-dictionary enrichment
+    # was unavailable for this column (info is None). A user-supplied
+    # description does not clear it — the owner metadata is still missing.
+    enrichment_degraded = info is None
 
     return ConceptDescriptor(
         name=col,
@@ -989,6 +1050,7 @@ def _describe_column(
         clinical_caveats=clinical_caveats or list(hint.pitfalls),
         missingness_semantics=missingness_semantics,
         missingness=miss,
+        concept_enrichment_degraded=enrichment_degraded,
     )
 
 
@@ -1525,6 +1587,11 @@ def retrieve_context_variables(
         required.add(context.target_outcome)
     if context.primary_exposure:
         required.add(context.primary_exposure)
+    from ..planning.baseline_requirements import baseline_requirement_projection
+
+    for table in baseline_requirement_projection(context)["tables"]:
+        for coordinate in (table["group_by"], *table["variables"]):
+            required.update(coordinate["available_columns"])
     by_name = {v.name: v for v in context.variables}
     selected_names = {v.name for v in selected}
     for name in required:

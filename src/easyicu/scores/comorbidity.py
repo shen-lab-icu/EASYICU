@@ -1378,4 +1378,14 @@ __all__ = [
     "ELIXHAUSER_VW_WEIGHTS",
     "flag_comorbidities",
     "load_comorbidity",
+    # Public thin wrappers for cross-package use (private names kept for compat).
+    "build_datasource",
+    "lower_cols",
+    "table_df",
 ]
+
+
+# --- Public cross-package aliases (thin wrappers, no logic change) ---
+build_datasource = _build_datasource
+lower_cols = _lower_cols
+table_df = _table_df

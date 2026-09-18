@@ -32,6 +32,8 @@ from easyicu.research_agent.planning.scientific_review import (
     _endpoint_resolved,
     _sensitivity_facts,
     build_plan_scientific_review,
+    method_source_facts,
+    planned_model_outcomes,
     post_baseline_exposure,
     remediation_route_for_finding,
     repeat_units_possible,
@@ -240,6 +242,7 @@ def test_compiler_bound_functional_form_step_is_a_distinct_typed_axis() -> None:
         inputs=["table:adjusted_association_estimates", "age"],
         expected_outputs=["table:functional_form_sensitivity"],
         sensitivity_spec_ids=["candidate_age_functional_form"],
+        functional_form_spec={"target_column": "age", "knot_quantiles": [0.1, 0.5, 0.9]},
         scientific_capability=ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     )
     plan = _plan().model_copy(update={"steps": [*_plan().steps, functional_form]})
@@ -469,6 +472,105 @@ def _plan(*, typed_bindings: bool = True) -> AnalysisPlan:
     )
 
 
+def test_method_layer_review_credits_typed_auxiliary_audit_binding() -> None:
+    from easyicu.research_agent.planning.literature_bindings import (
+        missing_required_method_layers,
+    )
+
+    plan = _plan()
+    audit = plan.steps[-1].model_copy(
+        update={
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                _binding(
+                    "sterne_missing_data_2009",
+                    "missing_data",
+                    "Audit variable availability and the complete-case assumption.",
+                )
+            ],
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "steps": [*plan.steps[:-1], audit],
+            "robustness_specs": [
+                RobustnessSpec(
+                    spec_id="complete_case_primary",
+                    axis="missing",
+                    description="Prespecified complete-case sensitivity.",
+                    missing_override={
+                        "strategy": "complete_case",
+                        "variables": ["exposure", "death", "age"],
+                    },
+                )
+            ],
+        }
+    )
+
+    facts = method_source_facts(plan, _context())
+    gate_missing = missing_required_method_layers(
+        plan, ["sterne_missing_data_2009"], context=_context()
+    )
+
+    assert "missing_data" in facts["required_method_layers"]
+    assert "missing_data" in facts["method_layers_by_step"][audit.step_id]
+    assert "missing_data" not in facts["missing_method_layers"]
+    assert "missing_data" not in gate_missing
+    assert audit.step_id not in facts["method_source_gaps"]
+
+
+def test_auxiliary_method_citation_does_not_cover_unbound_scientific_step() -> None:
+    plan = _plan(typed_bindings=False)
+    audit = plan.steps[-1].model_copy(
+        update={
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                _binding(
+                    "sterne_missing_data_2009",
+                    "missing_data",
+                    "Audit availability without authorizing the primary model.",
+                )
+            ],
+        }
+    )
+
+    facts = method_source_facts(
+        plan.model_copy(update={"steps": [*plan.steps[:-1], audit]}), _context()
+    )
+
+    assert facts["method_source_gaps"] == ["primary_model"]
+
+
+def test_method_layer_review_rejects_unsupported_auxiliary_binding() -> None:
+    plan = _plan()
+    audit = plan.steps[-1].model_copy(
+        update={
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                _binding(
+                    "sterne_missing_data_2009",
+                    "time_zero",
+                    "This source does not establish the time-zero decision.",
+                )
+            ],
+        }
+    )
+
+    facts = method_source_facts(
+        plan.model_copy(update={"steps": [*plan.steps[:-1], audit]}), _context()
+    )
+
+    assert facts["unsupported_method_bindings"] == [
+        {
+            "step_id": audit.step_id,
+            "citation_key": "sterne_missing_data_2009",
+            "unsupported_design_elements": ["time_zero"],
+            "matched_card_ids": [],
+        }
+    ]
+    assert "missing_data" not in facts["cited_method_layers"]
+
+
 def _legacy_design_selection_without_reviewable_plan() -> ResearchDesignSelection:
     common = {
         "analysis_type": "association_study",
@@ -656,7 +758,11 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     )
 
 
-def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None:
+@pytest.mark.parametrize("anchor", ["ICU admission", "icu_admission", "ICU-admission"])
+@pytest.mark.parametrize("confirmations", [{"feature_time_window": True}, {}, {"extraction_completed": True}])
+def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate(
+    anchor, confirmations
+) -> None:
     """Metadata-only candidate planning must not lose exposure opportunity.
 
     The outer feature window is not a clinical-definition anchor, but it does
@@ -677,10 +783,10 @@ def test_confirmed_outer_feature_window_closes_no_temporal_safety_gate() -> None
                 covariates=["age"],
                 data_constraints=json.dumps(
                     {
-                        "confirmations": {"feature_time_window": True},
+                        "confirmations": confirmations,
                         "materialization_window": {
                             "role": "outer_observation_window",
-                            "anchor": "ICU admission",
+                            "anchor": anchor,
                             "hours": 24,
                         },
                     }
@@ -738,6 +844,23 @@ def test_selected_temporal_design_routes_missing_execution_to_runtime_owner() ->
 
     assert finding.remediation_route == "runtime_capability"
     assert finding.requires_user_authorization is False
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in review.facts[
+        "automatic_revision_blockers"
+    ]
+
+
+@pytest.mark.parametrize("hours", [True, False, 0, -1, "NaN", "Infinity", None])
+def test_invalid_outer_feature_window_is_not_a_temporal_coordinate(hours) -> None:
+    context = _context().model_copy(update={
+        "variables": [],
+        "user_preferences": UserPreferences(data_constraints=json.dumps({
+            "materialization_window": {
+                "role": "outer_observation_window", "anchor": "icu_admission",
+                "hours": hours,
+            },
+        })),
+    })
+    assert post_baseline_exposure(context) == (False, None)
 
 
 @pytest.mark.parametrize("requested", [None, ["death"], ["death", "los_icu"]])
@@ -782,6 +905,77 @@ def test_only_requested_outcomes_require_model_contracts(requested) -> None:
     assert review.facts["requested_outcomes"] == ["death", "los_icu"]
     assert review.facts["model_covered_outcomes"] == ["death"]
     assert review.facts["missing_model_outcomes"] == ["los_icu"]
+
+
+@pytest.mark.parametrize(
+    ("method", "contract", "inputs", "expected"),
+    [
+        ("signed_landmark_restricted_cubic_spline", "a" * 64, ["exposure", "death"], ("death",)),
+        ("time_varying_exposure_model", "b" * 64, ["exposure", "death"], ("death",)),
+        ("signed_landmark_restricted_cubic_spline", "invalid", ["death"], ()),
+        ("signed_landmark_restricted_cubic_spline", "a" * 64, ["exposure"], ()),
+        ("unowned_model", "a" * 64, ["death"], ()),
+        ("another_native_owner", "c" * 64, ["death"], ("death",)),
+    ],
+)
+def test_native_runtime_outcome_coverage_requires_explicit_owner_contract_and_input(
+    method, contract, inputs, expected
+) -> None:
+    context = _context()
+    step = AnalysisStep(
+        step_id="native_primary",
+        planned_analysis_role="primary",
+        intent="Run the governed native model.",
+        inputs=inputs,
+        expected_outputs=["table:estimate"],
+        method=method,
+        icu_rule_refs=["scientific_runtime_contract:" + contract],
+        runtime_outcome_contract=(
+            {"owner_ref": "scientific_runtime_contract:" + contract, "outcomes": ["death"]}
+            if len(contract) == 64 and method != "unowned_model" else None
+        ),
+    )
+    plan = _plan().model_copy(update={"steps": [step]})
+    assert planned_model_outcomes(plan, context) == expected
+
+
+def test_native_runtime_does_not_cover_auxiliary_outcomes() -> None:
+    base = _context()
+    context = base.model_copy(update={
+        "variables": [*base.variables, ConceptDescriptor(
+            name="los_icu", role=VariableRole.OUTCOME, dtype="float64"
+        )],
+        "cohort": base.cohort.model_copy(update={
+            "requested_outcome_columns": ["death", "los_icu"]
+        }),
+    })
+    step = AnalysisStep(
+        step_id="native_primary", planned_analysis_role="primary",
+        intent="Run the governed native model.",
+        inputs=["exposure", "death", "los_icu"],
+        expected_outputs=["table:estimate"],
+        method="signed_landmark_restricted_cubic_spline",
+        icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+        runtime_outcome_contract={
+            "owner_ref": "scientific_runtime_contract:" + "a" * 64,
+            "outcomes": ["death"],
+        },
+    )
+    review = build_plan_scientific_review(
+        context=context, plan=_plan().model_copy(update={"steps": [step]})
+    )
+    assert review.facts["model_covered_outcomes"] == ["death"]
+    assert review.facts["missing_model_outcomes"] == ["los_icu"]
+
+
+def test_runtime_coverage_rejects_an_unbound_projection_ref() -> None:
+    step = AnalysisStep(
+        step_id="primary", planned_analysis_role="primary", intent="Estimate the outcome",
+        method="native_execution", inputs=["death"], expected_outputs=["table:estimate"],
+        icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+        runtime_outcome_contract={"owner_ref": "scientific_runtime_contract:" + "b" * 64, "outcomes": ["death"]},
+    )
+    assert planned_model_outcomes(_plan().model_copy(update={"steps": [step]}), _context()) == ()
 
 
 def test_controlled_ordered_analysis_counts_both_typed_outcomes() -> None:
@@ -954,6 +1148,28 @@ def test_equal_patient_and_stay_counts_do_not_raise_dependence_blocker() -> None
     codes = {item.code for item in review.findings}
     assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" not in codes
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
+
+
+def test_descriptive_intervals_without_patient_identity_cannot_be_approved() -> None:
+    context = _context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_epidemiology",
+        steps=[_absolute_risk_distribution_step()],
+    )
+    original_plan = plan.model_dump(mode="json")
+    review = build_plan_scientific_review(
+        context=context, plan=plan, literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    assert review.approval_allowed is False
+    finding = next(item for item in review.findings
+                   if item.code == "DESCRIPTIVE_INTERVAL_DEPENDENCE_UNRESOLVED")
+    assert finding.severity == "blocker"
+    assert finding.remediation_route == "agent_plan_revision"
+    assert review.dimension_scores["statistical_design"] < 100
+    assert plan.model_dump(mode="json") == original_plan
 
 
 def test_planner_selected_adjustment_roster_is_agent_owned() -> None:
@@ -1344,6 +1560,7 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
         "executable_axes": [],
         "declared_authority_ids": [],
         "effect_style_grid_required": False,
+        "planner_revision_supported": False,
     }
     assert "ROBUSTNESS_AXES_TOO_NARROW" not in codes
     finding = next(
@@ -1353,7 +1570,9 @@ def test_descriptive_absolute_risk_with_supporting_tables_does_not_invent_infere
     )
     assert finding.requires_user_authorization is False
     assert finding.authorization_question is None
-    assert finding.remediation_route == "agent_plan_revision"
+    assert finding.remediation_route == "runtime_capability"
+    assert finding.severity == "major"
+    assert "do not prove sensitivity robustness" in finding.remediation
 
 
 def test_absolute_risk_difference_without_typed_ceiling_remains_inferential() -> None:

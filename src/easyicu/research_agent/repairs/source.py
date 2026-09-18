@@ -5267,15 +5267,22 @@ _NAME_ERROR_HELPER_RE = re.compile(
 
 
 def _undefined_helper_reference_is_callable(code: str, name: str) -> bool:
-    """Prove the missing name is a callable/default hook, not an object alias."""
+    """Prove the missing name sits at a serialization-hook parameter position.
+
+    Fix F may only stub a helper the agent referenced but never defined when
+    the reference is a serialization parameter (``json.dump(..., default=...)``
+    and equivalent ``default=`` hooks).  A bare call such as
+    ``missing_model_fit(data)`` is a genuinely absent analysis function: a
+    tolerant ``str``/``None`` stub there would silently change the statistical
+    semantics, so it must refuse and let the failure stay visible.
+    """
 
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return False
     return any(
-        (isinstance(node.func, ast.Name) and node.func.id == name)
-        or any(
+        any(
             keyword.arg == "default"
             and isinstance(keyword.value, ast.Name)
             and keyword.value.id == name

@@ -1,3 +1,4 @@
+/* Owner: Settings route. */
 /* Screen: Settings — local paths, data mode, privacy, model, language, about.
    Utility page reached from the sidebar gear. Bound controls persist through
    /api/settings; path pickers list local folders through the FastAPI process. */
@@ -278,10 +279,10 @@
       </div>
       <div class="settings-cap-actions">
         <!-- Destination names must match the ones app.js puts in the rail
-             ('Project Monitor' / '项目监控', 'Idea Mining' / '想法挖掘'). A button
+             ('Copilot conversation' / 'Copilot 对话', 'Idea Mining' / '想法挖掘'). A button
              that opens #agent while calling it something the sidebar never
              says reads as a fourth feature, not a link to an existing one. -->
-        <button class="btn sm" data-settings-open="agent">${icon('agent', 12)} ${dual('Open Project Monitor', '打开项目监控')}</button>
+        <button class="btn sm" data-settings-open="agent">${icon('agent', 12)} ${dual('Open conversation', '打开研究对话')}</button>
         <button class="btn sm" data-settings-open="ideas">${icon('spark', 12)} ${dual('Open Idea Mining', '打开想法挖掘')}</button>
       </div>
     </div>`;

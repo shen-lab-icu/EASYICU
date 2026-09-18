@@ -7,6 +7,7 @@ import pytest
 
 from benchmarks.figure2_canonical9.comparator_shadow_review import (
     _ncbi_request_ids,
+    _parse_pmc,
     ComparatorShadowReviewError,
     REVIEW_DIMENSIONS,
     ReviewDimension,
@@ -20,6 +21,7 @@ from benchmarks.figure2_canonical9.comparator_shadow_review import (
 
 
 _PROTOCOL = Path("benchmarks/figure2_canonical9/dev9_comparator_shadow_review_v1.json")
+_PROTOCOL_V2 = Path("benchmarks/figure2_canonical9/dev9_comparator_shadow_review_v2.json")
 
 
 def _pubmed_xml(pmids: list[str]) -> str:
@@ -138,6 +140,116 @@ def test_exact_anchor_hydration_requires_accessible_full_text() -> None:
 
     with pytest.raises(ComparatorShadowReviewError, match="must be replaced"):
         hydrate_anchor_source_pack(protocol, fetch_text=fetch)
+
+
+def _pmc_article(body: str, extra: str = "", pmcid: str = "PMC4154544") -> str:
+    return (
+        "<pmc-articleset><article><front><article-meta>"
+        f'<article-id pub-id-type="pmcid">{pmcid}</article-id>'
+        '<article-id pub-id-type="pmid">24853585</article-id>'
+        "</article-meta></front>"
+        f"<body>{body}</body>{extra}</article></pmc-articleset>"
+    )
+
+
+def test_parse_pmc_counts_displays_held_in_floats_group() -> None:
+    """JATS may carry figures and tables outside <body> entirely.
+
+    Several publishers deposit displays in a ``<floats-group>`` sibling of
+    ``<body>``. A body-scoped search reported zero for those articles, which made
+    a fully readable anchor look unusable on the one comparator dimension the
+    shadow review measures with it.
+    """
+
+    xml = _pmc_article(
+        "<sec><title>Methods</title><p>Text.</p></sec>",
+        extra=(
+            "<floats-group>"
+            "<fig><label>Figure 1.</label><caption><p>Flow</p></caption></fig>"
+            "<fig><label>Figure 2.</label><caption><p>Effect</p></caption></fig>"
+            "<table-wrap><label>Table 1.</label><table/></table-wrap>"
+            "</floats-group>"
+        ),
+    )
+
+    record = next(iter(_parse_pmc(xml).values()))
+
+    assert record["figure_caption_count"] == 2
+    assert record["table_count"] == 1
+    assert record["has_full_text"] is True
+
+
+def test_parse_pmc_excludes_supplementary_sub_article_displays() -> None:
+    """A display inside supplementary material is not a main-article display."""
+
+    xml = _pmc_article(
+        "<sec><title>Results</title><p>Text.</p></sec><fig><caption><p>Main</p></caption></fig>",
+        extra=(
+            "<sub-article><body>"
+            "<table-wrap><table/></table-wrap><table-wrap><table/></table-wrap>"
+            "</body></sub-article>"
+        ),
+    )
+
+    record = next(iter(_parse_pmc(xml).values()))
+
+    assert record["figure_caption_count"] == 1
+    assert record["table_count"] == 0
+
+
+def test_parse_pmc_reports_citation_stub_as_no_full_text() -> None:
+    """A PMC record without an article body is not accessible full text.
+
+    Reported availability decides whether ``full_text_required_for_every_anchor``
+    can enforce its own policy. Treating any XML response as full text let a
+    citation-only stub pass, so the protocol's `replace_anchor` action never
+    fired for the one anchor it existed to catch.
+    """
+
+    stub = _pmc_article("", pmcid="PMC6537818")
+
+    record = next(iter(_parse_pmc(stub).values()))
+
+    assert record["has_full_text"] is False
+    assert record["section_titles"] == ()
+
+
+def test_v2_protocol_replaces_only_the_inaccessible_m3_anchor() -> None:
+    v1 = load_shadow_review_protocol(_PROTOCOL)
+    v2 = load_shadow_review_protocol(_PROTOCOL_V2)
+
+    assert v1.dimensions == v2.dimensions
+    assert v1.review_states == v2.review_states
+    assert v1.required_review_fields == v2.required_review_fields
+    assert v1.acceptance_rule == v2.acceptance_rule
+    assert v1.use_policy == v2.use_policy
+    assert v1.anchor_access_policy == v2.anchor_access_policy
+    assert v1.agent_visibility == v2.agent_visibility
+    assert v1.audience == v2.audience
+    assert protocol_content_sha256(v1) != protocol_content_sha256(v2)
+
+    by_task_v1 = {task.task_id: task for task in v1.tasks}
+    changed = [
+        task.task_id
+        for task in v2.tasks
+        if [anchor.citation_id for anchor in task.anchors]
+        != [anchor.citation_id for anchor in by_task_v1[task.task_id].anchors]
+    ]
+
+    assert changed == ["m3_sepsis_subphenotype"]
+    m3_v2 = {
+        anchor.citation_id
+        for task in v2.tasks
+        if task.task_id == "m3_sepsis_subphenotype"
+        for anchor in task.anchors
+    }
+    assert m3_v2 == {"pmid_24853585", "pmid_42223936"}
+    assert "pmid_31104070" not in {
+        anchor.citation_id
+        for task in v2.tasks
+        for anchor in task.anchors
+    }
+    assert sum(len(task.anchors) for task in v2.tasks) == 14
 
 
 def test_run_bound_review_requires_all_dimensions_and_exact_task_anchors(

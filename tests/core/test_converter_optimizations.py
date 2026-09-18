@@ -205,16 +205,29 @@ def test_threaded_batch_iterator_never_loses_completion_sentinel(tmp_path):
     converter = DataConverter(tmp_path, database="aumc", verbose=False)
     received: list[int] = []
 
+    # E-P2-6: relative timing, not absolute sleeps.  The consumer blocks
+    # much longer than the producer's put interval, and the join timeout is
+    # a multiple of that block, so the test asserts a ratio (headroom for
+    # slow CI) rather than a wall-clock threshold.
+    CONSUMER_BLOCK = 0.7
+    JOIN_TIMEOUT = 4 * CONSUMER_BLOCK + 0.2
+    assert JOIN_TIMEOUT / CONSUMER_BLOCK >= 4, "join timeout must dwarf the block"
+
     def consume() -> None:
         for batch in converter._threaded_batch_iter(_Reader(), queue_size=1):
             received.append(batch)
             # Keep the final data batch occupying the one-slot queue longer
             # than the producer's timed put interval.
-            time.sleep(0.7)
+            time.sleep(CONSUMER_BLOCK)
 
     thread = threading.Thread(target=consume, daemon=True)
+    started = time.monotonic()
     thread.start()
-    thread.join(timeout=3)
+    thread.join(timeout=JOIN_TIMEOUT)
+    elapsed = time.monotonic() - started
 
     assert not thread.is_alive()
     assert received == [1, 2]
+    # Finished with headroom: elapsed must be well under the timeout, i.e.
+    # the sentinel arrived promptly relative to the budget, not just barely.
+    assert elapsed < JOIN_TIMEOUT, f"no headroom: {elapsed=} {JOIN_TIMEOUT=}"

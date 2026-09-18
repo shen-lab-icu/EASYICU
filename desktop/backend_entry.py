@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 import sys
 import threading
-import time
-from typing import Sequence
+from typing import Callable, Sequence
 
 
 def _absolute_directory(raw: str, *, name: str) -> Path:
@@ -45,58 +44,86 @@ def _configure_environment(
 
 
 def _parser() -> argparse.ArgumentParser:
+    # The session token travels via the environment only. There is deliberately
+    # no --session-token flag: process arguments are visible to other local
+    # users via the process table, while the environment is inherited privately
+    # from the desktop shell that generated the token.
     parser = argparse.ArgumentParser(description="EasyICU Desktop backend")
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--parent-pid", required=True, type=int)
-    parser.add_argument("--session-token")
     parser.add_argument("--node-bin")
     return parser
 
 
-def _watch_parent_process(parent_pid: int, *, interval: float = 1.0) -> None:
+def _watch_parent_process(parent_pid: int, *, interval: float = 1.0,
+                          request_shutdown: Callable[[], None] | None = None) -> threading.Event:
     if parent_pid <= 1 or parent_pid == os.getpid():
         raise ValueError("parent-pid must identify the desktop shell")
+    if request_shutdown is None:
+        raise ValueError("a graceful shutdown callback is required")
+    stop = threading.Event()
 
     def monitor() -> None:
         import psutil
 
-        while psutil.pid_exists(parent_pid):
-            time.sleep(interval)
-        os._exit(0)
+        try:
+            parent = psutil.Process(parent_pid)
+            # Process.is_running checks creation time too, protecting PID reuse.
+            while parent.is_running():
+                if stop.wait(interval):
+                    return
+        except psutil.NoSuchProcess:
+            pass
+        if not stop.is_set():
+            request_shutdown()
 
     threading.Thread(
         target=monitor,
         name="easyicu-desktop-parent-watch",
         daemon=True,
     ).start()
+    return stop
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if not 1024 <= args.port <= 65535:
         raise ValueError("port must be between 1024 and 65535")
+    session_token = os.environ.get("EASYICU_DESKTOP_SESSION_TOKEN", "")
+    if not str(session_token).strip():
+        raise ValueError(
+            "EASYICU_DESKTOP_SESSION_TOKEN is not set; "
+            "the desktop shell must launch the backend with a token"
+        )
     _configure_environment(
         state_dir=args.state_dir,
         runtime_dir=args.runtime_dir,
-        session_token=args.session_token
-        or os.environ.get("EASYICU_DESKTOP_SESSION_TOKEN", ""),
+        session_token=session_token,
         node_bin=args.node_bin,
     )
-    _watch_parent_process(args.parent_pid)
-
     import uvicorn
 
     from easyicu.webserver.app import app
 
-    uvicorn.run(
+    server = uvicorn.Server(uvicorn.Config(
         app,
         host="127.0.0.1",
         port=args.port,
         access_log=False,
         log_level="info",
-    )
+        timeout_graceful_shutdown=10,
+    ))
+
+    def request_shutdown() -> None:
+        server.should_exit = True
+
+    stop = _watch_parent_process(args.parent_pid, request_shutdown=request_shutdown)
+    try:
+        server.run()
+    finally:
+        stop.set()
     return 0
 
 

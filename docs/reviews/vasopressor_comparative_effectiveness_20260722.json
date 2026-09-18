@@ -2,7 +2,7 @@
   "schema_version": "easyicu.know_how_review_packet/1",
   "card_id": "vasopressor_comparative_effectiveness",
   "card_version": "2.0.0",
-  "reviewed_content_sha256": "5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f",
+  "reviewed_content_sha256": "42750019b52c429d4f524ced8e4814cbeb28122821f4fbdde49526b104f0e9ae",
   "case_protocol_path": "benchmarks/figure2_canonical9/protocols/h2_vasopressor_causal_20260809.json",
   "case_protocol_content_sha256": "8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c",
   "runtime_scientific_projection_sha256": "ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2",
@@ -27,7 +27,7 @@
     "This blocker is source-specific and may be reopened only by a per-stay source-coverage contract with prespecified pre-ICU lookback that distinguishes true initiator, prevalent user, and verified non-user, followed by new clinical and methods review.",
     "Any future target-trial design is non-authorizing under the current materialization; mandatory future diagnostics include overall and arm-specific ESS, ESS/N, weight distribution, overlap, balance, and extreme weights, without inventing a universal numeric ESS reportability cutoff.",
     "The current formal H2 result is non-identifiability from the available medication-capture contract, not an estimated causal effect.",
-    "The reviewer approves exact case protocol digest 8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c, runtime projection digest ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2, and deterministic execution-contract digest 28967edb8e689ff734aa8115471e75001bd12f18315849f3a6c6d39c370c7a0d together with card digest 5a2abb75b1404a26f01d8dd9afce409b05cc21371d9079523d5168cdc62f410f."
+    "The reviewer approves exact case protocol digest 8242d0f783e894eb45d578dc1630beedeb38c3f537a3a0cf3c2962f6f223956c, runtime projection digest ac990d62490906436fd234eb6fc780def048bf8eb60aba8e7edb7599519752a2, and deterministic execution-contract digest 28967edb8e689ff734aa8115471e75001bd12f18315849f3a6c6d39c370c7a0d together with card digest 42750019b52c429d4f524ced8e4814cbeb28122821f4fbdde49526b104f0e9ae."
   ],
   "attestation_fields_required_after_signoff": [
     "reviewer_owner",

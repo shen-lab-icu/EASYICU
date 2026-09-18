@@ -33,7 +33,18 @@ def _env_flag(name: str) -> bool:
 
 
 def trusts_proxy() -> bool:
-    """True when an operator has vouched that the proxy authenticates."""
+    """True when an operator has vouched that the proxy authenticates.
+
+    D-P2-7: ``EASYICU_WEB_TRUST_PROXY=1`` must only be set when an
+    authenticating reverse proxy in front of EasyICU verifies every request
+    itself (identity, TLS, and host). With the flag on, a loopback peer is no
+    longer proof of a local user — any remote client the proxy forwards
+    reaches the filesystem and job APIs, including the extension-management
+    routes whose only remaining barrier is the ``expected_sha256``
+    exact-edit confirmation. Never enable this flag for a proxy that only
+    forwards.
+    """
+
     return _env_flag("EASYICU_WEB_TRUST_PROXY")
 
 

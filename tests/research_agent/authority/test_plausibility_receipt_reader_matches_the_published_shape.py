@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -204,7 +205,11 @@ def test_a_receipt_supplied_with_no_scope_is_still_refused() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = Path(
+    os.environ.get(
+        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+    )
+)
 
 
 _PUBLISHED_COUNTS = (RECEIPT_BELOW_FIELD, RECEIPT_ABOVE_FIELD, RECEIPT_TOTAL_FIELD)
@@ -227,6 +232,7 @@ def _recorded_receipts() -> list[dict]:
     return found
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )
@@ -268,6 +274,7 @@ def test_every_recorded_receipt_that_states_the_published_counts_is_readable() -
     )
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

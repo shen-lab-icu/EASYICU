@@ -13,7 +13,12 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
-from ..authority.declared_levels import observed_levels_for
+from ..concept_availability import (
+    ConceptSourceUnavailableError,
+    require_supported_variable_source,
+)
+
+from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
 from ..canonical_json import canonical_sha256
 from ..cohort.schema import materialized_input_column_authority
 from ..contracts.association_execution import (
@@ -23,6 +28,8 @@ from ..contracts.association_execution import (
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import ModelTermSpec, level_spelling
+from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.model_tokens import (
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
@@ -45,8 +52,10 @@ from ..schema import (
     RobustnessReplaySpec,
     TableOneSpec,
     TableOneVariableSpec,
+    PhenotypeComparisonSpec,
 )
 from ..research_context.typed import declared_domain_for_variable
+from ..contracts.table_one_semantics import table_one_variable_kind as _table_one_variable_kind, validate_table_one_column_roles
 from .analysis_types import (
     canonical_analysis_family,
     get_analysis_type,
@@ -61,7 +70,8 @@ from .cohort_contract import (
     cohort_concept_id_scope,
     validate_cohort_definition,
 )
-from .dependence_authority import context_counts_only_authority
+from .dependence_authority import descriptive_counts_only_required
+from .distribution_authority import distribution_policy_issues
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
 from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
@@ -76,6 +86,7 @@ from .progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveSkeletonStep,
     progressive_module_ids_for_analysis_types,
+    validate_progressive_module_action_compatibility,
 )
 from .robustness_contract import RobustnessSpec
 from .preplan_know_how import verify_know_how_decisions
@@ -83,6 +94,7 @@ from .scientific_action_catalog import (
     ScientificAction,
     ScientificActionGapError,
     scientific_action_for_id,
+    scientific_actions_for_analysis_type,
     validate_plan_scientific_action_selections,
 )
 from .scientific_review import post_baseline_exposure
@@ -226,7 +238,7 @@ def required_binary_display_label_scopes(
         domain = descriptor.observed_domain if descriptor is not None else None
         if not scope or not isinstance(domain, Mapping) or not domain.get("is_binary"):
             continue
-        levels = observed_levels_for(name=scope, variables=variables)
+        levels = closed_planning_levels_for(name=scope, variables=variables)
         if {_binary_level_index(level) for level in levels} != {0, 1}:
             continue
         if scope not in required:
@@ -256,7 +268,7 @@ def required_reader_display_label_keys(
         .casefold()
         for variable in context.variables
     }
-    return tuple(
+    keys = tuple(
         dict.fromkeys(
             str(value or "").strip()
             for value in getattr(selected, "required_variables", ()) or ()
@@ -265,6 +277,24 @@ def required_reader_display_label_keys(
             and variable_roles.get(str(value or "").strip()) != "id"
         )
     )
+    # Apply the same source boundary as raw-input compilation before asking
+    # the model to invent reader copy for a structurally unsupported input.
+    # Keep the selected roster intact: required endpoints need source repair
+    # or a reviewed design revision, never silent omission or substitution.
+    for key in keys:
+        descriptor = context.variable(key)
+        if descriptor is None:
+            continue  # The outline variable-binding owner handles absent keys.
+        try:
+            require_supported_variable_source(descriptor, context.cohort.database)
+        except ConceptSourceUnavailableError as exc:
+            raise _fail(
+                "progressive_design_input_structurally_unavailable",
+                str(exc),
+                path="design_selection.required_variables",
+                detail={"column": key},
+            ) from exc
+    return keys
 
 
 def _is_mechanical_identifier_label(key: str, value: str) -> bool:
@@ -572,6 +602,7 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
         in {
             "artifact:baseline_context",
             "artifact:baseline_context_summary",
+            "table:baseline_table",
             "table:cohort_summary",
         }
     )
@@ -623,7 +654,6 @@ def _compile_ordered_stratified_contract(
         and candidate.outcome_type == "binary"
         and candidate.primary_exposure
         and candidate.outcome
-        and candidate.event_level_index is not None
     ]
     if len(parents) != 1:
         raise _fail(
@@ -673,8 +703,20 @@ def _compile_ordered_stratified_contract(
         )
     levels = list(contract.exposure_levels)
     binary_levels = list(contract.binary_levels)
-    event_index = int(parent.event_level_index)
-    if len(levels) < 3 or binary_levels != [0, 1] or event_index != 1:
+    # Adjusted models encode the numeric binary outcome directly; their
+    # contract does not require the distribution module's event index. Reuse
+    # that model authority only after the shared outcome contract has proved
+    # the closed 0/1 domain. Never invent a domain or reverse an explicit event.
+    parent_requirements = _compile_adjusted_association(
+        context=context, variables=variables, step=parent,
+        step_index=skeleton.steps.index(parent),
+    )
+    if (
+        len(levels) < 3 or binary_levels != [0, 1]
+        or parent.event_level_index not in (None, 1)
+        or len(parent_requirements) != 1
+        or parent_requirements[0].method_family != ASSOCIATION_LOGIT_ESTIMATOR
+    ):
         raise _fail(
             "progressive_ordered_trend_domain_unsupported",
             "the v1 deterministic owner requires >=3 ordered exposure levels "
@@ -800,12 +842,27 @@ def _validate_scientific_action_runtime_contract(
 
 def _compile_binary_association_sensitivity_capability(
     *,
+    action: ScientificAction | None,
+    context: ResearchContext,
     skeleton: ProgressivePlanSkeleton,
     step: ProgressiveSkeletonStep,
     step_index: int,
     outputs: Sequence[tuple[str, str]],
 ) -> str | None:
     """Compile effect authority only for the closed binary sensitivity shape."""
+
+    # ``scientific_sensitivity`` is an article role, not an analysis family.
+    # A validated non-association action retains its own execution boundary;
+    # in particular, do not make a survival sensitivity inherit an odds-ratio
+    # parent or grant it the binary association capability.
+    if action is not None and action.analysis_family != "association":
+        if step.functional_form_spec is not None:
+            raise _fail(
+                "progressive_functional_form_family_mismatch",
+                "RCS-versus-linear model-term sensitivity belongs to the association owner",
+                step=step, step_index=step_index, path="functional_form_spec",
+            )
+        return None
 
     scientific_outputs = [
         product_id
@@ -888,6 +945,36 @@ def _compile_binary_association_sensitivity_capability(
             step_index=step_index,
             path="product_inputs",
         )
+    method = str(step.custom_method or "").strip().casefold()
+    form = step.functional_form_spec
+    if method in RCS_LINEAR_SENSITIVITY_METHODS or form is not None:
+        if form is None or method not in RCS_LINEAR_SENSITIVITY_METHODS or len(step.sensitivity_spec_ids) != 1:
+            raise _fail(
+                "progressive_functional_form_target_missing",
+                "RCS-versus-linear sensitivity requires one exact functional_form_spec and sensitivity id",
+                step=step, step_index=step_index, path="functional_form_spec",
+            )
+        targets = [term for term in parent.model_terms if term.name == form.target_column]
+        if len(targets) != 1 or targets[0].coding != "continuous":
+            raise _fail(
+                "progressive_functional_form_target_invalid",
+                "functional-form target must be one continuous term of the inherited primary model",
+                step=step, step_index=step_index, path="functional_form_spec.target_column",
+            )
+        prescribed = [spec for spec in (context.user_preferences.sensitivity_specs if context.user_preferences else ())
+                      if spec.spec_id in step.sensitivity_spec_ids]
+        operationalizations = dict(AdjustmentSetAuthority.from_context(context).operationalizations)
+        if prescribed and any(
+            spec.axis != "functional_form" or tuple(
+                operationalizations.get(name, name) for name in spec.execution_variables
+            ) != (form.target_column,)
+            for spec in prescribed
+        ):
+            raise _fail(
+                "progressive_functional_form_authority_mismatch",
+                "functional-form target must match the exact prespecified sensitivity authority",
+                step=step, step_index=step_index, path="functional_form_spec.target_column",
+            )
     return ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
 
 
@@ -941,18 +1028,6 @@ def _eligibility_criteria(
     ]
 
 
-def _table_one_variable_kind(variable: Any, levels: Sequence[Any]) -> str:
-    if variable.is_ordinal:
-        return "ordinal"
-    dtype = str(variable.dtype or "").lower()
-    if levels and (
-        len(levels) == 2
-        or dtype.startswith(("object", "str", "string", "category", "bool"))
-    ):
-        return "categorical"
-    return "continuous"
-
-
 def _compile_table_one(
     *,
     context: ResearchContext,
@@ -977,7 +1052,19 @@ def _compile_table_one(
         step_index=step_index,
         path="table_one_variables",
     )
-    group_levels = observed_levels_for(name=group_by, variables=dict(variables))
+    try:
+        validate_table_one_column_roles(
+            (group_by, *(item.name for item in row_intents)), context
+        )
+    except ValueError as exc:
+        raise _fail(
+            "progressive_table_one_semantic_role_ineligible",
+            str(exc),
+            step=step,
+            step_index=step_index,
+            path="table_one_variables",
+        ) from exc
+    group_levels = closed_planning_levels_for(name=group_by, variables=dict(variables))
     if len(group_levels) < 2:
         raise _fail(
             "progressive_table_one_group_levels_unavailable",
@@ -989,7 +1076,7 @@ def _compile_table_one(
     rows: list[TableOneVariableSpec] = []
     for index, item in enumerate(row_intents):
         variable = variables[item.name]
-        levels = observed_levels_for(name=item.name, variables=dict(variables))
+        levels = closed_planning_levels_for(name=item.name, variables=dict(variables))
         kind = _table_one_variable_kind(variable, levels)
         if kind == "continuous" and item.summary == "count_percent":
             raise _fail(
@@ -1108,8 +1195,8 @@ def _compile_distribution(
         step_index=step_index,
         path="distribution_variables",
     )
-    exposure_levels = observed_levels_for(name=exposure, variables=dict(variables))
-    outcome_levels = observed_levels_for(name=outcome, variables=dict(variables))
+    exposure_levels = closed_planning_levels_for(name=exposure, variables=dict(variables))
+    outcome_levels = closed_planning_levels_for(name=outcome, variables=dict(variables))
     if len(exposure_levels) < 2 or len(outcome_levels) < 2:
         raise _fail(
             "progressive_distribution_levels_unavailable",
@@ -1125,85 +1212,72 @@ def _compile_distribution(
         step=step,
         step_index=step_index,
     )
-    exposure_missingness = variables[exposure].missingness
-    missing_exposure_policy = step.missing_exposure_policy
-    if (
-        missing_exposure_policy == "fail_closed"
-        and exposure_missingness is not None
-        and exposure_missingness.n_missing > 0
-    ):
-        # A fail-closed policy is executable only when the sealed context says
-        # the exposure is complete.  When exact missing counts are already
-        # known, retain the Planner's declared levels while making the omitted
-        # denominator explicit in the typed distribution table.
-        missing_exposure_policy = "exclude_from_denominator"
     if counts_only:
-        # The typed StudyContext has already forbidden uncertainty and effect
-        # contrasts. Compile only the observed denominators, counts, and
+        # Study authority or the shared source-bound ceiling forbids uncertainty
+        # and effect contrasts. Compile only the observed denominators, counts, and
         # proportions; model-supplied contrast indexes carry no authority.
-        return ExposureOutcomeDistributionSpec(
-            schema_version="easyicu.exposure_outcome_distribution/3",
-            exposure=exposure,
-            exposure_levels=list(exposure_levels),
-            outcome=outcome,
-            outcome_levels=list(outcome_levels),
-            outcome_positive_value=event,
-            level_match_policy="exact_typed",
-            denominator_policy=step.denominator_policy,
-            missing_exposure_policy=missing_exposure_policy,
-            missing_outcome_policy=step.missing_outcome_policy,
-            undeclared_outcome_policy="fail_closed",
-            interval_method="none_counts_only",
-            repeated_unit_interval_method=None,
-            risk_difference_contrast=None,
-            dependence=None,
-            confidence_level=None,
-        )
-    reference = _level_at(
-        exposure_levels,
-        step.reference_exposure_level_index,
-        label="reference_exposure_level_index",
-        step=step,
-        step_index=step_index,
-    )
-    comparison = _level_at(
-        exposure_levels,
-        step.comparison_exposure_level_index,
-        label="comparison_exposure_level_index",
-        step=step,
-        step_index=step_index,
-    )
-    if step.reference_exposure_level_index == step.comparison_exposure_level_index:
-        raise _fail(
-            "progressive_distribution_contrast_not_distinct",
-            "risk-difference comparison and reference levels must differ",
+        inference_options: dict[str, Any] = {
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "risk_difference_contrast": None,
+            "dependence": None,
+            "confidence_level": None,
+        }
+    else:
+        reference = _level_at(
+            exposure_levels,
+            step.reference_exposure_level_index,
+            label="reference_exposure_level_index",
             step=step,
             step_index=step_index,
-            path="comparison_exposure_level_index",
         )
-    try:
-        return ExposureOutcomeDistributionSpec(
-            schema_version="easyicu.exposure_outcome_distribution/2",
-            exposure=exposure,
-            exposure_levels=list(exposure_levels),
-            outcome=outcome,
-            outcome_levels=list(outcome_levels),
-            outcome_positive_value=event,
-            level_match_policy="exact_typed",
-            denominator_policy=step.denominator_policy,
-            missing_exposure_policy=missing_exposure_policy,
-            missing_outcome_policy=step.missing_outcome_policy,
-            undeclared_outcome_policy="fail_closed",
-            interval_method="wilson",
-            repeated_unit_interval_method="patient_cluster_robust_wald",
-            risk_difference_contrast=ExposureOutcomeRiskDifferenceContrast(
+        comparison = _level_at(
+            exposure_levels,
+            step.comparison_exposure_level_index,
+            label="comparison_exposure_level_index",
+            step=step,
+            step_index=step_index,
+        )
+        if step.reference_exposure_level_index == step.comparison_exposure_level_index:
+            raise _fail(
+                "progressive_distribution_contrast_not_distinct",
+                "risk-difference comparison and reference levels must differ",
+                step=step,
+                step_index=step_index,
+                path="comparison_exposure_level_index",
+            )
+        inference_options = {
+            "schema_version": "easyicu.exposure_outcome_distribution/2",
+            "interval_method": "wilson",
+            "repeated_unit_interval_method": "patient_cluster_robust_wald",
+            "risk_difference_contrast": ExposureOutcomeRiskDifferenceContrast(
                 reference_exposure_level=reference,
                 comparison_exposure_level=comparison,
             ),
-            confidence_level=step.confidence_level,
+            "confidence_level": step.confidence_level,
+        }
+    # Both ceilings share the same typed denominator/missingness owner and
+    # targeted repair lane. A counts-only plan must not bypass that lane by
+    # leaking a raw schema exception or silently changing its chosen denominator.
+    try:
+        spec = ExposureOutcomeDistributionSpec(
+            exposure=exposure,
+            exposure_levels=list(exposure_levels),
+            outcome=outcome,
+            outcome_levels=list(outcome_levels),
+            outcome_positive_value=event,
+            level_match_policy="exact_typed",
+            denominator_policy=step.denominator_policy,
+            missing_exposure_policy=step.missing_exposure_policy,
+            missing_outcome_policy=step.missing_outcome_policy,
+            undeclared_outcome_policy="fail_closed",
+            **inference_options,
         )
     except ValidationError as exc:
-        finding = exc.errors(include_input=False)[0]
+        finding = exc.errors(
+            include_input=False, include_context=False, include_url=False
+        )[0]
         field = ".".join(str(value) for value in finding["loc"])
         raise _fail(
             "progressive_distribution_spec_invalid",
@@ -1213,6 +1287,16 @@ def _compile_distribution(
             step_index=step_index,
             path=field or "exposure_outcome_distribution",
         ) from exc
+    issues = distribution_policy_issues(spec, variables=variables)
+    if issues:
+        raise _fail(
+            "progressive_distribution_missingness_authority_invalid",
+            issues[0].message,
+            step=step,
+            step_index=step_index,
+            path=issues[0].field,
+        )
+    return spec
 
 
 def _compile_model_terms(
@@ -1593,6 +1677,8 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    if step.scientific_action_id == "phenotyping.outcome_by_cluster":
+        raw_names.append(_identity_column(context=context, step=step, step_index=step_index))
     if step.module_id == "absolute_risk_context":
         raw_names.extend(
             value for value in (step.primary_exposure, step.outcome) if value
@@ -1663,6 +1749,25 @@ def _compile_inputs(
         step_index=step_index,
         path="raw_inputs",
     )
+    if _is_ungrouped_baseline_summary(step):
+        ineligible = [name for name in raw if variables[name].role.value in {"id", "index", "meta", "time"}]
+        if ineligible:
+            raise _fail(
+                "progressive_baseline_summary_semantic_role_ineligible",
+                "A baseline summary requires clinical value variables; identifiers and measurement metadata "
+                "belong to cohort accounting or data-quality outputs, not patient-characteristic rows.",
+                step=step, step_index=step_index, path="raw_inputs",
+                detail={"columns": ineligible},
+            )
+    for name in raw:
+        try:
+            require_supported_variable_source(variables[name], context.cohort.database)
+        except ConceptSourceUnavailableError as exc:
+            raise _fail(
+                "progressive_raw_input_structurally_unavailable",
+                str(exc), step=step, step_index=step_index, path="raw_inputs",
+                detail={"column": name, "source_concepts": [r.concept_id for r in exc.receipts]},
+            ) from exc
     inputs = list(raw)
     if (
         step.module_id not in {"cohort_definition", "visualization"}
@@ -1739,14 +1844,68 @@ def _compile_inputs(
         # those steps, but its table/report product must not become a second
         # data-frame input that the executor neither reads nor receipts.
         parsed_reference = typed_product(reference.product_id)
-        if step.module_id not in _COHORT_FRAME_ONLY_MODULES and not (
+        primary_population_reference = (
+            step.module_id == "absolute_risk_context"
+            and reference.product_id == "table:adjusted_association_estimates"
+            and any(
+                source.step_id == owner and source.planned_analysis_role == "primary"
+                for source in skeleton.steps
+            )
+        )
+        if (step.module_id not in _COHORT_FRAME_ONLY_MODULES or primary_population_reference) and not (
             step.module_id == "report"
             and parsed_reference is not None
             and parsed_reference[0] == "figure"
         ):
             inputs.append(reference.product_id)
+    if step.module_id == "absolute_risk_context":
+        from .population_requirements import validate_population_choice
+
+        try:
+            validate_population_choice(
+                context, product="table:absolute_risk_context",
+                scope=step.population_scope, change_reason=step.population_scope_change_reason,
+            )
+        except ValueError as exc:
+            raise _fail("progressive_population_requirement_drift", str(exc),
+                        step=step, step_index=step_index, path="population_scope") from exc
+        primary_product = "table:adjusted_association_estimates"
+        if step.population_scope == "analysis_cohort" and primary_product in inputs:
+            raise _fail(
+                "progressive_population_scope_conflict",
+                "analysis_cohort scope cannot also bind a primary-model population",
+                step=step, step_index=step_index, path="population_scope",
+            )
+        if step.population_scope == "primary_model":
+            owner = producers.get(primary_product)
+            primary = next((source for source in skeleton.steps if source.step_id == owner), None)
+            if primary is None or primary.planned_analysis_role != "primary":
+                raise _fail(
+                    "progressive_primary_population_owner_missing",
+                    "primary_model scope requires a preceding supported primary model result",
+                    step=step, step_index=step_index, path="population_scope",
+                )
+            if (step.primary_exposure, step.outcome) != (primary.primary_exposure, primary.outcome):
+                raise _fail(
+                    "progressive_primary_population_variables_mismatch",
+                    "the descriptive population adapter must use the primary model's exposure and outcome",
+                    step=step, step_index=step_index, path="population_scope",
+                )
+            inputs.append(primary_product)
     inputs = list(dict.fromkeys(inputs))
     if step.module_id == "visualization":
+        diagnostic_inputs = [
+            product for product in inputs
+            if any(source.step_id == producers.get(product) and source.functional_form_spec is not None
+                   for source in skeleton.steps)
+        ]
+        if "table:robustness_matrix" in inputs and diagnostic_inputs:
+            raise _fail(
+                "progressive_robustness_diagnostic_display_mismatch",
+                "functional-form diagnostics are not effect estimates: retain them in the report as a diagnostic table, outside the robustness-matrix figure",
+                step=step, step_index=step_index, path="product_inputs",
+                detail={"diagnostic_inputs": diagnostic_inputs},
+            )
         invalid_sources = [
             value
             for value in inputs
@@ -1934,6 +2093,43 @@ def _compile_literature(
     return keys, compiled
 
 
+def _compile_phenotype_comparison_spec(
+    context: ResearchContext, step: ProgressiveSkeletonStep, step_index: int,
+) -> PhenotypeComparisonSpec | None:
+    if step.scientific_action_id != "phenotyping.outcome_by_cluster":
+        return None
+    try:
+        if not step.phenotyping_comparison_variables:
+            raise ValueError("phenotype_comparison_roster_missing")
+        variables = {v.name: v for v in context.variables}
+        names = [v.name for v in step.phenotyping_comparison_variables]
+        validate_table_one_column_roles(names, context)
+        declared_outcomes = set(context.cohort.outcome_columns) | {context.target_outcome}
+        outcomes = [name for name in names if name in declared_outcomes]
+        if not outcomes:
+            raise ValueError("phenotype_comparison_outcome_missing")
+        rows = []
+        for item in step.phenotyping_comparison_variables:
+            levels = closed_planning_levels_for(name=item.name, variables=variables)
+            kind = _table_one_variable_kind(variables[item.name], levels)
+            if (kind == "categorical" and item.summary != "count_percent") or (kind == "continuous" and item.summary == "count_percent"):
+                raise ValueError("phenotype_comparison_summary_incompatible")
+            rows.append(TableOneVariableSpec(
+                name=item.name, variable_kind=kind, summary=item.summary,
+                test="none_descriptive_smd_only", levels=list(levels) if kind != "continuous" else [],
+            ))
+        return PhenotypeComparisonSpec(
+            identity_column=_identity_column(context=context, step=step, step_index=step_index),
+            variables=rows, outcome_columns=outcomes,
+        )
+    except (ValueError, KeyError) as exc:
+        reason = str(exc).partition(":")[0]
+        if not reason.startswith("phenotype_comparison_"):
+            reason = "phenotype_comparison_spec_invalid"
+        raise _fail("progressive_" + reason, str(exc), step=step, step_index=step_index,
+                    path="phenotyping_comparison_variables") from exc
+
+
 def _compile_one_step(
     *,
     context: ResearchContext,
@@ -1963,6 +2159,16 @@ def _compile_one_step(
                 step_index=step_index,
                 path="scientific_action_id",
             ) from exc
+    validate_progressive_module_action_compatibility(
+        step,
+        available_action_ids=tuple(
+            item.action_id
+            for item in scientific_actions_for_analysis_type(skeleton.analysis_type).actions
+            if item.execution_mode != "not_available"
+        ),
+        step_index=step_index,
+        phase="compile",
+    )
     try:
         output_pairs = _canonical_outputs(step)
     except ValueError as exc:
@@ -1982,6 +2188,18 @@ def _compile_one_step(
         output_pairs=output_pairs,
     )
     _validate_outputs(output_pairs, step=step, step_index=step_index)
+    if step.scientific_action_id == PHENOTYPING_PRIMARY_ACTION:
+        try:
+            require_phenotyping_features(
+                step.phenotyping_feature_columns, inputs=step.raw_inputs,
+                descriptors=context.variables,
+                outcome_columns=(*context.cohort.outcome_columns, *([context.target_outcome] if context.target_outcome else [])),
+            )
+        except ValueError as exc:
+            raise _fail(
+                "progressive_" + str(exc).partition(":")[0], str(exc),
+                step=step, step_index=step_index, path="phenotyping_feature_columns",
+            ) from exc
     _validate_scientific_action_runtime_contract(
         action=action,
         step=step,
@@ -1990,6 +2208,8 @@ def _compile_one_step(
     )
     association_sensitivity_capability = (
         _compile_binary_association_sensitivity_capability(
+            action=action,
+            context=context,
             skeleton=skeleton,
             step=step,
             step_index=step_index,
@@ -2034,6 +2254,8 @@ def _compile_one_step(
         if _is_ungrouped_baseline_summary(step)
         else step.custom_method or _METHOD_BY_MODULE[step.module_id]
     )
+    if step.module_id == "absolute_risk_context" and "table:adjusted_association_estimates" in inputs:
+        method = "primary_population_absolute_risk_context"
     sensitivity_spec_ids = list(step.sensitivity_spec_ids)
     if step.module_id == "robustness_replay":
         # Foundation robustness intents are already validated, typed host
@@ -2060,6 +2282,14 @@ def _compile_one_step(
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],
         "sensitivity_spec_ids": sensitivity_spec_ids,
+        "functional_form_spec": step.functional_form_spec,
+        "population_scope_change_reason": step.population_scope_change_reason,
+        "population_scope": (
+            "primary_model" if method == "primary_population_absolute_risk_context"
+            else step.population_scope
+        ),
+        "phenotyping_feature_columns": step.phenotyping_feature_columns,
+        "phenotype_comparison_spec": _compile_phenotype_comparison_spec(context, step, step_index),
         "literature_citation_keys": citation_keys,
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,
@@ -2095,7 +2325,9 @@ def _compile_one_step(
             variables=variables,
             step=step,
             step_index=step_index,
-            counts_only=context_counts_only_authority(context),
+            counts_only=descriptive_counts_only_required(
+                context, analysis_type=skeleton.analysis_type,
+            ),
         )
         kwargs["exposure_outcome_distribution_spec"] = spec
         kwargs["scientific_capability"] = "descriptive_exposure_outcome_distribution_v1"

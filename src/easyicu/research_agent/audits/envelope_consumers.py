@@ -9,6 +9,7 @@ retain a decision only when both views agree exactly.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Mapping, Sequence
 
 from easyicu.research_agent.authority.result_envelope_sidecar import (
@@ -544,6 +545,43 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
                 raise RegisteredOutputAuthorityError(
                     f"step-result envelope authority for {step_id} has an invalid "
                     "canonical scalar tree"
+                )
+            if (
+                record.get("deterministic_standard_analysis") == "grouped_table_one"
+                and canonical_summary.get("analysis_family") == "grouped_table_one"
+            ):
+                # The source-summary digest above seals the complete roster,
+                # but generic scalar flattening intentionally omits lists of
+                # strings. Preserve this typed method coordinate, not arbitrary
+                # free-form notes or a guessed list of adjustment covariates.
+                variables = record["step_summary"].get("variables")
+                if (
+                    not isinstance(variables, list) or not variables
+                    or any(not isinstance(name, str) or re.fullmatch(
+                        r"[A-Za-z_][A-Za-z0-9_.-]*", name,
+                    ) is None for name in variables)
+                    or len(set(variables)) != len(variables)
+                ):
+                    raise RegisteredOutputAuthorityError(
+                        f"verified baseline roster for {step_id} is invalid"
+                    )
+                canonical_summary["variables"] = list(variables)
+            if record.get("deterministic_standard_analysis") == "signed_landmark_spline_association":
+                # Scalar reconstruction loses the adjustment roster, population
+                # rules, and interval semantics. Their typed runtime receipt is
+                # sealed by the same exact source-summary digest checked above.
+                from ..contracts.landmark_spline_validation import LandmarkSplineRuntimeReceipt
+
+                try:
+                    receipt = LandmarkSplineRuntimeReceipt.model_validate(
+                        record["step_summary"].get("scientific_runtime_receipt")
+                    )
+                except ValueError as exc:
+                    raise RegisteredOutputAuthorityError(
+                        f"verified landmark method receipt for {step_id} is invalid"
+                    ) from exc
+                canonical_summary["scientific_runtime_receipt"] = receipt.model_dump(
+                    mode="json", exclude_none=True,
                 )
             record["step_summary"] = canonical_summary
             record["writer_result_envelope_evidence_id"] = loaded.evidence_id

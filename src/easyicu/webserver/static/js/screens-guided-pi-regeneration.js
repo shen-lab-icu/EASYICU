@@ -1,3 +1,4 @@
+/* Owner: Guided Pi regeneration widget. */
 /* Guided Copilot in-place regeneration projection.
    The persisted transcript remains append-only; this owner only swaps the
    visible activity and assistant rows while a replacement branch streams. */

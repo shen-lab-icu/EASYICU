@@ -203,7 +203,7 @@ from ..resources.coder import (
     bind_primary_cohort_role,
 )
 from ..research_context.typed import resolved_raw_input_contracts_for_step
-from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from ..contracts.runtime import ValidationFinding, ExecutePhaseResult, PlanPhaseResult
 from ..gates.plausibility_obligation import (
     flag_only_plausibility_obligation_findings as _flag_only_plausibility_obligation_findings,
 )
@@ -346,11 +346,11 @@ from ..gates.visual import (
     VisualGateResult,
     VisualRepairAction,
     VisualRepairDecision,
-    _demote_cosmetic_visual_findings,
-    _is_cosmetic_visual_finding,
-    _visual_repair_request_log,
     collect_visual_gate_result,
     decide_visual_repair,
+    demote_cosmetic_visual_findings as _demote_cosmetic_visual_findings,
+    is_cosmetic_visual_finding as _is_cosmetic_visual_finding,
+    visual_repair_request_log as _visual_repair_request_log,
 )
 from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
@@ -501,6 +501,11 @@ from ..authority.runtime_artifacts import (
     write_run_checkpoint,
 )
 from ..scalar_utils import _expected_numeric_annotations_for_step
+from ..reporting.publication_filesystem import require_real_output_dir
+from ..reporting.publication_bundles import (
+    required_contract_roles_for_analysis_family,
+    resolve_upstream_analysis_family,
+)
 from ..reporting.side_findings import SideFinding
 from ..skills import ClinicalSkill
 from ..authority.step_capsule import (
@@ -920,6 +925,7 @@ def _repair_publication_figure_in_staging(
     failure.
     """
 
+    require_real_output_dir(out_dir, run_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix=".publication-figure-repair-", dir=out_dir.parent
@@ -951,6 +957,7 @@ def _repair_publication_figure_in_staging(
         if not authorizer(repair_id):
             return None
 
+        require_real_output_dir(out_dir, run_dir)
         backup_dir = Path(
             tempfile.mkdtemp(prefix=".publication-figure-backup-", dir=out_dir.parent)
         )
@@ -1009,7 +1016,7 @@ class _ExecutePhasePreparation:
 def _prepare_execute_phase_authority(
     pipeline: ExecutePhaseHost,
     *,
-    plan_result: _PlanPhaseResult,
+    plan_result: PlanPhaseResult,
     run_dir: Path,
     resume_from_step_id: Optional[str],
     stop_after_step_id: Optional[str],
@@ -1158,7 +1165,7 @@ def _prepare_execute_phase_authority(
 def run_execute_phase(
     pipeline: ExecutePhaseHost,
     *,
-    plan_result: _PlanPhaseResult,
+    plan_result: PlanPhaseResult,
     cohort_path: Path,
     trajectory_binding: Optional[StagedTrajectoryBinding],
     run_dir: Path,
@@ -1168,7 +1175,7 @@ def run_execute_phase(
     emit_progress: Callable[..., None],
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
-) -> _ExecutePhaseResult:
+) -> ExecutePhaseResult:
     preparation = _prepare_execute_phase_authority(
         pipeline,
         plan_result=plan_result,
@@ -1756,10 +1763,25 @@ def run_execute_phase(
 
     _validator_messages = _step_validator_messages
 
+    def _plan_step_outputs() -> Dict[str, tuple[str, ...]]:
+        """Live typed-output index for the dependency gate.
+
+        Reads the current plan variable, so a replan that replaces the queue
+        also replaces the producer map the gate consults.
+        """
+
+        return {
+            str(step.step_id): tuple(
+                str(item) for item in (step.expected_outputs or ())
+            )
+            for step in plan.steps
+        }
+
     _failed_dependency_record = functools.partial(
         _step_failed_dependency_record,
         per_step_records=per_step_records,
         shared_lock=shared_lock,
+        step_outputs_supplier=_plan_step_outputs,
     )
 
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
@@ -1889,6 +1911,15 @@ def run_execute_phase(
             resumed_step_ids=resumed_step_ids,
         )
     )
+    _record_step_exception = functools.partial(
+        _step_record_step_exception,
+        shared_lock=shared_lock,
+        findings=findings,
+        _flush_partial_manifest=_flush_partial_manifest,
+        per_step_records=per_step_records,
+        _append_terminal_step_record=_append_terminal_step_record,
+    )
+
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
@@ -1918,12 +1949,17 @@ def run_execute_phase(
             probe_summary=probe_summary,
         )
 
-        _resolve_run_transition = functools.partial(
-            _step_resolve_run_transition,
+        _resolve_run_halt = functools.partial(
+            _step_resolve_run_halt,
             run_input_authority_state=run_input_authority_state,
             emit_progress=emit_progress,
             run_id=run_id,
             requested_stop_after_step_id=requested_stop_after_step_id,
+            _replan_state=_replan_state,
+        )
+
+        _resolve_run_transition = functools.partial(
+            _step_resolve_run_transition,
             _maybe_directed_model_replan=_maybe_directed_model_replan,
             _replan_state=_replan_state,
             pipeline=pipeline,
@@ -1948,15 +1984,6 @@ def run_execute_phase(
             )
             return remaining
 
-        _record_step_exception = functools.partial(
-            _step_record_step_exception,
-            shared_lock=shared_lock,
-            findings=findings,
-            _flush_partial_manifest=_flush_partial_manifest,
-            per_step_records=per_step_records,
-            _append_terminal_step_record=_append_terminal_step_record,
-        )
-
         # ``steps_to_run`` carries the fail-closed preflight decision; recomputing
         # from the full plan here would revive
         # every step after a typed-DAG/trajectory contract ERROR and spend
@@ -1967,26 +1994,22 @@ def run_execute_phase(
                 executed_step_ids=set(preexecuted_step_ids),
                 stop_on_failure=(pipeline._submission_profile_name is not None),
                 stop_failure_roles=frozenset({"primary"}),
+                stop_after_step_id=requested_stop_after_step_id,
             ),
             execute_step=_execute_one_step,
             resolve_transition=_resolve_run_transition,
+            resolve_run_halt=_resolve_run_halt,
             apply_revised_plan=_apply_revised_plan,
             on_step_exception=_record_step_exception,
         )
     else:
-
-        _record_parallel_worker_error = functools.partial(
-            _step_record_parallel_worker_error,
-            shared_lock=shared_lock,
-            findings=findings,
-        )
 
         run_coordinator.run_parallel(
             steps=steps_to_run,
             max_workers=pipeline._max_concurrent_steps,
             execute_step=_execute_one_step,
             submit_step=_submit_in_current_context,
-            on_worker_error=_record_parallel_worker_error,
+            on_worker_error=functools.partial(_record_step_exception, parallel=True),
         )
     if run_input_authority_state.corrupted:
         _flush_partial_manifest(
@@ -2000,7 +2023,7 @@ def run_execute_phase(
         )
         plan_result.plan = plan
         plan_result.plan_path = plan_path
-        return _ExecutePhaseResult(
+        return ExecutePhaseResult(
             plan=plan,
             per_step_records=per_step_records,
             step_attempt_history=step_attempt_history,
@@ -2075,7 +2098,7 @@ def run_execute_phase(
 
     plan_result.plan = plan
     plan_result.plan_path = plan_path
-    return _ExecutePhaseResult(
+    return ExecutePhaseResult(
         plan=plan,
         per_step_records=per_step_records,
         step_attempt_history=step_attempt_history,
@@ -2292,8 +2315,8 @@ def _step_prepare_execution_authority(
                     validator="dependency_gate",
                     severity="warning",
                     message=(
-                        f"Skipped downstream figure step {step.step_id} because "
-                        f"required analysis step {parent_step_id} did not pass."
+                        f"Skipped downstream step {step.step_id} because "
+                        f"required step {parent_step_id} did not pass."
                     ),
                     detail={
                         "step_id": step.step_id,
@@ -3356,7 +3379,9 @@ def _step_prepare_post_candidate_figures(
             source="publication_figure_sibling_promotion",
         ):
             promoted = services.promote_sibling_figure_exports(
-                out_dir=run_result.out_dir
+                out_dir=run_result.out_dir,
+                run_dir=run_dir,
+                current_step_id=step.step_id,
             )
         if promoted is not None:
             worker_progress.runner_repair_name = promoted
@@ -3404,9 +3429,19 @@ def _step_prepare_post_candidate_figures(
                 parent_step_id = str(step.step_id or "").removesuffix("_figure")
                 direct_parent = run_dir / "steps" / parent_step_id
                 promoted = None
+                # Generic terminal promotion must not satisfy a figure step
+                # with a cross-semantics bundle: the promoted contract's
+                # roles have to intersect the direct parent's analysis
+                # family vocabulary (mirroring the pipeline's
+                # required_roles=("primary_estimand",) precedent for the
+                # association path).  An unmapped family fails closed.
+                terminal_required_roles = required_contract_roles_for_analysis_family(
+                    resolve_upstream_analysis_family(run_dir, str(step.step_id or ""))
+                )
                 if (
                     parent_step_id != str(step.step_id or "")
                     and direct_parent.is_dir()
+                    and terminal_required_roles is not None
                     and _automatic_repair_authorized(
                         "publication_bundle_promote_v1",
                         step=step,
@@ -3417,6 +3452,7 @@ def _step_prepare_post_candidate_figures(
                         run_dir=run_dir,
                         current_step_id=step.step_id,
                         out_dir=run_result.out_dir,
+                        required_roles=terminal_required_roles,
                         require_declared_sources=True,
                     )
                 if promoted is not None:
@@ -4470,23 +4506,23 @@ def _step_maybe_directed_model_replan(
     )
 
 
-def _step_resolve_run_transition(
+def _step_resolve_run_halt(
     step: AnalysisStep,
     record: Dict[str, Any],
-    has_remaining: bool,
     *,
     run_input_authority_state: Any,
     emit_progress: Any,
     run_id: str,
     requested_stop_after_step_id: Optional[str],
-    _maybe_directed_model_replan: Any,
     _replan_state: Dict[str, Any],
-    pipeline: Any,
-    _maybe_replan: Any,
-    plan_supplier: Callable[[], AnalysisPlan],
-    probe_summary: Optional[Dict[str, Any]],
-    per_step_records: List[Dict[str, Any]],
-) -> RunTransition:
+) -> Optional[RunTransition]:
+    """Host-level halt checks, separate from every replan decision.
+
+    The coordinator runs this after each step -- successful or failed -- so a
+    failed auxiliary step cannot skip input-authority corruption, a requested
+    stop, or a pending replan review on its way to the independent tail.
+    """
+
     if run_input_authority_state.corrupted:
         emit_progress(
             "audit",
@@ -4505,6 +4541,42 @@ def _step_resolve_run_transition(
             step_id=step.step_id,
         )
         return RunTransition.stop("requested_stop_after_step")
+    return replan_review.runtime_replan_pause_transition(_replan_state)
+
+
+def _step_resolve_run_transition(
+    step: AnalysisStep,
+    record: Dict[str, Any],
+    has_remaining: bool,
+    *,
+    _maybe_directed_model_replan: Any,
+    _replan_state: Dict[str, Any],
+    pipeline: Any,
+    _maybe_replan: Any,
+    plan_supplier: Callable[[], AnalysisPlan],
+    probe_summary: Optional[Dict[str, Any]],
+    per_step_records: List[Dict[str, Any]],
+    # Compatibility for direct callers of the pre-split signature: when the
+    # host halt coordinates are supplied, resolve the run-level halt first.
+    # Production wiring passes them to ``_step_resolve_run_halt`` instead and
+    # never reaches this branch.
+    run_input_authority_state: Any = None,
+    emit_progress: Any = None,
+    run_id: str = "",
+    requested_stop_after_step_id: Optional[str] = None,
+) -> RunTransition:
+    if run_input_authority_state is not None:
+        halt = _step_resolve_run_halt(
+            step,
+            record,
+            run_input_authority_state=run_input_authority_state,
+            emit_progress=emit_progress or (lambda *args, **kwargs: None),
+            run_id=run_id,
+            requested_stop_after_step_id=requested_stop_after_step_id,
+            _replan_state=_replan_state,
+        )
+        if halt is not None:
+            return halt
     directed_plan = _maybe_directed_model_replan(
         failed_step=step, failed_record=record
     )
@@ -4557,6 +4629,7 @@ def _step_record_step_exception(
     _flush_partial_manifest: Any,
     per_step_records: List[Dict[str, Any]],
     _append_terminal_step_record: Any,
+    parallel: bool = False,
 ) -> None:
     """Seal a terminal record for a step that raised instead of returning."""
 
@@ -4570,8 +4643,8 @@ def _step_record_step_exception(
                         f"The run was interrupted by "
                         f"{type(error).__name__} while step "
                         f"{step.step_id} was in flight; the step's own "
-                        "in-flight record is kept so a resume can pick "
-                        "it up, and no later step ran."
+                        "in-flight record is kept so a resume can pick it up. "
+                        + ("Already submitted independent workers may finish." if parallel else "No later step ran.")
                     ),
                     detail={
                         "reason": "operator_interrupt",
@@ -4616,8 +4689,9 @@ def _step_record_step_exception(
                 severity="error",
                 message=(
                     f"Step {step.step_id} raised {detail} instead of "
-                    "returning a step record, so the run stopped "
-                    "fail-closed before any later step."
+                    "returning a step record. "
+                    + ("The failed step is sealed; already submitted independent workers may finish."
+                       if parallel else "The run stopped fail-closed before any later step.")
                 ),
                 detail={
                     "reason": "step_execution_raised",
@@ -4628,22 +4702,6 @@ def _step_record_step_exception(
         )
         _append_terminal_step_record(per_step_records, crash_record)
         _flush_partial_manifest({"step_execution_raised": step.step_id})
-
-
-def _step_record_parallel_worker_error(
-    exc: BaseException,
-    *,
-    shared_lock: Any,
-    findings: List[ValidationFinding],
-) -> None:
-    with shared_lock:
-        findings.append(
-            ValidationFinding(
-                validator="step_executor",
-                severity="error",
-                message=f"Worker raised an unhandled exception: {exc!r}",
-            )
-        )
 
 
 def _step_build_probe_summary_and_record(
@@ -5353,9 +5411,10 @@ def _step_finalize_step(
                 evidence_ids=evidence_ids_for_step,
                 provider_budget=provider_budget,
             )
-        except Exception as exc:
-            interpretation = f"(analyzer failed: {exc})"
-            interp_generation_mode = "system"
+        finally:
+            # The coordinator seals exceptions as failures and stops the
+            # sequential queue. Never publish a failed call as Analyzer evidence.
+            _sync_provider_budget()
     _sync_provider_budget()
     # Content-addressing alone is insufficient for step-owned evidence:
     # two steps may legitimately receive identical analyzer text.  Bind

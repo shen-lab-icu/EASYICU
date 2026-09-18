@@ -16,26 +16,28 @@ from typing import Dict, Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
 
-from .. import ConceptDictionary, ConceptResolver, DataSourceRegistry, ICUDataSource
-from ..resources import load_data_sources, load_dictionary
+from easyicu import ConceptDictionary, ConceptResolver, DataSourceRegistry, ICUDataSource
+from easyicu.resources import load_data_sources, load_dictionary
 
 LOGGER = logging.getLogger(__name__)
 
-# Import optional modules
+# Import optional modules (absolute easyicu.io paths; this file lives in the
+# namespace package easyicu.scripts, so relative "..download" would resolve to
+# a non-existent easyicu.download and silently disable these commands).
 try:
-    from ..download import download_src
+    from easyicu.io.download import download_src
     HAS_DOWNLOAD = True
 except ImportError:
     HAS_DOWNLOAD = False
 
 try:
-    from ..import_data import import_src
+    from easyicu.io.import_data import import_src
     HAS_IMPORT = True
 except ImportError:
     HAS_IMPORT = False
 
 try:
-    from ..attach import attach_src, data, setup_src_data
+    from easyicu.io.attach import attach_src, data, setup_src_data
     HAS_ATTACH = True
 except ImportError:
     HAS_ATTACH = False
@@ -343,6 +345,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "extract":
         return handle_extract(args)
     elif args.command == "copilot":
+        # Lazy webserver import kept intentionally: this core CLI must import
+        # without pulling the webserver stack; the copilot subcommand is the
+        # only path that needs it.
         from easyicu.webserver.pi_copilot.install import install_runtime
 
         installed = install_runtime(destination=args.runtime_dir)
@@ -365,15 +370,19 @@ def handle_download(args) -> int:
 
     registry = load_data_sources(args.registry) if hasattr(args, 'registry') and args.registry else load_data_sources()
 
-    from ..download import download_sources
-    download_sources(
-        args.sources,
-        registry,
-        args.data_dirs,
-        force=args.force,
-        username=getattr(args, 'username', None),
-        password=getattr(args, 'password', None),
-    )
+    from easyicu.io.download import DownloadError, download_sources
+    try:
+        download_sources(
+            args.sources,
+            registry,
+            args.data_dirs,
+            force=args.force,
+            username=getattr(args, 'username', None),
+            password=getattr(args, 'password', None),
+        )
+    except DownloadError as exc:
+        LOGGER.error("Download failed: %s", exc)
+        return 1
     return 0
 
 
@@ -389,14 +398,19 @@ def handle_import(args) -> int:
 
     registry = load_data_sources(args.registry) if hasattr(args, 'registry') and args.registry else load_data_sources()
 
-    from ..import_data import import_sources
-    import_sources(
-        args.sources,
-        registry,
-        args.data_dirs,
-        force=args.force,
-        cleanup=getattr(args, 'cleanup', False),
-    )
+    from easyicu.io.import_data import TableImportError, import_sources
+    try:
+        import_sources(
+            args.sources,
+            registry,
+            args.data_dirs,
+            force=args.force,
+            cleanup=getattr(args, 'cleanup', False),
+        )
+    except TableImportError as e:
+        for name, err in e.failed.items():
+            LOGGER.error(f"Failed to import {name}: {err}")
+        return 1
     return 0
 
 

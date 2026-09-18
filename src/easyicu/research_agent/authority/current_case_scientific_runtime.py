@@ -19,6 +19,7 @@ from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from .rmst_runtime import RmstRuntimeAuthority
 from .time_varying_runtime import TimeVaryingRuntimeAuthority
 
 from ..contracts.association_execution import (
@@ -35,6 +36,10 @@ from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import landmark_association_composite_panels
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.model_terms import ModelTermSpec
+from ..contracts.functional_form import (
+    FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS, functional_form_products,
+)
+from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -124,6 +129,16 @@ class _AuthorityBase(BaseModel):
             legacy.pop("time_varying_effect_method", None)
             legacy.pop("time_varying_interval_cutpoints_days", None)
             legacy.pop("time_varying_cox_product", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
+            and body.get("authority_kind") == "landmark_categorical_association"
+            and body.get("schema_version")
+            == "easyicu.landmark_categorical_association_runtime_authority/1"
+            and body.get("association_model_grid") is None
+        ):
+            legacy = dict(body)
+            legacy.pop("association_model_grid", None)
             observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
         if observed != self.execution_contract_sha256:
             raise ValueError(
@@ -301,6 +316,9 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             "analysis_id",
             "n_stays",
             "n_events",
+            "exposure_evaluable_n",
+            "exposure_missing_n",
+            "fit_excluded_after_exposure_n",
             "estimate",
             "ci_low",
             "ci_high",
@@ -318,9 +336,52 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
 
     @property
     def sensitivity_ids(self) -> Tuple[str, ...]:
-        return tuple(item.analysis_id for item in self.variants)
+        # The reference row is the signed primary model, not a separately
+        # prespecified sensitivity. Keep it in the output grid, but never
+        # claim a nonexistent StudyContext sensitivity id on the plan step.
+        return tuple(
+            item.analysis_id
+            for item in self.variants
+            if item.analysis_id != self.reference_variant_id
+        )
 
-    def _parent(self, plan: AnalysisPlan) -> AnalysisStep:
+    def covered_prespecified_spec_ids(
+        self,
+        specs: Tuple[Any, ...] | list[Any],
+        *,
+        operationalizations: Mapping[str, str],
+    ) -> set[str]:
+        """Match declared sensitivity coordinates to sealed grid variants."""
+
+        by_id = {variant.analysis_id: variant for variant in self.variants}
+        covered: set[str] = set()
+        for spec in specs:
+            variant = by_id.get(spec.spec_id)
+            if (
+                variant is None
+                or variant.metadata.get("source_spec_id") != spec.spec_id
+                or variant.metadata.get("axis") != spec.axis
+                or len(spec.execution_variables) != 1
+            ):
+                continue
+            source = spec.execution_variables[0]
+            if spec.strategy == "alternate_exposure":
+                if variant.exposure_column == source and not variant.nonlinear_terms:
+                    covered.add(spec.spec_id)
+            elif spec.strategy == "restricted_cubic_spline":
+                target = operationalizations.get(source, source)
+                if (
+                    variant.exposure_column is None
+                    and len(variant.nonlinear_terms) == 1
+                    and variant.nonlinear_terms[0].source_column == target
+                    and variant.nonlinear_terms[0].basis == "natural_cubic_spline"
+                ):
+                    covered.add(spec.spec_id)
+        return covered
+
+    def _parent(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> AnalysisStep:
         parents = [
             step
             for step in plan.steps
@@ -331,7 +392,11 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
                 "association model-grid requires one adjusted-association parent"
             )
         parent = parents[0]
-        verdict = association_execution_verdict(parent)
+        verdict = (
+            landmark_categorical_association_execution_verdict(parent)
+            if allow_signed_parent
+            else association_execution_verdict(parent)
+        )
         requirement = sole_primary_model_requirement(parent)
         if (
             parent.planned_analysis_role != "primary"
@@ -432,16 +497,20 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             )
         )
 
-    def required_columns(self, plan: AnalysisPlan) -> Tuple[str, ...]:
-        parent = self._parent(plan)
+    def required_columns(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> Tuple[str, ...]:
+        parent = self._parent(plan, allow_signed_parent=allow_signed_parent)
         requirement = sole_primary_model_requirement(parent)
         assert requirement is not None
         return self.required_columns_from_requirement(requirement)
 
-    def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
+    def bind_plan(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> AnalysisPlan:
         """Compile host-owned products and exact inputs into the draft plan."""
 
-        parent = self._parent(plan)
+        parent = self._parent(plan, allow_signed_parent=allow_signed_parent)
         parent_index = next(
             index for index, step in enumerate(plan.steps) if step is parent
         )
@@ -467,6 +536,11 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             if name not in set(requirement.covariates or ())
         ]
         if missing_linear_parents:
+            if allow_signed_parent:
+                raise CurrentCaseScientificAuthorityError(
+                    "signed categorical parent cannot add undeclared nonlinear covariates: "
+                    + ", ".join(missing_linear_parents)
+                )
             # A functional-form sensitivity is defined only relative to a
             # linear parent term.  The signed runtime authority already names
             # the exact source columns; compile that prerequisite once rather
@@ -502,7 +576,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             )
             candidate = plan.steps[candidate_index]
         inputs = [
-            *self.required_columns(plan),
+            *self.required_columns(plan, allow_signed_parent=allow_signed_parent),
             self.cohort_product,
             self.parent_product,
         ]
@@ -534,8 +608,10 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         ]
         return plan.model_copy(update={"steps": steps})
 
-    def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
-        parent = self._parent(plan)
+    def governed_step(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> AnalysisStep:
+        parent = self._parent(plan, allow_signed_parent=allow_signed_parent)
         step = self._candidate(plan)
         parent_index = next(
             index for index, item in enumerate(plan.steps) if item is parent
@@ -565,7 +641,11 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         if tuple(step.sensitivity_spec_ids) != self.sensitivity_ids:
             issues.append("sensitivity_spec_ids")
         required_inputs = set(
-            (*self.required_columns(plan), self.cohort_product, self.parent_product)
+            (
+                *self.required_columns(plan, allow_signed_parent=allow_signed_parent),
+                self.cohort_product,
+                self.parent_product,
+            )
         )
         if set(step.inputs) != required_inputs:
             issues.append("inputs")
@@ -588,8 +668,10 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         self._require_rule_ref(step)
         return step
 
-    def validate_plan(self, plan: AnalysisPlan) -> None:
-        self.governed_step(plan)
+    def validate_plan(
+        self, plan: AnalysisPlan, *, allow_signed_parent: bool = False
+    ) -> None:
+        self.governed_step(plan, allow_signed_parent=allow_signed_parent)
 
 
 class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
@@ -602,7 +684,8 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     """
 
     schema_version: Literal[
-        "easyicu.landmark_categorical_association_runtime_authority/1"
+        "easyicu.landmark_categorical_association_runtime_authority/1",
+        "easyicu.landmark_categorical_association_runtime_authority/2",
     ]
     authority_kind: Literal["landmark_categorical_association"]
     cohort_method: Literal["signed_landmark_analysis_cohort"]
@@ -628,6 +711,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     categorical_adjustment_columns: Tuple[str, ...]
     dependence: PlannedDependenceRequirement | None = None
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
+    association_model_grid: AssociationModelGridRuntimeAuthority | None = None
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkCategoricalAssociationRuntimeAuthority":
@@ -662,6 +746,25 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         )
         if len(source_columns) != len(set(source_columns)):
             raise ValueError("landmark categorical source columns must be unique")
+        grid = self.association_model_grid
+        if self.schema_version.endswith("/1") and grid is not None:
+            raise ValueError("landmark categorical v1 cannot attach a model grid")
+        if self.schema_version.endswith("/2"):
+            if grid is None:
+                raise ValueError("landmark categorical v2 requires a model grid")
+            if (
+                grid.protocol_content_sha256 != self.protocol_content_sha256
+                or grid.cohort_product != self.cohort_product
+                or grid.parent_product != self.primary_product
+                or grid.output_product in {
+                    self.cohort_product,
+                    self.cohort_flow_product,
+                    self.primary_product,
+                }
+            ):
+                raise ValueError(
+                    "landmark categorical model grid disagrees with its signed parent"
+                )
         self._verify_digest()
         return self
 
@@ -686,6 +789,9 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             )
         )
 
+    def absolute_risk_population_inputs(self) -> tuple[str, ...]:
+        return (self.cohort_product, *self.primary_required_columns, self.primary_product)
+
     def _draft_primary(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
@@ -695,6 +801,43 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
                 "landmark categorical authority requires exactly one primary step"
             )
         return primary[0]
+
+    def planning_contract_context(self) -> str:
+        """Publish the same closed coordinates the execution gate enforces.
+
+        Level values stay host-local. The progressive planner selects indices
+        into the published domain, so project reference/contrast coordinates
+        into that vocabulary instead of expecting it to guess a hidden choice.
+        This is planning guidance, not a replacement for ``validate_plan``.
+        """
+
+        coordinates = {
+            "primary_exposure": self.exposure_column,
+            "outcome": self.outcome_column,
+            "outcome_type": "binary",
+            "exposure_term": {
+                "name": self.exposure_column,
+                "role": "exposure",
+                "coding": "binary" if self.exposure_kind == "binary" else "categorical",
+                "reference_level_index": self.exposure_levels.index(
+                    self.exposure_reference_level
+                ),
+            },
+            "primary_contrast_level_index": self.exposure_levels.index(
+                self.primary_contrast_level
+            ),
+            "covariates": list(self.required_adjustment_columns),
+        }
+        return (
+            "CALLER-BOUND LANDMARK ASSOCIATION COORDINATES: the primary "
+            "adjusted-association step must preserve the following exact "
+            "coordinates. Copy exposure_term into model_terms and include the "
+            "declared covariates in their exact order. Level indices refer to "
+            "the host-published domain; do not choose another contrast or "
+            "replace a categorical contrast with a linear trend. The host "
+            "separately binds temporal eligibility and dependence authority.\n"
+            + json.dumps(coordinates, ensure_ascii=False, sort_keys=True)
+        )
 
     def _validated_requirement(self, step: AnalysisStep) -> Any:
         requirement = sole_primary_model_requirement(step)
@@ -738,6 +881,14 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
 
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the temporal cohort owner and signed primary route."""
+
+        signed_methods = {self.cohort_method, self.primary_method}
+        if any(step.method in signed_methods for step in plan.steps):
+            # Saved plans cross this boundary again during deterministic replay
+            # and resume migration. Accept only a fully valid sealed plan; a
+            # partial or tampered signed route must still fail closed.
+            self.validate_plan(plan)
+            return plan
 
         primary = self._draft_primary(plan)
         self._validated_requirement(primary)
@@ -803,6 +954,22 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
                 continue
             else:
                 candidate = step
+            if (
+                candidate.method == "primary_population_absolute_risk_context"
+                and self.primary_product in candidate.inputs
+            ):
+                population_inputs = self.absolute_risk_population_inputs()
+                candidate = candidate.model_copy(update={
+                    "inputs": list(population_inputs),
+                    "input_consumption_contracts": [
+                        ArtifactConsumptionContract(input_key=key, mode="all_rows")
+                        for key in population_inputs if ":" in key
+                    ],
+                    "runtime_outcome_contract": RuntimeOutcomeContract(
+                        owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                    ),
+                    "icu_rule_refs": list(dict.fromkeys([*candidate.icu_rule_refs, self.plan_rule_ref])),
+                })
             if duplicate_outputs:
                 candidate = candidate.model_copy(
                     update={
@@ -819,7 +986,12 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
                     }
                 )
             steps.append(candidate)
-        return plan.model_copy(update={"steps": steps})
+        bound = plan.model_copy(update={"steps": steps})
+        if self.association_model_grid is not None:
+            return self.association_model_grid.bind_plan(
+                bound, allow_signed_parent=True
+            )
+        return bound
 
     def governed_cohort_step(self, plan: AnalysisPlan) -> AnalysisStep:
         candidates = [step for step in plan.steps if step.method == self.cohort_method]
@@ -907,6 +1079,29 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     def validate_plan(self, plan: AnalysisPlan) -> None:
         self.governed_cohort_step(plan)
         self.governed_primary_step(plan)
+        if self.association_model_grid is not None:
+            self.association_model_grid.validate_plan(
+                plan, allow_signed_parent=True
+            )
+        for step in plan.steps:
+            if step.method != "primary_population_absolute_risk_context":
+                continue
+            expected = self.absolute_risk_population_inputs()
+            if (
+                tuple(step.inputs) != expected
+                or step.expected_outputs != ["table:absolute_risk_context"]
+                or step.runtime_outcome_contract != RuntimeOutcomeContract(
+                    owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                )
+                or any(
+                    not any(c.input_key == key and c.mode == "all_rows" for c in step.input_consumption_contracts)
+                    for key in expected if ":" in key
+                )
+            ):
+                raise CurrentCaseScientificAuthorityError(
+                    "absolute-risk population drifted from its categorical primary owner"
+                )
+            self._require_rule_ref(step)
 
 
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):
@@ -914,6 +1109,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         "easyicu.landmark_spline_runtime_authority/1",
         "easyicu.landmark_spline_runtime_authority/2",
         "easyicu.landmark_spline_runtime_authority/3",
+        "easyicu.landmark_spline_runtime_authority/4",
     ]
     authority_kind: Literal["landmark_spline_association"]
     plan_method: Literal["signed_landmark_restricted_cubic_spline"]
@@ -1042,7 +1238,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 )
         elif self.dependence is None:
             raise ValueError(
-                "landmark spline v3 authority requires a cluster-robust dependence contract"
+                "landmark spline v3/v4 authority requires a cluster-robust dependence contract"
             )
         self._verify_digest()
         return self
@@ -1121,6 +1317,72 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
         return products[0] if products else None
 
+    def require_functional_form_spec(self, step: AnalysisStep, *, allow_draft_outputs: bool = False) -> FunctionalFormSpec:
+        """Validate the target, not the wording of a sensitivity's step id."""
+
+        spec = step.functional_form_spec
+        if (
+            spec is None or step.method not in RCS_LINEAR_SENSITIVITY_METHODS
+            or step.planned_analysis_role != "sensitivity"
+            or len(step.sensitivity_spec_ids) != 1
+            or step.robustness_replay_spec is not None
+            or not step.expected_outputs
+            or not step.expected_outputs[0].startswith("table:")
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "landmark functional-form sensitivity requires one exact target contract"
+            )
+        continuous = {self.exposure_column, *self.required_adjustment_columns} - set(self.categorical_adjustment_columns)
+        if spec.target_column not in continuous:
+            raise CurrentCaseScientificAuthorityError("functional-form target is not a continuous governed model term")
+        if spec.target_column == self.exposure_column and spec.knot_quantiles != self.spline_knot_quantiles:
+            raise CurrentCaseScientificAuthorityError("functional-form projection cannot change the primary spline knots")
+        expected_outputs = self.functional_form_outputs(step)
+        if tuple(step.expected_outputs) != expected_outputs and not (
+            allow_draft_outputs and tuple(step.expected_outputs) == expected_outputs[:1]
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "functional-form sensitivity requires reviewed curve/contrast products; revise the complete plan"
+            )
+        return spec
+
+    def functional_form_outputs(self, step: AnalysisStep) -> tuple[str, ...]:
+        if step.functional_form_spec is None or not step.expected_outputs:
+            raise CurrentCaseScientificAuthorityError("functional-form output has no exact target")
+        # Both targets publish effect tables. A covariate target refits; the
+        # exposure target projects the already sealed linear term onto the same
+        # primary grid. Neither may leave the article figure without a
+        # comparable specification contrast, because a one-row diagnostic cannot
+        # bind the display owner's contrast panel.
+        return functional_form_products(step.expected_outputs[0], include_effects=True)
+
+    def functional_form_effect_parents(self, steps, *, consumer: AnalysisStep) -> tuple[AnalysisStep, ...]:
+        """Select declared covariate refits; their effects must precede this consumer."""
+
+        positions = {step.step_id: index for index, step in enumerate(steps)}
+        if consumer.step_id not in positions or len(positions) != len(steps):
+            raise CurrentCaseScientificAuthorityError("functional-form dependency step identity is ambiguous")
+        parents = []
+        for parent in steps:
+            if parent.functional_form_spec is None or parent.functional_form_spec.target_column == self.exposure_column:
+                continue
+            self.require_functional_form_spec(parent)
+            if positions[parent.step_id] >= positions[consumer.step_id]:
+                raise CurrentCaseScientificAuthorityError("functional-form effect producer must precede robustness consumption")
+            parents.append(parent)
+        spec_ids = [parent.sensitivity_spec_ids[0] for parent in parents]
+        products = [key for parent in parents for key in parent.expected_outputs[1:]]
+        if len(set(spec_ids)) != len(spec_ids) or len(set(products)) != len(products):
+            raise CurrentCaseScientificAuthorityError("functional-form effect parents repeat a spec or product")
+        return tuple(parents)
+
+    def functional_form_inputs(self, step: AnalysisStep, *, cohort_input: str) -> tuple[str, ...]:
+        spec = self.require_functional_form_spec(step)
+        products = (self.downstream_parent_product, self.linear_sensitivity_product)
+        if spec.target_column == self.exposure_column:
+            return products
+        return (cohort_input, *self.required_columns, *products)
+
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the signed deterministic primary into one draft plan.
 
@@ -1148,6 +1410,9 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 "method": self.plan_method,
                 "intent": self.plan_intent,
                 "scientific_capability": LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+                "runtime_outcome_contract": RuntimeOutcomeContract(
+                    owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                ),
                 "expected_outputs": list(self.plan_outputs),
                 "inputs": [cohort_input, *self.required_columns],
                 "model_requirements": [],
@@ -1159,9 +1424,29 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
         generic_parent = "table:adjusted_association_estimates"
         replacement = self.downstream_parent_product
-        declared_products = {
-            product for step in plan.steps for product in step.expected_outputs
-        } | set(self.plan_outputs)
+        # Binding expands a reviewed functional-form sensitivity into its curve
+        # and contrast products mechanically, but only while binding that step,
+        # which happens after this assembly has chosen the composite inputs.
+        # Reading the planner's declared list alone would make the article
+        # figure's specification-contrast panel depend on the planner repeating
+        # names the host derives anyway. The guard keeps a malformed target on
+        # its existing rejection path instead of failing earlier here.
+        expanded_step_products = {
+            step.step_id: set(self.functional_form_outputs(step))
+            for step in plan.steps
+            if step.functional_form_spec is not None
+            and step.expected_outputs
+            and str(step.expected_outputs[0]).startswith("table:")
+        }
+        declared_products = (
+            {product for step in plan.steps for product in step.expected_outputs}
+            | set(self.plan_outputs)
+            | {
+                product
+                for products in expanded_step_products.values()
+                for product in products
+            }
+        )
         measurement_products = [
             product
             for product in declared_products
@@ -1169,16 +1454,42 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             and product.partition(":")[2]
             in {"measurement_process", "measurement_process_audit"}
         ]
+        sensitivity_contrast_products = [
+            product
+            for product in declared_products
+            if product.partition(":")[0] == "table"
+            and product.partition(":")[2].endswith("_exposure_contrasts")
+            and (
+                "robustness" in product.partition(":")[2]
+                or "sensitivity" in product.partition(":")[2]
+            )
+            and any(
+                step.planned_analysis_role == "sensitivity"
+                and step.method in RCS_LINEAR_SENSITIVITY_METHODS
+                and product
+                in expanded_step_products.get(
+                    step.step_id,
+                    {str(output) for output in step.expected_outputs},
+                )
+                for step in plan.steps
+            )
+        ]
         composite_inputs: tuple[str, ...] | None = None
         if (
             self.adjusted_absolute_risk_product is not None
             and self.adjusted_absolute_risk_product in declared_products
             and "table:robustness_summary" in declared_products
             and len(measurement_products) == 1
+            and len(sensitivity_contrast_products) <= 1
         ):
             composite_inputs = (
                 self.curve_product,
                 self.adjusted_absolute_risk_product,
+                *(
+                    (sensitivity_contrast_products[0],)
+                    if sensitivity_contrast_products
+                    else ()
+                ),
                 "table:robustness_summary",
                 measurement_products[0],
             )
@@ -1213,21 +1524,17 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             }
             <= set(step.inputs)
         ]
-        # Prefer the broad article display over a dedicated robustness figure.
-        # Both consume ``table:robustness_summary`` and therefore used to make
-        # the candidate set ambiguous.  The article display is the unique
-        # figure that also consumes the generic primary result and descriptive
-        # context; after authority binding it can be mechanically upgraded to
-        # the exact signed renderer with the model-standardised risk curve.
-        # Preserve the historical
-        # single-figure fallback when no article display exists.
+        # Only a four-table article display may be rebound as the composite
+        # hero.  A dedicated robustness figure also consumes the summary, but
+        # promoting it would silently replace that display and leave the
+        # actual two-curve display untouched.
         composite_candidates = (
             exact_composite_candidates
             if len(exact_composite_candidates) == 1
             else (
                 article_composite_candidates
                 if len(article_composite_candidates) == 1
-                else broad_composite_candidates
+                else []
             )
         )
         composite_step_id = (
@@ -1327,6 +1634,23 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             if step is candidate:
                 steps.append(bound)
                 continue
+            if (
+                step.method == "primary_population_absolute_risk_context"
+                and generic_parent in step.inputs
+            ):
+                population_inputs = self.absolute_risk_population_inputs(cohort_input)
+                steps.append(step.model_copy(update={
+                    "inputs": list(population_inputs),
+                    "input_consumption_contracts": [
+                        ArtifactConsumptionContract(input_key=key, mode="all_rows")
+                        for key in population_inputs if ":" in key
+                    ],
+                    "runtime_outcome_contract": RuntimeOutcomeContract(
+                        owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                    ),
+                    "icu_rule_refs": list(dict.fromkeys([*step.icu_rule_refs, self.plan_rule_ref])),
+                }))
+                continue
             if composite_step_id is not None and step.step_id == composite_step_id:
                 assert composite_inputs is not None
                 figure_output = step.expected_outputs[0]
@@ -1355,29 +1679,31 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
                 and generic_parent in step.inputs
             )
+            functional_form = (
+                step.functional_form_spec is not None or step.method in RCS_LINEAR_SENSITIVITY_METHODS
+            )
+            if inherited_binary_sensitivity and not functional_form:
+                raise CurrentCaseScientificAuthorityError(
+                    "landmark spline cannot reuse its nonlinear exposure result for another sensitivity method"
+                )
             signed_robustness_projection = (
                 step.planned_analysis_role == "sensitivity"
                 and step.robustness_replay_spec is not None
             )
-            signed_result_projection = (
-                inherited_binary_sensitivity or signed_robustness_projection
-            )
+            signed_result_projection = functional_form or signed_robustness_projection
+            if functional_form:
+                # Mechanical product expansion occurs only before plan review.
+                self.require_functional_form_spec(step, allow_draft_outputs=True)
+                step = step.model_copy(update={"expected_outputs": list(self.functional_form_outputs(step))})
             inputs = [
                 replacement if value == generic_parent else value
                 for value in step.inputs
             ]
             if signed_result_projection:
-                # The signed primary already performed the nested spline and
-                # linear fits. These children project its functional-form or
-                # robustness results, so raw cohort columns would falsely
-                # imply a second model fit and trigger unrelated obligations.
-                inputs = [replacement, self.linear_sensitivity_product]
-            if (
-                step.planned_analysis_role == "sensitivity"
-                and replacement in inputs
-                and self.linear_sensitivity_product not in inputs
-            ):
-                inputs.append(self.linear_sensitivity_product)
+                # Only an exact exposure check may project the primary fits.
+                # A covariate-form check retains the same cohort and complete
+                # model inputs so its own estimator must actually refit.
+                inputs = list(self.functional_form_inputs(step, cohort_input=cohort_input)) if functional_form else [replacement, self.linear_sensitivity_product]
             contracts = [
                 (
                     item.model_copy(update={"input_key": replacement})
@@ -1386,23 +1712,37 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 )
                 for item in step.input_consumption_contracts
             ]
-            if signed_result_projection:
-                contracts = []
-            if step.planned_analysis_role == "sensitivity" and replacement in inputs:
-                contracted = {item.input_key for item in contracts}
-                contracts.extend(
-                    ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
-                    for input_key in (
-                        replacement,
-                        self.linear_sensitivity_product,
+            figure_panels = [
+                (
+                    panel.model_copy(
+                        update={
+                            "source_products": [
+                                (
+                                    replacement
+                                    if value == generic_parent
+                                    else value
+                                )
+                                for value in panel.source_products
+                            ]
+                        }
                     )
-                    if input_key not in contracted
+                    if generic_parent in panel.source_products
+                    else panel
                 )
+                for panel in step.figure_panels
+            ]
+            if signed_result_projection:
+                contracts = [
+                    ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+                    for input_key in inputs if ":" in input_key
+                ]
             steps.append(
                 step.model_copy(
                     update={
                         "inputs": list(dict.fromkeys(inputs)),
                         "input_consumption_contracts": contracts,
+                        "figure_panels": figure_panels,
+                        "icu_rule_refs": list(dict.fromkeys([*step.icu_rule_refs, self.plan_rule_ref])) if functional_form else step.icu_rule_refs,
                         # The binary-sensitivity capability is closed over the
                         # generic adjusted-association parent.  Rebinding that
                         # edge to the signed landmark products invalidates the
@@ -1416,9 +1756,62 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     }
                 )
             )
+        # The robustness summary consumes covariate-form effect products.  A
+        # planner may emit the reviewed producer after that consumer, so bind
+        # the dependency in execution order before wiring its typed inputs.
+        robustness_positions = [
+            index
+            for index, step in enumerate(steps)
+            if step.planned_analysis_role == "sensitivity"
+            and step.robustness_replay_spec is not None
+        ]
+        if robustness_positions:
+            first_robustness_index = robustness_positions[0]
+            late_effect_producer_positions = [
+                index
+                for index, step in enumerate(steps)
+                if index >= first_robustness_index
+                and step.functional_form_spec is not None
+                and step.functional_form_spec.target_column != self.exposure_column
+            ]
+            if late_effect_producer_positions:
+                late_effect_producers = [
+                    steps[index] for index in late_effect_producer_positions
+                ]
+                late_positions = set(late_effect_producer_positions)
+                reordered = [
+                    step for index, step in enumerate(steps) if index not in late_positions
+                ]
+                insertion_index = next(
+                    index
+                    for index, step in enumerate(reordered)
+                    if step.planned_analysis_role == "sensitivity"
+                    and step.robustness_replay_spec is not None
+                )
+                steps = [
+                    *reordered[:insertion_index],
+                    *late_effect_producers,
+                    *reordered[insertion_index:],
+                ]
+        for index, step in enumerate(steps):
+            if step.planned_analysis_role != "sensitivity" or step.robustness_replay_spec is None:
+                continue
+            parents = self.functional_form_effect_parents(steps, consumer=step)
+            inputs = [replacement, self.linear_sensitivity_product, *(
+                key for parent in parents for key in parent.expected_outputs[1:]
+            )]
+            steps[index] = step.model_copy(update={
+                "inputs": inputs,
+                "input_consumption_contracts": [
+                    ArtifactConsumptionContract(input_key=key, mode="all_rows") for key in inputs
+                ],
+            })
         return plan.model_copy(
             update={"steps": steps, "robustness_specs": robustness_specs}
         )
+
+    def absolute_risk_population_inputs(self, cohort_input: str) -> tuple[str, ...]:
+        return (cohort_input, *self.required_columns, self.linear_sensitivity_product)
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [
@@ -1436,6 +1829,10 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             issues.append("intent")
         if step.scientific_capability != LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
             issues.append("scientific_capability")
+        if step.runtime_outcome_contract is not None and step.runtime_outcome_contract != RuntimeOutcomeContract(
+            owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+        ):
+            issues.append("runtime_outcome_contract")
         if tuple(step.expected_outputs) != self.plan_outputs:
             issues.append("expected_outputs")
         if not set(self.required_columns).issubset(step.inputs):
@@ -1453,7 +1850,42 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         return step
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
-        self.governed_step(plan)
+        primary = self.governed_step(plan)
+        for step in plan.steps:
+            if step.planned_analysis_role == "sensitivity" and step.robustness_replay_spec is not None:
+                parents = self.functional_form_effect_parents(plan.steps, consumer=step)
+                expected_effects = (
+                    self.downstream_parent_product, self.linear_sensitivity_product,
+                    *(key for parent in parents for key in parent.expected_outputs[1:]),
+                )
+                contracts = {item.input_key: item.mode for item in step.input_consumption_contracts}
+                if tuple(step.inputs) != expected_effects or any(contracts.get(key) != "all_rows" for key in expected_effects):
+                    raise CurrentCaseScientificAuthorityError("robustness omits a reviewed covariate-form effect product")
+            if step.method == "primary_population_absolute_risk_context":
+                expected = self.absolute_risk_population_inputs(sole_typed_cohort_input(primary))
+                if tuple(step.inputs) != expected or step.runtime_outcome_contract != RuntimeOutcomeContract(
+                    owner_ref=self.plan_rule_ref, outcomes=(self.outcome_column,)
+                ) or any(
+                    not any(c.input_key == key and c.mode == "all_rows" for c in step.input_consumption_contracts)
+                    for key in expected if ":" in key
+                ):
+                    raise CurrentCaseScientificAuthorityError("absolute-risk population drifted from its primary runtime owner")
+                self._require_rule_ref(step)
+            if step.functional_form_spec is None and step.method not in RCS_LINEAR_SENSITIVITY_METHODS:
+                if (
+                    step.planned_analysis_role == "sensitivity" and step.scientific_capability is None
+                    and step.robustness_replay_spec is None
+                    and set(primary.expected_outputs) & set(step.inputs)
+                ):
+                    raise CurrentCaseScientificAuthorityError("signed sensitivity has no target-bound execution owner")
+                continue
+            expected = self.functional_form_inputs(step, cohort_input=sole_typed_cohort_input(primary))
+            contracts = {item.input_key: item.mode for item in step.input_consumption_contracts}
+            if tuple(step.inputs) != expected or step.scientific_capability is not None or any(
+                contracts.get(key) != "all_rows" for key in expected if ":" in key
+            ):
+                raise CurrentCaseScientificAuthorityError("landmark functional-form inputs drifted from their target contract")
+            self._require_rule_ref(step)
 
 
 class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
@@ -1953,6 +2385,7 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
         LandmarkSurvivalRuntimeAuthority,
         SourceFeasibilityRuntimeAuthority,
         TimeVaryingRuntimeAuthority,
+        RmstRuntimeAuthority,
     ],
     Field(discriminator="authority_kind"),
 ]
@@ -1971,6 +2404,7 @@ def load_current_case_scientific_runtime_authority(
             LandmarkSurvivalRuntimeAuthority,
             SourceFeasibilityRuntimeAuthority,
             TimeVaryingRuntimeAuthority,
+            RmstRuntimeAuthority,
         ),
     ):
         return value

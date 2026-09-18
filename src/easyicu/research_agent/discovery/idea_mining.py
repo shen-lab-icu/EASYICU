@@ -905,21 +905,27 @@ def _fetch_reflection_prior_art(
 # it never pushes the idea toward an under-explored angle. This loop closes that
 # gap with SciMON's compare-to-prior-work-and-revise pattern: measure an idea's
 # crowdedness against PubMed, ask the model to revise it toward a gap the prior
-# art does NOT cover, then re-measure and keep the revision only if novelty
-# strictly improved. Provenance is never weakened -- every revision is
+# art may not cover, then retain the revision as an unreviewed proposal.
+# Exact-hit counts are retrieval diagnostics, not scientific novelty or an
+# adoption rule. Provenance is never weakened -- every revision is
 # re-validated through the same verbatim-quote traceability gate, and any
 # search/LLM failure leaves the idea unchanged (best-effort).
 NOVELTY_OPTIMIZATION_SYSTEM_PROMPT = (
     "You are a critical ICU research strategist sharpening a draft research idea "
     "toward a genuinely under-explored angle. The supplied titles are work that "
-    "is ALREADY published on this direction. Revise the idea so it targets a gap "
-    "those titles do NOT already cover -- for example a more specific "
+    "is ALREADY published on this direction. Titles alone cannot establish "
+    "what a study did or prove a gap. Propose a potentially distinct angle, "
+    "marking comparisons that need abstract/full-text verification -- for example a more specific "
     "subpopulation, an under-studied effect-modifier, a distinct timing window, "
     "or a comparison the titles do not address. Keep citation_key and "
     "source_quote EXACTLY as given (they are provenance anchors) and stay "
     "grounded in that quote: never invent a construct the source does not "
     "support. If you cannot find an honest, differentiated angle grounded in the "
-    "quote, return the idea unchanged. Return only JSON: a single idea object "
+    "quote, return the idea unchanged. In rationale, explain the concrete "
+    "difference from the closest supplied study, clinical importance, an "
+    "alternative explanation, and a result that would falsify the hypothesis. "
+    "Do not optimize wording for fewer exact search hits: a low count or zero "
+    "hits is not evidence of novelty. Return only JSON: a single idea object "
     "with the same field names as the draft."
 )
 
@@ -950,9 +956,11 @@ def build_novelty_optimization_messages(
         ],
         "available_source_text": source_text,
         "instruction": (
-            "Revise the draft idea toward an angle the already-published titles "
-            "do NOT cover, keeping citation_key and source_quote verbatim and "
-            "grounded in the quote. Return the single revised idea object."
+            "Propose an angle for comparison with the closest published work; "
+            "disclose what the titles cannot establish. Keep citation_key and "
+            "source_quote verbatim and grounded in the quote. Return the single "
+            "revised idea object with differences, clinical importance, an "
+            "alternative explanation and a falsifying result in rationale."
         ),
         "return": "JSON object (one idea; same field names as draft_idea)",
     }
@@ -971,7 +979,8 @@ def _measure_idea_novelty(
     """Return (total prior-art hit count, top titles) as a crowdedness signal.
 
     The hit count is the PubMed esearch total for the idea's exact-phrase
-    novelty query, so a lower count means a less-crowded direction. The search is
+    novelty query. A lower count can reflect wording or missed retrieval, not
+    a less-crowded scientific direction. The search is
     run WITHOUT the idea (no per-hit same-topic screening) so the measurement is
     a cheap count, not a full assessment. A search error yields ``-1`` so the
     optimiser treats the measurement as unavailable and leaves the idea
@@ -989,10 +998,18 @@ def _measure_idea_novelty(
         return -1, []
     if not isinstance(result, Mapping):
         result = {
-            "hit_count": getattr(result, "hit_count", 0),
+            "hit_count": getattr(result, "hit_count", None),
             "top_hits": getattr(result, "top_hits", []),
         }
-    count = int(result.get("hit_count") or 0)
+    try:
+        raw_count = result.get("hit_count")
+        if raw_count is None or isinstance(raw_count, bool):
+            return -1, []
+        count = int(raw_count)
+        if count < 0:
+            return -1, []
+    except (TypeError, ValueError, OverflowError):
+        return -1, []
     titles = [
         str(hit.get("title"))
         for hit in (result.get("top_hits") or [])
@@ -1023,18 +1040,15 @@ def optimize_ideas_for_novelty(
     max_tokens: int = 2048,
     trace: Optional[List[Dict[str, Any]]] = None,
 ) -> List[LiteratureIdeaCandidate]:
-    """Push crowded ideas toward novelty (measure -> revise -> re-measure).
+    """Collect provenance-checked alternatives without auto-replacing ideas.
 
-    For each idea whose exact prior-art hit count is at or above
-    ``crowded_min_hits``, the model is asked to revise toward a differentiated
-    angle, the revision is re-measured, and it replaces the original ONLY if the
-    hit count strictly drops. Otherwise the original is preserved. Each revision
-    is re-validated through the same verbatim-quote provenance gate, so a revised
-    idea whose quote was tampered is dropped back to the original. Returns one
-    idea per input (revised ideas carry a freshly derived content id). When a
-    ``trace`` list is supplied each idea's before/after signal is appended.
+    Exact-hit counts only trigger exploration and record retrieval behavior.
+    Neither fewer hits nor a model's rationale establishes a scientific gap.
+    Proposals are retained in ``trace`` for subsequent evidence-based review;
+    the original roster and its identifiers stay unchanged. Without a trace
+    destination, do not spend Provider calls on proposals nobody can inspect.
     """
-    if not ideas or search_client is None:
+    if trace is None or rounds <= 0 or not ideas or search_client is None:
         return list(ideas)
     if not hasattr(search_client, "search_prior_art"):
         return list(ideas)
@@ -1055,10 +1069,17 @@ def optimize_ideas_for_novelty(
             current, search_client=search_client, max_results=measure_max_results
         )
         entry: Dict[str, Any] = {
+            "schema_version": "easyicu.novelty_proposal_trace/2",
             "citation_key": current.citation_key,
             "initial_construct": _idea_construct_label(current),
             "initial_exact_hits": base_count,
+            "initial_exact_query": build_prior_art_queries(idea).get("exact", ""),
+            "initial_prior_art_titles": titles,
             "revised": False,
+            "final_construct": _idea_construct_label(idea),
+            "final_exact_hits": base_count,
+            "adoption_policy": "retain_original_pending_evidence_based_comparison",
+            "proposals": [],
         }
         if base_count >= max(1, int(crowded_min_hits)):
             for round_idx in range(rounds):
@@ -1098,17 +1119,22 @@ def optimize_ideas_for_novelty(
                     search_client=search_client,
                     max_results=measure_max_results,
                 )
-                # Keep the revision only if it is a measured improvement.
-                if 0 <= new_count < base_count:
-                    current = candidate
-                    base_count = new_count
-                    titles = new_titles
-                    entry["revised"] = True
-                else:
-                    break
-            entry["final_construct"] = _idea_construct_label(current)
-            entry["final_exact_hits"] = base_count
-        optimized.append(current)
+                entry["proposals"].append({
+                    "candidate": candidate.model_dump(mode="json"),
+                    "exact_query": build_prior_art_queries(candidate).get("exact", ""),
+                    "exact_hits": new_count,
+                    "prior_art_titles": new_titles,
+                    "status": "unreviewed",
+                    "adoption_allowed": False,
+                    "review_requirements": [
+                        "verify_closest_study_methods_and_population",
+                        "compare_concrete_scientific_difference",
+                        "assess_clinical_importance_and_alternative_explanations",
+                        "state_falsifying_results",
+                    ],
+                })
+                current, titles = candidate, new_titles
+        optimized.append(idea)
         if trace is not None:
             trace.append(entry)
     return optimized
@@ -1832,9 +1858,9 @@ def run_idea_mining_dry_run(
             source_snapshot_id=manifest.source_snapshot_id,
         )
     # Gap A -- SciMON-style novelty optimisation. Runs BEFORE concept mapping so a
-    # crowded idea is revised toward a differentiated angle while still an idea
-    # (mapping/feasibility then re-evaluate the sharper construct). Reuses the
-    # prior-art search client as the crowdedness oracle; default rounds=0 is a
+    # crowded query can suggest alternatives while the original idea stays in
+    # the mapping/feasibility roster. Proposals and retrieval diagnostics are
+    # saved separately, never promoted on hit count. Default rounds=0 is a
     # no-op that preserves the exact prior behaviour.
     novelty_optimization_trace: List[Dict[str, Any]] = []
     if (

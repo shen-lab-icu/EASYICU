@@ -1,3 +1,4 @@
+/* Owner: Cohort Statistics demo payload widget. */
 /* Seeded Cohort Statistics preview payloads and disclosure notes. */
 (function () {
   let t;

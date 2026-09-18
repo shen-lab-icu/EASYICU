@@ -166,14 +166,14 @@ def contained_regular_file(path: Path, root: Path) -> Optional[Path]:
     return resolved
 
 
-def read_frame(path: Path) -> pd.DataFrame:
+def read_frame(path: Path, *, text_columns: Sequence[str] = ()) -> pd.DataFrame:
     suffix = path.suffix.casefold()
     if suffix in {".parquet", ".pq"}:
         return pd.read_parquet(path)
     if suffix == ".csv":
-        return pd.read_csv(path)
+        return pd.read_csv(path, converters={name: str for name in text_columns})
     if suffix == ".tsv":
-        return pd.read_csv(path, sep="\t")
+        return pd.read_csv(path, sep="\t", converters={name: str for name in text_columns})
     raise TypedInputBindingError(
         "unsupported_format", "Typed input table format is unsupported"
     )
@@ -250,6 +250,7 @@ def load_typed_input(
     require_consumption_contract: bool = False,
     consumption_mode: str = "all_rows",
     minimum_row_count: int = 0,
+    text_columns: Sequence[str] = (),
 ) -> BoundTypedInput:
     """Load exactly the artifact recorded for ``input_key``, verifying it fully.
 
@@ -414,7 +415,9 @@ def load_typed_input(
             f"Typed binding for {input_key} promises a different product schema",
         )
 
-    frame = read_frame(path)
+    # Identity tokens in a delimited file are not measurements: preserve
+    # zero prefixes and literal NA-like identifiers without weakening byte checks.
+    frame = read_frame(path, text_columns=text_columns) if text_columns else read_frame(path)
     if list(frame.columns) != columns:
         raise TypedInputBindingError(
             "contract_columns_mismatch",

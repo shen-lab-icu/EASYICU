@@ -1,3 +1,4 @@
+/* Owner: Guided Pi DOM event wiring widget. */
 /* Copilot-owned delegated DOM event wiring.
    The parent screen passes explicit state, owners, and actions; this module
    contains no scientific policy and does not own API transport. */
@@ -6,8 +7,8 @@
 
   function create(options) {
     const {
-      state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
-      DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
+      state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
+      DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, render, projectId, previewWorkflowContext,
       openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
       openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
       loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
@@ -39,12 +40,48 @@
       const artifact = String((descriptor && descriptor.artifact) || '');
       if (artifact === 'result_tables.json') return 'review_result_tables';
       if (artifact === 'figure_gallery.json') return 'review_figures';
-      if (['manuscript_provenance.json', 'manuscript_scaffold.pdf', 'article_report.json'].includes(artifact)) {
+      if (['manuscript_provenance.json', 'manuscript_scaffold.pdf', 'manuscript_revision.pdf', 'article_report.json'].includes(artifact)) {
         return 'review_manuscript';
       }
       if (artifact === 'scientific_readiness.json') return 'review_scientific_review';
       if (String((descriptor && descriptor.kind) || '') === 'research_report') return 'review_results';
       return '';
+    }
+
+    function openResourceButton(resource) {
+      openResource(RESOURCE_OWNER.fromButton(resource));
+    }
+
+    function openResource(descriptor) {
+      const preview = window.EasyICU.guidedPi.optional('preview');
+      if (!preview || !preview.open) return;
+      if (preview.open(descriptor, projectId(), previewWorkflowContext()) !== true) return;
+      const actionCode = reviewActionCode(descriptor);
+      if (actionCode) void recordHostAction(actionCode,
+        [String((descriptor && descriptor.run_id) || projectId()), String(descriptor.artifact || 'report')].join(':'));
+    }
+
+    function referenceResource(descriptor, expectedProjectId) {
+      if (projectId() !== expectedProjectId || !state.session || state.busy || state.childJobId) return false;
+      if (!STUDY_WORKSPACE.setReference(descriptor, projectId(), state.session.session_id)) return false;
+      const input = state.host && state.host.querySelector('[data-gpi-input]');
+      if (input) state.draft = input.value;
+      const preview = window.EasyICU.guidedPi.optional('preview');
+      if (preview) preview.close();
+      render(true);
+      requestAnimationFrame(() => {
+        const composer = state.host && state.host.querySelector('[data-gpi-input]');
+        if (composer) { composer.focus(); composer.scrollIntoView({ block: 'nearest' }); }
+      });
+      return true;
+    }
+
+    function revealPendingReview() {
+      const card = state.host && state.host.querySelector('.gpi-confirmation');
+      if (!card) return;
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      card.setAttribute('tabindex', '-1');
+      card.focus({ preventScroll: true });
     }
 
     function prepareEntryCompose(action) {
@@ -63,6 +100,9 @@
     function wire() {
       if (!state.host) return;
       state.host.addEventListener('click', event => {
+        if (RUN_FILES && RUN_FILES.handleClick(event)) return;
+        if (event.target.closest('[data-gpi-reference-remove]')) { STUDY_WORKSPACE.removeReference(); render(true); return; }
+        if (event.target.closest('[data-gpi-refresh-status]')) { loadStatus(); return; }
         if (IDEA_SOURCE && IDEA_SOURCE.handleClick(event, {
           host: () => state.host, render, tr,
         })) return;
@@ -72,21 +112,7 @@
         if (event.target.closest('[data-gpi-demo]')) { openDemo(); return; }
         const resource = event.target.closest('[data-gpi-resource-kind]');
         if (resource) {
-          const descriptor = RESOURCE_OWNER.fromButton(resource);
-          const preview = window.EasyICU.guidedPi.optional('preview');
-          if (preview && preview.open) {
-            preview.open(
-              descriptor, projectId(), previewWorkflowContext(),
-            );
-            const artifact = String((descriptor && descriptor.artifact) || '');
-            const actionCode = reviewActionCode(descriptor);
-            if (actionCode) {
-              void recordHostAction(
-                actionCode,
-                [String((descriptor && descriptor.run_id) || projectId()), artifact || 'report'].join(':'),
-              );
-            }
-          }
+          openResourceButton(resource);
           return;
         }
         const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
@@ -123,7 +149,6 @@
           }
           finishProviderSetup(); return;
         }
-        if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
         if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
         if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
         if (event.target.closest('[data-gpi-study-setup]')) { openStudySetupInConversation(); return; }
@@ -133,7 +158,12 @@
         if (previewPlanData) { previewApprovedPlanDataPackage(previewPlanData); return; }
         const previewAnalysisData = event.target.closest('[data-gpi-run-outcome-data]');
         if (previewAnalysisData) { RUN_OUTCOME.openData(previewAnalysisData); return; }
-        if (event.target.closest('[data-gpi-run-outcome-retry]')) { retryFailedExecution('validation_repair'); return; }
+        const reportRetry = event.target.closest('[data-gpi-run-outcome-retry]');
+        if (reportRetry) {
+          const reason = reportRetry.dataset.gpiRunOutcomeRetry;
+          retryFailedExecution(['report_only', 'restore'].includes(reason) ? reason : 'validation_repair');
+          return;
+        }
         if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
         if (event.target.closest('[data-gpi-confirm-reject]')) { rejectWorkflowAction(); return; }
         if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }
@@ -149,13 +179,6 @@
         }
         const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
         if (dataSourceAction) { authorizeDataSource(dataSourceAction); return; }
-        if (event.target.closest('[data-gpi-data-demo]')) {
-          sendText(tr(
-            'I do not have local data yet. Show only the official EasyICU demo datasets and explain their limits. Do not download or use one until I choose it. Offer only each exact demo or continuing study planning without data; do not offer a local full-database workflow.',
-            '我还没有本地数据。请只列出 EasyICU 官方 Demo 数据并说明局限；在我选择前不要下载或使用。下一步只提供每个准确 Demo 或继续无数据规划，不要提供本地完整数据库工作流。',
-          ));
-          return;
-        }
         if (MESSAGE_ACTIONS.handleClick(event)) return;
         const starterAction = STARTERS && STARTERS.actionFromEvent(event);
         if (starterAction && starterAction.kind === 'send') {
@@ -203,7 +226,6 @@
         if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
         if (event.target.closest('[data-gpi-presentation-pin]')) { togglePresentationPin(); return; }
         if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
-        if (event.target.closest('[data-gpi-cancel-setup]')) { state.showSetup = false; state.error = ''; render(); return; }
         if (event.target.closest('[data-gpi-new]')) {
           state.sessionSelectionRevision += 1;
           state.session = null;
@@ -222,6 +244,7 @@
         if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
       });
       state.host.addEventListener('change', event => {
+        if (RUN_FILES && RUN_FILES.handleChange(event)) return;
         if (IDEA_SOURCE && IDEA_SOURCE.handleChange(event, {
           host: () => state.host, render, tr,
           onReady: () => {
@@ -243,7 +266,13 @@
         if (!form) return;
         const presets = {
           cliproxyapi: { provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', model: 'gpt-5.6-luna' },
-          'custom-openai': { provider: 'custom-openai', base_url: 'https://example.com/v1', api_transport: 'openai-completions', model: '' },
+          // D-P2-4: the custom gateway ships an EMPTY address on purpose. The
+          // example domain is placeholder text only (see the input's
+          // placeholder) and must never be a submittable value: submitting it
+          // would carry the pasted API key to a stand-in host during
+          // verification. configureProvider additionally refuses empty and
+          // example.* addresses, and the backend rejects example.* outright.
+          'custom-openai': { provider: 'custom-openai', base_url: '', api_transport: 'openai-completions', model: '' },
           openai: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', model: 'gpt-5.6-luna' },
           openrouter: { provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions', model: '' },
           deepseek: { provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions', model: 'deepseek-chat' },
@@ -297,7 +326,7 @@
       });
     }
 
-    return Object.freeze({ dismissHeaderOverflow, wire });
+    return Object.freeze({ dismissHeaderOverflow, wire, openResource, openResourceButton, referenceResource, revealPendingReview });
   }
 
   window.EasyICU.guidedPi.declare('events', { create });

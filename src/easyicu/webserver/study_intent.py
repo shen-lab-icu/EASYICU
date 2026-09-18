@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple
 
 from easyicu.ai_optin import AIOptInError
 from easyicu.webserver import provider_adapter
@@ -40,6 +41,8 @@ __all__ = [
     "StudyIntentError",
     "extract_study_intent",
     "deterministic_intent",
+    "explicit_outcome_concepts",
+    "explicit_exposure_aggregation",
     "SLOTS",
 ]
 
@@ -217,7 +220,7 @@ _FAMILY_PATTERNS: Tuple[Tuple[str, str], ...] = (
 # "I am NOT studying death, my outcome is AKI" must not read `death`. Without
 # this, a user's correction becomes the very thing they corrected.
 _NEGATION = re.compile(
-    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|并非|而非|非|无关|别)"
+    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|不(?:研究|分析|考虑|比较)|并非|而非|非|无关|别)"
     r"[\s\S]{0,16}$",
     re.IGNORECASE,
 )
@@ -236,6 +239,10 @@ def _negated(text: str, start: int) -> bool:
     for sep in (". ", "; ", "。", "；", "?", "？"):
         if sep in window:
             window = window.rsplit(sep, 1)[1]
+    # "非 X 患者的死亡" names a negative-exposure population, not a negated
+    # outcome. Close that noun phrase's scope while retaining any subsequent
+    # explicit negation such as "非 X 患者中，不研究死亡".
+    window = re.sub(r"非[^，,。；;?？]{1,20}?(?:患者|人群|病人)", "", window)
     return bool(_NEGATION.search(window))
 
 
@@ -260,7 +267,7 @@ def _family_of(concept: Optional[str]) -> Optional[frozenset]:
 
 
 def _match_concept(text: str) -> List[Tuple[str, str]]:
-    """Return (concept_id, matched_phrase) pairs in the order they appear.
+    """Return concept/phrase pairs in dictionary-specificity order.
 
     A phrase the sentence explicitly negates is not a reading — it is skipped,
     which leaves the slot unread rather than wrong.
@@ -277,6 +284,60 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
             found.append((concept, match.group(0)))
             break
     return found
+
+
+def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
+    """Read all explicit endpoint phrases without changing the primary slot.
+
+    Clinical events can also name a population or exposure, so this roster
+    only adds the closed, high-specificity endpoint vocabulary. A configured
+    event outcome remains the caller's authority. Specific phrases reserve
+    their text span: ``28-day mortality`` must not add generic ``death`` too.
+    This is intent, not evidence that the source can supply these endpoints.
+    """
+
+    text = str(question or "")
+    values: list[str] = []
+    covered: list[tuple[int, int]] = []
+    for pattern, concept in _PHRASE_TO_CONCEPT:
+        if concept not in _OUTCOME_CONCEPTS_PRIMARY:
+            continue
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            if _negated(text, match.start()) or any(
+                match.start() < end and start < match.end()
+                for start, end in covered
+            ):
+                continue
+            covered.append(match.span())
+            if concept not in values:
+                values.append(concept)
+    return tuple(values)
+
+
+def _exposure_candidates_in_text_order(
+    text: str, candidates: List[Tuple[str, str]]
+) -> List[Tuple[str, str]]:
+    """Read the studied marker before later definitions or method acronyms.
+
+    Dictionary order ranks synonyms, not scientific roles. Explicit population
+    phrases are not exposure assignments. Ties retain dictionary specificity
+    (for example, SOFA-2 before the overlapping original SOFA token).
+    """
+
+    positioned = []
+    for rank, (concept, phrase) in enumerate(candidates):
+        for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
+            if _negated(text, match.start()):
+                continue
+            after = text[match.end():]
+            before = text[max(0, match.start() - 35):match.start()]
+            if re.match(r"\s*(?:patients?\b|cohort\b|患者|人群|病人)", after, re.IGNORECASE):
+                continue
+            if re.search(r"\bpatients?\s+with\s*$", before, re.IGNORECASE):
+                continue
+            positioned.append((match.start(), rank, concept, phrase))
+            break
+    return [(concept, phrase) for _, _, concept, phrase in sorted(positioned)]
 
 
 def _clean_question(value: Any) -> str:
@@ -303,6 +364,74 @@ def _slot(value: Any, provenance: str, evidence: Optional[str] = None) -> Dict[s
 
 def _empty_slot() -> Dict[str, Any]:
     return {"value": None, "provenance": "unread", "evidence": None}
+
+
+@dataclass(frozen=True)
+class ExplicitExposureAggregation:
+    """An operation attached to one named concept in the actual question.
+
+    This is proposal input, not an execution or plan-approval receipt. Table
+    summary defaults never supply this coordinate.
+    """
+
+    concept_id: str
+    aggregation: Literal["max", "min", "mean", "median", "first", "last", "sum"]
+    evidence: str
+
+
+_MEASUREMENT_OPERATIONS = (
+    ("max", r"\b(?:maximum|highest|peak)\b|最高(?:值)?|最大(?:值)?|峰值"),
+    ("min", r"\b(?:minimum|lowest|nadir)\b|最低(?:值)?|最小(?:值)?"),
+    ("mean", r"\b(?:mean|average)\b|平均(?:值)?"),
+    ("median", r"\bmedian\b|中位数"),
+    ("first", r"\b(?:first|initial)\b|首次|初次"),
+    ("last", r"\b(?:last|final)\b|末次|最后一次"),
+    ("sum", r"\b(?:cumulative|total|sum)\b|累计|累积|总量"),
+)
+
+
+def explicit_exposure_aggregation(
+    question: str, *, concept_id: str,
+) -> Optional[ExplicitExposureAggregation]:
+    """Read only an adjacent, unambiguous measurement operation.
+
+    Match the concept phrase as a whole before looking outside it: the word
+    "mean" in "mean arterial pressure" does not request temporal averaging.
+    A remote table-summary instruction or another variable's operation cannot
+    bind this exposure. Negated and conflicting operations remain unread for
+    complete-plan resolution, never an internal-field questionnaire.
+    """
+
+    text = _clean_question(question)
+    lowered = text.lower()
+    matches: Dict[str, str] = {}
+    for pattern, concept in _PHRASE_TO_CONCEPT:
+        if concept != concept_id:
+            continue
+        for named in re.finditer(pattern, text, re.IGNORECASE):
+            for operation, expression in _MEASUREMENT_OPERATIONS:
+                before = re.search(
+                    rf"(?:{expression})\s*(?:(?:serum|blood|plasma)\s+|血清|血浆)?$",
+                    text[:named.start()], re.IGNORECASE,
+                )
+                after = re.match(
+                    rf"\s*(?:(?:levels?|values?)\s+|的|值|水平)?(?:{expression})",
+                    text[named.end():], re.IGNORECASE,
+                )
+                if before is not None:
+                    start, end = before.start(), named.end()
+                elif after is not None:
+                    start, end = named.start(), named.end() + after.end()
+                else:
+                    continue
+                if not _negated(lowered, start):
+                    matches[operation] = text[start:end]
+    if len(matches) != 1:
+        return None
+    operation, evidence = next(iter(matches.items()))
+    return ExplicitExposureAggregation(
+        concept_id=concept_id, aggregation=operation, evidence=evidence,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -348,6 +477,7 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
         for c, p in concepts
         if c != outcome_concept and not (outcome_family and _family_of(c) == outcome_family)
     ]
+    exposures = _exposure_candidates_in_text_order(text, exposures)
     if exposures:
         concept, phrase = exposures[0]
         slots["exposure"] = _slot(concept, "user_text", phrase)

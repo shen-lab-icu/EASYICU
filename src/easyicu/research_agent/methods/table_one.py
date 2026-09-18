@@ -475,7 +475,11 @@ def build_grouped_table_one(
         if contract.p_values_required:
             p_value, test_name = _p_value(frame, group_masks, variable)
         else:
-            p_value, test_name = None, "not_reported_repeated_units"
+            p_value, test_name = None, (
+                "not_reported_data_derived_groups"
+                if contract.schema_version == "easyicu.table_one/3"
+                else "not_reported_repeated_units"
+            )
         series = frame[variable.name]
         if variable.summary != "count_percent" and variable.levels:
             # An ordinal row summarised numerically may still declare its

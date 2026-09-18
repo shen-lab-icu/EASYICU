@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -185,6 +186,41 @@ def _render(run_dir: Path, manifest: dict, out_dir: Path):
     )
 
 
+@pytest.mark.parametrize("levels", [[0, 1], [1, 0]])
+def test_compiled_renderer_binds_labels_to_exposure_and_value(tmp_path, monkeypatch, levels):
+    from easyicu.research_agent.execution.runners import exposure_outcome_distribution_render as owner
+    table = _produced_table(tmp_path, monkeypatch, spec_updates={"exposure_levels": levels})
+    run_dir, manifest = _bound(tmp_path, table)
+    labels = {"unrelated=0": "Wrong reference", "unrelated=1": "Wrong comparison",
+              EXPOSURE: "Anticoagulant exposure", OUTCOME: "30-day readmission",
+              f"{EXPOSURE}=0": "No recorded treatment", f"{EXPOSURE}=1": "Recorded treatment"}
+    code = owner.exposure_outcome_distribution_figure_code(_step(), display_labels=labels)
+    inputs = run_dir / "resolved.json"
+    inputs.write_text(json.dumps(manifest))
+    output = tmp_path / "figures"
+    monkeypatch.setenv("STEP_OUT_DIR", str(output))
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(inputs))
+    exporter = owner.save_publication_figure
+    def check(fig, *args, **kwargs):
+        assert [t.get_text().replace("\n", " ") for t in fig.axes[0].get_yticklabels()] == [labels[f"{EXPOSURE}={n}"] for n in levels]
+        caption = kwargs["contract"].reader_caption
+        assert "Anticoagulant exposure" in caption and "30-day readmission" in caption
+        assert EXPOSURE not in caption and OUTCOME not in caption
+        return exporter(fig, *args, **kwargs)
+    monkeypatch.setattr(owner, "save_publication_figure", check)
+    exec(compile(code, "<compiled renderer>", "exec"), {})
+    pd.testing.assert_frame_equal(pd.read_csv(table), pd.read_csv(output / f"{PRODUCT}_input_source_data.csv"))
+
+
+def test_scoped_category_labels_support_named_and_ordinal_levels():
+    from easyicu.research_agent.figures.display_labels import scoped_label_lookup
+    labels = {"stage=3": "Stage III", "arm=usual care": "Usual care", "other=3": "Other label"}
+    assert scoped_label_lookup("stage", 3, labels) == "Stage III"
+    assert scoped_label_lookup("arm", "usual care", labels) == "Usual care"
+    assert scoped_label_lookup("unmapped", 3, labels) is None
+
+
 def _tampered(tmp_path: Path, monkeypatch, mutate) -> tuple[Path, dict]:
     """Rebind a table after ``mutate`` has changed one published number."""
 
@@ -226,6 +262,84 @@ def test_counts_only_table_renders_without_error_bars(
         "descriptive_result",
     ]
     assert "no uncertainty is computed" in contract["statistics_note"]
+    assert "No confidence intervals or hypothesis tests are shown" in contract["reader_caption"]
+    assert "(A) Bars" in contract["reader_caption"]
+    assert "(B) Points" in contract["reader_caption"]
+    assert "structural absence is counted as no event" in contract["reader_caption"]
+    assert "outcomes are not permitted" not in contract["reader_caption"]
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        (
+            "Patients without the prespecified treatment during the observation window",
+            "Patients receiving the prespecified treatment during the observation window",
+        ),
+        (
+            "观察窗口内未达到预先规定的RISK-X7评分阈值且完成随访的记录",
+            "观察窗口内达到预先规定的RISK-X7评分阈值且完成随访的记录",
+        ),
+    ],
+)
+@pytest.mark.parametrize("counts_only", [False, True])
+def test_long_category_labels_and_annotations_do_not_overlap_panels(
+    tmp_path: Path, monkeypatch, labels, counts_only: bool
+) -> None:
+    from easyicu.research_agent.execution.runners import (
+        exposure_outcome_distribution_render as renderer,
+    )
+
+    updates = (
+        {
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "confidence_level": None,
+        }
+        if counts_only
+        else {}
+    )
+    table = _produced_table(tmp_path, monkeypatch, spec_updates=updates)
+    run_dir, manifest = _bound(tmp_path, table)
+    exporter = renderer.save_publication_figure
+
+    def checked_export(fig, *args, **kwargs):
+        fig.canvas.draw()
+        canvas = fig.canvas.get_renderer()
+        axes = fig.axes
+        rendered_labels = []
+        for axis_index, ax in enumerate(axes):
+            other_ax = axes[1 - axis_index]
+            for label in ax.get_yticklabels():
+                if not label.get_visible():
+                    continue
+                bounds = label.get_window_extent(canvas)
+                assert not bounds.overlaps(other_ax.bbox)
+                assert bounds.x0 >= 0
+                rendered_labels.append("".join(label.get_text().split()))
+                for token in re.findall(r"[A-Za-z]+(?:-[A-Za-z0-9]+)*", labels[len(rendered_labels) - 1]):
+                    assert token in label.get_text()
+            for label in ax.texts:
+                if "%" not in label.get_text():
+                    continue
+                bounds = label.get_window_extent(canvas)
+                assert not bounds.overlaps(other_ax.bbox)
+                assert bounds.x0 >= ax.bbox.x0 - 1
+                assert bounds.x1 <= ax.bbox.x1 + 1
+        assert set(rendered_labels) == {"".join(label.split()) for label in labels}
+        assert axes[0].get_ylim() == axes[1].get_ylim()
+        return exporter(fig, *args, **kwargs)
+
+    monkeypatch.setattr(renderer, "save_publication_figure", checked_export)
+    run_exposure_outcome_distribution_figure(
+        out_dir=tmp_path / "figure",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=STEP_ID,
+        figure_product=PRODUCT,
+        level_labels=labels,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -364,6 +478,7 @@ def test_the_summary_and_note_carry_the_declared_design(
     assert "wilson" in note
     assert "structural 100% total" in note
     assert "no inferential interval" in note
+    assert "Error bars are 95% Wilson confidence intervals" in contract["reader_caption"]
 
 
 def test_patient_cluster_intervals_and_risk_difference_render_from_one_product(
@@ -454,6 +569,7 @@ def test_patient_cluster_intervals_and_risk_difference_render_from_one_product(
         "does not authorize association or causal interpretation"
         in contract["statistics_note"]
     )
+    assert "patient-cluster-robust Wald confidence intervals" in contract["reader_caption"]
     assert not [
         finding
         for finding in audit_publication_exports([out / f"{PRODUCT}.svg"])
@@ -819,3 +935,39 @@ def test_the_source_data_beside_the_figure_holds_every_row_it_drew(
         assert set(panel_rows["exposure_level_index"].astype(int)) == set(
             levels["exposure_level_index"].astype(int)
         ), panel
+
+
+def test_report_worker_overrides_gui_backend_in_fresh_process(tmp_path, monkeypatch):
+    """A desktop default must never construct a native window in a job thread."""
+    import os
+    import subprocess
+    import sys
+
+    table = _produced_table(tmp_path, monkeypatch)
+    root, manifest = _bound(tmp_path, table)
+    payload = tmp_path / 'worker.json'
+    payload.write_text(json.dumps({'run_dir': str(root), 'resolved_inputs': manifest,
+                                  'out_dir': str(tmp_path / 'worker-output'),
+                                  'step_id': STEP_ID, 'figure_product': PRODUCT}))
+    script = '''
+import json, sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from easyicu.research_agent.execution.runners.exposure_outcome_distribution_render import run_exposure_outcome_distribution_figure
+args = json.loads(Path(sys.argv[1]).read_text())
+args['run_dir'] = Path(args['run_dir'])
+args['out_dir'] = Path(args['out_dir'])
+with ThreadPoolExecutor(max_workers=1) as pool:
+    pool.submit(run_exposure_outcome_distribution_figure, **args).result(timeout=30)
+import matplotlib
+assert matplotlib.get_backend().lower() == 'agg'
+assert list(args['out_dir'].glob('*.png'))
+assert list(args['out_dir'].glob('*.pdf'))
+'''
+    completed = subprocess.run(
+        [sys.executable, '-c', script, str(payload)], capture_output=True, text=True,
+        env={**os.environ, 'MPLBACKEND': 'MacOSX' if sys.platform == 'darwin' else 'TkAgg',
+             'PYTHONPATH': str(Path(__file__).resolve().parents[3] / 'src')},
+        timeout=45,
+    )
+    assert completed.returncode == 0, completed.stderr

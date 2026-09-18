@@ -7,7 +7,7 @@
   "clinical_topics": ["external validation", "cross database", "transportability", "generalizability", "model validation", "data harmonization"],
   "topic_aliases": ["external validation", "cross database validation", "cross-database validation", "model transportability", "跨数据库验证", "外部验证"],
   "study_families": ["prediction", "association", "descriptive"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "A source population and one or more independently sampled target-database populations mapped to a common, clinically defensible eligibility definition.",
     "time_zero": "The same clinical landmark in every database, with any implementation differences documented.",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
+from ..contracts.figure_plan import ROBUSTNESS_FIGURE_KNOWN_INPUTS
 from ..contracts.step_families import (
     _CONTRACT_FAMILIES,
     _HEURISTIC_REACHABLE_FAMILIES,
@@ -170,6 +171,7 @@ def _enforce_advanced_plan_contract(
     if family == "robustness" and _dedicated_renderer_consumes_typed_source(
         plan.steps,
         source="table:robustness_matrix",
+        compatible_companions=ROBUSTNESS_FIGURE_KNOWN_INPUTS - {"table:robustness_matrix"},
     ):
         # A Planner-owned renderer already presents the deterministic replay
         # result.  Do not add a differently named conventional figure to the
@@ -358,3 +360,28 @@ def _enforce_advanced_plan_contract(
     )
     return revised, [finding]
 
+
+def enforce_advanced_plan_contract(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    long_trajectory_bound: bool = False,
+) -> tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Constrain advanced plan shape while leaving analysis code to the agent.
+
+    Public cross-owner entrypoint for
+    :func:`_enforce_advanced_plan_contract`. The advanced-family contract is
+    owned here; final shape checks only apply it.
+    """
+
+    return _enforce_advanced_plan_contract(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    )
+
+
+__all__ = [
+    "_enforce_advanced_plan_contract",
+    "enforce_advanced_plan_contract",
+]

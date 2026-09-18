@@ -1,3 +1,4 @@
+/* Owner: Guided extraction/design stepper widget. */
 /* Guided Copilot progressive extraction + study-design stepper.
    Owner file for the "Prepare data inside Copilot" inline card. This module
    owns extraction/design state, render HTML, and study-design vocabulary.

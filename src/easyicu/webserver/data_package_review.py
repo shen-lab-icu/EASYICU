@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import threading
 import statistics
@@ -17,6 +18,11 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from easyicu.research_agent.acquisition.catalog import build_available_catalog
+from easyicu.research_agent.concept_availability import (
+    normalize_database_name,
+    variable_source_unavailability,
+)
+from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.research_agent.cohort.materializer import (
     MaterializedMetadataError,
     validate_typed_event_status_domain,
@@ -756,12 +762,14 @@ def build_plan_bound_data_package_review(
     *,
     cohort_file: Path,
     plan_file: Path,
+    context_file: Path | None = None,
 ) -> Dict[str, Any]:
     """Build a result-blind preview of the exact cohort bound to a Plan.
 
     Only Parquet metadata is read: row count, column names, types, and null
-    counts. Values, event rates, group comparisons, and effect estimates never
-    cross this boundary.
+    counts. Typed missingness/source semantics are used only when bound to the
+    same cohort. Conditional-time coverage is withheld because it can disclose
+    event prevalence. No patient values or scientific estimates are returned.
     """
 
     study_id = str(study.get("id") or "").strip()
@@ -810,6 +818,40 @@ def build_plan_bound_data_package_review(
             "The exact Plan-bound cohort has no rows.",
         )
     columns = list(parquet.schema_arrow.names)
+    source_config = study.get("data_source")
+    source_config = source_config if isinstance(source_config, Mapping) else {}
+    database = normalize_database_name(str(source_config.get("database") or ""))
+    descriptors = {}
+    if context_file is not None:
+        context_path = Path(context_file)
+        try:
+            if (
+                not context_path.is_file() or context_path.is_symlink()
+                or context_path.stat().st_size > 4 * 1024 * 1024
+            ):
+                raise ValueError("context_file_unavailable_or_unbounded")
+            context = parse_research_context_json(context_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise DataPackageReviewError(
+                "plan_bound_data_preview_context_unreadable",
+                "The Plan-bound semantic context could not be verified.",
+                details={"error_type": type(exc).__name__},
+            ) from exc
+        row_count = (context.cohort.provenance or {}).get(
+            "analysis_row_count", context.cohort.n_stays,
+        )
+        if (
+            not context.cohort_parquet
+            or Path(context.cohort_parquet).resolve() != cohort_path.resolve()
+            or normalize_database_name(context.cohort.database) != database
+            or row_count != denominator
+            or len({variable.name for variable in context.variables}) != len(context.variables)
+        ):
+            raise DataPackageReviewError(
+                "plan_bound_data_preview_context_mismatch",
+                "The semantic context is not bound to this exact cohort.",
+            )
+        descriptors = {variable.name: variable for variable in context.variables}
     selected_design = next(
         (
             row
@@ -824,10 +866,18 @@ def build_plan_bound_data_package_review(
         if str(value).strip()
     }
     endpoint = str((plan.get("endpoint") or {}).get("name") or "").strip()
+    required.update(
+        value for step in plan.get("steps") or [] if isinstance(step, Mapping)
+        for value in step.get("inputs") or []
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)
+    )
+    if endpoint:
+        required.add(endpoint)
     missing_required = sorted(required.difference(columns))
+    unavailable_required: list[str] = []
     concepts: list[Dict[str, Any]] = []
     coverages: list[float] = []
-    partial_count = 0
+    attention_count = 0
     for index, name in enumerate(columns):
         null_counts: list[int] = []
         for row_group in range(parquet.metadata.num_row_groups):
@@ -838,8 +888,49 @@ def build_plan_bound_data_package_review(
         null_count = sum(null_counts) if len(null_counts) == parquet.metadata.num_row_groups else None
         evaluable = denominator - null_count if null_count is not None else None
         availability = "ready" if null_count == 0 else "partial" if null_count is not None else "semantic_review_required"
-        if availability == "partial":
-            partial_count += 1
+        reason = (
+            "plan_bound_column_complete" if null_count == 0
+            else "plan_bound_column_has_missing_values" if null_count is not None
+            else "plan_bound_null_count_unavailable"
+        )
+        coverage_denominator: int | None = denominator
+        descriptor = descriptors.get(name)
+        profile = descriptor.missingness if descriptor is not None else None
+        if profile is not None and null_count is not None:
+            raw_missing = profile.raw_n_missing
+            if raw_missing is None:
+                raw_missing = profile.n_missing
+            if (
+                profile.n_total != denominator or raw_missing != null_count
+                or profile.n_missing + profile.not_applicable_n != raw_missing
+                or (profile.eligible_n is not None
+                    and profile.eligible_n + profile.not_applicable_n != denominator)
+            ):
+                raise DataPackageReviewError(
+                    "plan_bound_data_preview_context_mismatch",
+                    "Typed missingness does not reconcile with cohort metadata.",
+                    details={"column": name},
+                )
+            if profile.eligible_n is not None and descriptor.role.value == "time":
+                availability = "ready" if profile.n_missing == 0 else "partial"
+                reason = (
+                    "plan_bound_conditional_scope_complete" if profile.n_missing == 0
+                    else "plan_bound_conditional_scope_missing"
+                )
+                # A timestamp's eligible denominator can encode the event
+                # count. Project its quality state, not that hidden result.
+                evaluable = coverage_denominator = null_count = None
+        unavailability = (
+            variable_source_unavailability(descriptor, database) if descriptor is not None else ()
+        )
+        if unavailability:
+            availability = "structurally_unavailable"
+            reason = "plan_bound_source_structurally_unavailable"
+            evaluable = coverage_denominator = null_count = None
+            if name in required:
+                unavailable_required.append(name)
+        if availability != "ready":
+            attention_count += 1
         if evaluable is not None:
             coverages.append(evaluable / denominator * 100)
         concepts.append(
@@ -849,34 +940,35 @@ def build_plan_bound_data_package_review(
                     if name == endpoint
                     else "plan_input"
                     if name in required
-                    else "supporting_variable"
+                    else "other_materialized_column"
                 ),
                 "concept_id": name,
                 "module": "analysis_cohort",
                 "column_role": str(parquet.schema_arrow.field(name).type),
                 "availability_status": availability,
-                "reason_code": (
-                    "plan_bound_column_complete"
-                    if null_count == 0
-                    else "plan_bound_column_has_missing_values"
-                    if null_count is not None
-                    else "plan_bound_null_count_unavailable"
-                ),
+                "reason_code": reason,
                 "evaluable_count": evaluable,
-                "denominator_count": denominator,
+                "denominator_count": coverage_denominator,
                 "missing_count": null_count,
+                "source_unavailability": [
+                    {"concept_id": item.concept_id, "database": item.database,
+                     "reason_code": item.reason_code}
+                    for item in unavailability
+                ],
             }
         )
 
-    source_config = study.get("data_source")
-    source_config = source_config if isinstance(source_config, Mapping) else {}
+    blocked = bool(missing_required or unavailable_required)
     payload: Dict[str, Any] = {
         "schema_version": "easyicu.data-package-review/2",
         "review_stage": "post_plan",
-        "status": "blocked" if missing_required else "ready_for_analysis",
+        "status": "blocked" if blocked else "ready_for_analysis",
+        "readiness_scope": "physical_metadata_not_clinical_validation",
+        "plan_input_count": len(required),
         "code": (
             "plan_bound_data_preview_missing_required_columns"
             if missing_required
+            else "plan_bound_data_preview_source_unavailable" if unavailable_required
             else "plan_bound_data_preview_ready"
         ),
         "study_context_id": study_id,
@@ -901,18 +993,20 @@ def build_plan_bound_data_package_review(
             else {},
         },
         "configured_modules": [
-            {"module": "analysis_cohort", "availability_status": "ready"}
+            {"module": "analysis_cohort", "availability_status": (
+                "structurally_unavailable" if blocked else "partial" if attention_count else "ready"
+            )}
         ],
         "concepts": concepts,
         "blocking_findings": [
             f"plan_required_column_missing:{name}" for name in missing_required
-        ],
+        ] + [f"plan_required_source_unavailable:{name}" for name in unavailable_required],
         "quality": {
-            "modules_ok": 1,
-            "modules_warn": 0,
-            "modules_bad": 0,
+            "modules_ok": int(not blocked and not attention_count),
+            "modules_warn": int(not blocked and bool(attention_count)),
+            "modules_bad": int(blocked),
             "modules_unknown": 0,
-            "watchlist_count": partial_count,
+            "watchlist_count": attention_count,
             "median_coverage_pct": round(statistics.median(coverages), 1)
             if coverages
             else None,
@@ -923,6 +1017,7 @@ def build_plan_bound_data_package_review(
             "event_rates",
             "group_comparisons",
             "effect_estimates",
+            "conditional_event_counts_and_coverage",
         ],
         "privacy": {
             "raw_rows_returned": False,
@@ -936,6 +1031,7 @@ def build_plan_bound_data_package_review(
                 "plan_bound_cohort_parquet_metadata",
                 "approved_candidate_plan",
                 "typed_study_context",
+                *(["cohort_bound_research_context"] if context_file is not None else []),
             ],
         },
     }

@@ -395,3 +395,29 @@ No literature citation here.
     ]
     assert all(repair["citation_key"] == "paper_2024" for repair in repairs)
     assert audit_manuscript_literature(repaired, _bundle()).status == "pass"
+
+
+def test_discussion_with_other_citations_still_restores_the_screened_comparator() -> None:
+    manuscript = """## Introduction
+Prior comparator work [@paper_2024] and observational reporting guidance [@strobe_2007].
+
+## Methods
+The observational reporting route followed STROBE [@strobe_2007].
+
+## Discussion
+The result was interpreted with reporting guidance [@strobe_2007].
+"""
+
+    blocked = audit_manuscript_literature(manuscript, _bundle())
+    assert blocked.status == "blocked"
+    assert blocked.direct_comparator_sections_missing == ["discussion"]
+
+    repaired, repairs = repair_missing_context_section_citations(
+        manuscript,
+        _bundle(),
+    )
+
+    assert [repair["section"] for repair in repairs] == ["discussion"]
+    assert repairs[0]["citation_key"] == "paper_2024"
+    assert repaired.count("[@paper_2024]") == 2
+    assert audit_manuscript_literature(repaired, _bundle()).status == "pass"

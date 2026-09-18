@@ -534,7 +534,8 @@ def test_step_summary_fraction_scale_follows_explicit_metric_wrappers(
         step_summary=step_summary,
     )
 
-    assert findings
+    assert len(findings) >= 1, "expected at least one fraction-scale finding"
+    assert findings[0].validator == "step_summary_fraction_scale"
     assert findings[0].detail["summary_path"] == expected_path
 
 
@@ -594,7 +595,8 @@ def test_step_summary_fraction_scale_preserves_standard_metric_wrappers(
         step_summary=step_summary,
     )
 
-    assert findings
+    assert len(findings) >= 1, "expected at least one fraction-scale finding"
+    assert findings[0].validator == "step_summary_fraction_scale"
     assert any(finding.detail["reported_value"] == 40.0 for finding in findings)
 
 
@@ -5175,8 +5177,7 @@ def test_statistical_validator_flags_single_group_partition(ra, tmp_path: Path):
         step_summary={},
     )
     deg = [
-        f
-        for f in findings
+        f for f in findings
         if "single-group" in f.message.lower() or "degenerate" in f.message.lower()
     ]
     assert deg and all(f.severity == "warning" for f in deg)

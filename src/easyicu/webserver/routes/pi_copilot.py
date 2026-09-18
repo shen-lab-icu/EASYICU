@@ -82,11 +82,15 @@ ResearchDocumentNameText = Annotated[
         min_length=20,
         max_length=64,
         pattern=(
-            r"^(?:manuscript_scaffold\.(?:pdf|tex|bib)|"
+            r"^(?:manuscript_scaffold\.(?:pdf|tex|bib)|manuscript_revision\.pdf|"
             r"system_validation_report\.(?:html|pdf))$"
         ),
     ),
 ]
+# D-P3-6: sha256 wire format shared with the frontend preview owner
+# (src/easyicu/webserver/static/js/screens-guided-pi-preview.js uses
+# /^[a-f0-9]{64}$/ in safeResource/previewUrl). No shared constant across
+# languages — change both patterns together, logic unchanged.
 Sha256Text = Annotated[
     str,
     StringConstraints(
@@ -182,6 +186,7 @@ class PiMessageRequest(BaseModel):
             "extract",
             "run",
             "provider_run",
+            "report_revision",
             "cancel",
             "workspace_write",
             "mcp_read",
@@ -368,6 +373,7 @@ def get_pi_copilot_literature_source(pmid: ShortText) -> dict:
         status = (
             422
             if code == "literature_source_pmid_invalid"
+            else 403 if code == "literature_source_network_blocked"
             else 404 if code == "literature_source_not_found" else 502
         )
         raise HTTPException(status_code=status, detail=exc.detail) from exc
@@ -665,12 +671,14 @@ def get_pi_copilot_research_document(
     project_id: ShortText,
     run_id: RunIdText,
     document_name: ResearchDocumentNameText,
+    expected_sha256: str | None = None,
 ) -> Response:
     try:
         payload = get_pi_copilot_service().get_research_document(
             project_id=project_id,
             run_id=run_id,
             document_name=document_name,
+            expected_sha256=expected_sha256,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

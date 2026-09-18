@@ -22,17 +22,21 @@ _MAX_FAILURE_PROJECTION_BYTES = 64 * 1024
 
 
 def _normalized_planner_gate_reason(row: Mapping[str, Any]) -> str:
-    """Upgrade one legacy planner-only Provider 5xx projection on read.
+    """Upgrade legacy planner-only Provider HTTP projections on read.
 
-    Older wrappers used the generic execution-failure code even though their
-    immutable source manifest recorded that analysis never started and the
-    Planner stopped on a Provider HTTP error.  Reading that closed projection
-    is enough to restore the same checkpoint-resume route used by new runs;
-    every other historical execution failure remains untouched.
+    Older wrappers used either the generic execution-failure code or a
+    compiler-failure code even though their immutable source manifest recorded
+    that analysis never started and the Planner stopped on a Provider HTTP
+    error.  Reading that closed projection is enough to restore the same
+    checkpoint-resume route used by new runs; every other historical failure
+    remains untouched.
     """
 
     reason = str(row.get("gate_reason") or "")
-    if reason != "research_pipeline_execution_failed":
+    if reason not in {
+        "research_pipeline_execution_failed",
+        "research_pipeline_progressive_compile_failed",
+    }:
         return reason
     project_dir = Path(str(row.get("project_dir") or "")).expanduser()
     manifest = project_dir / "source_run_manifest.json"
@@ -50,8 +54,8 @@ def _normalized_planner_gate_reason(row: Mapping[str, Any]) -> str:
     if (
         payload.get("schema_version") == "easyicu.web-research-pipeline-projection/1"
         and payload.get("status") == "failed"
-        and payload.get("failure_code") == "research_pipeline_execution_failed"
-        and payload.get("failure_type") == "provider_http"
+        and payload.get("failure_code") == reason
+        and payload.get("failure_type") in {"provider_http", "rate_limit"}
         and payload.get("analysis_started") is False
     ):
         return "research_pipeline_planner_provider_unavailable"
@@ -153,7 +157,9 @@ def workflow_authoritative_run(
     A package-bound preparation attempt can fail before producing a plan or
     starting analysis. When it was launched from an unchanged, review-pending
     candidate plan, the failed attempt remains audit history but must not erase
-    that candidate or force the researcher to spend another Planner run.
+    that candidate or force the researcher to spend another Planner run. This
+    includes a nonconvergent plan: its automatic-stop/approval restrictions
+    remain intact, and only its explicit source-bound retry may continue.
     """
 
     if not rows:
@@ -179,6 +185,7 @@ def workflow_authoritative_run(
             and {
                 "operator_plan_approval_required",
                 "plan_scientific_changes_required",
+                "agent_plan_revision_nonconvergent",
             }
             & {
                 str(code or "").strip()

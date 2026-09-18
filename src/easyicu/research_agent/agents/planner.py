@@ -13,6 +13,10 @@ from ..planning.analysis_types import (
     planner_analysis_family_authority_guide, validate_host_authorized_analysis_family,
 )
 from ..planning import scientific_action_catalog as _scientific_actions
+from ..planning.prompt_projection import (
+    planner_prompt_byte_limit,
+    project_plan_revision_prompt,
+)
 from ..planning.primary_result_contract import (
     primary_result_contract_guide,
     validate_required_primary_result as _validate_required_primary_result,
@@ -211,50 +215,29 @@ def _base_planner_user_prompt(
     "every task needs Table 1, outcome incidence, missingness, "
     "or a primary association model."
     + sensitivity_guide
-    + "Table 1 is standard for observational/association and prediction "
-    "families (STROBE item 14 / TRIPOD): include a `table:table_one` step "
-    "describing the analytic cohort before the primary analysis. Omit it "
-    "only for a family that genuinely does not call for one, such as a pure "
-    "feasibility/protocol task or clustering already described per cluster. "
-    "A step that declares the exact output `table:table_one` MUST also "
-    "declare `table_one_spec`: group_by, at least two closed group_levels, "
-    "and a variables roster whose name/kind/summary/test/closed levels "
-    "encode the scientific comparison. THE COLUMN YOU GROUP ON IS NOT ALSO "
-    "A ROW -- it would report each group as 100% itself. Name it in "
-    "`group_by` or in `variables`, never in both. "
-    "That same step's `inputs` must explicitly list its `group_by` and "
-    "every `variables[*].name`, in addition to the typed cohort artifact; "
-    "a column named inside the spec is not implicitly an input. "
-    "Levels follow the variable kind: a "
-    "'categorical' row summarised 'count_percent' requires at least two "
-    "closed levels; an 'ordinal' row summarised numerically may declare "
-    "its closed levels (a 0-4 organ score, a 0-3 stage) and the host then "
-    "stops the step on any value outside them, or may omit levels "
-    "entirely; a 'continuous' row must leave levels empty. Table 1 means "
-    "Overall plus grouped "
-    "columns. Preserve observed scalar types exactly: numeric 0/1 levels "
-    "must be JSON numbers, never the strings '0'/'1'. "
-    "When the variable catalog withholds categorical literals and supplies "
-    "`opaque_levels`, copy those exact opaque tokens into group_levels or a "
-    "categorical variable's levels. The host will bind them locally to the "
-    "digest-verified observed values; never guess a hidden label. For a "
-    f"two-level field the exact token array is `{opaque_binary_json}`; use "
-    "those same tokens for scalar selectors such as an event value or a "
-    "reference/comparison level. "
-    "Report per-group missing n (%), one variable-appropriate P value, "
-    "and the test name. Declare `missing_group_policy`: 'fail_closed' "
-    "stops the step if any row's group_by value is missing, and "
-    "'exclude_and_report' removes those rows from the whole table, Overall "
-    "included, and reports how many were removed. Check the variable "
-    "catalog's missingness for the column you group on: a grouping "
-    "variable derived from measurements is rarely observed on every stay, "
-    "and 'fail_closed' on such a column ends the step with no result. "
-    "A step with `table_one_spec` may declare only "
-    "`table:table_one` plus the optional host-audit outputs "
-    "`table:cohort_flow` and `log:source_row_count_reconciliation`; put "
-    "every other result or figure in a separate step. If only an "
-    "ungrouped cohort description is wanted, "
-    "emit `table:cohort_summary` instead and omit table_one_spec. "
+    + "Describe the analytic cohort with `table:table_one` for observational/"
+    "association and prediction studies; omit only when inappropriate to the "
+    "question (e.g. protocol/feasibility or an existing per-cluster description). "
+    "`table:table_one` requires `table_one_spec` with group_by, at least two "
+    "closed group_levels, and variables specifying name/kind/summary/test/levels. "
+    "THE COLUMN YOU GROUP ON IS NOT ALSO A ROW: name it in `group_by` or in "
+    "`variables`, never in both, because a grouping row would report each group "
+    "as 100% of itself. List group_by and every row "
+    "variable in inputs alongside the typed cohort artifact. Overall and groups "
+    "are columns. Categorical count_percent rows require at least two closed "
+    "levels; ordinal numerical rows may declare levels (then undeclared values "
+    "fail) or omit them; continuous rows leave levels empty. Preserve scalar "
+    "types: numeric 0/1 levels are numbers, not strings. When `opaque_levels` "
+    "are supplied, use exactly those tokens; never guess private literals. "
+    f"For binary fields use `{opaque_binary_json}`, also for event/reference/"
+    "comparison selectors. Report missing n (%) and planned comparisons only; "
+    "do not add P values to a descriptive-only design. Set missing_group_policy: "
+    "'fail_closed' stops on missing grouping values; 'exclude_and_report' removes "
+    "them from Overall and all groups and reports the excluded count. Check "
+    "catalog missingness before choosing. A table_one_spec step may emit only "
+    "`table:table_one` and optional `table:cohort_flow` / "
+    "`log:source_row_count_reconciliation`; other results need separate steps. "
+    "Ungrouped descriptions use `table:cohort_summary` without table_one_spec. "
     "For counts, events, prevalence, absolute risk, or outcome by group BY "
     "EXPOSURE LEVEL, declare `table:exposure_outcome_distribution` and its "
     "spec. Another table name sends the same science to generated code: a "
@@ -887,13 +870,15 @@ def _build_planner_user_prompt(
         prompt = replace_wire_section(
             prompt,
             start=(
-                "A step that declares the exact output `table:table_one` MUST also "
+                "`table:table_one` requires `table_one_spec` with group_by, "
             ),
             end="For counts, events, prevalence",
             replacement=(
                 "A `table:table_one` step MUST carry `table_one_spec` with "
                 "group_by, closed group_levels and its variable roster. The "
-                "grouping column is not also a row. Its inputs list the cohort "
+                "grouping column is not also a row variable: name it in "
+                "`group_by` or in `variables`, never in both. Its inputs list "
+                "the cohort "
                 "artifact, group_by and every row variable explicitly. Preserve "
                 "observed scalar types; categorical count/percent rows need "
                 "closed levels, continuous rows have none, and numeric ordinal "
@@ -901,7 +886,9 @@ def _build_planner_user_prompt(
                 f"are hidden, copy the opaque tokens (binary: {opaque_binary_json}) "
                 "and never guess labels. Choose the declared missing-group "
                 "policy from the catalogued coverage, and report grouped plus "
-                "Overall summaries, missing n (%), the test and P value. This "
+                "Overall summaries and missing n (%); name a test and P value "
+                "only where the design compares groups, never in a "
+                "descriptive-only Table 1. This "
                 "step emits only `table:table_one` plus allowed host audit "
                 "outputs; use a separate step for every other result or figure, "
                 "and use `table:cohort_summary` for an ungrouped description. "
@@ -1021,9 +1008,11 @@ def _build_planner_user_prompt(
 
 # Rendered once: the principle layer is static. Injected into the planner
 # system message so the (previously unused) principles actually steer the plan.
+from ..contracts.research_display import RESEARCH_DISPLAY_GUIDE
+
 _PRINCIPLES_GUIDE = _payload.render_methodological_principles(
     GENERAL_ICU_ANALYSIS_PRINCIPLES
-)
+) + "\n\n" + RESEARCH_DISPLAY_GUIDE
 
 
 def _validate_table_one_observed_levels(
@@ -1580,77 +1569,130 @@ class PlannerAgent:
         direct_comparator_keys = _payload.normalize_literature_citation_keys(
             direct_comparator_literature_keys
         )
-        resolved_planning_contract_context = planning_contract_context
-        if enforce_article_contract and not resolved_planning_contract_context:
-            from ..reporting.article_contract import (
-                build_article_analysis_contract,
-                render_article_analysis_contract_for_prompt,
-            )
-
-            resolved_planning_contract_context = (
-                render_article_analysis_contract_for_prompt(
-                    build_article_analysis_contract(article_contract_context or context)
-                )
-            )
-        resolved_planning_contract_context = _payload.bind_literature_citation_authority(
-            resolved_planning_contract_context,
-            allowed_citation_keys,
-            direct_comparator_keys=direct_comparator_keys,
-            required_method_layers=(
-                _payload.required_method_layers_for_context(context)
-            ),
-        )
         structured_output = None
         if llm_supports_strict_json_schema(self.llm):
             structured_output = _payload.planner_structured_output_request(
                 allowed_citation_keys
             )
         strict_transport_schema = structured_output is not None
-        messages = self.request_messages(
-            context,
-            know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
-            strict_transport_schema=strict_transport_schema,
-            structured_output=structured_output,
-        )
-        if structured_output is not None:
-            authority_note = _structured_output_authority_note(structured_output)
-            messages[0] = LLMMessage(
-                role=messages[0].role,
-                content=messages[0].content + authority_note,
-            )
-        self.last_prompt_metrics = self.request_metrics(
-            context,
-            know_how_context=know_how_context,
-            planning_contract_context=resolved_planning_contract_context,
-            strict_transport_schema=strict_transport_schema,
-            structured_output=structured_output,
-        )
-        message_payload_bytes = sum(
-            len(message.content.encode("utf-8")) for message in messages
-        )
-        structured_output_bytes = (
-            structured_output.payload_bytes if structured_output is not None else 0
-        )
-        self.last_prompt_metrics["message_payload_bytes"] = message_payload_bytes
-        self.last_prompt_metrics["structured_output_payload_bytes"] = (
-            structured_output_bytes
-        )
-        self.last_prompt_metrics["structured_output_authority_sha256"] = (
-            structured_output.authority_sha256
+        authority_note = (
+            _structured_output_authority_note(structured_output)
             if structured_output is not None
-            else None
+            else ""
         )
-        self.last_prompt_metrics["total_bytes"] = (
-            message_payload_bytes + structured_output_bytes
-        )
-        if self.last_prompt_metrics["total_bytes"] > _PLANNER_PROMPT_BYTE_LIMIT:
+
+        def _projected_contract(
+            byte_budget: int | None = None,
+            *,
+            elide_superseded_replans: bool = False,
+        ) -> tuple[str, list[dict[str, Any]]]:
+            projected, projection_receipts = project_plan_revision_prompt(
+                planning_contract_context,
+                byte_budget=byte_budget,
+                elide_superseded_replans=elide_superseded_replans,
+            )
+            if enforce_article_contract and not projected:
+                from ..reporting.article_contract import (
+                    build_article_analysis_contract,
+                    render_article_analysis_contract_for_prompt,
+                )
+
+                projected = render_article_analysis_contract_for_prompt(
+                    build_article_analysis_contract(article_contract_context or context)
+                )
+            bound = _payload.bind_literature_citation_authority(
+                projected,
+                allowed_citation_keys,
+                direct_comparator_keys=direct_comparator_keys,
+                required_method_layers=(
+                    _payload.required_method_layers_for_context(context)
+                ),
+                # A strict-transport request already carries the binding shape
+                # in its enforced schema; the illustrative examples would make
+                # a retry pay twice for the same syntax.
+                include_examples=structured_output is None,
+            )
+            return bound, projection_receipts
+
+        # The compact source plan keeps every declared requirement and is the
+        # only lossless view; measure the fully assembled request exactly, then
+        # either send it or try the one budget-pressure rung that exists:
+        # collapse ancestor failed-execution replans to digest pointers while
+        # the current source plan and the candidate seed keep their complete
+        # views. Nothing is elided unless the exactly assembled request
+        # actually overflows, so an ordinary request still restores every
+        # version from what is sent.
+        resolved_planning_contract_context = ""
+        revision_projection: list[dict[str, Any]] = []
+        messages: list[LLMMessage] = []
+        for elide_superseded_replans in (False, True):
+            resolved_planning_contract_context, revision_projection = (
+                _projected_contract(
+                    elide_superseded_replans=elide_superseded_replans,
+                )
+            )
+            messages = self.request_messages(
+                context,
+                know_how_context=know_how_context,
+                planning_contract_context=resolved_planning_contract_context,
+                strict_transport_schema=strict_transport_schema,
+                structured_output=structured_output,
+            )
+            if structured_output is not None:
+                messages[0] = LLMMessage(
+                    role=messages[0].role,
+                    content=messages[0].content + authority_note,
+                )
+            self.last_prompt_metrics = self.request_metrics(
+                context,
+                know_how_context=know_how_context,
+                planning_contract_context=resolved_planning_contract_context,
+                strict_transport_schema=strict_transport_schema,
+                structured_output=structured_output,
+            )
+            message_payload_bytes = sum(
+                len(message.content.encode("utf-8")) for message in messages
+            )
+            structured_output_bytes = (
+                structured_output.payload_bytes
+                if structured_output is not None
+                else 0
+            )
+            self.last_prompt_metrics["message_payload_bytes"] = message_payload_bytes
+            self.last_prompt_metrics["structured_output_payload_bytes"] = (
+                structured_output_bytes
+            )
+            self.last_prompt_metrics["structured_output_authority_sha256"] = (
+                structured_output.authority_sha256
+                if structured_output is not None
+                else None
+            )
+            self.last_prompt_metrics["total_bytes"] = (
+                message_payload_bytes + structured_output_bytes
+            )
+            self.last_prompt_metrics["plan_revision_projection"] = revision_projection
+            if (
+                self.last_prompt_metrics["total_bytes"]
+                <= planner_prompt_byte_limit(self.llm)
+            ):
+                break
+        if self.last_prompt_metrics["total_bytes"] > planner_prompt_byte_limit(self.llm):
+            plan_bytes = sum(
+                int(receipt.get("projected_bytes") or 0)
+                for receipt in revision_projection
+            )
+            plan_note = (
+                f" The source-plan block is {plan_bytes} bytes and keeps every "
+                "declared requirement; it cannot be shrunk without deleting "
+                "inputs, scientific actions or typed specs."
+                if plan_bytes
+                else ""
+            )
             raise PlannerPromptBudgetError(
                 "Planner prompt transport budget exceeded: "
                 f"{self.last_prompt_metrics['total_bytes']} > "
-                f"{_PLANNER_PROMPT_BYTE_LIMIT} bytes. No protocol claim, typed "
-                "input, or scientific coordinate was truncated; reduce selected "
-                "know-how cards or split the research context."
+                f"{planner_prompt_byte_limit(self.llm)} bytes.{plan_note} "
+                "Reduce selected know-how cards or split the research context."
             )
         from ..providers.structured_retry import call_llm_with_structured_retry
 

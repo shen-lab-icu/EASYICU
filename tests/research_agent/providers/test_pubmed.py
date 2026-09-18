@@ -667,6 +667,28 @@ def test_parse_esummary_extracts_core_fields(ra):
     assert "singer" in sep3.key
 
 
+def test_parse_esummary_retains_source_authors_and_not_editors(ra):
+    from easyicu.research_agent.literature import parse_pubmed_esummary
+
+    payload = _fixture_payload()
+    payload["result"]["8844239"]["authors"].extend([
+        {"name": "  ICU Research Group  ", "authtype": "CollectiveName"},
+        {"name": "Editor AB", "authtype": "Editor"},
+    ])
+    record = parse_pubmed_esummary(payload)[0]
+
+    assert record.authors == ["Vincent JL", "Moreno R", "ICU Research Group"]
+
+
+def test_parse_esummary_author_names_missing_remain_missing(ra):
+    from easyicu.research_agent.literature import parse_pubmed_esummary
+
+    payload = _fixture_payload()
+    payload["result"]["8844239"]["authors"] = []
+
+    assert parse_pubmed_esummary(payload)[0].authors == []
+
+
 def test_parse_esummary_tolerates_missing_fields(ra):
     """Records with no authors / no DOI / weird pubdate must still parse."""
     from easyicu.research_agent.literature import parse_pubmed_esummary

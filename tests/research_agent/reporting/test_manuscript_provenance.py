@@ -148,3 +148,130 @@ def test_manuscript_provenance_fails_closed_on_stale_evidence(
 
     with pytest.raises(ManuscriptProvenanceError, match="digest is stale"):
         build_manuscript_provenance(manuscript=manuscript, evidence=store)
+
+
+def _stale_manuscript() -> str:
+    return (
+        "The spline knot was 0.5[^claim_1].\n\n"
+        "[^claim_1]: value=0.5; step=primary_association; "
+        "field=scientific_runtime_receipt.spline_knot_quantiles[1]; "
+        "evidence=primary_summary\n"
+    )
+
+
+def test_manuscript_provenance_marks_stale_reader_links_without_raising(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_provenance import (
+        build_manuscript_provenance,
+    )
+
+    store = _registered_store(ra, tmp_path)
+    record = next(
+        item for item in store.records() if item.evidence_id == "primary_summary"
+    )
+    (tmp_path / record.relative_path).write_text("{}", encoding="utf-8")
+
+    payload = build_manuscript_provenance(
+        manuscript=_stale_manuscript(),
+        evidence=store,
+        verify="mark",
+    )
+
+    claim = payload["claims"][0]
+    assert claim["status"] == "stale"
+    assert claim["evidence"]["status"] == "stale"
+    assert claim["related_artifacts"] == []
+    assert payload["integrity"]["numeric_claims_verified"] is False
+
+
+def test_manuscript_provenance_attaches_display_identity_and_reader_context(
+    ra, tmp_path: Path
+) -> None:
+    import hashlib
+
+    from easyicu.research_agent.reporting.manuscript_provenance import (
+        build_manuscript_provenance,
+    )
+
+    store = _registered_store(ra, tmp_path)
+    table = tmp_path / "table_one.csv"
+    table.write_text("variable,value\nlact,2\n", encoding="utf-8")
+    store.register_file(
+        kind="table",
+        description="Registered Table 1.",
+        source_path=table,
+        evidence_id="table_one",
+        produced_by_step="primary_association",
+        producer="pipeline",
+        generation_mode="system",
+    )
+    table_sha = hashlib.sha256(table.read_bytes()).hexdigest()
+    contract_sha = "b" * 64
+
+    payload = build_manuscript_provenance(
+        manuscript=_stale_manuscript().replace("{}", "{}"),
+        evidence=store,
+        binding_map=None,
+        display_index={
+            table_sha: {"display_id": "Table 1", "contract_sha256": contract_sha}
+        },
+        method_summaries={
+            "primary_association": {
+                "intent": "Estimate the primary association.",
+                "relative_path": "must/not/leak.csv",
+            }
+        },
+        reader_notes=[
+            {
+                "code": "strict_untraceable_numeric_sentence_removed",
+                "severity": "warning",
+                "text": "A numeric sentence without a registered evidence source "
+                "was removed from the reader text.",
+            }
+        ],
+    )
+
+    claim = payload["claims"][0]
+    linked = [
+        row
+        for row in claim["related_artifacts"]
+        if row.get("display_id") == "Table 1"
+    ]
+    assert linked
+    assert linked[0]["display_contract_sha256"] == contract_sha
+    assert claim["method_summary"] == {"intent": "Estimate the primary association."}
+    notes_blocks = [
+        block
+        for block in payload["article_blocks"]
+        if block.get("kind") == "verification_notes"
+    ]
+    assert notes_blocks
+    assert notes_blocks[0]["notes"][0]["code"] == (
+        "strict_untraceable_numeric_sentence_removed"
+    )
+    serialized = json.dumps(payload)
+    assert "relative_path" not in serialized
+    assert "must/not/leak.csv" not in serialized
+
+
+@pytest.mark.parametrize("status", ["stale", "missing"])
+def test_reader_marks_unavailable_related_code_but_strict_binding_rejects(ra, tmp_path, status):
+    from easyicu.research_agent.reporting.manuscript_provenance import (
+        ManuscriptProvenanceError, build_manuscript_provenance,
+    )
+    store = _registered_store(ra, tmp_path)
+    record = next(item for item in store.records() if item.evidence_id == "association_code")
+    path = tmp_path / record.relative_path
+    if status == "stale":
+        path.write_text("changed code")
+    else:
+        path.unlink()
+    with pytest.raises(ManuscriptProvenanceError):
+        build_manuscript_provenance(manuscript=_stale_manuscript(), evidence=store)
+    payload = build_manuscript_provenance(manuscript=_stale_manuscript(), evidence=store, verify="mark")
+    claim = payload["claims"][0]
+    code = next(row for row in claim["related_artifacts"] if row["evidence_id"] == "association_code")
+    assert code["status"] == status
+    assert claim["status"] == status
+    assert payload["integrity"]["numeric_claims_verified"] is False

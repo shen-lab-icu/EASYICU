@@ -11,6 +11,7 @@ from easyicu.research_agent.icu_rules import VariableKind, classify_variable
 from easyicu.webserver import dataio, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.study_intent import explicit_outcome_concepts
 from easyicu.webserver.study_scientific_configuration import (
     ScientificConfiguration,
     ScientificConfigurationError,
@@ -197,32 +198,57 @@ def _patient_grouping_for_analysis_design(
         ) from exc
 
 
-def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
-    """Fail closed on inference contracts the v1 Web runner cannot execute.
+def resolve_study_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
+    """Resolve legacy descriptive scope identically for planning and launch.
 
-    This bridge must not translate an accepted robust/clustered request into an
-    ordinary model-based fit.  StudyContext owns the semantic commitment; a
-    future data-source adapter and association executor can add a digest-bound
-    physical grouping coordinate without changing this case-neutral boundary.
+    A confirmation may complete an absent legacy design, but cannot decide
+    which of two contradictory persisted scientific commitments is newer.
     """
-
     raw = study.get("analysis_design")
+    if raw is not None and not isinstance(raw, Mapping):
+        raise ResearchPipelineRunError(
+            "research_pipeline_analysis_design_invalid",
+            "The typed analysis design is invalid.",
+            details={"field": "analysis_design"},
+        )
+    design = dict(raw or {})
     confirmations = study.get("confirmations")
     if (
-        not raw
-        and isinstance(confirmations, Mapping)
+        isinstance(confirmations, Mapping)
         and confirmations.get("plan_timing_descriptive_only") is True
     ):
-        # Compatibility for a decision receipt written by hosts that saved the
-        # descriptive ceiling before ``analysis_design`` became part of the
-        # same atomic patch.  The confirmation is a typed, host-issued record
-        # of the user's exact choice, not free-text inference.  Future clicks
-        # persist this design directly in ``compile_plan_decision``.
-        raw = {
+        descriptive = {
             "analysis_family": "descriptive_epidemiology",
             "analysis_unit": "icu_stay",
             "variance_estimator": "none_counts_only",
         }
+        if any(design.get(key, value) != value for key, value in descriptive.items()) or design.get("cluster_unit"):
+            raise ResearchPipelineRunError(
+                "research_pipeline_descriptive_confirmation_conflict",
+                "The descriptive-only confirmation conflicts with the explicit "
+                "analysis design. Review a consistent study revision before planning or execution.",
+                details={"field": "analysis_design", "remediation_route": "agent_plan_revision"},
+            )
+        design.update(descriptive)
+    from easyicu.research_agent.contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
+
+    try:
+        validate_analysis_family_ceiling(
+            analysis_family=design.get("analysis_family"),
+            variance_estimator=design.get("variance_estimator", ""),
+        )
+    except AnalysisDesignConflict as exc:
+        raise ResearchPipelineRunError(
+            exc.code, str(exc),
+            details={"field": "analysis_design", "remediation_route": "agent_plan_revision", "requires_user_authorization": False},
+        ) from exc
+    return design
+
+
+def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
+    """Fail closed without substituting a different inferential design."""
+
+    raw = resolve_study_analysis_design(study)
     if not raw:
         if _primary_exposure(study) and _target_outcome(study):
             raise ResearchPipelineRunError(
@@ -237,12 +263,6 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
                 },
             )
         return {}
-    if not isinstance(raw, Mapping):
-        raise ResearchPipelineRunError(
-            "research_pipeline_analysis_design_invalid",
-            "The typed analysis design is invalid.",
-            details={"field": "analysis_design"},
-        )
     analysis_unit = _clean_text(raw.get("analysis_unit"), 80)
     variance_estimator = _clean_text(raw.get("variance_estimator"), 80)
     cluster_unit = _clean_text(raw.get("cluster_unit"), 80)
@@ -425,23 +445,17 @@ def _source_concept_for_operational_column(
 ) -> Optional[str]:
     """Resolve a wide materialized column back to its exported source concept."""
 
-    if column in by_id:
-        return column
     # Some user-facing clinical concepts are published by a versioned
     # composite output whose loader/source name is intentionally different.
     # Materialization must follow that declarative owner mapping just as the
     # post-materialization resolver does; otherwise a reviewed ``sep3`` plan
     # silently omits its exposure because the package stores
     # ``sep3_sofa1``.  Ambiguous composite families remain fail-closed.
-    from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+    from easyicu.concept_output_sources import resolve_composite_concept_output
 
-    composite_sources = {
-        output_concept
-        for output_concept, public_source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
-        if public_source == column and output_concept in by_id
-    }
-    if len(composite_sources) == 1:
-        return next(iter(composite_sources))
+    resolved = resolve_composite_concept_output(column, by_id.keys())
+    if resolved is not None:
+        return resolved
     for suffix in _MATERIALIZED_FEATURE_SUFFIXES:
         if column.endswith(suffix):
             source_concept = column[: -len(suffix)]
@@ -607,7 +621,10 @@ def _metadata_only_planning_coordinates(
         build_database_capability_catalog,
     )
     from easyicu.research_agent.contracts.endpoint import EndpointSpec
-    from easyicu.webserver.study_intent import deterministic_intent
+    from easyicu.webserver.study_intent import (
+        deterministic_intent,
+        explicit_exposure_aggregation,
+    )
 
     intent = deterministic_intent(question)
     raw_slots = intent.get("slots")
@@ -625,6 +642,10 @@ def _metadata_only_planning_coordinates(
 
     target_outcome = named_concept("outcome")
     primary_exposure = named_concept("exposure")
+    exposure_operation = (
+        explicit_exposure_aggregation(question, concept_id=primary_exposure)
+        if primary_exposure else None
+    )
     endpoint = None
     outcome_type = slots.get("outcome_type")
     outcome_type = outcome_type if isinstance(outcome_type, Mapping) else {}
@@ -645,6 +666,9 @@ def _metadata_only_planning_coordinates(
     return {
         "target_outcome": target_outcome,
         "primary_exposure": primary_exposure,
+        "primary_exposure_aggregation": (
+            exposure_operation.aggregation if exposure_operation is not None else None
+        ),
         "endpoint": endpoint,
         "source": "explicit_user_text_plus_database_capability",
         "execution_authorized": False,
@@ -744,7 +768,11 @@ def _data_foundation_profile(
     requested_outcomes = tuple(
         dict.fromkeys(
             value
-            for value in (target, *additional_outcomes)
+            for value in (
+                target,
+                *additional_outcomes,
+                *explicit_outcome_concepts(str(study.get("question") or "")),
+            )
             if isinstance(value, str) and value.strip()
         )
     )
@@ -834,6 +862,7 @@ def _data_foundation_profile(
 
     return {
         "allowed_modules": modules,
+        "available_concepts": tuple(by_id),
         "static_concepts": tuple(dict.fromkeys(static_concepts)),
         "outcome_concepts": tuple(outcome_concepts),
         "required_feature_concepts": tuple(required_feature_concepts),

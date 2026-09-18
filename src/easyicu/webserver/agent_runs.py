@@ -35,6 +35,7 @@ from easyicu.webserver.research_evidence_preview import (
     build_evidence_preview,
 )
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
+from easyicu.webserver.research_input_progress import project_research_input_state
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.run_record import (
     RunDirectory,
@@ -83,6 +84,10 @@ _RUN_ARTIFACT_NAMES = [
 # JSON review payloads.  They may be downloaded/previewed but are never parsed
 # as JSON or accepted from a browser-supplied path.
 _RUN_DOCUMENT_SPECS = {
+    "manuscript_revision.pdf": {
+        "media_type": "application/pdf",
+        "max_bytes": 16 * 1024 * 1024,
+    },
     "manuscript_scaffold.pdf": {
         "media_type": "application/pdf",
         "max_bytes": 16 * 1024 * 1024,
@@ -1469,6 +1474,7 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "gate_reason": gate.reason,
         "gate_checks": gate_checks,
         "run_status": source_manifest.get("status"),
+        "research_input_state": project_research_input_state(source_manifest.get("research_input_state")),
         "pending_review_reason_codes": pending_reason_codes,
         "plan_approval_allowed": source_manifest.get("plan_approval_allowed"),
         "scientific_plan_review_status": source_manifest.get(
@@ -1547,6 +1553,8 @@ def _public_review_payloads(
     if "scientific_readiness.json" in payloads:
         public["scientific_readiness.json"] = payloads["scientific_readiness.json"]
     if "manuscript_draft.json" in payloads:
+        from easyicu.research_agent.reporting.manuscript_reader import refresh_reader_bibliography
+
         row = payloads["manuscript_draft.json"]
         public["manuscript_draft.json"] = {
             "run_id": row.get("run_id"),
@@ -1556,12 +1564,16 @@ def _public_review_payloads(
             "sentences": row.get("sentences", []),
             "markdown_preview": row.get("markdown_preview"),
             "source": row.get("source"),
+            "report_revision": row.get("report_revision"),
+            "reader": refresh_reader_bibliography(row.get("reader")),
         }
     if "manuscript_provenance.json" in payloads:
         # This artifact is already a path-free host projection.  Preserve its
         # typed reader structure; the normal payload privacy scan still runs
         # before it crosses the Web boundary.
-        public["manuscript_provenance.json"] = payloads["manuscript_provenance.json"]
+        from easyicu.research_agent.reporting.manuscript_reader import refresh_reader_bibliography
+
+        public["manuscript_provenance.json"] = refresh_reader_bibliography(payloads["manuscript_provenance.json"])
     for name in (
         "benchmark_scorecard.json",
         "workflow_graph.json",

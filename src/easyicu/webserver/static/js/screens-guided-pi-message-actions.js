@@ -1,3 +1,4 @@
+/* Owner: Guided Pi message-action widget. */
 /* Guided Copilot message-action owner.
    Editing and regenerating both rewind to the target turn and create a
    recoverable Pi branch: an edited turn replaces everything after it rather

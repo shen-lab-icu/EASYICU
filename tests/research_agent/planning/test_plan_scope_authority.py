@@ -14,7 +14,8 @@ import pytest
 from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.authority import plan_scope
 from easyicu.research_agent.contracts.figure_plan import PlannedFigurePanelSpec
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.contracts.functional_form import FunctionalFormSpec
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, PhenotypeComparisonSpec
 
 _PHASE_PLAN_SCOPE_NAMES = {
     "_normalise_scientific_text",
@@ -85,6 +86,34 @@ def test_every_public_step_field_has_exactly_one_authority_class() -> None:
     assert len(flattened) == len(set(flattened))
 
 
+@pytest.mark.parametrize("field, initial, changed", [
+    ("population_scope", "analysis_cohort", "primary_model"),
+    ("population_scope_change_reason",
+     "Restore the requested primary model population.",
+     "Describe the broader eligible population instead."),
+    ("phenotyping_feature_columns", ["age"], ["age", "severity"]),
+    ("functional_form_spec",
+     FunctionalFormSpec(target_column="age", knot_quantiles=(0.1, 0.5, 0.9)),
+     FunctionalFormSpec(target_column="age", knot_quantiles=(0.2, 0.5, 0.8))),
+    ("phenotype_comparison_spec",
+     PhenotypeComparisonSpec(identity_column="stay_id", outcome_columns=["death"], variables=[
+         {"name": "death", "variable_kind": "categorical", "summary": "count_percent",
+          "test": "none_descriptive_smd_only", "levels": [0, 1]},
+     ]),
+     PhenotypeComparisonSpec(identity_column="patient_id", outcome_columns=["death"], variables=[
+         {"name": "death", "variable_kind": "categorical", "summary": "count_percent",
+          "test": "none_descriptive_smd_only", "levels": [0, 1]},
+     ])),
+])
+def test_new_scientific_fields_change_plan_signature(field, initial, changed) -> None:
+    # Exercise the signature owner, not the separate executable-step validator.
+    base = AnalysisStep(step_id="scope_probe", intent="Test scope identity.", method="custom_analysis")
+    before = base.model_copy(update={field: initial})
+    after = base.model_copy(update={field: changed})
+    assert plan_scope._step_scientific_signature(before) != plan_scope._step_scientific_signature(after)
+    assert field in plan_scope._ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS
+
+
 def test_typed_figure_panel_is_part_of_scientific_plan_authority() -> None:
     base = AnalysisStep(
         step_id="06_figure",
@@ -116,6 +145,22 @@ def test_typed_figure_panel_is_part_of_scientific_plan_authority() -> None:
     assert plan_scope._step_scientific_signature(base) != (
         plan_scope._step_scientific_signature(changed)
     )
+
+
+def test_runtime_outcome_owner_and_endpoint_are_scientific_plan_authority() -> None:
+    def step(owner: str, outcome: str) -> AnalysisStep:
+        return AnalysisStep(
+            step_id="runtime_analysis", intent="Execute the governed endpoint analysis.",
+            method="custom_analysis", expected_outputs=["table:runtime_result"],
+            runtime_outcome_contract={
+                "owner_ref": "scientific_runtime_contract:" + owner * 64,
+                "outcomes": [outcome],
+            },
+        )
+
+    base = plan_scope._step_scientific_signature(step("a", "death"))
+    assert base != plan_scope._step_scientific_signature(step("b", "death"))
+    assert base != plan_scope._step_scientific_signature(step("a", "icu_los"))
 
 
 def test_scientific_signature_uses_typed_role_not_intent_role_words() -> None:

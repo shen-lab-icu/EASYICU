@@ -45,7 +45,7 @@ from easyicu.research_agent.schema import (
 )
 
 
-def _directive() -> str:
+def _directive(*, strict_transport_schema: bool = False) -> str:
     """The prompt the Planner is actually sent, built the way the host builds it.
 
     Asserted against the rendered prompt rather than the source file: the point
@@ -69,7 +69,9 @@ def _directive() -> str:
             ConceptDescriptor(name="death", dtype="int64"),
         ],
     )
-    return _build_planner_user_prompt(context)
+    return _build_planner_user_prompt(
+        context, strict_transport_schema=strict_transport_schema
+    )
 
 
 @pytest.mark.parametrize(
@@ -106,6 +108,24 @@ def test_the_table_one_grouping_rule_is_published() -> None:
     text = _directive()
     assert "GROUP ON IS NOT ALSO" in text
     assert "never in both" in text
+
+
+def test_the_grouping_rule_survives_strict_prompt_compaction() -> None:
+    """A compacted prompt must teach the same science, not a stale one.
+
+    Strict transport replaces the syntax-heavy Table 1 paragraph with a shorter
+    rendering, so an edit to the paragraph above can leave the compacted copy
+    behind. The boundary then either raises on a missing marker or, worse, ships
+    an instruction the directive has since retracted. Both renderings are
+    therefore checked for the grouping rule and for the descriptive-only
+    comparison boundary.
+    """
+
+    strict = _directive(strict_transport_schema=True)
+
+    assert strict != _directive()
+    assert "never in both" in strict
+    assert "never in a descriptive-only Table 1" in strict
 
 
 def test_the_grouping_rule_is_really_enforced() -> None:

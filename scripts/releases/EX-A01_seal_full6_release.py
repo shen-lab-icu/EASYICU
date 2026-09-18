@@ -86,6 +86,7 @@ FOUNDATION_LOCK_PATH = (
     _REPOSITORY_ROOT / "src/easyicu/data/concept-dict.LOCK.json"
 )
 EXPECTED_PARQUET_COUNT = len(DATABASES) * len(MODULES)
+PRIVATE_DERIVATION_CONTEXT_DIRECTORY = ".derivation-context"
 SPECIAL_SHARED_TIMING_MODULES = frozenset(("sepsis3_sofa1", "sepsis3_sofa2"))
 SPECIAL_SHARED_TIMING_STAGE_ID = "sepsis3_sofa1_sofa2_joint_worker"
 CORRECTIONS = (
@@ -106,6 +107,20 @@ CORRECTIONS = (
 )
 OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
 EVENT_TIME_COMPANIONS = {"death": "death_time"}
+
+
+def _public_parquet_paths(database_root: Path) -> set[str]:
+    """Enumerate public module tables without counting private replay shards."""
+
+    public: set[str] = set()
+    for path in database_root.rglob("*.parquet"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(database_root)
+        if relative.parts and relative.parts[0] == PRIVATE_DERIVATION_CONTEXT_DIRECTORY:
+            continue
+        public.add(relative.as_posix())
+    return public
 
 
 def _physical_columns_from_manifest_concepts(
@@ -770,11 +785,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                     raise ReleaseValidationError(
                         f"{database}: manifest module set does not match the 19-module contract"
                     )
-                actual_parquets = {
-                    path.relative_to(database_root).as_posix()
-                    for path in database_root.rglob("*.parquet")
-                    if path.is_file()
-                }
+                actual_parquets = _public_parquet_paths(database_root)
                 expected_parquets = {f"{module}.parquet" for module in MODULES}
                 if actual_parquets != expected_parquets:
                     raise ReleaseValidationError(

@@ -1287,7 +1287,12 @@ def _valid_writer_section_responses(
         results,
         f"## Discussion\n\n{body}",
         f"## Limitations\n\n{body}",
-        f"## Conclusion\n\n{body}",
+        # The conclusion-interpretation contract (147f52d3d) rejects a
+        # Conclusion that only copies result sentences; it must carry a
+        # complete host claim token for the bounded interpretation.
+        f"## Conclusion\n\n{body}\n\n"
+        "Within these bounds the association is descriptive only "
+        "{claim:primary_model.primary_association}.",
     ]
 
 
@@ -1404,7 +1409,10 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     assert "complete standalone sentence" in captured["user"]
     assert "Run-bound typed methodology applications" in captured["user"]
     assert "mechanisms, strengths, or limitations" in captured["user"]
-    assert "must either be one exact host-authorized claim token" in captured["user"]
+    assert (
+        "Use a complete host-authorized claim token for the study interpretation"
+        in captured["user"]
+    )
     assert "TBD by author" not in captured["user"]
     # Administrative facts are host-owned and appended after the LLM sections.
     assert "Funding information requires author verification" not in captured["user"]

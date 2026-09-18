@@ -1,7 +1,7 @@
 """Mechanical validation of confidence-interval method labels.
 
 The owner of this contract is the generated-code preflight layer.  It only
-checks that a statsmodels result's default ``conf_int()`` is not described as
+checks that a recognized statsmodels result's ``conf_int()`` is not described as
 a profile-likelihood interval; it does not choose or refit a model.
 """
 
@@ -50,15 +50,19 @@ def _statsmodels_symbols(tree: ast.Module) -> tuple[set[str], set[str]]:
     for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in {"statsmodels", "statsmodels.api"}:
+                if alias.name == "statsmodels" or alias.name.startswith("statsmodels."):
                     module_aliases.add(alias.asname or alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom) and node.module in {
-            "statsmodels",
-            "statsmodels.api",
-        }:
+        elif isinstance(node, ast.ImportFrom) and (
+            node.module == "statsmodels"
+            or (node.module or "").startswith("statsmodels.")
+        ):
             for alias in node.names:
-                if alias.name in _STATSMODELS_MODEL_CLASSES:
+                if alias.name.lower() in {
+                    name.lower() for name in _STATSMODELS_MODEL_CLASSES
+                }:
                     constructor_aliases.add(alias.asname or alias.name)
+                elif alias.name == "api":
+                    module_aliases.add(alias.asname or alias.name)
     return module_aliases, constructor_aliases
 
 
@@ -73,9 +77,16 @@ def _is_statsmodels_constructor(
     function = node.func
     if isinstance(function, ast.Name):
         return function.id in constructor_aliases
+    while isinstance(function, ast.Attribute) and isinstance(
+        function.value, ast.Attribute
+    ):
+        function = ast.Attribute(
+            value=function.value.value, attr=function.attr, ctx=ast.Load()
+        )
     return (
         isinstance(function, ast.Attribute)
-        and function.attr in _STATSMODELS_MODEL_CLASSES
+        and function.attr.lower()
+        in {name.lower() for name in _STATSMODELS_MODEL_CLASSES}
         and isinstance(function.value, ast.Name)
         and function.value.id in module_aliases
     )
@@ -128,11 +139,9 @@ def _result_names(
     return result_names
 
 
-def _uses_default_conf_int(tree: ast.Module, result_names: set[str]) -> bool:
+def _uses_conf_int(tree: ast.Module, result_names: set[str]) -> bool:
     return any(
         isinstance(node, ast.Call)
-        and not node.args
-        and not node.keywords
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "conf_int"
         and isinstance(node.func.value, ast.Name)
@@ -147,10 +156,7 @@ def _profile_label_nodes(tree: ast.Module) -> list[ast.Constant]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
-        and (
-            node.value == "profile_normal"
-            or node.value.endswith("_profile_normal")
-        )
+        and (node.value == "profile_normal" or node.value.endswith("_profile_normal"))
     ]
 
 
@@ -163,7 +169,7 @@ def _wald_label(value: str) -> str:
 def confidence_interval_method_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
-    """Return a finding when default statsmodels intervals are mislabeled."""
+    """Return a finding when recognized statsmodels intervals are mislabeled."""
 
     module_aliases, constructor_aliases = _statsmodels_symbols(tree)
     if not module_aliases and not constructor_aliases:
@@ -173,11 +179,58 @@ def confidence_interval_method_findings(
         module_aliases=module_aliases,
         constructor_aliases=constructor_aliases,
     )
-    if not result_names or not _uses_default_conf_int(tree, result_names):
+    if not result_names or not _uses_conf_int(tree, result_names):
         return []
     labels = _profile_label_nodes(tree)
     if not labels:
         return []
+    # A profile label is wrong for all these result.conf_int calls, but only
+    # the existing default Logit-family/normal 95% form permits a literal repair.
+    # Unknown levels, mixed results and t-based models require an explicit review.
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "conf_int"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in result_names
+    ]
+    default_level = all(
+        len(call.args) <= 1
+        and (
+            not call.args
+            or isinstance(call.args[0], ast.Constant)
+            and call.args[0].value == 0.05
+        )
+        and all(
+            kw.arg == "alpha"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value == 0.05
+            for kw in call.keywords
+        )
+        for call in calls
+    )
+    constructors = [
+        node.func
+        for node in ast.walk(tree)
+        if _is_statsmodels_constructor(
+            node, module_aliases=module_aliases, constructor_aliases=constructor_aliases
+        )
+    ]
+    normal_model = all(
+        isinstance(fn, ast.Attribute)
+        and fn.attr.lower() in {"logit", "probit", "poisson", "mnlogit"}
+        for fn in constructors
+    )
+    explicit_use_t = any(
+        isinstance(node, ast.keyword)
+        and node.arg == "use_t"
+        or isinstance(node, ast.Attribute)
+        and node.attr == "use_t"
+        for node in ast.walk(tree)
+    )
+    repair_safe = default_level and normal_model and not explicit_use_t
     occurrences = [
         {
             "line": int(node.lineno),
@@ -185,7 +238,7 @@ def confidence_interval_method_findings(
             "end_line": int(node.end_lineno or node.lineno),
             "end_column": int(node.end_col_offset or node.col_offset),
             "reported": str(node.value),
-            "expected": _wald_label(str(node.value)),
+            "expected": _wald_label(str(node.value)) if repair_safe else "",
         }
         for node in labels
     ]
@@ -194,15 +247,15 @@ def confidence_interval_method_findings(
             validator="mechanical_code_preflight",
             severity="error",
             message=(
-                "Default statsmodels conf_int() intervals are Wald/asymptotic "
-                "normal intervals, but the generated metadata labels them as "
-                "profile likelihood."
+                "The recognized statsmodels conf_int() call does not calculate "
+                "profile-likelihood intervals, but the generated metadata labels "
+                "it as profile likelihood. Verify its level and reference distribution."
             ),
             detail={
                 "reason": "confidence_interval_method_mislabeled",
                 "occurrence_count": len(occurrences),
                 "occurrences": occurrences,
-                "repair_safe": True,
+                "repair_safe": repair_safe,
             },
         )
     ]

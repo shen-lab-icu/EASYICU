@@ -12,6 +12,31 @@ def test_materialized_concepts_share_one_literature_phrase_owner() -> None:
     assert direct_evidence_search.concept_phrase("lact_first") == "lactate"
 
 
+def test_strict_kdigo_physical_column_uses_clinical_retrieval_identity() -> None:
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+    from easyicu.research_agent.schema import (
+        CohortDescriptor, ConceptDescriptor, ResearchContext,
+    )
+
+    context = ResearchContext(
+        research_question="KDIGO AKI stage and in-hospital mortality in ICU stays",
+        cohort=CohortDescriptor(cohort_name="ICU", database="miiv", n_stays=100),
+        variables=[
+            ConceptDescriptor(name="aki_stage_strict", dtype="int64"),
+            ConceptDescriptor(name="death", dtype="int64"),
+        ],
+        primary_exposure="aki_stage_strict", target_outcome="death",
+    )
+    identity = literature_concept_identity("aki_stage_strict")
+    assert identity is not None
+    assert identity.canonical_phrase == "KDIGO acute kidney injury"
+    queries = build_pubmed_protocol_queries_for_context(context)
+    assert all('"aki stage strict"' not in query for query in queries)
+    assert all('"KDIGO"' in query or '"AKI"' in query for query in queries)
+
+
 def test_protocol_definition_is_not_used_as_fluid_balance_search_phrase() -> None:
     identity = literature_concept_identity("fluid_balance_cumulative")
 

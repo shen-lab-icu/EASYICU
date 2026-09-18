@@ -19,11 +19,53 @@ from easyicu.research_agent.reporting.writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
     _normalize_claim_token_sentences,
+    _normalize_structured_abstract_labels,
     _repair_abstract_conclusion_boundary,
     _remove_unresolved_evidence_tokens,
     publish_writer_only_result,
     repair_writer_only,
+    writer_only_preflight_payload,
 )
+
+
+def test_structured_abstract_labels_are_separated_from_filterable_prose():
+    source = (
+        "## Abstract\n\n"
+        "**Background:** Context remains.\n\n"
+        "**Results:** Unsupported result.\n\n"
+        "**Conclusions:** Caution remains.\n\n"
+        "## Introduction\n\n**Results:** This is not an abstract label.\n"
+    )
+
+    normalized = _normalize_structured_abstract_labels(source)
+
+    assert "**Background:**\nContext remains." in normalized
+    assert "**Results:**\nUnsupported result." in normalized
+    assert "**Conclusions:**\nCaution remains." in normalized
+    assert "## Introduction\n\n**Results:** This is not an abstract label." in normalized
+    assert _normalize_structured_abstract_labels(normalized) == normalized
+
+
+def test_claim_projection_keeps_abstract_result_label_when_body_is_rejected(
+    tmp_path, monkeypatch,
+):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    authority = owner._ReadOnlyAuthority(records=(), aliases={}, claims_by_ref={})
+    monkeypatch.setattr(owner, "_read_only_authority", lambda _run: authority)
+    monkeypatch.setattr(owner, "load_manuscript_method_facts", lambda **_kwargs: ())
+    source = (
+        "## Abstract\n\n"
+        "**Results:** Treatment prevented mortality.\n\n"
+        "**Conclusions:** Independent validation is required.\n\n"
+        "## Introduction\n\nContext remains.\n"
+    )
+
+    projected, section_errors = owner._claim_policy_projection(tmp_path, source)
+
+    assert "**Results:**\n" in projected
+    assert "Treatment prevented mortality." not in projected
+    assert "abstract" in section_errors
 
 
 def _manuscript(*, leak: bool = False) -> str:
@@ -321,9 +363,318 @@ def test_abstract_conclusion_fallback_is_cited_and_noncausal() -> None:
         "**Conclusions:** The treatment improved survival {evidence:unsupported}.",
     )
 
-    repaired, changed = _repair_abstract_conclusion_boundary(raw, _literature())
+    repaired, changed = _repair_abstract_conclusion_boundary(
+        raw, _literature(), rejected_sentences=("The treatment improved survival {evidence:unsupported}.",),
+    )
 
     assert changed is True
     assert "The treatment improved survival" not in repaired
     assert "do not establish causation [@strobe_2007]" in repaired
     assert "validation in other cohorts" in repaired
+
+
+def test_abstract_result_rejection_does_not_rewrite_valid_conclusion():
+    raw = _manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "**Conclusions:** Independent validation is required.",
+    )
+    repaired, changed = _repair_abstract_conclusion_boundary(
+        raw, _literature(), rejected_sentences=("A rejected abstract result.",),
+    )
+    assert not changed and repaired == raw
+
+
+def test_second_authority_repair_is_validated_and_only_incomplete_owner_repeats(tmp_path, monkeypatch):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    software = "Analyses used versioned software and registered artifacts."
+    manuscript = _manuscript().replace(software, "Unsupported software statement.")
+    manuscript = manuscript.replace("## Discussion\n", "## Discussion\n\nUnsupported discussion statement.\n")
+    prepared = _prepared(tmp_path, manuscript)
+
+    def project(_run, text):
+        errors = {}
+        for key in ("methods", "discussion"):
+            statement = ("Unsupported software statement." if key == "methods"
+                         else "Unsupported discussion statement.")
+            if statement in text:
+                text = text.replace(statement, "")
+                errors[key] = (statement,)
+        return text, errors
+
+    monkeypatch.setattr(owner, "_claim_policy_projection", project)
+
+    class Writer:
+        calls = 0
+
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, *, section_errors, **kwargs):
+            self.calls += 1
+            assert set(section_errors) == {"methods"}
+            assert "Software and reproducibility" in section_errors["methods"][0]
+            assert "Unsupported discussion statement." not in text
+            replacement = software if self.calls == 2 else "Unsupported software statement."
+            return text.replace("### Software and reproducibility", "### Software and reproducibility\n\n" + replacement), ("methods",)
+
+    writer = Writer()
+    result = repair_writer_only(prepared, writer=writer)
+    assert writer.calls == 2
+    assert result.quality_audit.status == "pass"
+    assert result.authority_repaired_section_keys == ("methods",)
+    assert "discussion" in result.authority_filtered_section_keys
+    assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == manuscript
+
+
+@pytest.mark.parametrize("still_broken", [False, True])
+def test_completed_reader_failure_enters_remaining_final_audit_pass(tmp_path, monkeypatch, still_broken):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+    from easyicu.research_agent.reporting.manuscript_sections import ManuscriptReaderQualityContractError
+
+    software = "Analyses used versioned software and registered artifacts."
+    bad = _manuscript().replace(software, "")
+    prepared = _prepared(tmp_path, bad)
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+
+    class Writer:
+        calls = 0
+
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, *, section_errors, **kwargs):
+            self.calls += 1
+            assert set(section_errors) == {"methods"}
+            if self.calls == 1 or still_broken:
+                raise ManuscriptReaderQualityContractError(
+                    findings=(("MANUSCRIPT_SECTION_EMPTY", "Methods", "Still incomplete"),),
+                    manuscript=text, repaired_section_keys=("methods",),
+                )
+            return text.replace("### Software and reproducibility", "### Software and reproducibility\n\n" + software), ("methods",)
+
+    writer = Writer()
+    if still_broken:
+        with pytest.raises(WriterOnlyMigrationError, match="AUTHORITY_REPAIR_EXHAUSTED"):
+            repair_writer_only(prepared, writer=writer)
+    else:
+        result = repair_writer_only(prepared, writer=writer)
+        assert result.quality_audit.status == "pass"
+        assert result.authority_repaired_section_keys == ("methods",)
+    assert writer.calls == 2
+    assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == bad
+
+
+@pytest.mark.parametrize("phase", ["initial", "authority"])
+def test_replay_mismatch_keeps_identity_through_writer_owner(tmp_path, monkeypatch, phase):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    manuscript = _manuscript().replace("Analyses used versioned software and registered artifacts.", "")
+    prepared = _prepared(tmp_path, manuscript)
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+    drift = WriterOnlyMigrationError(code="WRITER_ONLY_REPLAY_MISMATCH", detail="Saved prefix changed")
+
+    class Writer:
+        def repair_existing(self, text, **kwargs):
+            if phase == "initial":
+                raise drift
+            return text, ()
+
+        def repair_sections(self, *args, **kwargs):
+            raise drift
+
+    with pytest.raises(WriterOnlyMigrationError) as caught:
+        repair_writer_only(prepared, writer=Writer())
+    assert caught.value is drift
+
+
+def _claim_reader_authority(monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+    from easyicu.research_agent.authority.scientific_claims import ScientificClaim, derive_scientific_claim_drafts
+    from ..authority.test_model_contrast_scientific_claims import _summary
+
+    summary = _summary(exposure="lactate", outcome="mortality")
+    summary["reportable_model_contrasts"]["adjustment_columns"] = ["age"]
+    draft = derive_scientific_claim_drafts(summary)[0]
+    claim = ScientificClaim(**draft.model_dump(), step_id="primary", evidence_id="verified_summary")
+    authority = SimpleNamespace(
+        records=(SimpleNamespace(evidence_id=claim.evidence_id),),
+        claims_by_ref={claim.claim_ref: claim},
+    )
+    monkeypatch.setattr(owner, "_read_only_authority", lambda _run: authority)
+    return claim, authority
+
+
+@pytest.mark.parametrize("initial_reader_failure", [False, True])
+def test_reader_quality_uses_verified_claim_text_and_keeps_canonical_tokens(tmp_path, monkeypatch, initial_reader_failure):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+    from easyicu.research_agent.reporting.manuscript_sections import ManuscriptReaderQualityContractError
+
+    claim, _ = _claim_reader_authority(monkeypatch)
+    manuscript = _manuscript().replace(
+        "**Results:** Sepsis status was associated with mortality.",
+        "**Results:**\n\n" + claim.placeholder,
+    ).replace("### Primary association\nSepsis status was associated with mortality.",
+              "### Primary association\n\n" + claim.placeholder)
+    prepared = _prepared(tmp_path, manuscript)
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+
+    class Writer:
+        def repair_existing(self, text, **kwargs):
+            if initial_reader_failure:
+                raise ManuscriptReaderQualityContractError(
+                    findings=(("MANUSCRIPT_SECTION_EMPTY", "Results", "Raw claim-only section"),),
+                    manuscript=text, repaired_section_keys=("abstract", "results"),
+                )
+            return text, ()
+
+        def repair_sections(self, *args, **kwargs):
+            pytest.fail("A verified claim-only subsection must not trigger a prose rewrite")
+
+    result = repair_writer_only(prepared, writer=Writer())
+    assert result.quality_audit.status == "pass"
+    assert claim.placeholder in result.manuscript
+    assert claim.placeholder not in result.reader_manuscript
+    assert "0.8" in result.reader_manuscript
+
+
+@pytest.mark.parametrize("change", ["missing", "malformed", "stale_evidence"])
+def test_claim_reader_view_rejects_unresolved_authority(tmp_path, monkeypatch, change):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    claim, authority = _claim_reader_authority(monkeypatch)
+    text = claim.placeholder
+    if change == "missing":
+        text = "{claim:primary.unknown}"
+    elif change == "malformed":
+        text = "Unsupported prose " + text
+    else:
+        authority.records = (SimpleNamespace(evidence_id="another_summary"),)
+    with pytest.raises(WriterOnlyMigrationError, match="SCIENTIFIC_CLAIM_BINDING_FAILED"):
+        owner._claim_reader_view(tmp_path, text)
+
+
+@pytest.mark.parametrize("separator", [",", ", ", ";", "; "])
+def test_exact_registered_citation_groups_are_normalized_before_unknown_removal(tmp_path, monkeypatch, separator):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    authority = owner._ReadOnlyAuthority(
+        records=(SimpleNamespace(evidence_id="first"), SimpleNamespace(evidence_id="second")),
+        aliases={"alias": "second"}, claims_by_ref={},
+    )
+    monkeypatch.setattr(owner, "_read_only_authority", lambda _: authority)
+    text = "Analyses used registered methods {evidence:first" + separator + "evidence:alias}."
+    normalized, refs, count = owner._remove_unresolved_evidence_tokens(tmp_path, text)
+    assert normalized == "Analyses used registered methods {evidence:first} {evidence:alias}."
+    assert refs == () and count == 0
+    assert owner._normalize_registered_evidence_groups(normalized, authority) == normalized
+
+
+@pytest.mark.parametrize("token", [
+    "{evidence:first; evidence:foreign}", "{{evidence:first; evidence:second}}",
+    "{evidence:first; evidence:second; trust me}", "{evidence:first; claim:second}",
+])
+def test_unknown_or_malformed_group_cannot_gain_evidence_authority(token):
+    from types import SimpleNamespace
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    authority = owner._ReadOnlyAuthority(
+        records=(SimpleNamespace(evidence_id="first"), SimpleNamespace(evidence_id="second")),
+        aliases={}, claims_by_ref={},
+    )
+    assert owner._normalize_registered_evidence_groups(token, authority) == token
+
+
+def _slot_bearing_draft() -> str:
+    """A repair draft whose result sentences are not placed yet."""
+
+    return (
+        _manuscript()
+        .replace(
+            "**Results:** Sepsis status was associated with mortality.",
+            "**Results:** {claim:robustness_summary.model_contrast_1}",
+        )
+        .replace(
+            "**Conclusions:** The association requires external validation.",
+            "**Conclusions:**",
+        )
+        .replace(
+            "### Primary association\n"
+            "Sepsis status was associated with mortality.",
+            "### Primary association\n"
+            "{claim:robustness_summary.model_contrast_1}",
+        )
+        .replace(
+            "### Sensitivity and subgroup analyses\n"
+            "Sensitivity analyses used the prespecified population.",
+            "### Sensitivity and subgroup analyses\n"
+            "{claim:robustness_summary.model_contrast_2}",
+        )
+    )
+
+
+def test_preflight_separates_unbound_draft_from_delivered_manuscript(
+    tmp_path: Path,
+) -> None:
+    """An unplaced claim slot is not a defect in the delivered report."""
+
+    draft = _slot_bearing_draft()
+    prepared = _prepared(tmp_path, draft)
+    (prepared.source_run_dir / "manuscript_scaffold_bound.md").write_text(
+        _manuscript(), encoding="utf-8"
+    )
+
+    payload = writer_only_preflight_payload(prepared)
+
+    draft_codes = [finding["code"] for finding in payload["source_quality_findings"]]
+    assert "MANUSCRIPT_ABSTRACT_LABEL_MISSING_OR_EMPTY" in draft_codes
+    assert "MANUSCRIPT_SECTION_TRUNCATED" in draft_codes, draft_codes
+    assert payload["source_quality_audited_artifact"] == "manuscript_scaffold.md"
+    assert payload["delivered_manuscript_artifact"] == "manuscript_scaffold_bound.md"
+    assert payload["delivered_source_quality_status"] == "pass"
+    assert payload["delivered_source_quality_findings"] == []
+    assert payload["unbound_draft_truncation_only"] is True
+    assert payload["provider_calls"] == 0
+
+
+def test_preflight_keeps_the_legacy_repair_guard_on_preplacement_keys(
+    tmp_path: Path,
+) -> None:
+    """Clarifying a diagnostic must not widen a fail-closed gate."""
+
+    draft = _slot_bearing_draft()
+    prepared = _prepared(tmp_path, draft)
+    (prepared.source_run_dir / "manuscript_scaffold_bound.md").write_text(
+        _manuscript(), encoding="utf-8"
+    )
+
+    payload = writer_only_preflight_payload(prepared)
+
+    assert payload["planned_section_keys"] == [
+        key for key in quality_repair_section_keys(draft)
+    ]
+    assert payload["planned_section_keys"]
+
+
+def test_preflight_without_delivered_manuscript_claims_no_all_clear(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared(tmp_path, _manuscript(leak=True))
+
+    payload = writer_only_preflight_payload(prepared)
+
+    assert payload["delivered_manuscript_artifact"] is None
+    assert payload["delivered_manuscript_sha256"] is None
+    assert payload["delivered_source_quality_status"] is None
+    assert payload["delivered_source_quality_findings"] == []
+    assert payload["unbound_draft_truncation_only"] is False
+
+
+def test_bound_manuscript_stays_outside_the_sealed_input_hash_guard() -> None:
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    assert "manuscript_scaffold.md" in owner._INPUT_NAMES
+    assert "manuscript_scaffold_bound.md" not in owner._INPUT_NAMES

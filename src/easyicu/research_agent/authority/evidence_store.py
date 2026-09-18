@@ -91,7 +91,6 @@ from .numeric_claim_identity import (
     NumericClaim as NumericClaim,
     NumericEffectScale as NumericEffectScale,
     NumericEstimand as NumericEstimand,
-    infer_numeric_claim_identity as _infer_numeric_claim_identity,
 )
 from .scientific_claims import (
     ScientificClaim,
@@ -109,6 +108,7 @@ from .manuscript_claim_policy import (
     filter_evidence_bound_scaffold,
     malformed_authority_placeholder_sentences,
 )
+from .manuscript_method_facts import load_manuscript_method_facts, ManuscriptMethodFact
 from .source_fingerprints import registered_source_fingerprints_match
 from ..schema import EvidenceRecord
 
@@ -2419,14 +2419,15 @@ class EvidenceStore:
             ):
                 if len(value) > len(claim.value):
                     claim.value = value
-                inferred_scale, inferred_estimand = _infer_numeric_claim_identity(
-                    source_field,
-                    declared_effect_scale=effect_scale,
+                identity = NumericClaim(
+                    value=value, canonical=canonical, evidence_id=evidence_id,
+                    step_id=step_id, source_field=source_field, tolerance=tolerance,
+                    effect_scale=effect_scale, estimand=estimand,
                 )
                 if claim.effect_scale is None:
-                    claim.effect_scale = inferred_scale
+                    claim.effect_scale = identity.effect_scale
                 if claim.estimand is None:
-                    claim.estimand = estimand or inferred_estimand
+                    claim.estimand = identity.estimand
                 return claim
         claim = NumericClaim(
             value=value,
@@ -2517,6 +2518,11 @@ class EvidenceStore:
                 summary=summary,
                 drafts=scientific_claim_drafts,
             )
+        numeric_identities = {}
+        if scientific_claim_drafts and "reportable_model_contrasts" in summary:
+            from .model_contrast_scientific_claims import model_contrast_numeric_identities
+
+            numeric_identities = model_contrast_numeric_identities(summary)
         declared_effect_scale = (
             summary.get("effect_scale") if isinstance(summary, Mapping) else None
         )
@@ -2535,6 +2541,9 @@ class EvidenceStore:
         registered: List[NumericClaim] = []
         with self._lock:
             for path, literal, canonical, local_effect_scale in leaves:
+                effect_scale, estimand = numeric_identities.get(
+                    path, (local_effect_scale, None),
+                )
                 registered.append(
                     self._upsert_numeric_claim_in_memory(
                         value=literal,
@@ -2543,7 +2552,8 @@ class EvidenceStore:
                         step_id=step_id,
                         source_field=path,
                         tolerance=tolerance,
-                        effect_scale=local_effect_scale,
+                        effect_scale=effect_scale,
+                        estimand=estimand,
                     )
                 )
             if truncated:
@@ -3110,6 +3120,7 @@ class EvidenceStore:
         from .runtime_artifacts import (
             active_step_evidence_ids_by_step,
             run_level_evidence_matches_claim_owner,
+            verified_run_evidence_path,
         )
 
         records_by_id = {
@@ -3117,6 +3128,7 @@ class EvidenceStore:
             for record in self.current_verified_records(per_step_records)
         }
         current_identity_scales: Dict[Tuple[str, str, str], Any] = {}
+        current_identity_roles: Dict[Tuple[str, str, str], NumericEstimand] = {}
         for raw in per_step_records:
             step_id = str(raw.get("step_id") or "").strip()
             evidence_id = str(raw.get("step_summary_evidence_id") or "").strip()
@@ -3130,6 +3142,29 @@ class EvidenceStore:
                 )
             ):
                 current_identity_scales[(step_id, evidence_id, path)] = effect_scale
+            record = records_by_id.get(evidence_id)
+            if (
+                record is not None
+                and record.generation_mode == "deterministic_standard"
+                and "reportable_model_contrasts" in summary
+            ):
+                from .model_contrast_scientific_claims import model_contrast_numeric_identities
+
+                # Writer views deliberately omit protocol and lineage fields.
+                # Recover the numeric type from the registered full summary,
+                # never from a compact display projection or generated copy.
+                source_path = verified_run_evidence_path(self.root, record)
+                if source_path is None:
+                    continue
+                source_summary = json.loads(source_path.read_text(encoding="utf-8"))
+                validate_scientific_claim_registration(
+                    root=self.root, record=record, step_id=step_id,
+                    summary=source_summary, drafts=derive_scientific_claim_drafts(source_summary),
+                )
+                for path, (scale, role) in model_contrast_numeric_identities(source_summary).items():
+                    key = (step_id, evidence_id, path)
+                    current_identity_scales[key] = scale
+                    current_identity_roles[key] = role
         active_ids_by_step = active_step_evidence_ids_by_step(per_step_records)
         run_level_contracts = {
             "research_context": ("log", "pipeline"),
@@ -3158,6 +3193,8 @@ class EvidenceStore:
                         current_scale = current_identity_scales[identity_key]
                         if current_scale not in (None, ""):
                             payload["effect_scale"] = current_scale
+                        if identity_key in current_identity_roles:
+                            payload["estimand"] = current_identity_roles[identity_key]
                         claim = NumericClaim.from_dict(payload)
                     authoritative.append(claim)
                 continue
@@ -3181,18 +3218,41 @@ class EvidenceStore:
     # Manuscript binding
     # ------------------------------------------------------------------
 
-    def enforce_evidence_bound_scaffold(self, scaffold: str) -> tuple[str, List[str]]:
-        """Apply the manuscript claim policy and enforce this store's mode."""
-        verified_ids = {record.evidence_id for record in self.verified_records()}
+    def manuscript_method_facts(
+        self, per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    ) -> tuple[ManuscriptMethodFact, ...]:
+        """Reproduce exact metadata statements from the selected context source."""
+
+        return load_manuscript_method_facts(
+            root=self.root,
+            records=(
+                self.current_verified_records(per_step_records)
+                if per_step_records is not None else self.verified_records()
+            ),
+        )
+
+    def enforce_evidence_bound_scaffold(
+        self, scaffold: str, *,
+        per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    ) -> tuple[str, List[str]]:
+        """Enforce the policy against the same ledger used for final binding."""
+        verified_records = (self.current_verified_records(per_step_records)
+                            if per_step_records is not None else self.verified_records())
+        verified_ids = {record.evidence_id for record in verified_records}
 
         def resolve_evidence(ref: str) -> bool:
             record = self.get(ref)
             return record is not None and record.evidence_id in verified_ids
 
+        def resolve_claim(ref: str):
+            claim = self._scientific_claim_by_ref(ref)
+            return claim if claim is not None and claim.evidence_id in verified_ids else None
+
         result = filter_evidence_bound_scaffold(
             scaffold,
-            resolve_claim=self._scientific_claim_by_ref,
+            resolve_claim=resolve_claim,
             resolve_evidence=resolve_evidence,
+            method_facts=load_manuscript_method_facts(root=self.root, records=verified_records),
         )
         if result.filtered_sentences and (
             self.enforcement_mode is EvidenceEnforcementMode.STRICT

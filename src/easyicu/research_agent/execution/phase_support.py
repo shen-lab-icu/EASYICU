@@ -43,6 +43,7 @@ from ..cohort.schema import (
     CohortDefinition,
     assert_cohort_definition_locked,
 )
+from ..contracts.declared_product import typed_product
 from ..contracts.runtime import ValidationFinding
 
 if TYPE_CHECKING:
@@ -1408,21 +1409,55 @@ def _step_failed_dependency_record(
     *,
     per_step_records: List[Dict[str, Any]],
     shared_lock: Any,
+    step_outputs_supplier: Any = None,
 ) -> Optional[Dict[str, Any]]:
+    """Name the failed producer a step can no longer consume, if any.
+
+    Two explicit edges are honored: the structural figure→parent edge and the
+    Planner-declared typed ``kind:product`` input edge. Both are checked against
+    the latest record per step, so a step skipped after its own producer failed
+    also blocks its consumers. No edge is guessed from free-text intent.
+    """
+
     parent_step_id = _parent_step_id_for_figure_step(step)
-    if parent_step_id is None:
-        return None
     with shared_lock:
         records = list(per_step_records)
     latest = {
         str(record.get("step_id") or ""): record
         for record in current_step_records(records)
     }
-    record = latest.get(parent_step_id)
-    if record is not None:
+    if parent_step_id is not None:
+        record = latest.get(parent_step_id)
+        if record is not None and (
+            str(record.get("status") or "").lower() != "ok"
+        ):
+            return dict(record)
+    if step_outputs_supplier is None:
+        return None
+    wanted = {
+        product
+        for raw in step.inputs or ()
+        if (product := typed_product(raw)) is not None
+    }
+    if not wanted:
+        return None
+    outputs_by_step = step_outputs_supplier() or {}
+    for producer_step_id, record in latest.items():
+        if producer_step_id == str(step.step_id):
+            # A step is never its own dependency: on a retry its own stale
+            # record must not skip it, whatever its self-edge looks like.
+            continue
         if str(record.get("status") or "").lower() == "ok":
-            return None
-        return dict(record)
+            continue
+        produced = {
+            product
+            for raw in outputs_by_step.get(producer_step_id, ())
+            if (product := typed_product(raw)) is not None
+        }
+        if wanted & produced:
+            dependency_record = dict(record)
+            dependency_record["dependency_match"] = "typed_product"
+            return dependency_record
     return None
 
 

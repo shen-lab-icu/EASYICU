@@ -64,7 +64,7 @@ def test_runner_image_workflow_builds_smokes_and_generates_sbom() -> None:
     assert "--read-only" in workflow
     assert "--cap-drop ALL" in workflow
     assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
-    assert "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" in workflow
+    assert "anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26" in workflow
     assert "src/easyicu/research_agent/execution/kernel_identity.py" in workflow
     assert "tests/research_agent/authority/test_execution_kernel_identity.py" in workflow
     assert "format: cyclonedx-json" in workflow
@@ -196,8 +196,13 @@ def test_missing_docker_binary_raises(
 ):
     cohort = _make_cohort(tmp_path)
     import easyicu.research_agent.execution.runner as runner_mod
+    from easyicu.research_agent.execution import docker_locality
 
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _n: None)
+    # "Missing" means missing everywhere the resolver is allowed to look. A
+    # machine with a real Homebrew docker must not turn this assertion green by
+    # accident, and must not let the local fallback go untested either.
+    monkeypatch.setattr(docker_locality, "LOCAL_DOCKER_DIRS", ())
 
     with pytest.raises(FileNotFoundError, match="not found on PATH"):
         ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
@@ -2085,6 +2090,8 @@ def test_a_stopped_daemon_raises_a_typed_availability_failure(
         "owner": "easyicu.execution.runtime_v1",
         "reason_code": "docker_daemon_unreachable",
         "runner_kind": "docker",
+        "probe_phase": "image_inspect",
+        "exit_code": 1,
     }
     # Still a RuntimeError, so every existing handler keeps working...
     assert isinstance(exc.value, RuntimeError)
@@ -2124,3 +2131,10 @@ def test_an_absent_image_is_not_reported_as_a_stopped_daemon(
 
     assert exc.value.reason_code == "docker_image_missing"
     assert "Build or pull" in str(exc.value)
+
+
+@pytest.mark.parametrize("message", ["permission denied: /private/host.sock", "context not found", "server returned an invalid response", ""])
+def test_unknown_docker_failures_do_not_claim_that_an_image_is_missing(message):
+    from easyicu.research_agent.execution.runner import _classify_docker_failure
+
+    assert _classify_docker_failure(message, "") == "docker_probe_failed"
