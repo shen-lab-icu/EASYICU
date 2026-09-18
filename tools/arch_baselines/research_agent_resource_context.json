@@ -1,8 +1,6 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [
-      "src/easyicu/research_agent/schema.py"
-    ],
+    "source_digest_changes": [],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -497,9 +495,29 @@
         "src/easyicu/research_agent/schema.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "restock wave: shap/xgboost/lightgbm/torch importable and 8 new curated kernels enter Coder selection (M2 now selects lasso_selection+shap_attribution); prompt_bytes within existing limits",
+      "source_digest_changes": [],
+      "summary_changes": {}
+    },
+    {
+      "reason": "R-roundup: msm/gformula/rcs kernels enter Coder selection; PSM vectorised byte-identical so its bundle bytes unchanged",
+      "source_digest_changes": [],
+      "summary_changes": {}
+    },
+    {
+      "reason": "R-roundup follow-ups: msm/gformula/rcs kernels + r_runtime rails enter selection; DR/gformula/MSM parked unreachable with reason",
+      "source_digest_changes": [],
+      "summary_changes": {}
+    },
+    {
+      "reason": "second restock wave: GAM/Gray/nomogram kernels enter Coder selection (gee+mixed parked); RCS card loaded",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Bind corrected know-how card aliases and review-packet digests from the 2026-09-17 audit closure.",
+  "baseline_reason": "second restock wave: GAM/Gray/nomogram kernels enter Coder selection (gee+mixed parked); RCS card loaded",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -559,7 +577,7 @@
   "tasks": [
     {
       "coder_resources": {
-        "bundle_sha256": "ad2f61175f9af4931bb6935e6f0bc832571fac46655bfb7d64260a1ac4376483",
+        "bundle_sha256": "27e5fd3b01ff165c4ef6e2f0434fad1700fe7cefb2a1f49791bc985705ab6066",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 369,
         "prompt_limit_bytes": 8000,
@@ -579,9 +597,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "96f1bd920332c3c7fba55eb2b6af964999eb88105d98b5782f90b4af27c8485b",
-          "2b03f976e4f038c19bd08e335eb7c08011adf2edea249cebd15c4414bb4979d3",
-          "a01705ad7b7d19a0353c0b0b0040a1e05bee3d415f9e7b9d92221548db2deae2"
+          "7613c5c2fac7cf8d16386c43980e271d2a4c98f42b8d0ac040506abda02dd8c9",
+          "010c45124e067834f2f1c53fc53626eb6bfc70f44d914bf26ae61ed8a3ec09db",
+          "bc44cd4483a2499d7f9459e93420668b03b3b9779682edf25e5d040844d77546"
         ]
       },
       "fixture_concepts": [
@@ -655,9 +673,9 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "dba9411abc02101bb722bceb01234ad2da91edbdec004c031a2b6d0c92cf0fd8",
+        "bundle_sha256": "d4bb4f6744f4596637f7c8726be0eaf9a2d6cc9aef45acb78b5b33c35d32fa29",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
-        "prompt_bytes": 611,
+        "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
         "provider_calls": 0,
         "selected": [
@@ -665,6 +683,12 @@
             "kind": "action",
             "resource_id": "action:typed-input-sdk",
             "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.rcs_dose_response",
+            "sha256": "5ed39cd34edb9485122f9bd878ed932bc34283093a1b7077e20ec7e1db2cda66",
             "version": "1.0.0"
           },
           {
@@ -687,9 +711,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "53a0400320360a6e4a107d783abcb14196d78d86ec9d492af33c9819b1832cc3",
-          "98b85b01ff15e2a5f6afd9ec85265b5295d953c0b93b056285019d4cd667e31f",
-          "7bf2ac38d93bcf7c3c4bc07392c122328f1550e8042464db5beeaab2493849e3"
+          "c5747b66c19b8695e7fd386e85f047d7dbbe641bb4a756125de53fb5dcc6336b",
+          "fda14d8f9578cf1d6283fa55df03a0ff317180bab5d0a7c731515e8e2fa2c3cb",
+          "9902e3e7f23d26aab4fd70c4ea962458139604fc5d9fb57c80a61e5175848065"
         ]
       },
       "fixture_concepts": [
@@ -763,9 +787,9 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "1daba0f7620f5ddf4ae6feae079bd028dcdf101d1edb5d4611d3d154e08b22d6",
+        "bundle_sha256": "56a211360d3ca4a0b65bbbd0b42ce1d44cddfe2640396b4dfded355ebc3f7d47",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
-        "prompt_bytes": 611,
+        "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
         "provider_calls": 0,
         "selected": [
@@ -773,6 +797,12 @@
             "kind": "action",
             "resource_id": "action:typed-input-sdk",
             "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.rcs_dose_response",
+            "sha256": "5ed39cd34edb9485122f9bd878ed932bc34283093a1b7077e20ec7e1db2cda66",
             "version": "1.0.0"
           },
           {
@@ -795,9 +825,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "57d500636a9c07e7f5fb1c2db7762a722c721111cd567217ac95a4b29937a552",
-          "b31d855e67f20ad6f109285b15b04ef6fd2f7c611dc1aad11278b9f2a925297f",
-          "6559da6ce1b0fc50600f707787f13bc304c91f4486a6e8ab683820dbdb85c7ec"
+          "0f71c28eb9b23d550017b6db632f7c7e29587ccdd5b6ff6344f3fab3e86d4cc0",
+          "eee91448df8fedc528463a58a9515e3668ab3a8eab235062b02baf4f051fbb62",
+          "1a525b1ea7d0585d12d3181767a5b5406675134f44a30b97ff947f416037801d"
         ]
       },
       "fixture_concepts": [
@@ -857,9 +887,9 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "3901a430560a3206865408fd9a8e91e7e24a895b7982635c3ea720a85638dd1b",
+        "bundle_sha256": "727dbf6fa848e30f97005e362c567bd7a761338178e79a3e4a4f6454713f0b82",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
-        "prompt_bytes": 611,
+        "prompt_bytes": 1138,
         "prompt_limit_bytes": 8000,
         "provider_calls": 0,
         "selected": [
@@ -867,6 +897,12 @@
             "kind": "action",
             "resource_id": "action:typed-input-sdk",
             "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.rcs_dose_response",
+            "sha256": "5ed39cd34edb9485122f9bd878ed932bc34283093a1b7077e20ec7e1db2cda66",
             "version": "1.0.0"
           },
           {
@@ -889,9 +925,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "05d66acb6271d714c6e940d6f3b95143a6345419214b287c674e735252687da9",
-          "9565b513217caa8ac95bf91f466c31539725210f0e00bbdcc7cf69c12fe16a31",
-          "192635267a77ff6fd3bcafd44b71bc8fe1825e13be5185e62597097e4942f9f7"
+          "8c828bb1d6995797fcbd53fb34fbe6cda22c4d636f558c4df18c935539a292a3",
+          "cf59ff6b14e2838dcb7375faac18a17d1a44130f7aedf8ef02191c3457678438",
+          "78baaedd006b1c392628ac558ddcd93a1da2c0152e7463f49de170b01461fc6a"
         ]
       },
       "fixture_concepts": [
@@ -951,9 +987,9 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "744dd27af55760668e36ea5442e2c4c00ab050e06b084ead7450d7050c8a213d",
+        "bundle_sha256": "d5b5ad58053c772585070142ab87b9c9b07d2d6fe3c6f2e2b103a50c707520ce",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
-        "prompt_bytes": 1810,
+        "prompt_bytes": 1909,
         "prompt_limit_bytes": 8000,
         "provider_calls": 0,
         "selected": [
@@ -965,20 +1001,20 @@
           },
           {
             "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.lasso_selection",
+            "sha256": "627b2c1073d64f479fe5e23cc41e5e42e8a302c5270838e0d67813cc8b50ba0a",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.shap_attribution",
+            "sha256": "baf56501968af823f82c2bba7a37451253d0d2e2d84e5735617ad90027cde645",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
             "resource_id": "software:easyicu.research_agent.methods.conformal",
             "sha256": "ee1005ab2f969d8080e8843da6be7c87d2ee1e3934cc0ac3f8b0d647332f9c0b",
-            "version": "1.0.0"
-          },
-          {
-            "kind": "software",
-            "resource_id": "software:easyicu.research_agent.methods.decision_curve",
-            "sha256": "d7fdadf8871c55bcdbb8791e8fcbd8ba2618de6b50bf4e404d787cbf3bdb7b46",
-            "version": "1.0.0"
-          },
-          {
-            "kind": "software",
-            "resource_id": "software:easyicu.research_agent.methods.delong_auc",
-            "sha256": "76fa453486ffa3807f166cabebe993a2acf90393428cc2dde9cdc4eda076e5b2",
             "version": "1.0.0"
           },
           {
@@ -989,9 +1025,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "65dbb96a1231e622d99b5e36e33a5d804c174820a6693d3433efab29c588c70a",
-          "396047111da0f42f97e97143160cd008ebbfca8cac877744cde50947a42a25b2",
-          "e99577c45314cbe491d013f7e7dd67deb7957e80f333d8d3cb81d31a0192441c"
+          "ea2d9015b3b44aafb1d4fdd2f0a92374255db6d609ae1711bed9ba7f20e97931",
+          "0bfc4b572359563915ed603ccc632698df1b4e548f0a770fd592544e089ef41d",
+          "5b0078957b0218650e1a2450003d7c04806ff6d10cff002a4b1713cc36856697"
         ]
       },
       "fixture_concepts": [
@@ -1066,7 +1102,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "7118031b3045376520e74229c2a688d4400c37cf4c53877c7a43220a3851c77b",
+        "bundle_sha256": "9be38caa34b304a6eca4845debf1ed57c5e66d3d60f86d69ac3c0d9c80e65471",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 506,
         "prompt_limit_bytes": 8000,
@@ -1092,9 +1128,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "7d122f52fcce4e2736d26fe5ea1281480a376dd05d02275036ea847cd137de83",
-          "b57e09b80e452ab3d37e92b03842009683dc12c3f120619840def2a566f90d08",
-          "e92989d44d4608ced8743a4a629b09a57f8fca9aea9bfc5e20ea655c0c0d1782"
+          "fff7ca144dfaa3aa8958522f2e6e6aa45caff62e70cba1eb0eeda7514c0fea50",
+          "e0e4070240ce6215cd418cc68879249884a9b28d3a8da5919309a2bde783c5ef",
+          "cfb2129bb72b67112836c29c17fa179a2f0e905cf5056c349c7316eb64c2a1cd"
         ]
       },
       "fixture_concepts": [
@@ -1169,7 +1205,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "311b9e3e8c5369a3e7124ba43b71ae91e35095c87ad43830d36e3bedc9d3af55",
+        "bundle_sha256": "2965d090126f20ef0d3a7ff5ab259a9c4516a66898cf9c51e104edc43e75b2bb",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 2255,
         "prompt_limit_bytes": 8000,
@@ -1207,9 +1243,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "4355cb65d424ddd3e6220dea4c4f0e05820cee106e8de404b23efe2896d7f27f",
-          "d65859bdb85062e137763b79f186998073af9b318abf5b0c1e0afaaebf754d88",
-          "9d9fbe06ccec61e17f19ba85f5fc17670de466eec1df2e97439acb5940aea507"
+          "cc0f47d80631a77040e1131bd6b5ec87e99c557be2cf4ba2c42e79e5879f2730",
+          "4e0b36265fbfac23b4905cd7eb646f24bb9b679b2d8af50b89f766f0d2a84038",
+          "b53f24b68c460ff1cd1e002d4b5fceedb9f7ecbdb7ad3306b2afe9b2a192c6b6"
         ]
       },
       "fixture_concepts": [
@@ -1283,7 +1319,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "fc543ea2e79b1bff08bb487d7057b7600918e54ca1e4a9952115853deb05ef28",
+        "bundle_sha256": "9af642f7836eb429752ad0b806b14aaed4e5facf3aeb92fddee7135979996c15",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 1337,
         "prompt_limit_bytes": 8000,
@@ -1321,9 +1357,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "2f8ffd2cbd618138192af9ea223788fc43b124ca2a5e949c985dd97c3f144440",
-          "24af3dc757847b2c250350ab5aaf60999b5a250a60e531e18bba81e3c5e20949",
-          "ad706ee05930aa61abdf88a0e33bd9ff9dc6ebf3a85fb08f08c2255a91dc5f50"
+          "5f4614aeec8c4941acf44673575027108abedc0d4d09b8984237a4e1f13344c3",
+          "c553871890608b4f32e7b9febfc2b9562aafc206072707b80d0e555cbf719b60",
+          "b61f7c34fb5cb6ed2a84389acaacf2deacbcfe60ddbb339bb540198a9bd25335"
         ]
       },
       "fixture_concepts": [
@@ -1398,7 +1434,7 @@
     },
     {
       "coder_resources": {
-        "bundle_sha256": "63f081ec1da85f77a05a04cf659a6e1bad40f7aecd327a03e355a1992a966a52",
+        "bundle_sha256": "b08dbb20435cf4754414d24b3a22738509a15f1158b7e635c19f6915ed39a41c",
         "profile_ref": "npj_dm_framework_v2_dev/20260722",
         "prompt_bytes": 506,
         "prompt_limit_bytes": 8000,
@@ -1424,9 +1460,9 @@
           }
         ],
         "selection_receipt_sha256": [
-          "4793728edbadb8b44f7ebba8ce5218f3533964a21e29c1e6bb8d58c2c8b61549",
-          "749a65caa37ff923f97e605c4b3675e0db8d470deff82a454060adb562f3c6bb",
-          "616c71317f4a55f27d4f76f5544d547922296164d3afe8debc4adbbcac784274"
+          "c6487bd9a552db726964af1689ab8e33a9bf105e92482a0ab1b17c4fe8e228ca",
+          "00899fa246c8d3532349294de06c22d6c080c1d952e5dcbb8de669bca6a33ab0",
+          "a2353195aaa71922255820e2bc91d8cf0d375467a32334e0f434c96b61733ae6"
         ]
       },
       "fixture_concepts": [
