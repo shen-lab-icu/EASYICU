@@ -4,8 +4,8 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5695,
-      "sha256": "0bee52c6671ea739c5788c4085ca1f52abcfdbc44a82c12fe19cecef376d7d94",
+      "loc": 6160,
+      "sha256": "2d4beb17b0e8fde3bfb6a36d41d89d2987350e2676c9946d93da4509cea1db25",
       "intra_package_import_edges": 102,
       "shim_bypass_violations": []
     },
@@ -22,9 +22,9 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 7141,
-      "sha256": "5df24f10b858fdc8cb1bc6de0d33786abf2d84ab2669d9ed6edcba66da9fbe83",
-      "intra_package_import_edges": 130,
+      "loc": 7364,
+      "sha256": "fb5cab1a9deef907b396bfb6c5a697ca98ac9a527b892d647a8b78ee9e6314bf",
+      "intra_package_import_edges": 132,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
@@ -82,8 +82,8 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 6228,
-      "sha256": "938ef3631b255ef3439f9209637db9be15ed6c9ebdd520e0a2aadc21ceed6984",
+      "loc": 6442,
+      "sha256": "714d43be34bfebb854bf0bc6ac1d17934ea271ceabfc6d2357449880af57eabd",
       "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
@@ -232,8 +232,8 @@
       "shim_bypass_violations": []
     },
     "agents/coder.py": {
-      "loc": 1639,
-      "sha256": "faa42bbff608895138d87e9244ab83b73170bd30bf3f40f5a684b8112725a331",
+      "loc": 1646,
+      "sha256": "596295b625d4a3029ef8c8306bee76ffbe31d861bc0bf08eb1e0adfa573bee5b",
       "intra_package_import_edges": 27,
       "shim_bypass_violations": []
     },
@@ -292,8 +292,8 @@
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3483,
-      "sha256": "5d033d6c817560bf0f0853b6e00fbe244d576b01336781ce0a84ab69b76bd6fb",
+      "loc": 4030,
+      "sha256": "1df9740efd0475f0ff4b64378d52a815cdcc7b0bc69f7fef596ef8a59e6f8689",
       "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
@@ -331,7 +331,7 @@
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1787,
+      "line_start": 1797,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -342,18 +342,18 @@
       "callable_closure_captured_names": 0
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 944,
+      "lines": 975,
       "line_start": 1165,
       "direct_nested_funcs": 4,
       "total_nested_funcs": 6,
-      "own_bound_names": 135,
+      "own_bound_names": 137,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 69
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3776,
+      "line_start": 3807,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -382,18 +382,18 @@
       "callable_closure_captured_names": 15
     },
     "pipeline.py::run": {
-      "lines": 802,
-      "line_start": 4153,
+      "lines": 806,
+      "line_start": 4306,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
-      "own_bound_names": 109,
+      "own_bound_names": 110,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
-      "callable_closure_captured_names": 43
+      "callable_closure_captured_names": 44
     },
     "pipeline.py::_generate_or_resume_plan": {
       "lines": 444,
-      "line_start": 2132,
+      "line_start": 2266,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 55,
@@ -403,7 +403,7 @@
     },
     "pipeline.py::_run_plan_phase": {
       "lines": 634,
-      "line_start": 2942,
+      "line_start": 3086,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 85,
@@ -412,7 +412,13 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Replace the private cross-module publication output-path import with a public filesystem owner entrypoint; no LOC or function-complexity growth.",
+  "baseline_reason": "Reviewed SimpleImputer alias-to-Pipeline preflight guard adds 56 lines to gates/preflight.py; bare alias use remains blocked",
+  "baseline_accepted_growth": {
+    "gates/preflight.py": {
+      "loc_was": 6386,
+      "loc_now": 6442
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -1128,6 +1134,123 @@
     },
     {
       "reason": "Replace the private cross-module publication output-path import with a public filesystem owner entrypoint; no LOC or function-complexity growth."
+    },
+    {
+      "reason": "expansion branch: session resume + tool promotion + literature gate + eval harness (5 new modules, evidence/pipeline/phase/discovery growth)",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5695,
+          "loc_now": 5800
+        },
+        "pipeline.py": {
+          "loc_was": 7141,
+          "loc_now": 7273
+        },
+        "authority/evidence_store.py": {
+          "loc_was": 3483,
+          "loc_now": 4030
+        }
+      }
+    },
+    {
+      "reason": "expansion wiring: session resume filter+recording in execute phase, promotion grant registry+annotation, retrieval evidence flag+gate call, top-level lazy exports",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5800,
+          "loc_now": 6051
+        },
+        "pipeline.py": {
+          "loc_was": 7273,
+          "loc_now": 7285
+        }
+      }
+    },
+    {
+      "reason": "wiring pass-through: pipeline delegate forwards session pair; entrypoint shape pin updated deliberately",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 6051,
+          "loc_now": 6052
+        },
+        "pipeline.py": {
+          "loc_was": 7285,
+          "loc_now": 7290
+        }
+      }
+    },
+    {
+      "reason": "restock wave: 8 methods kernels (PSM/NRI/mediation/CIF/target-trial/DR/lasso/SHAP) + 3 checked-in tool cards + loader"
+    },
+    {
+      "reason": "restock wave follow-ups: coder capability block gated for render-only steps, trajectory gate 43k to 43.1k, kernel families narrowed, canary lock hash refresh",
+      "accepted_growth": {
+        "agents/coder.py": {
+          "loc_was": 1639,
+          "loc_now": 1646
+        }
+      }
+    },
+    {
+      "reason": "R-roundup: PSM vectorised byte-identical, R rails + adapter reroute, MSM/gformula/DTR-value/RCS kernels + 4th card, kernel family narrowing"
+    },
+    {
+      "reason": "R-roundup follow-ups: coder block gating, kernel family narrowing, canary refresh"
+    },
+    {
+      "reason": "Codex review fixes: PSM output-bound digests, executor-bound decisions, store-verified session resume, RCSBasis-only fits, source-backed literature warnings",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 6052,
+          "loc_now": 6136
+        },
+        "pipeline.py": {
+          "loc_was": 7290,
+          "loc_now": 7294
+        }
+      }
+    },
+    {
+      "reason": "Codex round-2 fixes: byte-verified session resume, pipeline resume supplier, output-bound PSM digests, executor-bound decisions, RCSBasis-only fits",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 6136,
+          "loc_now": 6144
+        },
+        "pipeline.py": {
+          "loc_was": 7294,
+          "loc_now": 7364
+        }
+      }
+    },
+    {
+      "reason": "second restock wave: GEE/mixed/GAM/Gray/nomogram kernels (gee+mixed parked with reason), RCS card, ranking pin hardening"
+    },
+    {
+      "reason": "governance gap wave: dedup-undeclared + missingness-unexamined review findings, single-imputation preflight rule, EPV integrity check",
+      "accepted_growth": {
+        "gates/preflight.py": {
+          "loc_was": 6228,
+          "loc_now": 6386
+        }
+      }
+    },
+    {
+      "reason": "governance gap wave: dedup-undeclared + missingness-unexamined review findings, single-imputation preflight rule, EPV advisory with maturity finding",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 6144,
+          "loc_now": 6183
+        }
+      }
+    },
+    {
+      "reason": "Reviewed SimpleImputer alias-to-Pipeline preflight guard adds 56 lines to gates/preflight.py; bare alias use remains blocked",
+      "accepted_growth": {
+        "gates/preflight.py": {
+          "loc_was": 6386,
+          "loc_now": 6442
+        }
+      }
     }
   ]
 }

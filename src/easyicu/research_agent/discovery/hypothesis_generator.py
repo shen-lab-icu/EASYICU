@@ -513,10 +513,70 @@ def generate_hypotheses(
     )
 
 
+# ---------------------------------------------------------------------------
+# Track 2 — minimal pairwise tournament for hypothesis priority (research use).
+# ---------------------------------------------------------------------------
+#
+# NOTE: this ranking orders *hypothesis priority* (which candidate to try
+# first). It is NOT a manuscript conclusion, NOT a novelty claim, and NOT
+# evidence for any scientific finding. Manuscript claims still require the
+# ordinary evidence-store binding and review path.
+def pairwise_tournament_rank(
+    candidates: Sequence[HypothesisCandidate],
+    *,
+    beats: Optional[Any] = None,
+) -> List[HypothesisCandidate]:
+    """Rank hypothesis candidates by pairwise tournament (Copeland score).
+
+    ``beats(a, b)`` returns 1 when ``a`` beats ``b``, -1 when ``b`` beats
+    ``a``, and 0 on a tie. The default compares ``priority_score`` with a
+    deterministic ``candidate_id`` tie-break. Each win scores 1 and each tie
+    scores 0.5; final order is ``(-wins, -priority_score, candidate_id)`` so
+    results are deterministic. The input list is never mutated.
+    """
+
+    ranked = list(candidates or [])
+
+    def _default_beats(
+        left: HypothesisCandidate, right: HypothesisCandidate
+    ) -> int:
+        if left.priority_score > right.priority_score:
+            return 1
+        if left.priority_score < right.priority_score:
+            return -1
+        if left.candidate_id < right.candidate_id:
+            return 1
+        if left.candidate_id > right.candidate_id:
+            return -1
+        return 0
+
+    judge = beats if beats is not None else _default_beats
+    wins: Dict[str, float] = {c.candidate_id: 0.0 for c in ranked}
+    for idx, left in enumerate(ranked):
+        for right in ranked[idx + 1 :]:
+            outcome = judge(left, right)
+            if outcome not in (1, -1, 0):
+                raise ValueError("beats(a, b) must return 1, -1, or 0")
+            if outcome == 1:
+                wins[left.candidate_id] += 1.0
+            elif outcome == -1:
+                wins[right.candidate_id] += 1.0
+            else:
+                wins[left.candidate_id] += 0.5
+                wins[right.candidate_id] += 0.5
+    by_id = {c.candidate_id: c for c in ranked}
+    ordered_ids = sorted(
+        wins,
+        key=lambda cid: (-wins[cid], -by_id[cid].priority_score, cid),
+    )
+    return [by_id[cid] for cid in ordered_ids]
+
+
 __all__ = [
     "HypothesisCandidate",
     "HypothesisFeasibilitySignal",
     "HypothesisGeneratorResult",
     "LITERATURE_SATURATION_SIGNAL_STATEMENT",
     "generate_hypotheses",
+    "pairwise_tournament_rank",
 ]

@@ -1,0 +1,71 @@
+{
+ "deterministic_governance_rates_pct": {
+  "causal_framing": 7.6,
+  "code_sharing": 25.4,
+  "competing_outcome_def": 1.7,
+  "competing_risks": 1.7,
+  "complete_case": 2.5,
+  "eligibility": 80.5,
+  "first_stay_dedup": 30.5,
+  "landmark": 3.4,
+  "mi_mice": 36.4,
+  "missingness": 58.5,
+  "mortality_window": 59.3,
+  "propensity": 15.3,
+  "readmission_handling": 6.8,
+  "reporting_guideline": 25.4,
+  "sample_size": 16.9,
+  "sensitivity_battery": 32.2,
+  "sophisticated_adjustment": 57.6,
+  "subgroup": 34.7,
+  "time_zero": 0.8,
+  "trajectory": 9.3,
+  "validation": 37.3
+ },
+ "limitations": [
+  "top-journal sample skews to well-reported studies; community practice is likely sloppier",
+  "PMC OA subset (54%) skews open-access; paywalled methods unseen",
+  "unstated defaults (e.g. silent complete-case) are invisible by construction",
+  "raw full texts (~5MB) not stored in repo; regenerate via documented queries"
+ ],
+ "llm_deep_dive_n118": {
+  "dedup_pct": {
+   "all_stays": 2.5,
+   "first_only": 47.5,
+   "not_applicable": 11.9,
+   "unclear": 38.1
+  },
+  "immortal_time_mentioned_pct": 11.0,
+  "missingness_pct": {
+   "complete_case_assumed": 10.2,
+   "complete_case_stated": 0.0,
+   "exclusion_or_single_imputation": 21.2,
+   "multiple_imputation": 33.9,
+   "unstated": 34.7
+  },
+  "time_zero_pct": {
+   "hospital_admission": 1.7,
+   "icu_admission": 35.6,
+   "other_event_anchored": 22.0,
+   "unstated_implicit": 40.7
+  }
+ },
+ "mined_at": "2026-09-18",
+ "sample": {
+  "frame": "top specialty journals 2021-2026 using MIMIC/eICU (20 journals, 2 tiers)",
+  "top_journals": {
+   "BMC anesthesiology": 38,
+   "Critical care (London, England)": 32,
+   "Critical care explorations": 10,
+   "EClinicalMedicine": 11,
+   "Intensive care medicine experimental": 10,
+   "Journal of critical care": 20,
+   "Journal of intensive care medicine": 44,
+   "Shock (Augusta, Ga.)": 59
+  },
+  "unique_pmids": 251,
+  "with_methods_text": 118,
+  "with_pmc_fulltext": 135
+ },
+ "schema_version": "easyicu.governance_mining/1"
+}

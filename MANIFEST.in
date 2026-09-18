@@ -21,6 +21,7 @@ include .github/workflows/*.yml
 # The explicit runtime assets below support rebuilding a wheel from an sdist.
 include src/easyicu/research_agent/README.md
 recursive-include src/easyicu/research_agent/runner_image *
+recursive-include src/easyicu/research_agent/methods/tool_cards *.json
 
 # Include data files
 recursive-include src/easyicu/data *.json

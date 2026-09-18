@@ -6134,6 +6134,219 @@ def _categorical_level_reconciliation_findings(
     return sorted(findings, key=lambda finding: int(finding.detail["counts_line"]))
 
 
+_SINGLE_IMPUTATION_PIPELINE_WRAPPERS = frozenset(
+    {
+        "Pipeline",
+        "ColumnTransformer",
+        "make_pipeline",
+        "make_column_transformer",
+        "FeatureUnion",
+    }
+)
+
+_AGGREGATE_FILL_METHODS = frozenset({"median", "mean", "mode", "quantile"})
+
+
+def _single_imputation_findings(
+    tree: ast.AST, step: AnalysisStep
+) -> list[ValidationFinding]:
+    """Flag ad-hoc single-value imputation in Coder-generated code.
+
+    Governance mining: single-value handling (median/mean/forward-fill/LOCF)
+    appears in ~21% of ICU papers, usually unexamined. Bare ``fillna`` with a
+    scalar is NOT flagged (indicator construction and documented defaults are
+    legitimate); only method-based fills, aggregate fills, interpolation and
+    unwrapped ``SimpleImputer`` are.  ``SimpleImputer`` nested inside, or
+    assigned once and then passed to, a sklearn ``Pipeline``/
+    ``ColumnTransformer`` stays allowed: that is the sanctioned repair form,
+    and blocking it would loop repairs.
+    """
+
+    parents: dict[int, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents.setdefault(id(child), parent)
+    findings: list[ValidationFinding] = []
+
+    def _function_of(node: ast.AST) -> str:
+        current: ast.AST | None = node
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return current.name
+            current = parents.get(id(current))
+        return ""
+
+    def _add(node: ast.AST, reason: str, message: str) -> None:
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=message,
+                detail={
+                    "reason": reason,
+                    "line": int(getattr(node, "lineno", 0) or 0),
+                    "function": _function_of(node),
+                },
+            )
+        )
+
+    def _inside_pipeline_wrapper(node: ast.AST) -> bool:
+        current: ast.AST | None = node
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, ast.Call):
+                func = current.func
+                name = ""
+                if isinstance(func, ast.Name):
+                    name = func.id
+                elif isinstance(func, ast.Attribute):
+                    name = func.attr
+                if name in _SINGLE_IMPUTATION_PIPELINE_WRAPPERS:
+                    return True
+            current = parents.get(id(current))
+        return False
+
+    def _scope_of(node: ast.AST) -> ast.AST:
+        current: ast.AST | None = node
+        while current is not None:
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.Module)):
+                return current
+            current = parents.get(id(current))
+        return tree
+
+    def _assigned_alias_in_pipeline(node: ast.Call) -> bool:
+        assignment = parents.get(id(node))
+        target: ast.AST | None = None
+        if isinstance(assignment, ast.Assign) and assignment.value is node:
+            if len(assignment.targets) == 1:
+                target = assignment.targets[0]
+        elif isinstance(assignment, ast.AnnAssign) and assignment.value is node:
+            target = assignment.target
+        if not isinstance(target, ast.Name):
+            return False
+
+        scope = _scope_of(node)
+        if any(
+            isinstance(other, ast.Call)
+            and isinstance(other.func, ast.Attribute)
+            and other.func.attr in {"fit", "transform", "fit_transform"}
+            and isinstance(other.func.value, ast.Name)
+            and other.func.value.id == target.id
+            and _scope_of(other) is scope
+            and not _inside_pipeline_wrapper(other)
+            for other in ast.walk(scope)
+        ):
+            return False
+        for use in ast.walk(scope):
+            if (
+                not isinstance(use, ast.Name)
+                or use.id != target.id
+                or not isinstance(use.ctx, ast.Load)
+                or _scope_of(use) is not scope
+                or use.lineno <= assignment.lineno
+                or not _inside_pipeline_wrapper(use)
+            ):
+                continue
+            # A later assignment means the pipeline no longer receives this
+            # SimpleImputer instance.  Keep flagging the original bare one.
+            if any(
+                isinstance(other, ast.Name)
+                and other.id == target.id
+                and isinstance(other.ctx, (ast.Store, ast.Del))
+                and _scope_of(other) is scope
+                and assignment.lineno < other.lineno < use.lineno
+                for other in ast.walk(scope)
+            ):
+                continue
+            return True
+        return False
+
+    def _is_aggregate_call(value: ast.AST) -> bool:
+        return (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr in _AGGREGATE_FILL_METHODS
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, (ast.Name, ast.Attribute)):
+            continue
+        attr = func.attr if isinstance(func, ast.Attribute) else func.id
+        if attr in {"ffill", "bfill"}:
+            _add(
+                node,
+                "single_imputation_forward_backward_fill",
+                "Forward/backward fill imputes missing values with neighbours; "
+                "declare a missing-data strategy (multiple imputation or an "
+                "examined complete-case plan) instead of silently carrying "
+                "values forward.",
+            )
+        elif attr == "interpolate":
+            _add(
+                node,
+                "single_imputation_interpolation",
+                "Interpolation imputes missing values from neighbours; declare "
+                "a missing-data strategy instead of silently interpolating "
+                "irregular ICU series.",
+            )
+        elif attr == "fillna":
+            method_kw = next(
+                (
+                    keyword
+                    for keyword in node.keywords
+                    if keyword.arg == "method"
+                ),
+                None,
+            )
+            if method_kw is not None:
+                _add(
+                    node,
+                    "single_imputation_fillna_method",
+                    "fillna with a fill method is forward/backward filling; "
+                    "declare a missing-data strategy instead.",
+                )
+                continue
+            values = list(node.args)
+            values.extend(
+                keyword.value
+                for keyword in node.keywords
+                if keyword.arg == "value"
+            )
+            if any(_is_aggregate_call(value) for value in values):
+                _add(
+                    node,
+                    "single_imputation_aggregate_fill",
+                    "Filling missing values with a median/mean aggregate is "
+                    "single imputation; declare a missing-data strategy "
+                    "(multiple imputation or an examined complete-case plan) "
+                    "or route through the missing-data kernel.",
+                )
+        elif attr == "SimpleImputer":
+            if _inside_pipeline_wrapper(node) or _assigned_alias_in_pipeline(node):
+                continue
+            strategy = ""
+            for keyword in node.keywords:
+                if keyword.arg == "strategy" and isinstance(
+                    keyword.value, ast.Constant
+                ):
+                    strategy = str(keyword.value.value or "")
+            _add(
+                node,
+                "single_imputation_bare_estimator",
+                "Bare SimpleImputer outside a Pipeline/ColumnTransformer "
+                f"imputes with strategy {strategy or 'median'} and no missingness "
+                "audit trail; wrap it in the sanctioned Pipeline form or "
+                "declare a missing-data strategy.",
+            )
+    return findings
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -6203,6 +6416,7 @@ def audit_mechanical_code_contracts(
     )
     findings.extend(table_one_spec_binding_findings(tree, step))
     findings.extend(_boolean_reduction_identity_findings(tree))
+    findings.extend(_single_imputation_findings(tree, step))
     findings.extend(_local_helper_unpack_arity_findings(tree))
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))

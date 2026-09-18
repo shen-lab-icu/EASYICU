@@ -357,3 +357,38 @@ def test_unpinned_historical_profile_keeps_caller_owned_plan_options(tmp_path):
         config = PipelineConfig(workdir=tmp_path, planner_only=value, require_human_plan_review=value,
                                 **NPJ_DM_2026_05.pipeline_options())
         assert config.planner_only is value and config.require_human_plan_review is value
+
+
+def test_literature_retrieval_evidence_flag_is_strictly_gated(
+    ra, tmp_path: Path
+) -> None:
+    base = {
+        "workdir": tmp_path,
+        "planner_strategy": "progressive_v2",
+        "require_human_plan_review": True,
+        "enable_literature": True,
+        "require_literature_retrieval_evidence": True,
+    }
+
+    config = ra.PipelineConfig(**base)
+    assert config.require_literature_retrieval_evidence is True
+
+    with pytest.raises(
+        ValueError, match="require_literature_retrieval_evidence requires enable_literature"
+    ):
+        ra.PipelineConfig(**{**base, "enable_literature": False})
+
+    with pytest.raises(
+        ValueError, match="require_literature_retrieval_evidence requires require_human_plan_review"
+    ):
+        ra.PipelineConfig(**{**base, "require_human_plan_review": False})
+
+    with pytest.raises(
+        ValueError, match="require_literature_retrieval_evidence requires progressive_v2"
+    ):
+        ra.PipelineConfig(**{**base, "planner_strategy": "monolithic_v1"})
+
+
+def test_literature_retrieval_evidence_defaults_off(ra, tmp_path: Path) -> None:
+    config = ra.PipelineConfig(workdir=tmp_path)
+    assert config.require_literature_retrieval_evidence is False

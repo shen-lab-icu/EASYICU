@@ -31,7 +31,7 @@
     "src/easyicu/research_agent/viability.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/evaluator",
-  "scorer_tree_sha256": "dc39320e5e087de6c635c2c2c8b9c08d152a0ecb9b20fbef2d3757ca80fe6224",
+  "scorer_tree_sha256": "877e3d81b52f08be04e63caf0bb8c35352bdbc317720946aabe701a4d6d537be",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

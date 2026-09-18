@@ -1,0 +1,85 @@
+{
+  "card": {
+    "inputs": [
+      {
+        "description": "fitted tree model with predict",
+        "name": "model",
+        "required": true,
+        "value_kind": "fitted_tree_model"
+      },
+      {
+        "description": "complete-case numeric matrix",
+        "name": "X",
+        "required": true,
+        "value_kind": "float_matrix"
+      }
+    ],
+    "method_meaning": "exact TreeExplainer SHAP values for a fixed fitted tree model; reports per-feature mean|SHAP| plus the SHAP matrix, base value and predictions for beeswarm/waterfall",
+    "origin_output_sha256": "36c0d0197801519f5513bbfed9a98a37e19d99a186dfc0b5537a33d84a2dc287",
+    "outputs": [
+      {
+        "description": "",
+        "name": "mean_abs_shap",
+        "value_kind": "float_list"
+      },
+      {
+        "description": "",
+        "name": "shap_values",
+        "value_kind": "float_matrix"
+      },
+      {
+        "description": "",
+        "name": "base_value",
+        "value_kind": "float"
+      },
+      {
+        "description": "",
+        "name": "predictions",
+        "value_kind": "float_list"
+      }
+    ],
+    "population_assumption": "any complete-case numeric matrix scored by the fixed model; origin run on a synthetic fixture (seed 0, n=60, p=4, XGBRegressor 10 trees)",
+    "schema_version": "easyicu.tool_card/1",
+    "timing_assumption": "retrospective analysis on a frozen data extract; no observation-window or real-time constraint",
+    "tool_name": "shap_tree_attribution",
+    "tool_version": "1.0.0",
+    "validation_evidence": [
+      {
+        "evidence_id": "shap-sandbox-run-1",
+        "kind": "sandbox_run",
+        "note": "origin run: exact TreeExplainer on the fixed XGBRegressor and fixed 60x4 matrix",
+        "output_sha256": "36c0d0197801519f5513bbfed9a98a37e19d99a186dfc0b5537a33d84a2dc287",
+        "passed": true
+      },
+      {
+        "evidence_id": "shap-repro-1",
+        "kind": "independent_reproduction",
+        "note": "refit the XGBRegressor with identical pinned hyperparameters (including random_state=0, n_jobs=1) under a different process-global RNG state (numpy seed 1234 vs 0), then reran exact TreeExplainer on the fixed matrix; SHAP exact values are a pure function of (model bytes, data); output digest byte-identical",
+        "output_sha256": "36c0d0197801519f5513bbfed9a98a37e19d99a186dfc0b5537a33d84a2dc287",
+        "passed": true
+      },
+      {
+        "evidence_id": "shap-applicability-1",
+        "kind": "applicability_check",
+        "note": "intended reuse is attributing fixed tree-model predictions on complete-case matrices, inside the card population; no clinical transport claimed",
+        "output_sha256": "36c0d0197801519f5513bbfed9a98a37e19d99a186dfc0b5537a33d84a2dc287",
+        "passed": true
+      }
+    ]
+  },
+  "decision": {
+    "allowed_identity": "verified_tool",
+    "card_sha256": "671978be5871771f5edb33a7c3ff19e87cb534a8db07851bf5a9ac283dfa8b37",
+    "executor_module": "easyicu.research_agent.methods.shap_attribution",
+    "granted_verified_tool": true,
+    "reasons": [
+      "granted_verified_tool: reproductions=1 boundary_covered=True"
+    ],
+    "schema_version": "easyicu.tool_promotion_decision/1",
+    "tool_name": "shap_tree_attribution",
+    "tool_version": "1.0.0"
+  },
+  "executor_module": "easyicu.research_agent.methods.shap_attribution",
+  "issued_note": "Issued 2026-09-18 on synthetic fixtures; origin bounds the claim to method mechanics (see card population assumption). Reproduction is deterministic rerun, not fresh data.",
+  "schema_version": "easyicu.tool_card_grant_file/1"
+}
