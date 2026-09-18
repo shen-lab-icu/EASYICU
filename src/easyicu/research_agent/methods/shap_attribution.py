@@ -87,12 +87,6 @@ def _tree_model_types() -> tuple[type, ...]:
         pass
     else:
         accepted.extend([lgb.LGBMRegressor, lgb.LGBMClassifier])
-    try:
-        import catboost as cb
-    except ImportError:
-        pass
-    else:
-        accepted.extend([cb.CatBoostRegressor, cb.CatBoostClassifier])
     return tuple(accepted)
 
 
