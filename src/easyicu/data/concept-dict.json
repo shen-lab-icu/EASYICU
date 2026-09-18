@@ -413,12 +413,15 @@
    ]
   }
  },
- "adh_rate": {
-  "unit": [
-   "units/min",
-   "U/min"
-  ],
-  "description": "vasopressin rate",
+  "adh_rate": {
+   "unit": [
+    "units/min",
+    "U/min"
+   ],
+   "min": 0,
+   "max": 0.15,
+   "_comment": "2026-09-18 v6: added clinically reviewed bounds 0-0.15 (unmerged review tag archive/concept-clinical-bounds-ee33539). Vasopressin infusion is typically 0.01-0.06 units/min, refractory shock up to ~0.1; v5 sealed vasopressors show absurd tails (eICU max 190, MIMIC max 50, MIMIC-IV max 40) from unit errors. 0.15 excludes junk while keeping real shock doses.",
+   "description": "vasopressin rate",
   "omopid": 1507835,
   "category": "medications",
   "sources": {
@@ -11528,9 +11531,12 @@
    ]
   }
  },
- "phn_rate": {
-  "unit": "mcg/kg/min",
-  "description": "phenylephrine rate",
+  "phn_rate": {
+   "unit": "mcg/kg/min",
+   "min": 0,
+   "max": 15,
+   "_comment": "2026-09-18 v6: added clinically reviewed bounds 0-15 (unmerged review tag archive/concept-clinical-bounds-ee33539 set phn_rate 0-15). v5 sealed vasopressors show absurd tails (eICU max 475, MIMIC max 250, MIMIC-IV max 440) from unit/weight errors. 15 keeps high-dose phenylephrine while excluding junk.",
+   "description": "phenylephrine rate",
   "omopid": 1135766,
   "category": "medications",
   "sources": {
@@ -12059,14 +12065,15 @@
    ]
   }
  },
- "po2": {
-  "unit": [
-   "mmHg",
-   "mm Hg"
-  ],
-  "min": 40,
-  "max": 600,
-  "description": "O2 partial pressure",
+  "po2": {
+   "unit": [
+    "mmHg",
+    "mm Hg"
+   ],
+   "min": 20,
+   "max": 600,
+   "_comment": "2026-09-18 v6: lowered from ricu-inherited 40 to clinically reviewed 20 (unmerged review tag archive/concept-clinical-bounds-ee33539 set po2 20-700). v5 sealed exports show min exactly 40.0 in all six DBs, proving true hypoxia <40 was silently discarded before aggregation. 20 keeps severe hypoxemia while still excluding junk/artefact tails; revisit 0 only with explicit artefact audit.",
+   "description": "O2 partial pressure",
   "omopid": 4094581,
   "category": "blood gas",
   "sources": {

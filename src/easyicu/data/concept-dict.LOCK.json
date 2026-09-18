@@ -2,7 +2,7 @@
   "finalized": false,
   "finalized_note": "2026-09-15 待重新提取与质控：Dev9 在已发布 v5 之后以 6fd512344 引入共享住院死亡结局绑定，并以 639718e9f 补充 legacy service 的 EYE 外科映射；当前 concept-dict 因此不再等于 v5 运行所绑定的字典。v5 及其 HiRID AKI 修复保留为不可变历史发布，不能用当前字典摘要重新标记旧输出。新的 full6 发布须从当前字典重新生成受影响输出并完成既有封存门禁。",
   "locked_for_extraction_run": "pending_dev9_foundation_refresh_6fd512344_639718e9f_20260915",
-  "concept_dict_sha256": "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba",
+  "concept_dict_sha256": "ebce6b4e8cfadbbc2a6a6c8e923e64709012a0f14aa4e3284430fa796343edbf",
   "sofa2_dict_sha256": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
   "total_concepts": 256,
   "new_this_round": [],
@@ -18,6 +18,9 @@
     {
       "git_commit": "170b58189347c06574efde268e7d36b946febfb6",
       "change": "Raise crea ceiling 15->25 mg/dL: the ricu-inherited cap silently dropped real severe-AKI peaks before KDIGO aggregation (cross-DB measurement: genuine (15,25] peaks in eICU/SICdb stays; unit-error tails above 25 stay excluded)."
+    },
+    {
+      "change": "v6 pending (uncommitted 2026-09-18): po2 min 40->20 (ee33539 clinically reviewed 20; v5 min exactly 40.0 all DBs proves true hypoxia discarded); adh_rate adds 0-0.15, phn_rate adds 0-15 (ee33539; v5 tails adh 190/phn 475 prove unit errors); norepi_equiv median->sum (additive potency; SOFA cardio uses norepi60 etc, unaffected)."
     }
   ],
   "previous_published_lock": {
